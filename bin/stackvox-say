@@ -1,0 +1,67 @@
+#!/bin/bash
+# stackvox-say — fast TTS client for hooks.
+# Talks directly to the stackvox daemon over its unix socket, bypassing
+# Python startup. Falls back to macOS `say` with --fallback-say.
+#
+# Usage:
+#   stackvox-say "text"
+#   stackvox-say --voice bf_emma --speed 1.1 "text"
+#   stackvox-say --fallback-say "text"
+#   stackvox-say --socket /tmp/other.sock "text"
+#
+# Env:
+#   STACKVOX_SOCKET — override socket path (default: ~/.cache/stackvox/daemon.sock)
+
+set -u
+
+sock="${STACKVOX_SOCKET:-$HOME/.cache/stackvox/daemon.sock}"
+voice="" speed="" lang="" fallback=0 text=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --voice)        voice="$2"; shift 2 ;;
+    --speed)        speed="$2"; shift 2 ;;
+    --lang)         lang="$2";  shift 2 ;;
+    --fallback-say) fallback=1; shift ;;
+    --socket)       sock="$2";  shift 2 ;;
+    -h|--help)
+      sed -n '3,13p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0 ;;
+    --)             shift; text="$*"; break ;;
+    -*)             echo "stackvox-say: unknown flag: $1" >&2; exit 1 ;;
+    *)              text="${text:+$text }$1"; shift ;;
+  esac
+done
+
+if [[ -z "$text" ]]; then
+  echo "stackvox-say: no text provided" >&2
+  exit 1
+fi
+
+do_fallback() {
+  if [[ $fallback -eq 1 ]] && command -v say >/dev/null; then
+    say "$text"
+    exit 0
+  fi
+  exit 2
+}
+
+[[ -S "$sock" ]]          || do_fallback
+command -v nc >/dev/null  || do_fallback
+
+# Minimal JSON escape: backslash, double quote, newline, tab.
+esc=${text//\\/\\\\}
+esc=${esc//\"/\\\"}
+esc=${esc//$'\n'/\\n}
+esc=${esc//$'\t'/\\t}
+
+payload='{"text":"'$esc'"'
+[[ -n "$voice" ]] && payload+=',"voice":"'$voice'"'
+[[ -n "$speed" ]] && payload+=',"speed":'$speed
+[[ -n "$lang"  ]] && payload+=',"lang":"'$lang'"'
+payload+='}'
+
+resp=$(printf '%s\n' "$payload" | nc -U -w 1 "$sock" 2>/dev/null)
+[[ "$resp" == "ok" ]] && exit 0
+
+do_fallback

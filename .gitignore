@@ -2,3 +2,11 @@
 build/
 stack-nudge
 stack-nudge.app
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.venv/
+venv/

@@ -4,21 +4,76 @@
 set -e
 
 INSTALL_DIR="${HOME}/.stack-nudge"
+VENV="$INSTALL_DIR/venv"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "Installing stack-nudge..."
 
-# Copy notify.sh to shared install dir
 mkdir -p "$INSTALL_DIR"
+
+# Build and install the native app bundle (macOS click-to-focus banners)
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  echo ""
+  echo "Building stack-nudge.app..."
+  bash "$SCRIPT_DIR/build.sh" >/dev/null
+  cp -r "$SCRIPT_DIR/build/stack-nudge.app" "$HOME/Applications/stack-nudge.app"
+  echo "  Installed stack-nudge.app -> ~/Applications/stack-nudge.app"
+fi
+
+# Set up bundled voice engine (stackvox) in an isolated venv
+echo ""
+echo "Setting up voice engine..."
+if [[ ! -x "$VENV/bin/stackvox" ]]; then
+  python3 -m venv "$VENV"
+  "$VENV/bin/pip" install --quiet "$SCRIPT_DIR"
+  echo "  Voice engine installed -> $VENV"
+else
+  "$VENV/bin/pip" install --quiet --upgrade "$SCRIPT_DIR"
+  echo "  Voice engine updated   -> $VENV"
+fi
+
+# Register launchd agent to keep the voice daemon running across reboots (macOS only)
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  PLIST_LABEL="com.stackonehq.stack-nudge-daemon"
+  PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
+  cat > "$PLIST_PATH" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${PLIST_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${VENV}/bin/stackvox</string>
+        <string>serve</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>${INSTALL_DIR}/daemon.log</string>
+    <key>StandardErrorPath</key>
+    <string>${INSTALL_DIR}/daemon.log</string>
+</dict>
+</plist>
+PLIST
+  launchctl unload "$PLIST_PATH" 2>/dev/null || true
+  launchctl load "$PLIST_PATH"
+  echo "  Voice daemon registered as launchd agent (starts at login)"
+fi
+
+# Copy notify.sh to shared install dir
 cp "$SCRIPT_DIR/notify.sh" "$INSTALL_DIR/notify.sh"
 chmod +x "$INSTALL_DIR/notify.sh"
-echo "  Installed notify.sh -> $INSTALL_DIR/notify.sh"
+echo "  Installed notify.sh    -> $INSTALL_DIR/notify.sh"
 NOTIFY="$INSTALL_DIR/notify.sh"
 
 # Copy example config only if no config exists yet (preserve user customisations on reinstall)
 if [[ ! -f "$INSTALL_DIR/config" && -f "$SCRIPT_DIR/notify.conf.example" ]]; then
   cp "$SCRIPT_DIR/notify.conf.example" "$INSTALL_DIR/config"
-  echo "  Created config      -> $INSTALL_DIR/config"
+  echo "  Created config         -> $INSTALL_DIR/config"
 fi
 
 # Detect agents and wire up their hooks
@@ -100,6 +155,6 @@ echo ""
 echo "Done! Hooks are wired up."
 echo ""
 echo "Config: edit ~/.stack-nudge/config to customise behaviour."
-echo "  STACKNUDGE_VOICE=true                 — speak notifications aloud (requires StackVox)"
+echo "  STACKNUDGE_VOICE=true                 — speak notifications aloud"
 echo "  STACKNUDGE_ACTIVATE_IMMEDIATELY=true  — focus your editor without clicking"
 echo "To uninstall, run: ./uninstall.sh"

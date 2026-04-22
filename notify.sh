@@ -93,16 +93,23 @@ agent_label() {
   esac
 }
 
-# Speak a message aloud via StackVox if enabled and the daemon is reachable.
-# Falls back silently if StackVox is not installed or daemon is not running.
+# Bundled voice engine paths
+VENV="${HOME}/.stack-nudge/venv"
+STACKVOX="${VENV}/bin/stackvox"
+STACKVOX_SAY="${VENV}/bin/stackvox-say"
+
+# Speak a message aloud via the bundled StackVox daemon.
+# Auto-starts the daemon if it isn't running. Falls back silently if the
+# venv isn't installed or the daemon fails to respond.
 speak_notification() {
   [[ "${VOICE_ENABLED}" != "true" ]] && return
+  [[ ! -x "$STACKVOX_SAY" ]] && return
   local text="$1"
-  if command -v stackvox-say &>/dev/null; then
-    stackvox-say --voice "${VOICE_NAME}" --speed "${VOICE_SPEED}" "${text}" 2>/dev/null &
-  elif command -v stackvox &>/dev/null; then
-    stackvox say --voice "${VOICE_NAME}" --speed "${VOICE_SPEED}" "${text}" 2>/dev/null &
+  # Start daemon if socket doesn't exist yet
+  if [[ ! -S "${HOME}/.cache/stackvox/daemon.sock" ]]; then
+    nohup "$STACKVOX" serve >/dev/null 2>&1 &
   fi
+  "$STACKVOX_SAY" --voice "${VOICE_NAME}" --speed "${VOICE_SPEED}" "${text}" 2>/dev/null &
 }
 
 notify_macos() {
