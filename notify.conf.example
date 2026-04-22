@@ -1,0 +1,21 @@
+# stack-nudge user config
+# Copy this file to ~/.stack-nudge/config to customise behaviour.
+# Lines starting with # are comments and have no effect.
+
+# Speak notifications aloud via StackVox (offline TTS).
+# Requires: pip install stackvox && stackvox serve
+# Default: false
+#STACKNUDGE_VOICE=true
+
+# StackVox voice ID to use.
+# Default: af_heart
+#STACKNUDGE_VOICE_NAME=af_heart
+
+# StackVox playback speed (1.0 = normal).
+# Default: 1.1
+#STACKNUDGE_VOICE_SPEED=1.1
+
+# Bring your editor to focus immediately when the notification fires,
+# instead of waiting for you to click it.
+# Default: false
+#STACKNUDGE_ACTIVATE_IMMEDIATELY=true

@@ -1,0 +1,13 @@
+{
+  "name": "stack-nudge",
+  "description": "Notifications for AI coding agents — banners + sounds when Claude finishes or pauses for permission",
+  "version": "1.1.0",
+  "license": "MIT",
+  "author": {
+    "name": "StackOneHQ",
+    "url": "https://github.com/StackOneHQ"
+  },
+  "homepage": "https://github.com/StackOneHQ/stack-nudge",
+  "repository": "https://github.com/StackOneHQ/stack-nudge",
+  "hooks": "./hooks/hooks.json"
+}

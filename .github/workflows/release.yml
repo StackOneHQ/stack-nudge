@@ -1,0 +1,75 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build (${{ matrix.arch }})
+    runs-on: macos-15
+    strategy:
+      matrix:
+        arch: [arm64, x86_64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build stack-nudge.app
+        run: |
+          APP="stack-nudge.app/Contents"
+          mkdir -p "$APP/MacOS"
+          swiftc \
+            notifier/main.swift \
+            notifier/Config.swift \
+            notifier/Notifier.swift \
+            notifier/AppActivator.swift \
+            -o "$APP/MacOS/stack-nudge" \
+            -target ${{ matrix.arch }}-apple-macos12.0 \
+            -framework Foundation \
+            -framework AppKit \
+            -framework ScriptingBridge
+          cp notifier/Info.plist "$APP/Info.plist"
+          mkdir -p "$APP/Resources"
+          cp notifier/Icon.icns "$APP/Resources/Icon.icns"
+
+      - name: Verify
+        run: file stack-nudge.app/Contents/MacOS/stack-nudge
+
+      - name: Package
+        run: |
+          mkdir release
+          cp -r stack-nudge.app release/
+          cp notify.sh release/
+          tar czf stack-nudge-${{ matrix.arch }}.tar.gz release
+          shasum -a 256 stack-nudge-${{ matrix.arch }}.tar.gz \
+            | awk '{print $1}' > stack-nudge-${{ matrix.arch }}.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stack-nudge-${{ matrix.arch }}
+          path: |
+            stack-nudge-${{ matrix.arch }}.tar.gz
+            stack-nudge-${{ matrix.arch }}.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            stack-nudge-arm64.tar.gz
+            stack-nudge-arm64.sha256
+            stack-nudge-x86_64.tar.gz
+            stack-nudge-x86_64.sha256
