@@ -66,6 +66,19 @@ struct AppActivator {
                 if raiseWindow(pid: pid, containingTitle: title) { break }
             }
         }
+
+        // Press Enter to approve the permission prompt (requires Accessibility permission)
+        if sendApproval && AXIsProcessTrusted(), let procName = proc {
+            var err: NSDictionary?
+            NSAppleScript(source: """
+                tell application "System Events"
+                    tell process "\(procName)"
+                        delay 0.3
+                        key code 36
+                    end tell
+                end tell
+            """)?.executeAndReturnError(&err)
+        }
     }
 
     // MARK: - CLI discovery
