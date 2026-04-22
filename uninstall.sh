@@ -64,6 +64,12 @@ if [[ -f "$PLIST_PATH" ]]; then
   echo "  Removed launchd agent"
 fi
 
+# Remove app bundle
+if [[ -d "$HOME/Applications/stack-nudge.app" ]]; then
+  rm -rf "$HOME/Applications/stack-nudge.app"
+  echo "  Removed ~/Applications/stack-nudge.app"
+fi
+
 # Remove install dir (includes venv and notify.sh)
 if [[ -d "$INSTALL_DIR" ]]; then
   rm -rf "$INSTALL_DIR"
