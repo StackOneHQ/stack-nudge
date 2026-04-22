@@ -11,6 +11,15 @@ echo "Installing stack-nudge..."
 
 mkdir -p "$INSTALL_DIR"
 
+# Build and install the native app bundle (macOS click-to-focus banners)
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  echo ""
+  echo "Building stack-nudge.app..."
+  bash "$SCRIPT_DIR/build.sh" >/dev/null
+  cp -r "$SCRIPT_DIR/build/stack-nudge.app" "$HOME/Applications/stack-nudge.app"
+  echo "  Installed stack-nudge.app -> ~/Applications/stack-nudge.app"
+fi
+
 # Set up bundled voice engine (stackvox) in an isolated venv
 echo ""
 echo "Setting up voice engine..."
