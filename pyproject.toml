@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stackvox"
+version = "0.1.0"
+description = "Offline TTS engine bundled with stack-nudge"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "StackOne Technologies Ltd.", email = "engineering@stackone.com" }]
+keywords = ["tts", "kokoro", "onnx", "offline", "speech"]
+dependencies = [
+    "kokoro-onnx>=0.4.0",
+    "soundfile>=0.12.1",
+    "sounddevice>=0.4.6",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-mock>=3.12",
+    "ruff>=0.5",
+]
+
+[project.urls]
+Homepage = "https://github.com/StackOneHQ/stack-nudge"
+Repository = "https://github.com/StackOneHQ/stack-nudge"
+Issues = "https://github.com/StackOneHQ/stack-nudge/issues"
+
+[project.scripts]
+stackvox = "stackvox.cli:main"
+
+[tool.setuptools]
+script-files = ["bin/stackvox-say"]
+
+[tool.setuptools.packages.find]
+include = ["stackvox*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"

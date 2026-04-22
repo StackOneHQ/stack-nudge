@@ -2,12 +2,12 @@
 # Copy this file to ~/.stack-nudge/config to customise behaviour.
 # Lines starting with # are comments and have no effect.
 
-# Speak notifications aloud via StackVox (offline TTS).
-# Requires: pip install stackvox && stackvox serve
+# Speak notifications aloud via the bundled StackVox TTS engine.
+# The voice daemon starts automatically on first notification.
 # Default: false
 #STACKNUDGE_VOICE=true
 
-# StackVox voice ID to use.
+# StackVox voice ID to use. Run `~/.stack-nudge/venv/bin/stackvox voices` for the full list.
 # Default: af_heart
 #STACKNUDGE_VOICE_NAME=af_heart
 

@@ -68,14 +68,7 @@ Add that to your shell profile.
 
 ### Voice notifications
 
-stack-nudge can speak notifications aloud using [StackVox](https://github.com/StackOneHQ/stackvox), an offline TTS library with ~13 ms latency.
-
-**Setup:**
-
-```bash
-pip install stackvox
-stackvox serve   # start the daemon (add to login items or a launch agent)
-```
+stack-nudge includes an offline TTS engine (StackVox) that speaks notifications aloud with ~13 ms latency. No external install needed — it's bundled and set up automatically by `./install.sh`.
 
 **Enable in your config** (`~/.stack-nudge/config`):
 
@@ -83,12 +76,14 @@ stackvox serve   # start the daemon (add to login items or a launch agent)
 STACKNUDGE_VOICE=true
 ```
 
+The voice daemon starts automatically on first notification and is registered as a login item so it stays running across reboots.
+
 Voice fires only when the banner shows — it's suppressed along with the banner when your editor is already in focus. For permission events, voice says *"Bash command needs approval"* or *"Edit: filename"* rather than reading the raw command aloud.
 
 Optional tuning (also in `~/.stack-nudge/config`):
 
 ```bash
-STACKNUDGE_VOICE_NAME=af_heart   # StackVox voice ID
+STACKNUDGE_VOICE_NAME=af_heart   # voice ID (run `~/.stack-nudge/venv/bin/stackvox voices` for the full list)
 STACKNUDGE_VOICE_SPEED=1.1       # playback speed (1.0 = normal)
 ```
 
