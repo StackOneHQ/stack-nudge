@@ -13,6 +13,8 @@ Replies: "ok", "busy", "err: <msg>".
 
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
 import json
 import logging
 import os
@@ -20,6 +22,7 @@ import queue
 import signal
 import socket
 import socketserver
+import sys
 import threading
 
 from stackvox.engine import DEFAULT_LANG, DEFAULT_SPEED, DEFAULT_VOICE, Stackvox
@@ -35,6 +38,84 @@ CLIENT_TIMEOUT_SECONDS = 1.0
 PING_TIMEOUT_SECONDS = 0.5
 RECV_BYTES = 1024
 
+# Holds CoreAudio callback references so they aren't garbage collected.
+_ca_refs: list = []
+
+
+def _reinit_audio() -> None:
+    """Force PortAudio to re-enumerate audio devices.
+
+    Necessary on macOS when the default output device changes (e.g. connecting
+    or disconnecting Bluetooth headphones). PortAudio caches the device list at
+    Pa_Initialize() time and won't follow the system default otherwise.
+    """
+    import sounddevice as sd
+
+    try:
+        sd._lib.Pa_Terminate()  # type: ignore[attr-defined]
+        sd._lib.Pa_Initialize()  # type: ignore[attr-defined]
+        logger.info("audio reinitialized after device change")
+    except Exception:
+        logger.debug("audio reinit unavailable", exc_info=True)
+
+
+def _start_device_watcher(callback: "() -> None") -> None:
+    """macOS only: watch for default output device changes via CoreAudio.
+
+    Registers a property listener on kAudioHardwarePropertyDefaultOutputDevice
+    and runs a CFRunLoop in a background daemon thread so the callbacks fire.
+    Falls back silently on non-macOS or if CoreAudio is unavailable.
+    """
+    if sys.platform != "darwin":
+        return
+
+    try:
+        _ca = ctypes.CDLL(ctypes.util.find_library("CoreAudio") or "")
+        _cf = ctypes.CDLL(ctypes.util.find_library("CoreFoundation") or "")
+    except Exception:
+        logger.debug("CoreAudio unavailable; device watcher disabled")
+        return
+
+    class _PropAddr(ctypes.Structure):
+        _fields_ = [
+            ("mSelector", ctypes.c_uint32),
+            ("mScope", ctypes.c_uint32),
+            ("mElement", ctypes.c_uint32),
+        ]
+
+    _ListenerProc = ctypes.CFUNCTYPE(
+        ctypes.c_int32,
+        ctypes.c_uint32,   # inObjectID
+        ctypes.c_uint32,   # inNumberAddresses
+        ctypes.POINTER(_PropAddr),
+        ctypes.c_void_p,
+    )
+
+    def _on_device_change(obj_id: int, n: int, addrs, data) -> int:
+        try:
+            callback()
+        except Exception:
+            logger.debug("device-change callback error", exc_info=True)
+        return 0
+
+    cb = _ListenerProc(_on_device_change)
+    _ca_refs.append(cb)  # prevent GC
+
+    prop = _PropAddr(
+        0x644F7574,  # kAudioHardwarePropertyDefaultOutputDevice  'dOut'
+        0x676C6F62,  # kAudioObjectPropertyScopeGlobal             'glob'
+        0,           # kAudioObjectPropertyElementMain
+    )
+    _ca.AudioObjectAddPropertyListener(1, ctypes.byref(prop), cb, None)
+
+    # CoreAudio property listeners fire on the thread's CFRunLoop — spin one up.
+    def _run_loop() -> None:
+        _cf.CFRunLoopRun()
+
+    t = threading.Thread(target=_run_loop, daemon=True, name="audio-device-watcher")
+    t.start()
+    logger.debug("audio device watcher started")
+
 
 class _DaemonState:
     def __init__(self, voice: str, speed: float, lang: str) -> None:
@@ -43,6 +124,7 @@ class _DaemonState:
         self.stop_event = threading.Event()
         self.worker = threading.Thread(target=self._worker, daemon=True)
         self.worker.start()
+        _start_device_watcher(_reinit_audio)
 
     def _worker(self) -> None:
         while not self.stop_event.is_set():
@@ -50,15 +132,23 @@ class _DaemonState:
                 req = self.queue.get(timeout=WORKER_POLL_SECONDS)
             except queue.Empty:
                 continue
-            try:
-                self.tts.speak(
-                    req["text"],
-                    voice=req.get("voice"),
-                    speed=req.get("speed"),
-                    lang=req.get("lang"),
-                )
-            except Exception:
-                logger.exception("playback error")
+            # Retry once after reinitializing audio — handles the case where a
+            # device switch happens just before playback starts.
+            for attempt in range(2):
+                try:
+                    self.tts.speak(
+                        req["text"],
+                        voice=req.get("voice"),
+                        speed=req.get("speed"),
+                        lang=req.get("lang"),
+                    )
+                    break
+                except Exception:
+                    if attempt == 0:
+                        logger.warning("playback error; reinitializing audio and retrying")
+                        _reinit_audio()
+                    else:
+                        logger.exception("playback error after audio reinit")
 
     def submit(self, req: dict) -> bool:
         try:
