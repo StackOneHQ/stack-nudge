@@ -363,13 +363,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate {
         positionPanel()
 
         let config = PanelConfig.load()
-        hotkey = Hotkey(spec: config.hotkeySpec) { [weak self] in
-            self?.toggle()
-        }
-        if hotkey == nil {
-            FileHandle.standardError.write(Data(
-                "stack-nudge-panel: failed to register hotkey '\(config.hotkeySpec)'\n".utf8))
-        }
+        nav.hotkeyDisplay = config.hotkeySpec
+        _ = registerHotkey(spec: config.hotkeySpec)
 
         startListener()
         menuBar = MenuBarController(panelController: self)
@@ -379,6 +374,75 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate {
             openConfig:       { NSWorkspace.shared.open(URL(fileURLWithPath: ConfigFile.path)) },
             quit:             { NSApp.terminate(nil) }
         )
+        nav.setHotkey = { [weak self] spec in
+            self?.registerHotkey(spec: spec) ?? false
+        }
+
+        startConfigWatcher()
+    }
+
+    @discardableResult
+    private func registerHotkey(spec: String) -> Bool {
+        let new = Hotkey(spec: spec) { [weak self] in self?.toggle() }
+        guard let new else {
+            FileHandle.standardError.write(Data(
+                "stack-nudge-panel: failed to register hotkey '\(spec)'\n".utf8))
+            return false
+        }
+        hotkey = new  // releasing the old instance unregisters it via deinit
+        return true
+    }
+
+    // MARK: - Config file watcher
+
+    private var configWatcher: DispatchSourceFileSystemObject?
+
+    // Watches ~/.stack-nudge/config for writes so that edits made via "Open
+    // config file…" or any external editor flow back into the running panel
+    // without needing a daemon restart. Most macOS editors save by writing to
+    // a temp file and renaming, which would orphan a vanilla file watcher; we
+    // re-arm on .rename/.delete so subsequent edits keep firing.
+    private func startConfigWatcher() {
+        configWatcher?.cancel()
+        configWatcher = nil
+
+        let fd = open(ConfigFile.path, O_EVTONLY)
+        guard fd >= 0 else {
+            // File may not exist yet during install — try again shortly.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.startConfigWatcher()
+            }
+            return
+        }
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .rename, .delete],
+            queue: .main
+        )
+        source.setEventHandler { [weak self, weak source] in
+            guard let self, let source else { return }
+            let flags = source.data
+            self.reloadConfigFromDisk()
+            if flags.contains(.rename) || flags.contains(.delete) {
+                // Atomic-save replaced the inode under us; re-open against
+                // the new file. Small delay lets the editor finish its swap.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    self.startConfigWatcher()
+                }
+            }
+        }
+        source.setCancelHandler { close(fd) }
+        source.resume()
+        configWatcher = source
+    }
+
+    private func reloadConfigFromDisk() {
+        let config = PanelConfig.load()
+        if config.hotkeySpec != nav.hotkeyDisplay {
+            if registerHotkey(spec: config.hotkeySpec) {
+                nav.hotkeyDisplay = config.hotkeySpec
+            }
+        }
     }
 
     func showPermissions() {
@@ -396,6 +460,23 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate {
         let mods = event.modifierFlags
         let blockingMods: NSEvent.ModifierFlags = [.control, .option]
         let cmdOnly = mods.intersection([.command, .control, .option, .shift]) == .command
+
+        // While recording a hotkey, swallow every key so the new combo
+        // doesn't accidentally fire some other shortcut.
+        if nav.recordingHotkey {
+            if event.keyCode == KeyCode.escape && mods.intersection([.command, .control, .option, .shift]).isEmpty {
+                nav.cancelRecordingHotkey()
+                return true
+            }
+            let captured = mods.intersection([.command, .control, .option, .shift])
+            // Need at least one modifier (Carbon RegisterEventHotKey rejects
+            // bare keys, and we don't want to accidentally bind plain "n").
+            guard !captured.isEmpty else { return true }
+            if let spec = Hotkey.encode(eventModifiers: mods.rawValue, keyCode: event.keyCode) {
+                nav.commitHotkey(spec)
+            }
+            return true
+        }
 
         // Cmd+1/2/3 jump directly between modes; the in-panel tab strip is
         // the discoverable mouse equivalent.
@@ -516,7 +597,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate {
                 windowTitle: event.windowTitle,
                 ipcHook: event.ipcHook,
                 projectPath: event.projectPath,
-                sendApproval: sendApproval
+                sendApproval: sendApproval,
+                agent: event.agent
             )
         }
     }
@@ -554,7 +636,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate {
                 windowTitle: session.projectName,
                 ipcHook: nil,
                 projectPath: session.projectPath,
-                sendApproval: false
+                sendApproval: false,
+                agent: session.agent
             )
         }
     }

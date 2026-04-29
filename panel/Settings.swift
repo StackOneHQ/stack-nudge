@@ -34,7 +34,9 @@ final class PanelNav: ObservableObject {
     @Published var mode: PanelMode = .events
     @Published var selectedSettingIndex: Int = 0
 
-    @Published var hotkeyDisplay:   String = "cmd+shift+n"
+    @Published var hotkeyDisplay:   String = "cmd+opt+n"
+    @Published var recordingHotkey: Bool = false
+    @Published var hotkeyError:     String?
     @Published var bannerEnabled:   Bool = true
     @Published var voiceEnabled:    Bool = false
     @Published var soundStop:       String = "Glass"
@@ -45,6 +47,10 @@ final class PanelNav: ObservableObject {
     @Published var voicesLoading:   Bool = true
 
     var actions: SettingsActions?
+    // Wired by PanelController so nav can re-register the global hotkey
+    // without owning the Hotkey instance directly. Returns true if the
+    // new spec registered successfully.
+    var setHotkey: ((String) -> Bool)?
 
     static let macSounds = [
         "Basso", "Blow", "Bottle", "Frog", "Funk", "Glass", "Hero",
@@ -55,19 +61,20 @@ final class PanelNav: ObservableObject {
     static let speedMax = 1.60
     static let speedStep = 0.05
 
-    var rowCount: Int { 9 }
+    var rowCount: Int { 10 }
 
     // Row layout (kept in one place so the controller, view, and indexing
     // logic all agree on what each row index means):
-    //   0  Banner notifications  toggle
-    //   1  Voice notifications   toggle
-    //   2  Agent done sound      cycle
-    //   3  Permission sound      cycle
-    //   4  Voice                 cycle
-    //   5  Speed                 cycle
-    //   6  Check permissions…    action
-    //   7  Open config file…     action
-    //   8  Quit panel            action
+    //   0  Hotkey                hotkey-record
+    //   1  Banner notifications  toggle
+    //   2  Voice notifications   toggle
+    //   3  Agent done sound      cycle
+    //   4  Permission sound      cycle
+    //   5  Voice                 cycle
+    //   6  Speed                 cycle
+    //   7  Check permissions…    action
+    //   8  Open config file…     action
+    //   9  Quit panel            action
 
     // MARK: - Disk I/O
 
@@ -128,12 +135,14 @@ final class PanelNav: ObservableObject {
     func cycleForward()  { applyCycle(forward: true) }
     func cycleBackward() { applyCycle(forward: false) }
 
-    // Enter: toggles flip, cycle rows step forward, actions fire.
+    // Enter: toggles flip, cycle rows step forward, actions fire, hotkey
+    // row enters record mode.
     func activate() {
         switch selectedSettingIndex {
-        case 6: actions?.checkPermissions()
-        case 7: actions?.openConfig()
-        case 8: actions?.quit()
+        case 0: startRecordingHotkey()
+        case 7: actions?.checkPermissions()
+        case 8: actions?.openConfig()
+        case 9: actions?.quit()
         default: applyCycle(forward: true)
         }
     }
@@ -141,25 +150,54 @@ final class PanelNav: ObservableObject {
     private func applyCycle(forward: Bool) {
         switch selectedSettingIndex {
         case 0:
+            // Cycle on the hotkey row also enters record mode.
+            startRecordingHotkey()
+        case 1:
             bannerEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_BANNER", value: bannerEnabled ? "true" : "false")
-        case 1:
+        case 2:
             voiceEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_VOICE", value: voiceEnabled ? "true" : "false")
-        case 2:
-            soundStop = step(soundStop, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_STOP", preview: true)
         case 3:
-            soundPermission = step(soundPermission, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_PERMISSION", preview: true)
+            soundStop = step(soundStop, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_STOP", preview: true)
         case 4:
+            soundPermission = step(soundPermission, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_PERMISSION", preview: true)
+        case 5:
             guard !voicesLoading, !voicesAvailable.isEmpty else { return }
             voice = step(voice, in: voicesAvailable, forward: forward, key: "STACKNUDGE_VOICE_NAME", preview: false)
-        case 5:
+        case 6:
             let next = forward ? voiceSpeed + Self.speedStep : voiceSpeed - Self.speedStep
             voiceSpeed = max(Self.speedMin, min(Self.speedMax, (next * 100).rounded() / 100))
             ConfigFile.write(key: "STACKNUDGE_VOICE_SPEED", value: String(format: "%.2f", voiceSpeed))
         default:
             break
         }
+    }
+
+    // MARK: - Hotkey recording
+
+    func startRecordingHotkey() {
+        recordingHotkey = true
+        hotkeyError = nil
+    }
+
+    func cancelRecordingHotkey() {
+        recordingHotkey = false
+    }
+
+    func commitHotkey(_ spec: String) {
+        // Try to register first; only persist if it took. Failing means the
+        // combo was rejected by the OS (already-registered global, malformed,
+        // etc.) — keep the previous one and surface a message to the user.
+        guard let setHotkey, setHotkey(spec) else {
+            hotkeyError = "‘\(spec)’ is unavailable — already bound by another app"
+            recordingHotkey = false
+            return
+        }
+        hotkeyError = nil
+        hotkeyDisplay = spec
+        ConfigFile.write(key: "STACKNUDGE_PANEL_HOTKEY", value: spec)
+        recordingHotkey = false
     }
 
     private func step(_ current: String, in list: [String], forward: Bool, key: String, preview: Bool) -> String {
@@ -182,30 +220,38 @@ struct SettingsView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        infoRow(
-                            label: "Hotkey",
-                            value: nav.hotkeyDisplay
-                        )
+                        section("Hotkey") {
+                            row(0, label: "Panel shortcut",
+                                kind: .cycle,
+                                value: nav.recordingHotkey ? "Press combo…" : nav.hotkeyDisplay)
+                            if let error = nav.hotkeyError {
+                                Text(error)
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                                    .padding(.horizontal, 14)
+                                    .padding(.top, 2)
+                            }
+                        }
 
                         section("Toggles") {
-                            row(0, label: "Banner notifications", kind: .toggle, value: nav.bannerEnabled ? "On" : "Off")
-                            row(1, label: "Voice notifications",  kind: .toggle, value: nav.voiceEnabled  ? "On" : "Off")
+                            row(1, label: "Banner notifications", kind: .toggle, value: nav.bannerEnabled ? "On" : "Off")
+                            row(2, label: "Voice notifications",  kind: .toggle, value: nav.voiceEnabled  ? "On" : "Off")
                         }
 
                         section("Sounds") {
-                            row(2, label: "Agent done", kind: .cycle, value: nav.soundStop)
-                            row(3, label: "Permission", kind: .cycle, value: nav.soundPermission)
+                            row(3, label: "Agent done", kind: .cycle, value: nav.soundStop)
+                            row(4, label: "Permission", kind: .cycle, value: nav.soundPermission)
                         }
 
                         section("Voice") {
-                            row(4, label: "Voice",  kind: .cycle, value: voiceLabel)
-                            row(5, label: "Speed",  kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed))
+                            row(5, label: "Voice",  kind: .cycle, value: voiceLabel)
+                            row(6, label: "Speed",  kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed))
                         }
 
                         section("Actions") {
-                            row(6, label: "Check permissions…", kind: .action, value: "")
-                            row(7, label: "Open config file…",  kind: .action, value: "")
-                            row(8, label: "Quit panel",         kind: .action, value: "")
+                            row(7, label: "Check permissions…", kind: .action, value: "")
+                            row(8, label: "Open config file…",  kind: .action, value: "")
+                            row(9, label: "Quit panel",         kind: .action, value: "")
                         }
                     }
                     .padding(.horizontal, 14)
@@ -288,19 +334,6 @@ struct SettingsView: View {
         }
     }
 
-    private func infoRow(label: String, value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-            Spacer()
-            Text(value)
-                .font(.caption.monospaced())
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.horizontal, 6)
-    }
 }
 
 private struct SettingsRowView: View {

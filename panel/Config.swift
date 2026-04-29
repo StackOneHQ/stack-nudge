@@ -4,7 +4,7 @@ import Foundation
 // Parses simple `KEY=value` lines, ignoring comments and blank lines.
 // notify.sh shell-sources it; we just need the subset relevant to the panel.
 struct PanelConfig {
-    var hotkeySpec: String = "cmd+shift+n"
+    var hotkeySpec: String = "cmd+opt+n"
 
     static func load() -> PanelConfig {
         var config = PanelConfig()

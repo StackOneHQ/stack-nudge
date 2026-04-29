@@ -85,7 +85,7 @@ STACKNUDGE_PANEL=true
 STACKNUDGE_BANNER=false   # optional — suppress macOS banners when using the panel
 ```
 
-Default hotkey is `cmd+shift+n`. Override with `STACKNUDGE_PANEL_HOTKEY=cmd+opt+space` (or any combination of `cmd`/`shift`/`opt`/`ctrl` + a letter, digit, or `space`/`return`/`tab`/`escape`).
+Default hotkey is `cmd+opt+n`. Override with `STACKNUDGE_PANEL_HOTKEY=cmd+opt+space` (or any combination of `cmd`/`shift`/`opt`/`ctrl` + a letter, digit, or `space`/`return`/`tab`/`escape`).
 
 The panel registers a launchd agent so it starts at login when enabled. Banner and panel can run together, alone, or both off — the sound and voice still fire as passive signals.
 
