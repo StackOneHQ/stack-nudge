@@ -78,4 +78,23 @@ final class Hotkey {
         "7": 26, "8": 28, "9": 25,
         "space": 49, "return": 36, "tab": 48, "escape": 53,
     ]
+
+    private static let codeToKey: [UInt16: String] = {
+        var inverted: [UInt16: String] = [:]
+        for (name, code) in keyCodes { inverted[UInt16(code)] = name }
+        return inverted
+    }()
+
+    // Reverse of `parse`: build a "cmd+shift+n" spec string from an NSEvent's
+    // modifiers + keyCode. Returns nil if the keyCode isn't one we can name.
+    static func encode(eventModifiers: UInt, keyCode: UInt16) -> String? {
+        guard let key = codeToKey[keyCode] else { return nil }
+        var parts: [String] = []
+        if eventModifiers & 0x100000 != 0 { parts.append("cmd")   } // NSEvent.ModifierFlags.command
+        if eventModifiers & 0x040000 != 0 { parts.append("ctrl")  } // .control
+        if eventModifiers & 0x080000 != 0 { parts.append("opt")   } // .option
+        if eventModifiers & 0x020000 != 0 { parts.append("shift") } // .shift
+        parts.append(key)
+        return parts.joined(separator: "+")
+    }
 }

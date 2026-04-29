@@ -117,6 +117,12 @@ private struct NudgeEventDTO: Decodable {
     let ipc_hook: String?
     let has_action_button: Bool?
     let timestamp: Double?
+    let agent_pid: Int?
+    let shell_pid: Int?
+    let terminal_pid: Int?
+    let terminal_app: String?
+    let term_program: String?
+    let session_id: String?
 
     func toNudgeEvent() -> NudgeEvent {
         NudgeEvent(
@@ -129,7 +135,13 @@ private struct NudgeEventDTO: Decodable {
             windowTitle: window_title,
             ipcHook: ipc_hook,
             hasActionButton: has_action_button ?? false,
-            timestamp: timestamp.map { Date(timeIntervalSince1970: $0) } ?? Date()
+            timestamp: timestamp.map { Date(timeIntervalSince1970: $0) } ?? Date(),
+            agentPID: agent_pid,
+            shellPID: shell_pid,
+            terminalPID: terminal_pid,
+            terminalApp: terminal_app,
+            termProgram: term_program,
+            sessionID: session_id
         )
     }
 }

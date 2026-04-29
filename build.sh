@@ -56,6 +56,9 @@ build_app "$PANEL_APP" "stack-nudge-panel" \
   panel/Panel.swift \
   panel/MenuBar.swift \
   panel/Permissions.swift \
+  panel/Settings.swift \
+  panel/SessionStore.swift \
+  panel/Sessions.swift \
   shared/AppActivator.swift \
   -framework Foundation -framework AppKit -framework SwiftUI -framework Carbon
 echo "  Built $PANEL_APP"

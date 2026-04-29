@@ -66,7 +66,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private let statusItem: NSStatusItem
     private weak var panelController: PanelController?
-    private var permissionsWC: PermissionsWindowController?
 
     init(panelController: PanelController) {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -185,10 +184,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func showPermissionsAction() {
-        if permissionsWC == nil {
-            permissionsWC = PermissionsWindowController()
-        }
-        permissionsWC?.showAndRaise()
+        panelController?.showPermissions()
     }
 
     @objc private func openConfigAction() {
