@@ -38,3 +38,8 @@
 # Global hotkey that focuses the panel. Modifiers: cmd, shift, opt/alt, ctrl.
 # Default: cmd+shift+n
 #STACKNUDGE_PANEL_HOTKEY=cmd+shift+n
+
+# Sound played for the "agent done" event. Any name from /System/Library/Sounds/
+# (without the .aiff extension). Defaults: Glass for stop, Ping for permission.
+#STACKNUDGE_SOUND_STOP=Glass
+#STACKNUDGE_SOUND_PERMISSION=Ping

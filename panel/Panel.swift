@@ -9,12 +9,20 @@ private enum KeyCode {
     static let escape:    UInt16 = 53
     static let upArrow:   UInt16 = 126
     static let downArrow: UInt16 = 125
+    static let leftArrow: UInt16 = 123
+    static let rightArrow: UInt16 = 124
     static let returnKey: UInt16 = 36
     static let numpadEnter: UInt16 = 76
+    static let tab:       UInt16 = 48
     static let oKey:      UInt16 = 31
     static let rKey:      UInt16 = 15
     static let delete:    UInt16 = 51
     static let forwardDelete: UInt16 = 117
+    static let comma:     UInt16 = 43
+    static let one:       UInt16 = 18
+    static let two:       UInt16 = 19
+    static let three:     UInt16 = 20
+    static let nKey:      UInt16 = 45
 }
 
 // Floating, non-activating panel. Shown via global hotkey; receives key
@@ -53,41 +61,91 @@ final class FloatingPanel: NSPanel {
 struct PanelContentView: View {
 
     @ObservedObject var store: EventStore
+    @ObservedObject var sessions: SessionStore
+    @ObservedObject var nav: PanelNav
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
+            tabStrip
+            Divider().opacity(0.4)
 
+            switch nav.mode {
+            case .events:   eventsBody
+            case .sessions: SessionsView(store: sessions)
+            case .settings: SettingsView(nav: nav)
+            }
+        }
+    }
+
+    private var tabStrip: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "bell.badge.fill")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .padding(.trailing, 4)
+
+            tab(.events,
+                label: "Events",
+                count: store.events.count,
+                shortcutKeys: ["⌘", "1"])
+            tab(.sessions,
+                label: "Sessions",
+                count: sessions.sessions.filter { $0.status == .active }.count,
+                shortcutKeys: ["⌘", "2"])
+            tab(.settings,
+                label: "Settings",
+                count: 0,
+                shortcutKeys: ["⌘", "3"])
+
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    private func tab(_ mode: PanelMode, label: String, count: Int, shortcutKeys: [String]) -> some View {
+        let isActive = nav.mode == mode
+        return Button {
+            nav.mode = mode
+        } label: {
+            HStack(spacing: 5) {
+                Text(label)
+                    .font(.caption.weight(isActive ? .semibold : .regular))
+                if count > 0 {
+                    Text("\(count)")
+                        .font(.caption2.monospacedDigit())
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(
+                            Capsule().fill(Color.primary.opacity(isActive ? 0.18 : 0.10))
+                        )
+                }
+                HStack(spacing: 2) {
+                    ForEach(shortcutKeys, id: \.self) { KeyCapView(symbol: $0) }
+                }
+                .opacity(isActive ? 0.5 : 0.85)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .foregroundStyle(isActive ? Color.primary : Color.secondary)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isActive ? Color.accentColor.opacity(0.25) : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var eventsBody: some View {
+        VStack(alignment: .leading, spacing: 0) {
             if store.events.isEmpty {
                 emptyState
             } else {
                 eventList
             }
-
             footer
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    private var header: some View {
-        HStack(spacing: 8) {
-            Text("stack-nudge")
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.primary)
-            Spacer()
-            if !store.events.isEmpty {
-                Text("\(store.events.count)")
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(
-                        Capsule().fill(Color.primary.opacity(0.08))
-                    )
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
     }
 
     private var emptyState: some View {
@@ -154,7 +212,7 @@ struct PanelContentView: View {
     }
 }
 
-private struct FooterHint: View {
+struct FooterHint: View {
     let label: String
     let keys: [String]
     var primary: Bool = false
@@ -172,7 +230,7 @@ private struct FooterHint: View {
     }
 }
 
-private struct KeyCapView: View {
+struct KeyCapView: View {
     let symbol: String
 
     var body: some View {
@@ -192,7 +250,7 @@ private struct KeyCapView: View {
     }
 }
 
-private struct FooterDivider: View {
+struct FooterDivider: View {
     var body: some View {
         Rectangle()
             .fill(Color.primary.opacity(0.15))
@@ -271,8 +329,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate {
     private var panel: FloatingPanel!
     private var hotkey: Hotkey?
     private let store = EventStore()
+    private let sessions = SessionStore()
+    private let nav = PanelNav()
     private var listener: EventListener?
     private var menuBar: MenuBarController?
+    private var permissionsWC: PermissionsWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let frame = NSRect(x: 0, y: 0, width: 420, height: 280)
@@ -288,7 +349,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate {
         blur.layer?.cornerRadius = 12
         blur.layer?.masksToBounds = true
 
-        let host = NSHostingView(rootView: PanelContentView(store: store))
+        let host = NSHostingView(rootView: PanelContentView(store: store, sessions: sessions, nav: nav))
         host.translatesAutoresizingMaskIntoConstraints = false
         blur.addSubview(host)
         NSLayoutConstraint.activate([
@@ -312,6 +373,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate {
 
         startListener()
         menuBar = MenuBarController(panelController: self)
+
+        nav.actions = SettingsActions(
+            checkPermissions: { [weak self] in self?.showPermissions() },
+            openConfig:       { NSWorkspace.shared.open(URL(fileURLWithPath: ConfigFile.path)) },
+            quit:             { NSApp.terminate(nil) }
+        )
+    }
+
+    func showPermissions() {
+        if permissionsWC == nil { permissionsWC = PermissionsWindowController() }
+        permissionsWC?.showAndRaise()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -321,8 +393,88 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate {
     // MARK: - PanelKeyDelegate
 
     func panelHandlesKey(_ event: NSEvent) -> Bool {
-        let blockingMods: NSEvent.ModifierFlags = [.command, .control, .option]
-        guard event.modifierFlags.intersection(blockingMods).isEmpty else {
+        let mods = event.modifierFlags
+        let blockingMods: NSEvent.ModifierFlags = [.control, .option]
+        let cmdOnly = mods.intersection([.command, .control, .option, .shift]) == .command
+
+        // Cmd+1/2/3 jump directly between modes; the in-panel tab strip is
+        // the discoverable mouse equivalent.
+        if cmdOnly {
+            switch event.keyCode {
+            case KeyCode.one:
+                nav.mode = .events; return true
+            case KeyCode.two:
+                nav.mode = .sessions; return true
+            case KeyCode.three:
+                nav.mode = .settings; return true
+            default:
+                break
+            }
+        }
+
+        // Sessions mode: ↑/↓ select, Enter focus, ⌫/R kill, N rename.
+        // While the rename TextField is active, every key flows through to
+        // SwiftUI; the field handles Enter via .onSubmit and Esc via
+        // .onExitCommand.
+        if nav.mode == .sessions {
+            if sessions.renamingPID != nil { return false }
+            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            switch event.keyCode {
+            case KeyCode.escape where plain:
+                nav.mode = .events
+            case KeyCode.upArrow where plain:
+                selectPrevSession()
+            case KeyCode.downArrow where plain:
+                selectNextSession()
+            case KeyCode.returnKey, KeyCode.numpadEnter:
+                guard plain else { return false }
+                focusSelectedSession()
+            case KeyCode.delete, KeyCode.forwardDelete, KeyCode.rKey:
+                guard plain else { return false }
+                killSelectedSession()
+            case KeyCode.nKey:
+                // Accept N regardless of shift (same physical key for n / N).
+                guard mods.intersection([.command, .control, .option]).isEmpty else { return false }
+                let pid = sessions.selectedPID ?? sessions.sessions.first?.pid
+                if let pid { sessions.startRenaming(pid) }
+            default:
+                return false
+            }
+            return true
+        }
+
+        // In settings mode, the controller drives row selection and value
+        // cycling on PanelNav so the SettingsView stays a pure renderer.
+        if nav.mode == .settings {
+            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            let shiftOnly = mods.intersection([.command, .control, .option, .shift]) == .shift
+            switch event.keyCode {
+            case KeyCode.escape where plain:
+                nav.mode = .events
+            case KeyCode.upArrow where plain:
+                nav.selectPrevRow()
+            case KeyCode.downArrow where plain:
+                nav.selectNextRow()
+            case KeyCode.tab where plain:
+                nav.selectNextRow()
+            case KeyCode.tab where shiftOnly:
+                nav.selectPrevRow()
+            case KeyCode.leftArrow where plain:
+                nav.cycleBackward()
+            case KeyCode.rightArrow where plain:
+                nav.cycleForward()
+            case KeyCode.returnKey, KeyCode.numpadEnter:
+                guard plain else { return false }
+                nav.activate()
+            default:
+                return false
+            }
+            return true
+        }
+
+        // Events mode: filter out cmd/ctrl/opt-modified keys so app-level
+        // shortcuts pass through to the responder chain.
+        guard mods.intersection(blockingMods.union([.command])).isEmpty else {
             return false
         }
         switch event.keyCode {
@@ -375,6 +527,58 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate {
         if store.events.isEmpty { hidePanel() }
     }
 
+    // MARK: - Sessions actions
+
+    private func selectNextSession() {
+        guard !sessions.sessions.isEmpty else { return }
+        let pids = sessions.sessions.map(\.pid)
+        let idx = sessions.selectedPID.flatMap(pids.firstIndex(of:)) ?? -1
+        sessions.selectedPID = pids[min(idx + 1, pids.count - 1)]
+    }
+
+    private func selectPrevSession() {
+        guard !sessions.sessions.isEmpty else { return }
+        let pids = sessions.sessions.map(\.pid)
+        let idx = sessions.selectedPID.flatMap(pids.firstIndex(of:)) ?? 0
+        sessions.selectedPID = pids[max(idx - 1, 0)]
+    }
+
+    private func focusSelectedSession() {
+        guard let pid = sessions.selectedPID,
+              let session = sessions.sessions.first(where: { $0.pid == pid }),
+              let bundleID = bundleID(for: session.terminalApp) else { return }
+        hidePanel()
+        DispatchQueue.global(qos: .userInitiated).async {
+            AppActivator.activate(
+                bundleID: bundleID,
+                windowTitle: session.projectName,
+                ipcHook: nil,
+                projectPath: session.projectPath,
+                sendApproval: false
+            )
+        }
+    }
+
+    private func killSelectedSession() {
+        guard let pid = sessions.selectedPID else { return }
+        sessions.killSession(pid)
+    }
+
+    // Map a terminal/IDE process name to the launch-services bundle ID so
+    // AppActivator can talk to the right app.
+    private func bundleID(for terminalApp: String?) -> String? {
+        guard let app = terminalApp else { return nil }
+        if app.hasPrefix("Code") { return "com.microsoft.VSCode" }
+        if app.hasPrefix("Cursor") { return "com.todesktop.230313mzl4w4u92" }
+        switch app {
+        case "iTerm2", "iTerm":     return "com.googlecode.iterm2"
+        case "Warp", "WarpTerminal": return "dev.warp.Warp-Stable"
+        case "Ghostty", "ghostty":   return "com.mitchellh.ghostty"
+        case "Terminal":             return "com.apple.Terminal"
+        default:                     return nil
+        }
+    }
+
     // MARK: - Show / hide
 
     // Toggle behaves on focus, not visibility: hotkey while panel is key hides it;
@@ -394,8 +598,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate {
 
     // NSApp.hide hides all our windows AND deactivates the app, so the system
     // frontmost reverts to whatever was active before the panel was summoned.
+    // Always return to events mode on hide so the next show is predictable.
     private func hidePanel() {
         panel.orderOut(nil)
+        nav.mode = .events
         NSApp.hide(nil)
     }
 

@@ -148,30 +148,104 @@ ensure_panel_running() {
   done
 }
 
-# Construct one JSON line and write it to the panel socket. macOS nc lacks
-# the -N flag, so we send via python's socket module directly — no nc, no
-# nudges-stuck-in-stdout-buffer surprises.
+# Walk up the process tree from this hook's parent and detect the agent
+# binary, parent shell, and terminal/helper. Sets AGENT_PID, SHELL_PID,
+# TERMINAL_PID, TERMINAL_APP (each empty if not found).
+walk_session_chain() {
+  AGENT_PID=""; SHELL_PID=""; TERMINAL_PID=""; TERMINAL_APP=""
+  local pid="$PPID"
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    [[ -z "$pid" || "$pid" -le 1 ]] && break
+    local comm
+    comm=$(ps -p "$pid" -o comm= 2>/dev/null)
+    [[ -z "$comm" ]] && break
+    local base="${comm##*/}"
+    case "$base" in
+      claude|gemini|codex)
+        [[ -z "$AGENT_PID" ]] && AGENT_PID="$pid"
+        ;;
+      bash|zsh|sh|fish|dash|ksh)
+        [[ -z "$SHELL_PID" ]] && SHELL_PID="$pid"
+        ;;
+    esac
+    case "$base" in
+      "Code Helper"|"Code Helper (Plugin)"|"Code Helper (Renderer)"|Code|\
+      "Cursor Helper"|"Cursor Helper (Plugin)"|"Cursor Helper (Renderer)"|Cursor|\
+      iTerm2|iTerm|Terminal|Warp|WarpTerminal|ghostty|Ghostty)
+        TERMINAL_PID="$pid"; TERMINAL_APP="$base"; break ;;
+    esac
+    pid=$(ps -p "$pid" -o ppid= 2>/dev/null | tr -d ' ')
+  done
+}
+
+# Construct one JSON line and write it to the panel socket. Pass values via
+# env vars rather than positional argv to keep the heredoc readable now that
+# we have ~15 fields.
 # Args: title message bundle_id window_title has_action(true|false)
 post_to_panel() {
   [[ "${PANEL_ENABLED}" != "true" ]] && return
   ensure_panel_running
   [[ ! -S "$PANEL_SOCK" ]] && return
 
-  python3 - "$AGENT" "$EVENT" "$1" "$2" "$PWD" "$3" "$4" "${VSCODE_IPC_HOOK_CLI:-}" "$5" "$PANEL_SOCK" <<'PY' 2>/dev/null
-import json, socket, sys, time
-agent, event, title, message, project, bundle, window, ipc, has_action, sock_path = sys.argv[1:11]
+  walk_session_chain
+
+  NUDGE_AGENT="$AGENT" \
+  NUDGE_EVENT="$EVENT" \
+  NUDGE_TITLE="$1" \
+  NUDGE_MESSAGE="$2" \
+  NUDGE_PROJECT="$PWD" \
+  NUDGE_BUNDLE="$3" \
+  NUDGE_WINDOW="$4" \
+  NUDGE_IPC_HOOK="${VSCODE_IPC_HOOK_CLI:-}" \
+  NUDGE_HAS_ACTION="$5" \
+  NUDGE_SOCK="$PANEL_SOCK" \
+  NUDGE_AGENT_PID="${AGENT_PID:-}" \
+  NUDGE_SHELL_PID="${SHELL_PID:-}" \
+  NUDGE_TERMINAL_PID="${TERMINAL_PID:-}" \
+  NUDGE_TERMINAL_APP="${TERMINAL_APP:-}" \
+  NUDGE_TERM_PROGRAM="${TERM_PROGRAM:-}" \
+  NUDGE_SESSION_ID="${TERM_SESSION_ID:-${ITERM_SESSION_ID:-}}" \
+  python3 - <<'PY' 2>/dev/null
+import json, os, socket, time
+
+env = os.environ
 out = {
-  "agent": agent, "event": event, "title": title, "message": message,
-  "timestamp": time.time(), "has_action_button": has_action == "true",
+    "agent":             env["NUDGE_AGENT"],
+    "event":             env["NUDGE_EVENT"],
+    "title":             env["NUDGE_TITLE"],
+    "message":           env["NUDGE_MESSAGE"],
+    "timestamp":         time.time(),
+    "has_action_button": env["NUDGE_HAS_ACTION"] == "true",
 }
-if project: out["project_path"]  = project
-if bundle:  out["bundle_id"]     = bundle
-if window:  out["window_title"]  = window
-if ipc:     out["ipc_hook"]      = ipc
+
+# Only emit fields that have values — keeps the wire payload clean.
+optional = {
+    "project_path":  env.get("NUDGE_PROJECT"),
+    "bundle_id":     env.get("NUDGE_BUNDLE"),
+    "window_title":  env.get("NUDGE_WINDOW"),
+    "ipc_hook":      env.get("NUDGE_IPC_HOOK"),
+    "agent_pid":     env.get("NUDGE_AGENT_PID"),
+    "shell_pid":     env.get("NUDGE_SHELL_PID"),
+    "terminal_pid":  env.get("NUDGE_TERMINAL_PID"),
+    "terminal_app":  env.get("NUDGE_TERMINAL_APP"),
+    "term_program":  env.get("NUDGE_TERM_PROGRAM"),
+    "session_id":    env.get("NUDGE_SESSION_ID"),
+}
+for key, value in optional.items():
+    if not value:
+        continue
+    if key.endswith("_pid"):
+        try:
+            out[key] = int(value)
+        except ValueError:
+            continue
+    else:
+        out[key] = value
+
 data = (json.dumps(out) + "\n").encode()
 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 try:
-    s.connect(sock_path)
+    s.connect(env["NUDGE_SOCK"])
     s.sendall(data)
 finally:
     s.close()
@@ -313,13 +387,15 @@ TITLE="$(agent_label "$AGENT")"
 
 case "$OS" in
   Darwin)
+    SOUND_STOP="${STACKNUDGE_SOUND_STOP:-Glass}"
+    SOUND_PERMISSION="${STACKNUDGE_SOUND_PERMISSION:-Ping}"
     case "$EVENT" in
       permission)
         ctx=$(permission_context)
         voice_ctx=$(voice_permission_context)
-        notify_macos "$TITLE" "${ctx:-Waiting for your approval}" "Ping" "${voice_ctx:-Waiting for your approval}"
+        notify_macos "$TITLE" "${ctx:-Waiting for your approval}" "$SOUND_PERMISSION" "${voice_ctx:-Waiting for your approval}"
         ;;
-      *) notify_macos "$TITLE" "Done" "Glass" ;;
+      *) notify_macos "$TITLE" "Done" "$SOUND_STOP" ;;
     esac
     ;;
   Linux)
