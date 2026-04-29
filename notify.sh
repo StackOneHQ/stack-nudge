@@ -105,6 +105,7 @@ speak_notification() {
   [[ "${VOICE_ENABLED}" != "true" ]] && return
   [[ ! -x "$STACKVOX_SAY" ]] && return
   local text="$1"
+  [[ -z "$text" ]] && return
   # Start daemon if socket doesn't exist yet
   if [[ ! -S "${HOME}/.cache/stackvox/daemon.sock" ]]; then
     nohup "$STACKVOX" serve >/dev/null 2>&1 &
@@ -204,6 +205,9 @@ notify_macos() {
     [[ -n "${VSCODE_IPC_HOOK_CLI}" ]] && open_args+=(--ipc-hook "${VSCODE_IPC_HOOK_CLI}")
     open_args+=(--project-path "${PWD}")
     [[ "${EVENT}" == "permission" ]] && open_args+=(--has-action-button)
+    # Play sound independently — don't rely on the Swift app delivering it,
+    # since macOS can suppress the notification silently (DND, timing, etc.)
+    afplay "/System/Library/Sounds/${sound}.aiff" 2>/dev/null &
     # Launch via `open -a` so LaunchServices registers it — required for click-to-focus
     open -a "$app_bundle" "${open_args[@]}"
     speak_notification "${voice_message}"
@@ -244,7 +248,7 @@ case "$OS" in
         voice_ctx=$(voice_permission_context)
         notify_macos "$TITLE" "${ctx:-Waiting for your approval}" "Ping" "${voice_ctx:-Waiting for your approval}"
         ;;
-      *) notify_macos "$TITLE" "Done" "Glass" ;;
+      *) notify_macos "$TITLE" "Done" "Glass" "" ;;
     esac
     ;;
   Linux)
