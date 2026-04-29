@@ -82,6 +82,11 @@ VOICE_ENABLED="${STACKNUDGE_VOICE:-false}"
 VOICE_NAME="${STACKNUDGE_VOICE_NAME:-af_heart}"
 VOICE_SPEED="${STACKNUDGE_VOICE_SPEED:-1.1}"
 
+# Banner and panel surfaces are independent; sound/voice always fire.
+BANNER_ENABLED="${STACKNUDGE_BANNER:-true}"
+PANEL_ENABLED="${STACKNUDGE_PANEL:-false}"
+PANEL_SOCK="${HOME}/.stack-nudge/panel.sock"
+
 # Pretty-print the agent name for the notification title
 agent_label() {
   case "$1" in
@@ -110,6 +115,67 @@ speak_notification() {
     nohup "$STACKVOX" serve >/dev/null 2>&1 &
   fi
   "$STACKVOX_SAY" --voice "${VOICE_NAME}" --speed "${VOICE_SPEED}" "${text}" 2>/dev/null &
+}
+
+# Locate one of our .app bundles. Searches ~/Applications, the script's
+# own directory, and the repo build/ output (for in-tree development).
+# Args: app-bundle-name (e.g. "stack-nudge.app")
+# Echoes the first match, empty string if none found.
+find_app_bundle() {
+  local name="$1"
+  for candidate in \
+    "$HOME/Applications/$name" \
+    "$(dirname "$0")/$name" \
+    "$(dirname "$0")/build/$name"; do
+    if [[ -d "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return
+    fi
+  done
+}
+
+ensure_panel_running() {
+  [[ "${PANEL_ENABLED}" != "true" ]] && return
+  [[ -S "$PANEL_SOCK" ]] && return
+  local panel_app
+  panel_app=$(find_app_bundle "stack-nudge-panel.app")
+  [[ -z "$panel_app" ]] && return
+  # -g: launch in the background, don't bring the panel app to foreground
+  open -ga "$panel_app" 2>/dev/null
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [[ -S "$PANEL_SOCK" ]] && return
+    sleep 0.1
+  done
+}
+
+# Construct one JSON line and write it to the panel socket. macOS nc lacks
+# the -N flag, so we send via python's socket module directly — no nc, no
+# nudges-stuck-in-stdout-buffer surprises.
+# Args: title message bundle_id window_title has_action(true|false)
+post_to_panel() {
+  [[ "${PANEL_ENABLED}" != "true" ]] && return
+  ensure_panel_running
+  [[ ! -S "$PANEL_SOCK" ]] && return
+
+  python3 - "$AGENT" "$EVENT" "$1" "$2" "$PWD" "$3" "$4" "${VSCODE_IPC_HOOK_CLI:-}" "$5" "$PANEL_SOCK" <<'PY' 2>/dev/null
+import json, socket, sys, time
+agent, event, title, message, project, bundle, window, ipc, has_action, sock_path = sys.argv[1:11]
+out = {
+  "agent": agent, "event": event, "title": title, "message": message,
+  "timestamp": time.time(), "has_action_button": has_action == "true",
+}
+if project: out["project_path"]  = project
+if bundle:  out["bundle_id"]     = bundle
+if window:  out["window_title"]  = window
+if ipc:     out["ipc_hook"]      = ipc
+data = (json.dumps(out) + "\n").encode()
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    s.connect(sock_path)
+    s.sendall(data)
+finally:
+    s.close()
+PY
 }
 
 notify_macos() {
@@ -180,39 +246,48 @@ notify_macos() {
     fi
   fi
 
-  # Find the stack-nudge .app bundle: ~/Applications or repo
-  local app_bundle
-  for candidate in \
-    "$HOME/Applications/stack-nudge.app" \
-    "$(dirname "$0")/stack-nudge.app" \
-    "$(dirname "$0")/build/stack-nudge.app"; do
-    if [[ -d "$candidate" ]]; then
-      app_bundle="$candidate"
-      break
-    fi
-  done
+  local has_action="false"
+  [[ "${EVENT}" == "permission" ]] && has_action="true"
 
-  if [[ -n "$app_bundle" ]]; then
-    # Build args array — avoids quoting hazards with window titles containing spaces
-    local open_args=(
-      --args
-      --title "${title}" --message "${message}"
-      --sound "${sound}" --activate "${bundle_id}"
-    )
-    [[ "${ACTIVATE_IMMEDIATELY}" == "true" ]] && open_args+=(--activate-immediately)
-    [[ -n "$win_title" ]] && open_args+=(--window-title "${project_name}")
-    [[ -n "${VSCODE_IPC_HOOK_CLI}" ]] && open_args+=(--ipc-hook "${VSCODE_IPC_HOOK_CLI}")
-    open_args+=(--project-path "${PWD}")
-    [[ "${EVENT}" == "permission" ]] && open_args+=(--has-action-button)
-    # Launch via `open -a` so LaunchServices registers it — required for click-to-focus
-    open -a "$app_bundle" "${open_args[@]}"
-    speak_notification "${voice_message}"
+  # Post first so the panel has the event queued by the time the sound plays.
+  # Backgrounded — the python3 cold-start (~50ms) shouldn't block the agent's hook.
+  post_to_panel "${title}" "${message}" "${bundle_id}" "${project_name:-}" "${has_action}" &
+
+  if [[ "${BANNER_ENABLED}" == "true" ]]; then
+    fire_banner "$title" "$message" "$sound" "$bundle_id" \
+      "${project_name:-}" "${win_title}" "${has_action}"
   else
-    # Fallback: osascript notification + sound (no click-to-focus)
+    afplay "/System/Library/Sounds/${sound}.aiff" 2>/dev/null &
+  fi
+
+  speak_notification "${voice_message}"
+}
+
+fire_banner() {
+  local title="$1" message="$2" sound="$3" bundle_id="$4"
+  local project_name="$5" win_title="$6" has_action="$7"
+
+  local app_bundle
+  app_bundle=$(find_app_bundle "stack-nudge.app")
+
+  if [[ -z "$app_bundle" ]]; then
     afplay "/System/Library/Sounds/${sound}.aiff" 2>/dev/null &
     osascript -e "display notification \"${message}\" with title \"${title}\" sound name \"${sound}\"" 2>/dev/null
-    speak_notification "${voice_message}"
+    return
   fi
+
+  local open_args=(
+    --args
+    --title "${title}" --message "${message}"
+    --sound "${sound}" --activate "${bundle_id}"
+  )
+  [[ "${ACTIVATE_IMMEDIATELY}" == "true" ]] && open_args+=(--activate-immediately)
+  [[ -n "$win_title" ]]               && open_args+=(--window-title "${project_name}")
+  [[ -n "${VSCODE_IPC_HOOK_CLI}" ]]   && open_args+=(--ipc-hook "${VSCODE_IPC_HOOK_CLI}")
+  open_args+=(--project-path "${PWD}")
+  [[ "${has_action}" == "true" ]]     && open_args+=(--has-action-button)
+
+  open -a "$app_bundle" "${open_args[@]}"
 }
 
 play_linux() {

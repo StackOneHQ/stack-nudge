@@ -19,3 +19,22 @@
 # instead of waiting for you to click it.
 # Default: false
 #STACKNUDGE_ACTIVATE_IMMEDIATELY=true
+
+# Show the macOS banner notification on each event.
+# Set to false to suppress banners — useful when STACKNUDGE_PANEL=true and
+# you'd rather interact with nudges via the floating panel.
+# Default: true
+#STACKNUDGE_BANNER=false
+
+# Run the floating panel daemon. Press the hotkey to focus a movable
+# window listing recent nudges, then act on them with the keyboard:
+#   Enter  → approve permission / focus source editor
+#   O      → focus source editor without approving
+#   ↑ ↓    → move selection
+#   Esc    → hide panel
+# Default: false
+#STACKNUDGE_PANEL=true
+
+# Global hotkey that focuses the panel. Modifiers: cmd, shift, opt/alt, ctrl.
+# Default: cmd+shift+n
+#STACKNUDGE_PANEL_HOTKEY=cmd+shift+n
