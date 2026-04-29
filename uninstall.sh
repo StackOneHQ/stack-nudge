@@ -55,20 +55,26 @@ print(f"  Cleaned {path}")
 PY
 fi
 
-# Stop and remove launchd agent (macOS)
-PLIST_LABEL="com.stackonehq.stack-nudge-daemon"
-PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
-if [[ -f "$PLIST_PATH" ]]; then
-  launchctl unload "$PLIST_PATH" 2>/dev/null || true
-  rm -f "$PLIST_PATH"
-  echo "  Removed launchd agent"
-fi
+# Stop and remove launchd agents (macOS)
+for label in com.stackonehq.stack-nudge-daemon com.stackonehq.stack-nudge-panel; do
+  plist="$HOME/Library/LaunchAgents/${label}.plist"
+  if [[ -f "$plist" ]]; then
+    launchctl unload "$plist" 2>/dev/null || true
+    rm -f "$plist"
+    echo "  Removed launchd agent ($label)"
+  fi
+done
 
-# Remove app bundle
-if [[ -d "$HOME/Applications/stack-nudge.app" ]]; then
-  rm -rf "$HOME/Applications/stack-nudge.app"
-  echo "  Removed ~/Applications/stack-nudge.app"
-fi
+# Stop any running panel process the launchd agent didn't catch
+pkill -f stack-nudge-panel 2>/dev/null || true
+
+# Remove app bundles
+for app in stack-nudge.app stack-nudge-panel.app; do
+  if [[ -d "$HOME/Applications/$app" ]]; then
+    rm -rf "$HOME/Applications/$app"
+    echo "  Removed ~/Applications/$app"
+  fi
+done
 
 # Remove install dir (includes venv and notify.sh)
 if [[ -d "$INSTALL_DIR" ]]; then

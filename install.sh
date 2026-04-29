@@ -11,57 +11,131 @@ echo "Installing stack-nudge..."
 
 mkdir -p "$INSTALL_DIR"
 
-# Build and install the native app bundle (macOS click-to-focus banners)
+# Build and install the native app bundles (macOS click-to-focus banners + panel)
 if [[ "$(uname -s)" == "Darwin" ]]; then
   echo ""
-  echo "Building stack-nudge.app..."
+  echo "Building stack-nudge.app + stack-nudge-panel.app..."
   bash "$SCRIPT_DIR/build.sh" >/dev/null
-  cp -r "$SCRIPT_DIR/build/stack-nudge.app" "$HOME/Applications/stack-nudge.app"
-  echo "  Installed stack-nudge.app -> ~/Applications/stack-nudge.app"
+  rm -rf "$HOME/Applications/stack-nudge.app"
+  rm -rf "$HOME/Applications/stack-nudge-panel.app"
+  cp -r "$SCRIPT_DIR/build/stack-nudge.app"       "$HOME/Applications/stack-nudge.app"
+  cp -r "$SCRIPT_DIR/build/stack-nudge-panel.app" "$HOME/Applications/stack-nudge-panel.app"
+  echo "  Installed stack-nudge.app       -> ~/Applications/stack-nudge.app"
+  echo "  Installed stack-nudge-panel.app -> ~/Applications/stack-nudge-panel.app"
 fi
 
-# Set up bundled voice engine (stackvox) in an isolated venv
+# Pick a Python ≥ 3.10 for the venv. stackvox requires it, but `python3` on
+# PATH is often the system 3.9 (especially in non-interactive shells).
+find_python() {
+  if [[ -n "${STACKNUDGE_PYTHON:-}" && -x "${STACKNUDGE_PYTHON}" ]]; then
+    echo "${STACKNUDGE_PYTHON}"
+    return
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    if python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+      command -v python3
+      return
+    fi
+  fi
+  for cand in /opt/homebrew/bin/python3.14 /opt/homebrew/bin/python3.13 \
+              /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.11 \
+              /opt/homebrew/bin/python3.10 \
+              /usr/local/bin/python3.14 /usr/local/bin/python3.13 \
+              /usr/local/bin/python3.12 /usr/local/bin/python3.11 \
+              /usr/local/bin/python3.10; do
+    [[ -x "$cand" ]] && { echo "$cand"; return; }
+  done
+}
+
+# Install the voice engine (stackvox) from PyPI into an isolated venv.
 echo ""
 echo "Setting up voice engine..."
+STACKVOX_SPEC="stackvox>=0.3.0"
+PYTHON=$(find_python)
+if [[ -z "$PYTHON" ]]; then
+  echo "  Could not find Python ≥ 3.10. Install one (e.g. 'brew install python@3.13')"
+  echo "  or set STACKNUDGE_PYTHON=/path/to/python3 and re-run."
+  exit 1
+fi
 if [[ ! -x "$VENV/bin/stackvox" ]]; then
-  python3 -m venv "$VENV"
-  "$VENV/bin/pip" install --quiet "$SCRIPT_DIR"
-  echo "  Voice engine installed -> $VENV"
+  "$PYTHON" -m venv "$VENV"
+  "$VENV/bin/pip" install --quiet "$STACKVOX_SPEC"
+  echo "  Voice engine installed -> $VENV  (using $PYTHON)"
 else
-  "$VENV/bin/pip" install --quiet --upgrade "$SCRIPT_DIR"
+  "$VENV/bin/pip" install --quiet --upgrade "$STACKVOX_SPEC"
   echo "  Voice engine updated   -> $VENV"
 fi
 
-# Register launchd agent to keep the voice daemon running across reboots (macOS only)
-if [[ "$(uname -s)" == "Darwin" ]]; then
-  PLIST_LABEL="com.stackonehq.stack-nudge-daemon"
-  PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
-  cat > "$PLIST_PATH" <<PLIST
+# Write a LaunchAgent plist and (re)load it.
+# Args: label keep_alive_mode log_path program_args...
+#   keep_alive_mode = "always" (restart on any exit) | "on_crash" (only on non-zero exit)
+register_launchd_agent() {
+  local label="$1" keep_alive_mode="$2" log_path="$3"
+  shift 3
+  local plist_path="$HOME/Library/LaunchAgents/${label}.plist"
+
+  local program_xml=""
+  for arg in "$@"; do
+    program_xml+="        <string>${arg}</string>"$'\n'
+  done
+
+  local keep_alive_xml
+  case "$keep_alive_mode" in
+    always)   keep_alive_xml="<true/>" ;;
+    on_crash) keep_alive_xml="<dict><key>SuccessfulExit</key><false/></dict>" ;;
+    *) echo "register_launchd_agent: bad mode '$keep_alive_mode'" >&2; return 1 ;;
+  esac
+
+  cat > "$plist_path" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>${PLIST_LABEL}</string>
+    <string>${label}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>${VENV}/bin/stackvox</string>
-        <string>serve</string>
-    </array>
+${program_xml}    </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <true/>
+    ${keep_alive_xml}
     <key>StandardOutPath</key>
-    <string>${INSTALL_DIR}/daemon.log</string>
+    <string>${log_path}</string>
     <key>StandardErrorPath</key>
-    <string>${INSTALL_DIR}/daemon.log</string>
+    <string>${log_path}</string>
 </dict>
 </plist>
 PLIST
-  launchctl unload "$PLIST_PATH" 2>/dev/null || true
-  launchctl load "$PLIST_PATH"
+  launchctl unload "$plist_path" 2>/dev/null || true
+  launchctl load "$plist_path"
+}
+
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  register_launchd_agent \
+    "com.stackonehq.stack-nudge-daemon" \
+    "always" \
+    "${INSTALL_DIR}/daemon.log" \
+    "${VENV}/bin/stackvox" "serve"
   echo "  Voice daemon registered as launchd agent (starts at login)"
+
+  # Panel launcher is config-aware: exits 0 when STACKNUDGE_PANEL isn't enabled.
+  # KeepAlive=on_crash lets launchd respect that exit and not loop.
+  PANEL_LAUNCHER="$INSTALL_DIR/panel-launcher.sh"
+  cat > "$PANEL_LAUNCHER" <<'LAUNCHER'
+#!/usr/bin/env bash
+[[ -f "$HOME/.stack-nudge/config" ]] && source "$HOME/.stack-nudge/config"
+[[ "${STACKNUDGE_PANEL:-false}" != "true" ]] && exit 0
+exec "$HOME/Applications/stack-nudge-panel.app/Contents/MacOS/stack-nudge-panel"
+LAUNCHER
+  chmod +x "$PANEL_LAUNCHER"
+
+  register_launchd_agent \
+    "com.stackonehq.stack-nudge-panel" \
+    "on_crash" \
+    "${INSTALL_DIR}/panel.log" \
+    "${PANEL_LAUNCHER}"
+  echo "  Panel daemon registered as launchd agent (starts at login when STACKNUDGE_PANEL=true)"
 fi
 
 # Copy notify.sh to shared install dir
@@ -157,4 +231,6 @@ echo ""
 echo "Config: edit ~/.stack-nudge/config to customise behaviour."
 echo "  STACKNUDGE_VOICE=true                 — speak notifications aloud"
 echo "  STACKNUDGE_ACTIVATE_IMMEDIATELY=true  — focus your editor without clicking"
+echo "  STACKNUDGE_PANEL=true                 — keyboard-native floating panel (cmd+shift+n)"
+echo "  STACKNUDGE_BANNER=false               — suppress macOS banner notifications"
 echo "To uninstall, run: ./uninstall.sh"
