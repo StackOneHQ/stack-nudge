@@ -268,6 +268,7 @@ walk_session_chain() {
     case "$base" in
       "Code Helper"|"Code Helper (Plugin)"|"Code Helper (Renderer)"|Code|\
       "Cursor Helper"|"Cursor Helper (Plugin)"|"Cursor Helper (Renderer)"|Cursor|\
+      Zed|zed|\
       iTerm2|iTerm|Terminal|Warp|WarpTerminal|ghostty|Ghostty)
         TERMINAL_PID="$pid"; TERMINAL_APP="$base"; break ;;
     esac
@@ -356,7 +357,8 @@ notify_macos() {
   local sound="$3"
   local voice_message="${4:-$message}"
 
-  # Detect terminal / editor bundle ID for click-to-focus
+  # Detect terminal / editor bundle ID for click-to-focus.
+  # Zed sets TERM_PROGRAM=zed in its integrated terminal as of zed-industries/zed#14213.
   local bundle_id
   case "${TERM_PROGRAM}" in
     vscode)
@@ -366,6 +368,7 @@ notify_macos() {
         bundle_id="com.microsoft.VSCode"
       fi
       ;;
+    zed)          bundle_id="dev.zed.Zed" ;;
     iTerm.app)    bundle_id="com.googlecode.iterm2" ;;
     WarpTerminal) bundle_id="dev.warp.Warp-Stable" ;;
     ghostty)      bundle_id="com.mitchellh.ghostty" ;;
@@ -377,6 +380,7 @@ notify_macos() {
   case "$bundle_id" in
     com.todesktop.230313mzl4w4u92) process_name="Cursor" ;;
     com.microsoft.VSCode)           process_name="Code" ;;
+    dev.zed.Zed)                    process_name="Zed" ;;
     com.googlecode.iterm2)          process_name="iTerm2" ;;
     dev.warp.Warp-Stable)           process_name="Warp" ;;
     com.mitchellh.ghostty)          process_name="Ghostty" ;;
