@@ -17,7 +17,7 @@ jobs:
     name: shell syntax + shellcheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: bash -n on tracked shell scripts
         run: |
@@ -41,7 +41,7 @@ jobs:
       matrix:
         arch: [arm64, x86_64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: build both .app bundles
         run: ./build.sh ${{ matrix.arch }}
