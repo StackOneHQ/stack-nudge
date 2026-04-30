@@ -350,8 +350,23 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // Post a UNUserNotification when STACKNUDGE_BANNER is enabled.
     // Sound is omitted — afplay fires independently in notify.sh so we
     // don't double-cue when the macOS banner is also shown.
+    // If STACKNUDGE_ACTIVATE_IMMEDIATELY is set, focus the source editor
+    // right away without waiting for the user to click.
     private func postBannerIfNeeded(_ event: NudgeEvent) {
         let config = PanelConfig.load()
+
+        if config.activateImmediately, let bundleID = event.bundleID {
+            DispatchQueue.global(qos: .userInitiated).async {
+                AppActivator.activate(bundleID: bundleID,
+                                      windowTitle: event.windowTitle,
+                                      ipcHook: event.ipcHook,
+                                      projectPath: event.projectPath,
+                                      sendApproval: false,
+                                      agent: event.agent)
+            }
+            return
+        }
+
         guard config.bannerEnabled else { return }
 
         let content = UNMutableNotificationContent()

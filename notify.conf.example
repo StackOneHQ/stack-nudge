@@ -26,14 +26,8 @@
 # Default: true
 #STACKNUDGE_BANNER=false
 
-# Run the floating panel daemon. Press the hotkey to focus a movable
-# window listing recent nudges, then act on them with the keyboard:
-#   Enter  → approve permission / focus source editor
-#   O      → focus source editor without approving
-#   ↑ ↓    → move selection
-#   Esc    → hide panel
-# Default: false
-#STACKNUDGE_PANEL=true
+# Note: STACKNUDGE_PANEL=true is no longer required — the panel is always
+# available via the hotkey below. STACKNUDGE_PANEL=false is also no-op.
 
 # Global hotkey that focuses the panel. Modifiers: cmd, shift, opt/alt, ctrl.
 # Default: cmd+opt+n  (avoids cmd+shift+n which most browsers bind to
