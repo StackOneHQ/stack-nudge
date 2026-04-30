@@ -146,7 +146,7 @@ voice_phrase_for() {
   local event="$1"
   local lang repo
 
-  if [[ -x "$STACKVOX_SAY" ]]; then
+  if [[ -x "$STACKVOX" ]]; then
     lang=$(voice_to_lang "$VOICE_NAME")
     repo=$(repo_name_raw)
   else
@@ -196,25 +196,37 @@ agent_label() {
   esac
 }
 
-# Bundled voice engine paths
+# Bundled voice engine paths. stackvox 0.3.x consolidated the CLI — there
+# is no separate `stackvox-say` console script anymore; speech goes through
+# `stackvox say <text>` as a subcommand.
 VENV="${HOME}/.stack-nudge/venv"
 STACKVOX="${VENV}/bin/stackvox"
-STACKVOX_SAY="${VENV}/bin/stackvox-say"
+
+# Log a debug line when STACKNUDGE_DEBUG=true. Used for "voice was
+# requested but couldn't fire" cases that previously failed silently.
+nudge_debug() {
+  [[ "${STACKNUDGE_DEBUG:-}" == "true" ]] || return 0
+  printf '[stack-nudge] %s\n' "$*" >&2
+}
 
 # Speak a message aloud via the bundled StackVox daemon.
 # Auto-starts the daemon if it isn't running. Falls back silently if the
-# venv isn't installed or the daemon fails to respond.
+# venv isn't installed or the daemon fails to respond — set STACKNUDGE_DEBUG=true
+# to surface why.
 speak_notification() {
   [[ "${VOICE_ENABLED}" != "true" ]] && return
-  [[ ! -x "$STACKVOX_SAY" ]] && return
+  if [[ ! -x "$STACKVOX" ]]; then
+    nudge_debug "voice requested but stackvox not found at $STACKVOX"
+    return
+  fi
   local text="$1"
-  # Start daemon if socket doesn't exist yet
   if [[ ! -S "${HOME}/.cache/stackvox/daemon.sock" ]]; then
+    nudge_debug "stackvox daemon socket missing — starting daemon"
     nohup "$STACKVOX" serve >/dev/null 2>&1 &
   fi
   local kokoro_lang
   kokoro_lang=$(voice_to_kokoro_lang "$VOICE_NAME")
-  "$STACKVOX_SAY" --voice "${VOICE_NAME}" --lang "${kokoro_lang}" --speed "${VOICE_SPEED}" "${text}" 2>/dev/null &
+  "$STACKVOX" say --voice "${VOICE_NAME}" --lang "${kokoro_lang}" --speed "${VOICE_SPEED}" "${text}" 2>/dev/null &
 }
 
 # Locate one of our .app bundles. Searches ~/Applications, the script's

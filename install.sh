@@ -48,7 +48,7 @@ find_python() {
 # Install the voice engine (stackvox) from PyPI into an isolated venv.
 echo ""
 echo "Setting up voice engine..."
-STACKVOX_SPEC="stackvox>=0.3.0"
+STACKVOX_SPEC="stackvox>=0.4.0"
 PYTHON=$(find_python)
 if [[ -z "$PYTHON" ]]; then
   echo "  Could not find Python ≥ 3.10. Install one (e.g. 'brew install python@3.13')"
