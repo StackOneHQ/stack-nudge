@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shell:
+    name: shell syntax + shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: bash -n on tracked shell scripts
+        run: |
+          set -e
+          mapfile -d '' files < <(git ls-files -z '*.sh')
+          for f in "${files[@]}"; do
+            echo "→ bash -n $f"
+            bash -n "$f"
+          done
+
+      - name: shellcheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          severity: warning
+
+  build-macos:
+    name: swift build (${{ matrix.arch }})
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x86_64]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: build stack-nudge.app
+        run: ./build.sh ${{ matrix.arch }}
+
+      - name: verify executable exists + is correct arch
+        run: |
+          set -e
+          bin=$(ls build/stack-nudge.app/Contents/MacOS/)
+          file "build/stack-nudge.app/Contents/MacOS/$bin"
+          file "build/stack-nudge.app/Contents/MacOS/$bin" | grep -q "${{ matrix.arch }}"
+
+      - name: verify Info.plist is valid
+        run: plutil -lint panel/Info.plist
