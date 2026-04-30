@@ -1,12 +1,26 @@
-.DS_Store
+# Build output
 build/
 stack-nudge
 stack-nudge.app
+stack-nudge-panel.app
 
-# Python
+# macOS
+.DS_Store
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*~
+
+# Python (ad-hoc venvs in the repo, the stackvox venv lives in ~/.stack-nudge/)
 __pycache__/
 *.py[cod]
 *.egg-info/
 dist/
 .venv/
 venv/
+
+# Stack-nudge dev artifacts
+/tmp/
+*.log
