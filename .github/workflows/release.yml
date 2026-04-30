@@ -6,70 +6,65 @@ on:
       - 'v*'
 
 jobs:
-  build:
-    name: Build (${{ matrix.arch }})
+  release:
+    name: Build universal binary, attach to release
     runs-on: macos-15
-    strategy:
-      matrix:
-        arch: [arm64, x86_64]
-
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v6
 
-      - name: Build stack-nudge.app
+      # Stamp the tag's version into Info.plist so the bundled app advertises
+      # the right version regardless of what's checked into main.
+      - name: Stamp version from tag
         run: |
-          APP="stack-nudge.app/Contents"
-          mkdir -p "$APP/MacOS"
-          swiftc \
-            notifier/main.swift \
-            notifier/Config.swift \
-            notifier/Notifier.swift \
-            notifier/AppActivator.swift \
-            -o "$APP/MacOS/stack-nudge" \
-            -target ${{ matrix.arch }}-apple-macos12.0 \
-            -framework Foundation \
-            -framework AppKit \
-            -framework ScriptingBridge
-          cp notifier/Info.plist "$APP/Info.plist"
-          mkdir -p "$APP/Resources"
-          cp notifier/Icon.icns "$APP/Resources/Icon.icns"
+          VERSION="${GITHUB_REF_NAME#v}"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" panel/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" panel/Info.plist
 
-      - name: Verify
-        run: file stack-nudge.app/Contents/MacOS/stack-nudge
+      # Build each arch sequentially via swiftc's -target flag (cross-compiles
+      # fine on macos-15 runners). Stash the per-arch mach-o so we can lipo
+      # them into a universal binary afterward.
+      - name: Build arm64
+        run: bash build.sh arm64
+      - name: Stash arm64 binary
+        run: cp build/stack-nudge.app/Contents/MacOS/stack-nudge /tmp/stack-nudge-arm64
 
+      - name: Build x86_64
+        run: bash build.sh x86_64
+      - name: Stash x86_64 binary
+        run: cp build/stack-nudge.app/Contents/MacOS/stack-nudge /tmp/stack-nudge-x86_64
+
+      - name: Combine into universal binary
+        run: |
+          # The x86_64 build is what's currently in build/, so just replace
+          # its mach-o with the lipo'd universal one.
+          lipo -create /tmp/stack-nudge-arm64 /tmp/stack-nudge-x86_64 \
+               -output build/stack-nudge.app/Contents/MacOS/stack-nudge
+          # lipo invalidates the per-arch ad-hoc signatures — re-sign the bundle.
+          codesign --force --deep --sign - build/stack-nudge.app
+          file build/stack-nudge.app/Contents/MacOS/stack-nudge
+
+      # Tarball includes the prebuilt bundle plus everything install.sh needs
+      # at runtime. install.sh skips the build step when build/stack-nudge.app
+      # is already present, so users who download the release run a fast
+      # install (no swiftc dependency on the user's machine).
       - name: Package
         run: |
-          mkdir release
-          cp -r stack-nudge.app release/
-          cp notify.sh release/
-          tar czf stack-nudge-${{ matrix.arch }}.tar.gz release
-          shasum -a 256 stack-nudge-${{ matrix.arch }}.tar.gz \
-            | awk '{print $1}' > stack-nudge-${{ matrix.arch }}.sha256
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p release/build
+          cp -R build/stack-nudge.app release/build/
+          cp notify.sh install.sh uninstall.sh notify.conf.example release/
+          cp -R phrases release/
+          tar czf "stack-nudge-${VERSION}-universal.tar.gz" -C release .
+          shasum -a 256 "stack-nudge-${VERSION}-universal.tar.gz" \
+            | awk '{print $1}' > "stack-nudge-${VERSION}-universal.sha256"
 
-      - uses: actions/upload-artifact@v7
+      # release-please creates the GitHub Release before this workflow runs,
+      # so action-gh-release attaches assets to the existing release rather
+      # than creating a duplicate.
+      - uses: softprops/action-gh-release@v3
         with:
-          name: stack-nudge-${{ matrix.arch }}
-          path: |
-            stack-nudge-${{ matrix.arch }}.tar.gz
-            stack-nudge-${{ matrix.arch }}.sha256
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          merge-multiple: true
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          generate_release_notes: true
           files: |
-            stack-nudge-arm64.tar.gz
-            stack-nudge-arm64.sha256
-            stack-nudge-x86_64.tar.gz
-            stack-nudge-x86_64.sha256
+            stack-nudge-*-universal.tar.gz
+            stack-nudge-*-universal.sha256
