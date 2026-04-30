@@ -3,6 +3,10 @@ import AppKit
 // Read/write helper for ~/.stack-nudge/config. Preserves comments and
 // untouched lines on write — replaces only the line that sets the given key,
 // or appends if no uncommented line exists yet.
+//
+// Pure parsing/applying lives in `parse(_:)` and `apply(_:key:value:)` so
+// tests can exercise them without touching disk; `read()` and `write(_:_:)`
+// are thin wrappers that pin the on-disk path.
 enum ConfigFile {
 
     static let path = ("~/.stack-nudge/config" as NSString).expandingTildeInPath
@@ -11,6 +15,25 @@ enum ConfigFile {
         guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else {
             return [:]
         }
+        return parse(contents)
+    }
+
+    static func write(key: String, value: String) {
+        let contents = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+        let updated = apply(contents, key: key, value: value)
+        try? updated.write(toFile: path, atomically: true, encoding: .utf8)
+    }
+
+    static func bool(_ map: [String: String], _ key: String, default defaultValue: Bool) -> Bool {
+        guard let value = map[key]?.lowercased() else { return defaultValue }
+        return value == "true" || value == "1" || value == "yes"
+    }
+
+    // MARK: - Pure helpers (testable)
+
+    /// Parse a config-file string into a key→value map. Skips comments and
+    /// blank lines; strips surrounding single/double quotes from values.
+    static func parse(_ contents: String) -> [String: String] {
         var result: [String: String] = [:]
         for raw in contents.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = raw.trimmingCharacters(in: .whitespaces)
@@ -23,8 +46,11 @@ enum ConfigFile {
         return result
     }
 
-    static func write(key: String, value: String) {
-        let contents = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+    /// Return `contents` with `key` set to `value`. If an uncommented line
+    /// for the key exists, that line is replaced in place (preserving order
+    /// and surrounding comments). Otherwise the assignment is appended,
+    /// trailing blanks collapsed, and a final newline guaranteed.
+    static func apply(_ contents: String, key: String, value: String) -> String {
         var lines = contents.components(separatedBy: "\n")
         let newLine = "\(key)=\(value)"
         var replaced = false
@@ -40,13 +66,7 @@ enum ConfigFile {
             lines.append(newLine)
             lines.append("")
         }
-        try? lines.joined(separator: "\n")
-            .write(toFile: path, atomically: true, encoding: .utf8)
-    }
-
-    static func bool(_ map: [String: String], _ key: String, default defaultValue: Bool) -> Bool {
-        guard let value = map[key]?.lowercased() else { return defaultValue }
-        return value == "true" || value == "1" || value == "yes"
+        return lines.joined(separator: "\n")
     }
 
     private static func stripQuotes(_ value: String) -> String {

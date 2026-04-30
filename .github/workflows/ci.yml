@@ -55,3 +55,17 @@ jobs:
 
       - name: verify Info.plist is valid
         run: plutil -lint panel/Info.plist
+
+  test-macos:
+    name: swift test
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: print toolchain
+        run: |
+          xcode-select -p
+          swift --version
+
+      - name: swift test
+        run: swift test
