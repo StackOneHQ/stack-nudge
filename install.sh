@@ -11,11 +11,21 @@ echo "Installing stack-nudge..."
 
 mkdir -p "$INSTALL_DIR"
 
-# Build and install the native app bundle (single persistent binary)
+# Build and install the native app bundle (single persistent binary).
+# build.sh's output (stdout + stderr — Swift emits ~120 lines of UserNotifications
+# deprecation warnings on every build) is redirected to a log so the install
+# transcript stays scannable. On real build failure the log's last 20 lines
+# are dumped so the actual error doesn't get hidden.
+BUILD_LOG="/tmp/stack-nudge-install-build.log"
 if [[ "$(uname -s)" == "Darwin" ]]; then
   echo ""
   echo "Building stack-nudge.app..."
-  bash "$SCRIPT_DIR/build.sh" >/dev/null
+  if ! bash "$SCRIPT_DIR/build.sh" > "$BUILD_LOG" 2>&1; then
+    echo ""
+    echo "  ✗ Build failed. Last 20 lines of $BUILD_LOG:"
+    tail -20 "$BUILD_LOG" | sed 's/^/      /'
+    exit 1
+  fi
   rm -rf "$HOME/Applications/stack-nudge.app"
   rm -rf "$HOME/Applications/stack-nudge-panel.app"  # clean up old panel binary
   cp -r "$SCRIPT_DIR/build/stack-nudge.app" "$HOME/Applications/stack-nudge.app"
@@ -51,8 +61,13 @@ echo "Setting up voice engine..."
 STACKVOX_SPEC="stackvox>=0.4.0"
 PYTHON=$(find_python)
 if [[ -z "$PYTHON" ]]; then
-  echo "  Could not find Python ≥ 3.10. Install one (e.g. 'brew install python@3.13')"
-  echo "  or set STACKNUDGE_PYTHON=/path/to/python3 and re-run."
+  echo ""
+  echo "  ✗ Could not find Python ≥ 3.10 — required by the bundled voice engine (stackvox)."
+  echo ""
+  echo "    Install one of these and re-run ./install.sh:"
+  echo "      brew install python@3.13"
+  echo "      STACKNUDGE_PYTHON=/path/to/python3 ./install.sh"
+  echo ""
   exit 1
 fi
 if [[ ! -x "$VENV/bin/stackvox" ]]; then
@@ -160,7 +175,7 @@ if [[ -d "$HOME/.claude" ]]; then
   echo ""
   echo "Detected Claude Code (~/.claude)"
   python3 - "$HOME/.claude/settings.json" "$NOTIFY" <<'PY'
-import json, os, sys
+import json, os, re, sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
@@ -171,20 +186,37 @@ if path.exists():
 else:
     settings = {}
 
+# Match any prior stack-nudge / tinynudge hook entry regardless of where it
+# was installed (legacy ~/.tinynudge, moved checkouts, etc.) so upgrades
+# replace the stale entry instead of appending a duplicate that points at a
+# dead path.
+STALE = re.compile(r"(?:^|/)\.?(?:tinynudge|stack-nudge)/notify\.sh(?:\s|$)")
+
 hooks = settings.setdefault("hooks", {})
 # Permission hook blocks on a FIFO until the user approves via stack-nudge,
 # so it needs a longer timeout than Claude Code's 600s default.
 for event, arg, timeout in [("Stop", "stop", 30), ("PermissionRequest", "permission", 600)]:
     groups = hooks.setdefault(event, [])
+
+    # Drop any existing group whose inner hook commands all look like ours
+    # (or are entirely empty after pruning ours). Mixed groups keep the
+    # non-stack-nudge entries intact.
+    cleaned = []
+    for g in groups:
+        inner = g.get("hooks", [])
+        kept = [h for h in inner if not STALE.search(h.get("command", "") or "")]
+        if not kept:
+            continue
+        if kept != inner:
+            g = {**g, "hooks": kept}
+        cleaned.append(g)
+    groups[:] = cleaned
+
     cmd = f"{notify} claude-code {arg}"
-    if not any(
-        any(h.get("command") == cmd for h in g.get("hooks", []))
-        for g in groups
-    ):
-        groups.append({
-            "matcher": "",
-            "hooks": [{"type": "command", "command": cmd, "timeout": timeout}],
-        })
+    groups.append({
+        "matcher": "",
+        "hooks": [{"type": "command", "command": cmd, "timeout": timeout}],
+    })
 
 path.write_text(json.dumps(settings, indent=2) + "\n")
 print(f"  Updated {path}")
@@ -197,7 +229,7 @@ if [[ -d "$HOME/.cursor" ]]; then
   echo ""
   echo "Detected Cursor (~/.cursor)"
   python3 - "$HOME/.cursor/hooks.json" "$NOTIFY" <<'PY'
-import json, sys
+import json, re, sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
@@ -205,11 +237,15 @@ notify = sys.argv[2]
 path.parent.mkdir(parents=True, exist_ok=True)
 settings = json.loads(path.read_text()) if path.exists() else {}
 
+# Match any prior stack-nudge / tinynudge entry regardless of install path
+# so upgrades replace stale entries rather than appending duplicates.
+STALE = re.compile(r"(?:^|/)\.?(?:tinynudge|stack-nudge)/notify\.sh(?:\s|$)")
+
 hooks = settings.setdefault("hooks", {})
 stop_cmd = f"{notify} cursor stop"
 stop = hooks.setdefault("stop", [])
-if not any(h.get("command") == stop_cmd for h in stop):
-    stop.append({"type": "command", "command": stop_cmd})
+stop[:] = [h for h in stop if not STALE.search(h.get("command", "") or "")]
+stop.append({"type": "command", "command": stop_cmd})
 
 path.write_text(json.dumps(settings, indent=2) + "\n")
 print(f"  Updated {path}")
