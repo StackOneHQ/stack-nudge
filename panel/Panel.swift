@@ -394,6 +394,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
         store.remove(id: event.id)
         let approve = response.actionIdentifier == "ALLOW"
+
+        // If we have a FIFO, the source hook is blocking on it — write the
+        // decision and let Claude Code skip its own UI prompt entirely.
+        // No keystroke injection or window targeting needed.
+        if approve, let fifo = event.fifoPath {
+            DispatchQueue.global(qos: .userInitiated).async {
+                Self.writeFIFO(fifo, "allow")
+            }
+            return
+        }
+
         guard let bundleID = event.bundleID else { return }
 
         // Hide the app first so the system restores focus to the previous
@@ -411,6 +422,16 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                                   sendApproval: approve,
                                   agent: event.agent)
         }
+    }
+
+    // Write a decision string to the hook's FIFO. The source notify.sh
+    // is blocked on `select`, so this returns immediately after writing.
+    private static func writeFIFO(_ path: String, _ decision: String) {
+        let fd = Darwin.open(path, O_WRONLY | O_NONBLOCK)
+        guard fd >= 0 else { return }
+        defer { Darwin.close(fd) }
+        let line = decision + "\n"
+        _ = line.withCString { Darwin.write(fd, $0, strlen($0)) }
     }
 
     // Show banners even when the app is frontmost (needed for accessory apps).
@@ -653,8 +674,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         store.remove(id: event.id)
         hidePanel()
 
-        guard let bundleID = event.bundleID else { return }
         let sendApproval = approve && event.hasActionButton
+
+        // FIFO path = the source hook is blocking on a permission decision.
+        // Write "allow" to it and we're done — Claude Code skips its UI prompt.
+        if sendApproval, let fifo = event.fifoPath {
+            DispatchQueue.global(qos: .userInitiated).async {
+                Self.writeFIFO(fifo, "allow")
+            }
+            return
+        }
+
+        guard let bundleID = event.bundleID else { return }
         DispatchQueue.global(qos: .userInitiated).async {
             AppActivator.activate(
                 bundleID: bundleID,

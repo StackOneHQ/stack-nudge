@@ -123,6 +123,7 @@ private struct NudgeEventDTO: Decodable {
     let terminal_app: String?
     let term_program: String?
     let session_id: String?
+    let fifo_path: String?
 
     func toNudgeEvent() -> NudgeEvent {
         NudgeEvent(
@@ -141,7 +142,8 @@ private struct NudgeEventDTO: Decodable {
             terminalPID: terminal_pid,
             terminalApp: terminal_app,
             termProgram: term_program,
-            sessionID: session_id
+            sessionID: session_id,
+            fifoPath: fifo_path
         )
     }
 }

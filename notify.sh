@@ -282,6 +282,7 @@ post_to_panel() {
   NUDGE_WINDOW="$4" \
   NUDGE_IPC_HOOK="${VSCODE_IPC_HOOK_CLI:-}" \
   NUDGE_HAS_ACTION="$5" \
+  NUDGE_FIFO="${6:-}" \
   NUDGE_SOCK="$PANEL_SOCK" \
   NUDGE_AGENT_PID="${AGENT_PID:-}" \
   NUDGE_SHELL_PID="${SHELL_PID:-}" \
@@ -308,6 +309,7 @@ optional = {
     "bundle_id":     env.get("NUDGE_BUNDLE"),
     "window_title":  env.get("NUDGE_WINDOW"),
     "ipc_hook":      env.get("NUDGE_IPC_HOOK"),
+    "fifo_path":     env.get("NUDGE_FIFO"),
     "agent_pid":     env.get("NUDGE_AGENT_PID"),
     "shell_pid":     env.get("NUDGE_SHELL_PID"),
     "terminal_pid":  env.get("NUDGE_TERMINAL_PID"),
@@ -410,12 +412,16 @@ notify_macos() {
   fi
 
   local has_action="false"
-  [[ "${EVENT}" == "permission" ]] && has_action="true"
+  local fifo_path=""
+  if [[ "${EVENT}" == "permission" ]]; then
+    has_action="true"
+    fifo_path=$(create_perm_fifo)
+  fi
 
   # Post to the persistent app — it handles both the panel history and the
   # UNUserNotification banner based on the user's config. Backgrounded so
   # Python startup (~50ms) doesn't block the agent hook.
-  post_to_panel "${title}" "${message}" "${bundle_id}" "${project_name:-}" "${has_action}" &
+  post_to_panel "${title}" "${message}" "${bundle_id}" "${project_name:-}" "${has_action}" "${fifo_path}" &
 
   # Sound fires independently via afplay — guaranteed even if macOS throttles
   # or the app isn't running yet. Voice replaces the chime when enabled.
@@ -424,6 +430,62 @@ notify_macos() {
   fi
 
   speak_notification "${voice_message}"
+
+  # For permission events, block reading from the FIFO. The user's Allow
+  # click in the panel/banner writes "allow" to it; we then output the
+  # PermissionRequest decision JSON to stdout so Claude Code skips its
+  # own UI prompt entirely. Timeout falls back to Claude Code's UI.
+  if [[ -n "$fifo_path" ]]; then
+    wait_for_permission_response "$fifo_path"
+  fi
+}
+
+# Create a unique FIFO at /tmp for the user's response. Echoes the path.
+# Returns empty if mkfifo fails.
+create_perm_fifo() {
+  local fifo="/tmp/stack-nudge-perm-$$-$(date +%s)-$RANDOM.fifo"
+  if mkfifo -m 0600 "$fifo" 2>/dev/null; then
+    echo "$fifo"
+  fi
+}
+
+# Block reading the user's decision from the FIFO with a timeout. Outputs
+# the PermissionRequest JSON to stdout when read; silent on timeout so
+# Claude Code falls back to its own UI prompt.
+# Uses Python because bash's `read -t` doesn't time out the FIFO open() call.
+wait_for_permission_response() {
+  local fifo="$1"
+  local timeout=550  # Claude Code's hook timeout defaults to 600s — leave buffer
+
+  trap 'rm -f "$fifo"' EXIT
+
+  local decision
+  decision=$(NUDGE_FIFO="$fifo" NUDGE_TIMEOUT="$timeout" python3 - <<'PY' 2>/dev/null
+import os, select, sys
+fifo = os.environ["NUDGE_FIFO"]
+timeout = float(os.environ["NUDGE_TIMEOUT"])
+try:
+    fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+except OSError:
+    sys.exit(0)
+try:
+    r, _, _ = select.select([fd], [], [], timeout)
+    if r:
+        data = os.read(fd, 1024).decode("utf-8", errors="replace").strip()
+        sys.stdout.write(data)
+finally:
+    os.close(fd)
+PY
+)
+
+  case "$decision" in
+    allow)
+      printf '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}\n'
+      ;;
+    deny)
+      printf '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"Denied via stack-nudge"}}}\n'
+      ;;
+  esac
 }
 
 
