@@ -136,6 +136,40 @@ LAUNCHER
     "${INSTALL_DIR}/panel.log" \
     "${PANEL_LAUNCHER}"
   echo "  Panel daemon registered as launchd agent (starts at login when STACKNUDGE_PANEL=true)"
+
+  # Auto-updater: checks npm for new versions every 4 hours.
+  # Harmless when not installed via npm (exits early).
+  if command -v npm >/dev/null 2>&1; then
+    command -v npm > "$INSTALL_DIR/.npm-path"
+  fi
+  cp "$SCRIPT_DIR/update.sh" "$INSTALL_DIR/update.sh"
+  chmod +x "$INSTALL_DIR/update.sh"
+
+  UPDATER_LABEL="com.stackonehq.stack-nudge-updater"
+  UPDATER_PLIST="$HOME/Library/LaunchAgents/${UPDATER_LABEL}.plist"
+  cat > "$UPDATER_PLIST" <<UPDATER
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${UPDATER_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${INSTALL_DIR}/update.sh</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>14400</integer>
+    <key>StandardOutPath</key>
+    <string>${INSTALL_DIR}/update.log</string>
+    <key>StandardErrorPath</key>
+    <string>${INSTALL_DIR}/update.log</string>
+</dict>
+</plist>
+UPDATER
+  launchctl unload "$UPDATER_PLIST" 2>/dev/null || true
+  launchctl load "$UPDATER_PLIST"
+  echo "  Auto-updater registered (checks npm every 4 hours)"
 fi
 
 # Copy notify.sh to shared install dir

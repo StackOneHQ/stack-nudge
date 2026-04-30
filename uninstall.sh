@@ -56,7 +56,7 @@ PY
 fi
 
 # Stop and remove launchd agents (macOS)
-for label in com.stackonehq.stack-nudge-daemon com.stackonehq.stack-nudge-panel; do
+for label in com.stackonehq.stack-nudge-daemon com.stackonehq.stack-nudge-panel com.stackonehq.stack-nudge-updater; do
   plist="$HOME/Library/LaunchAgents/${label}.plist"
   if [[ -f "$plist" ]]; then
     launchctl unload "$plist" 2>/dev/null || true

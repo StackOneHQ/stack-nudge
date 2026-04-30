@@ -1,0 +1,6 @@
+.github/
+build/
+assets/
+Makefile
+.gitignore
+*.md
