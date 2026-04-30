@@ -28,25 +28,26 @@ struct SettingsView: View {
                         }
 
                         section("Toggles") {
-                            row(1, label: "Banner notifications", kind: .toggle, value: nav.bannerEnabled ? "On" : "Off")
-                            row(2, label: "Voice notifications",  kind: .toggle, value: nav.voiceEnabled  ? "On" : "Off")
-                            row(3, label: "Pin panel",            kind: .toggle, value: nav.panelPinned   ? "On" : "Off")
+                            row(1, label: "Banner notifications", kind: .toggle, value: nav.bannerEnabled   ? "On" : "Off")
+                            row(2, label: "Voice notifications",  kind: .toggle, value: nav.voiceEnabled    ? "On" : "Off")
+                            row(3, label: "Mute when focused",    kind: .toggle, value: nav.muteWhenFocused ? "On" : "Off")
+                            row(4, label: "Pin panel",            kind: .toggle, value: nav.panelPinned     ? "On" : "Off")
                         }
 
                         section("Sounds") {
-                            row(4, label: "Agent done", kind: .cycle, value: nav.soundStop)
-                            row(5, label: "Permission", kind: .cycle, value: nav.soundPermission)
+                            row(5, label: "Agent done", kind: .cycle, value: nav.soundStop)
+                            row(6, label: "Permission", kind: .cycle, value: nav.soundPermission)
                         }
 
                         section("Voice") {
-                            row(6, label: "Voice",  kind: .cycle, value: voiceLabel)
-                            row(7, label: "Speed",  kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed))
+                            row(7, label: "Voice",  kind: .cycle, value: voiceLabel)
+                            row(8, label: "Speed",  kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed))
                         }
 
                         section("Actions") {
-                            row(8, label: "Check permissions…", kind: .action, value: "")
-                            row(9, label: "Open config file…",  kind: .action, value: "")
-                            row(10, label: "Quit panel",        kind: .action, value: "")
+                            row(9,  label: "Check permissions…", kind: .action, value: "")
+                            row(10, label: "Open config file…",  kind: .action, value: "")
+                            row(11, label: "Quit panel",         kind: .action, value: "")
                         }
                     }
                     .padding(.horizontal, 14)

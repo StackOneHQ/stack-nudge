@@ -6,7 +6,7 @@
 APP := $(HOME)/Applications/stack-nudge.app
 APP_LABEL := com.stackonehq.stack-nudge
 BUILD_LOG := /tmp/stack-nudge-dev.log
-WATCH_DIRS := panel shared notifier notify.sh phrases
+WATCH_DIRS := panel shared notify.sh phrases
 
 .PHONY: help
 help:
@@ -81,7 +81,7 @@ dev:
 	@touch $(WATCH_MARKER); \
 	while true; do \
 		sleep 0.5; \
-		if find $(WATCH_DIRS) \( -name '*.swift' -o -name 'Info.plist' \) -newer $(WATCH_MARKER) -print -quit 2>/dev/null | grep -q .; then \
+		if find $(WATCH_DIRS) \( -name '*.swift' -o -name '*.sh' -o -name 'Info.plist' \) -newer $(WATCH_MARKER) -print -quit 2>/dev/null | grep -q .; then \
 			touch $(WATCH_MARKER); \
 			$(MAKE) --no-print-directory reload || true; \
 		fi; \

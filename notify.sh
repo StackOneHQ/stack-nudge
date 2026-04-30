@@ -401,25 +401,30 @@ notify_macos() {
       -e "end tell" 2>/dev/null)
   fi
 
-  # Suppress banner only if the exact source window is currently frontmost
-  local frontmost_id
-  frontmost_id=$(osascript -e "id of app (path to frontmost application as text)" 2>/dev/null)
-  if [[ "$frontmost_id" == "$bundle_id" && -n "$process_name" && -n "$win_title" ]]; then
-    local frontmost_win
-    frontmost_win=$(osascript \
-      -e "tell application \"System Events\"" \
-      -e "  tell process \"${process_name}\"" \
-      -e "    get title of window 1" \
-      -e "  end tell" \
-      -e "end tell" 2>/dev/null)
-    if [[ "$frontmost_win" == "$win_title" ]]; then
-      # Source window is already focused — minimal signal. Skip sound when
-      # voice is on (voice itself is suppressed here too, but keep the
-      # "voice replaces sound" rule consistent across all paths).
-      if [[ "${VOICE_ENABLED}" != "true" ]]; then
-        afplay "/System/Library/Sounds/${sound}.aiff" 2>/dev/null
+  # Suppress banner only if the exact source window is currently frontmost.
+  # Gated on STACKNUDGE_MUTE_WHEN_FOCUSED — set to false to always notify
+  # regardless of which window has focus.
+  local mute_when_focused="${STACKNUDGE_MUTE_WHEN_FOCUSED:-true}"
+  if [[ "$mute_when_focused" == "true" ]]; then
+    local frontmost_id
+    frontmost_id=$(osascript -e "id of app (path to frontmost application as text)" 2>/dev/null)
+    if [[ "$frontmost_id" == "$bundle_id" && -n "$process_name" && -n "$win_title" ]]; then
+      local frontmost_win
+      frontmost_win=$(osascript \
+        -e "tell application \"System Events\"" \
+        -e "  tell process \"${process_name}\"" \
+        -e "    get title of window 1" \
+        -e "  end tell" \
+        -e "end tell" 2>/dev/null)
+      if [[ "$frontmost_win" == "$win_title" ]]; then
+        # Source window is already focused — minimal signal. Skip sound when
+        # voice is on (voice itself is suppressed here too, but keep the
+        # "voice replaces sound" rule consistent across all paths).
+        if [[ "${VOICE_ENABLED}" != "true" ]]; then
+          afplay "/System/Library/Sounds/${sound}.aiff" 2>/dev/null
+        fi
+        return
       fi
-      return
     fi
   fi
 
