@@ -50,7 +50,9 @@ struct AppActivator {
 
             // Step 3: focus the agent's terminal pane via AX before sending Enter,
             // so the keystroke lands in the right pane instead of whatever was
-            // last focused in VS Code.
+            // last focused in VS Code. After AX press of the tab, dwell briefly
+            // for the xterm canvas to take focus, then send Enter routed
+            // explicitly to the Code/Cursor process.
             if pressEnter {
                 Thread.sleep(forTimeInterval: 0.3)
                 if let runningApp = NSRunningApplication
@@ -59,11 +61,15 @@ struct AppActivator {
                         pid: runningApp.processIdentifier,
                         agent: terminalLabelHint(for: agent)
                     )
-                    Thread.sleep(forTimeInterval: 0.1)
+                    Thread.sleep(forTimeInterval: 0.3)
                 }
                 var err3: NSDictionary?
                 NSAppleScript(source: """
-                    tell application "System Events" to key code 36
+                    tell application "System Events"
+                        tell process "\(procName)"
+                            key code 36
+                        end tell
+                    end tell
                 """)?.executeAndReturnError(&err3)
             }
             return
@@ -161,10 +167,9 @@ struct AppActivator {
     }
 
     private static func focus(_ element: AXUIElement) -> Bool {
-        // Prefer an explicit press (terminal tab elements respond to it the
-        // same way a click would, which both selects the tab and focuses the
-        // xterm canvas inside). Fall back to setting the focused attribute
-        // for elements that don't accept a press.
+        // AX press is the click-equivalent — for terminal tab radio buttons,
+        // it both selects the tab and lets VS Code's own JS focus handlers
+        // run, which is what moves keyboard focus into the xterm canvas.
         if AXUIElementPerformAction(element, kAXPressAction as CFString) == .success {
             return true
         }

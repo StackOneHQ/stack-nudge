@@ -54,6 +54,7 @@ struct SessionsView: View {
                     }
                 }
                 .padding(.vertical, 4)
+                .background(ThinScrollers())
             }
             .onChange(of: store.selectedPID) { newValue in
                 guard let pid = newValue else { return }
@@ -65,11 +66,7 @@ struct SessionsView: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 0) {
-            Image(systemName: "bell.badge.fill")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-            Spacer()
+        PageFooter {
             if store.renamingPID != nil {
                 FooterHint(label: "Save",   keys: ["⏎"])
                 FooterHint(label: "Cancel", keys: ["esc"])
@@ -81,17 +78,6 @@ struct SessionsView: View {
                 FooterHint(label: "Back",   keys: ["esc"])
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .background(
-            ZStack {
-                Color.primary.opacity(0.05)
-                Rectangle()
-                    .fill(Color.primary.opacity(0.1))
-                    .frame(height: 0.5)
-                    .frame(maxHeight: .infinity, alignment: .top)
-            }
-        )
     }
 }
 

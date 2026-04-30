@@ -153,30 +153,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         try? task.run()
     }
 
-    // Spoken confirmation via stackvox. Auto-starts the daemon if needed
-    // (mirrors notify.sh). Silent fallback if stackvox isn't installed.
     private func speak(_ text: String) {
-        let venvBin = "\(NSHomeDirectory())/.stack-nudge/venv/bin"
-        let stackvoxSay = "\(venvBin)/stackvox-say"
-        let stackvox    = "\(venvBin)/stackvox"
-        let socketPath  = "\(NSHomeDirectory())/.cache/stackvox/daemon.sock"
-        guard FileManager.default.isExecutableFile(atPath: stackvoxSay) else { return }
-
-        if !FileManager.default.fileExists(atPath: socketPath),
-           FileManager.default.isExecutableFile(atPath: stackvox) {
-            let serve = Process()
-            serve.executableURL = URL(fileURLWithPath: stackvox)
-            serve.arguments = ["serve"]
-            try? serve.run()
-        }
-
-        let config = ConfigFile.read()
-        let voice = config["STACKNUDGE_VOICE_NAME"]  ?? "af_heart"
-        let speed = config["STACKNUDGE_VOICE_SPEED"] ?? "1.1"
-        let say = Process()
-        say.executableURL = URL(fileURLWithPath: stackvoxSay)
-        say.arguments = ["--voice", voice, "--speed", speed, text]
-        try? say.run()
+        Speaker.speak(text)
     }
 
     @objc private func showPanelAction() {

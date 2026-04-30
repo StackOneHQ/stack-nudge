@@ -82,6 +82,110 @@ VOICE_ENABLED="${STACKNUDGE_VOICE:-false}"
 VOICE_NAME="${STACKNUDGE_VOICE_NAME:-af_heart}"
 VOICE_SPEED="${STACKNUDGE_VOICE_SPEED:-1.1}"
 
+# Map a Kokoro voice prefix to a phrase-file language code.
+voice_to_lang() {
+  case "${1:0:2}" in
+    af|am|bf|bm) echo "en" ;;
+    ff)          echo "fr" ;;
+    hf|hm)       echo "hi" ;;
+    if|im)       echo "it" ;;
+    pf|pm)       echo "pt" ;;
+    *)           echo "en" ;;
+  esac
+}
+
+# Map a Kokoro voice prefix to the --lang code stackvox expects.
+voice_to_kokoro_lang() {
+  case "${1:0:2}" in
+    af|am) echo "en-us" ;;
+    bf|bm) echo "en-gb" ;;
+    ff)    echo "fr-fr" ;;
+    hf|hm) echo "hi" ;;
+    if|im) echo "it" ;;
+    pf|pm) echo "pt-br" ;;
+    *)     echo "en-us" ;;
+  esac
+}
+
+# Light expansion for stackvox: split hyphens/underscores, fix a couple of
+# stackvox-specific tokens that the model otherwise mispronounces.
+repo_name_raw() {
+  local repo parts=() word
+  repo=$(basename "$PWD")
+  for word in $(echo "$repo" | tr '_-' '  '); do
+    case "$word" in
+      cli|CLI)           word="C L I" ;;
+      stackone|StackOne) word="stack one" ;;
+    esac
+    parts+=("$word")
+  done
+  echo "${parts[*]}"
+}
+
+# Heavier expansion for the macOS `say` fallback — that engine mispronounces
+# more acronyms, so split a wider set into letters.
+repo_name_expanded() {
+  local repo parts=() word
+  repo=$(basename "$PWD")
+  for word in $(echo "$repo" | tr '_-' '  '); do
+    case "$word" in
+      mcp|MCP)           word="M C P" ;;
+      api|API)           word="A P I" ;;
+      cli|CLI)           word="C L I" ;;
+      hris|HRIS)         word="H R I S" ;;
+      ai|AI)             word="A I" ;;
+      stackone|StackOne) word="stack one" ;;
+    esac
+    parts+=("$word")
+  done
+  echo "${parts[*]}"
+}
+
+# Pick a phrase from the right pool (TEMPLATES_RESPONSE for stop events,
+# TEMPLATES_NOTIFICATION for permission events) and format it with the
+# repo name. Phrase files live next to notify.sh in phrases/<lang>.sh
+# so they're co-located with the script wherever it's installed.
+voice_phrase_for() {
+  local event="$1"
+  local lang repo
+
+  if [[ -x "$STACKVOX_SAY" ]]; then
+    lang=$(voice_to_lang "$VOICE_NAME")
+    repo=$(repo_name_raw)
+  else
+    lang="en"
+    repo=$(repo_name_expanded)
+  fi
+
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local phrases_dir="$script_dir/phrases"
+  local lang_file="$phrases_dir/$lang.sh"
+  [[ -f "$lang_file" ]] || lang_file="$phrases_dir/en.sh"
+  if [[ ! -f "$lang_file" ]]; then
+    echo "$repo"
+    return
+  fi
+
+  # shellcheck disable=SC1090
+  source "$lang_file"
+
+  local templates=()
+  case "$event" in
+    permission) templates=("${TEMPLATES_NOTIFICATION[@]}") ;;
+    *)          templates=("${TEMPLATES_RESPONSE[@]}") ;;
+  esac
+
+  if [[ ${#templates[@]} -eq 0 ]]; then
+    echo "$repo"
+    return
+  fi
+
+  local template="${templates[$((RANDOM % ${#templates[@]}))]}"
+  # shellcheck disable=SC2059
+  printf "$template" "$repo"
+}
+
 # Banner and panel surfaces are independent; sound/voice always fire.
 BANNER_ENABLED="${STACKNUDGE_BANNER:-true}"
 PANEL_ENABLED="${STACKNUDGE_PANEL:-false}"
@@ -114,7 +218,9 @@ speak_notification() {
   if [[ ! -S "${HOME}/.cache/stackvox/daemon.sock" ]]; then
     nohup "$STACKVOX" serve >/dev/null 2>&1 &
   fi
-  "$STACKVOX_SAY" --voice "${VOICE_NAME}" --speed "${VOICE_SPEED}" "${text}" 2>/dev/null &
+  local kokoro_lang
+  kokoro_lang=$(voice_to_kokoro_lang "$VOICE_NAME")
+  "$STACKVOX_SAY" --voice "${VOICE_NAME}" --lang "${kokoro_lang}" --speed "${VOICE_SPEED}" "${text}" 2>/dev/null &
 }
 
 # Locate one of our .app bundles. Searches ~/Applications, the script's
@@ -315,7 +421,12 @@ notify_macos() {
       -e "  end tell" \
       -e "end tell" 2>/dev/null)
     if [[ "$frontmost_win" == "$win_title" ]]; then
-      afplay "/System/Library/Sounds/${sound}.aiff" 2>/dev/null
+      # Source window is already focused — minimal signal. Skip sound when
+      # voice is on (voice itself is suppressed here too, but keep the
+      # "voice replaces sound" rule consistent across all paths).
+      if [[ "${VOICE_ENABLED}" != "true" ]]; then
+        afplay "/System/Library/Sounds/${sound}.aiff" 2>/dev/null
+      fi
       return
     fi
   fi
@@ -327,10 +438,15 @@ notify_macos() {
   # Backgrounded — the python3 cold-start (~50ms) shouldn't block the agent's hook.
   post_to_panel "${title}" "${message}" "${bundle_id}" "${project_name:-}" "${has_action}" &
 
+  # Voice "replaces" sound — when both are configured, the spoken message
+  # is the audible signal so we don't double-cue with a chime.
+  local effective_sound="$sound"
+  [[ "${VOICE_ENABLED}" == "true" ]] && effective_sound=""
+
   if [[ "${BANNER_ENABLED}" == "true" ]]; then
-    fire_banner "$title" "$message" "$sound" "$bundle_id" \
+    fire_banner "$title" "$message" "$effective_sound" "$bundle_id" \
       "${project_name:-}" "${win_title}" "${has_action}"
-  else
+  elif [[ "${VOICE_ENABLED}" != "true" ]]; then
     afplay "/System/Library/Sounds/${sound}.aiff" 2>/dev/null &
   fi
 
@@ -345,8 +461,15 @@ fire_banner() {
   app_bundle=$(find_app_bundle "stack-nudge.app")
 
   if [[ -z "$app_bundle" ]]; then
-    afplay "/System/Library/Sounds/${sound}.aiff" 2>/dev/null &
-    osascript -e "display notification \"${message}\" with title \"${title}\" sound name \"${sound}\"" 2>/dev/null
+    # Fallback path when stack-nudge.app isn't installed. `sound` is empty
+    # when voice is enabled — skip both the afplay chime and osascript's
+    # sound name so the user hears voice only.
+    if [[ -n "$sound" ]]; then
+      afplay "/System/Library/Sounds/${sound}.aiff" 2>/dev/null &
+      osascript -e "display notification \"${message}\" with title \"${title}\" sound name \"${sound}\"" 2>/dev/null
+    else
+      osascript -e "display notification \"${message}\" with title \"${title}\"" 2>/dev/null
+    fi
     return
   fi
 
@@ -391,11 +514,18 @@ case "$OS" in
     SOUND_PERMISSION="${STACKNUDGE_SOUND_PERMISSION:-Ping}"
     case "$EVENT" in
       permission)
+        # Banner stays specific (tool / file context) so the user can read
+        # what's pending. Voice picks from the conversational notification
+        # pool, formatted with the repo name — same shape as
+        # stackone-say-hooks.
         ctx=$(permission_context)
-        voice_ctx=$(voice_permission_context)
-        notify_macos "$TITLE" "${ctx:-Waiting for your approval}" "$SOUND_PERMISSION" "${voice_ctx:-Waiting for your approval}"
+        voice_msg=$(voice_phrase_for permission)
+        notify_macos "$TITLE" "${ctx:-Waiting for your approval}" "$SOUND_PERMISSION" "$voice_msg"
         ;;
-      *) notify_macos "$TITLE" "Done" "$SOUND_STOP" ;;
+      *)
+        voice_msg=$(voice_phrase_for stop)
+        notify_macos "$TITLE" "Done" "$SOUND_STOP" "$voice_msg"
+        ;;
     esac
     ;;
   Linux)

@@ -6,7 +6,7 @@
 PANEL_APP := $(HOME)/Applications/stack-nudge-panel.app
 PANEL_LABEL := com.stackonehq.stack-nudge-panel
 BUILD_LOG := /tmp/stack-nudge-dev.log
-WATCH_DIRS := panel shared notifier
+WATCH_DIRS := panel shared notifier notify.sh phrases
 
 .PHONY: help
 help:
@@ -34,7 +34,8 @@ uninstall:
 clean:
 	@rm -rf build
 
-# One-shot dev cycle: rebuild, reinstall the panel.app, kickstart the daemon.
+# One-shot dev cycle: rebuild, reinstall the panel.app, refresh notify.sh in
+# ~/.stack-nudge so hook-side changes propagate, kickstart the daemon.
 # Build output goes to $(BUILD_LOG); on failure, last 20 lines tail to stderr.
 .PHONY: reload
 reload:
@@ -47,6 +48,13 @@ reload:
 	fi; \
 	rm -rf "$(PANEL_APP)"; \
 	cp -R build/stack-nudge-panel.app "$(PANEL_APP)"; \
+	if [ -d "$$HOME/.stack-nudge" ]; then \
+		cp notify.sh "$$HOME/.stack-nudge/notify.sh"; \
+		if [ -d phrases ]; then \
+			rm -rf "$$HOME/.stack-nudge/phrases"; \
+			cp -R phrases "$$HOME/.stack-nudge/phrases"; \
+		fi; \
+	fi; \
 	launchctl kickstart -k "gui/$$(id -u)/$(PANEL_LABEL)" 2>/dev/null || true; \
 	printf 'reloaded\n'
 
