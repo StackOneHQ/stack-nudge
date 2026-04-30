@@ -1,0 +1,103 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. The more specific your reproduction steps, the faster we can fix it.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, plus the expected behavior.
+      placeholder: When Claude Code requests a permission, the banner appears but pressing Enter on the panel row does not approve it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal command sequence a maintainer can follow.
+      placeholder: |
+        1. `./install.sh`
+        2. Set `STACKNUDGE_PANEL=true` in `~/.stack-nudge/config`
+        3. Run a Claude Code session in a VS Code terminal
+        4. Trigger any permission prompt
+        5. Press the global hotkey, then Enter on the row
+        6. Observe: focus changes but Enter doesn't fire
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: stack-nudge version
+      description: Run `git -C ~/path/to/stack-nudge describe --tags` or paste the latest commit SHA.
+      placeholder: "v0.3.0 / commit abc1234"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version (if applicable)
+      placeholder: "macOS 15.2"
+
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent
+      multiple: true
+      options:
+        - Claude Code
+        - Cursor
+        - Gemini CLI
+        - Codex
+        - Other / custom hook
+
+  - type: dropdown
+    id: editor
+    attributes:
+      label: Editor / terminal hosting the agent
+      multiple: true
+      options:
+        - VS Code
+        - Cursor
+        - iTerm2
+        - Warp
+        - Ghostty
+        - Terminal.app
+        - Other
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant config
+      description: |
+        Contents of `~/.stack-nudge/config` (redact anything personal).
+        Particularly useful: `STACKNUDGE_PANEL`, `STACKNUDGE_BANNER`, `STACKNUDGE_VOICE`, `STACKNUDGE_PANEL_HOTKEY`.
+      render: shell
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / output
+      description: |
+        - `~/.stack-nudge/panel.log` for panel daemon errors
+        - `~/.stack-nudge/daemon.log` for stackvox errors
+        Redact anything sensitive.
+      render: shell

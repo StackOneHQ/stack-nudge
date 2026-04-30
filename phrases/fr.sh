@@ -1,5 +1,6 @@
 #!/bin/bash
 # French phrase templates. Formal addressing (vous). %s is the repo name.
+# shellcheck disable=SC2034  # arrays are consumed by notify.sh after sourcing
 TEMPLATES_RESPONSE=(
   "%s est prêt pour vous"
   "%s requiert votre attention"

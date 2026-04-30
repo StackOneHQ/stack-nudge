@@ -1,0 +1,17 @@
+version: 2
+updates:
+  # No tracked Swift dependencies (no SPM Package.swift) and no tracked
+  # Python dependencies (stackvox is pulled fresh from PyPI by install.sh).
+  # The only thing dependabot can usefully bump here is the GitHub Actions
+  # we pin in workflows.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+      - ci
+    groups:
+      actions:
+        patterns:
+          - "*"

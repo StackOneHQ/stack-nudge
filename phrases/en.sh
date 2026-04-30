@@ -1,5 +1,6 @@
 #!/bin/bash
 # English phrase templates. %s is the repo name.
+# shellcheck disable=SC2034  # arrays are consumed by notify.sh after sourcing
 TEMPLATES_RESPONSE=(
   "%s is ready for you"
   "%s needs your attention"

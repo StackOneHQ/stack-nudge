@@ -1,5 +1,6 @@
 #!/bin/bash
 # Italian phrase templates. Formal addressing (Lei). %s is the repo name.
+# shellcheck disable=SC2034  # arrays are consumed by notify.sh after sourcing
 TEMPLATES_RESPONSE=(
   "%s è pronto per Lei"
   "%s richiede la Sua attenzione"
