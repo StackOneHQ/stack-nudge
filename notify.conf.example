@@ -38,3 +38,9 @@
 # (without the .aiff extension). Defaults: Glass for stop, Ping for permission.
 #STACKNUDGE_SOUND_STOP=Glass
 #STACKNUDGE_SOUND_PERMISSION=Ping
+
+# Suppress banner + voice when the source window is already frontmost. A
+# soft chime still plays so you know the agent finished. Set to false to
+# always notify regardless of focus.
+# Default: true
+#STACKNUDGE_MUTE_WHEN_FOCUSED=false

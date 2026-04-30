@@ -112,6 +112,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let config = ConfigFile.read()
         let banner = ConfigFile.bool(config, "STACKNUDGE_BANNER", default: true)
         let voice  = ConfigFile.bool(config, "STACKNUDGE_VOICE",  default: false)
+        let mute   = ConfigFile.bool(config, "STACKNUDGE_MUTE_WHEN_FOCUSED", default: true)
         let hotkey = config["STACKNUDGE_PANEL_HOTKEY"] ?? "cmd+shift+n"
 
         let status = NSMenuItem(title: "Hotkey · \(hotkey)", action: nil, keyEquivalent: "")
@@ -119,8 +120,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(status)
         menu.addItem(.separator())
 
-        menu.addItem(toggle("Show banners",       state: banner, key: "STACKNUDGE_BANNER"))
+        menu.addItem(toggle("Show banners",        state: banner, key: "STACKNUDGE_BANNER"))
         menu.addItem(toggle("Voice notifications", state: voice,  key: "STACKNUDGE_VOICE"))
+        menu.addItem(toggle("Mute when focused",   state: mute,   key: "STACKNUDGE_MUTE_WHEN_FOCUSED"))
         menu.addItem(.separator())
 
         menu.addItem(action("Show panel",         #selector(showPanelAction)))
