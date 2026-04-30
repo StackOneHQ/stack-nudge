@@ -443,7 +443,8 @@ notify_macos() {
 # Create a unique FIFO at /tmp for the user's response. Echoes the path.
 # Returns empty if mkfifo fails.
 create_perm_fifo() {
-  local fifo="/tmp/stack-nudge-perm-$$-$(date +%s)-$RANDOM.fifo"
+  local fifo
+  fifo="/tmp/stack-nudge-perm-$$-$(date +%s)-$RANDOM.fifo"
   if mkfifo -m 0600 "$fifo" 2>/dev/null; then
     echo "$fifo"
   fi
