@@ -4,6 +4,47 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.2.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.1.2...v1.2.0) (2026-04-30)
+
+
+### Features
+
+* **#18:** detect Zed as a host editor ([e672ca2](https://github.com/StackOneHQ/stack-nudge/commit/e672ca2c080023f431b7a0ef44b7ea1fc42dbe4e))
+* add mute-when-focused toggle ([b9286cc](https://github.com/StackOneHQ/stack-nudge/commit/b9286ccbcd3642d8a152bea1d56dc8468a8cb6dd))
+* add mute-when-focused toggle (+ make-dev watcher fix) ([64d70e3](https://github.com/StackOneHQ/stack-nudge/commit/64d70e3702050afe9bd7179ffa123cae77d21fe5))
+* add pin panel toggle (auto-hide on focus loss when off) ([b4c4cc7](https://github.com/StackOneHQ/stack-nudge/commit/b4c4cc75de2bf1205d9ac168e8d434c564aab40e))
+* blocking permission hook with FIFO-based approval ([84baaea](https://github.com/StackOneHQ/stack-nudge/commit/84baaeaf9c0dd86e85f69a41d42ee873d0f8d868))
+* blocking permission hook with FIFO-based approval ([3e1265e](https://github.com/StackOneHQ/stack-nudge/commit/3e1265ecaed73d78bcae2964e3097a8f7a8aa95c))
+* bundle StackVox TTS engine into stack-nudge ([dfba23e](https://github.com/StackOneHQ/stack-nudge/commit/dfba23e1bb77c459db5c2e1ce768c6c691e8575e))
+* bundle StackVox TTS engine into stack-nudge ([46749a3](https://github.com/StackOneHQ/stack-nudge/commit/46749a3c2504df31ccd3f826004d34d12c8ec9f3))
+* detect Zed as a host editor (closes [#18](https://github.com/StackOneHQ/stack-nudge/issues/18)) ([a8c5e5b](https://github.com/StackOneHQ/stack-nudge/commit/a8c5e5bc28f71ee42c7b567e96219d506bd32555))
+* hotkey recorder, AX terminal-pane focus, config file watcher ([f201f1b](https://github.com/StackOneHQ/stack-nudge/commit/f201f1b1583864bf0d0f664eee892331d268aa25))
+* keyboard-native floating panel ([938d657](https://github.com/StackOneHQ/stack-nudge/commit/938d6576235f86ea8af78e4f1842ba35ed41a5cf))
+* keyboard-native floating panel ([94b42d5](https://github.com/StackOneHQ/stack-nudge/commit/94b42d540a3aadae7d33e975b44f8e489b12daaa))
+* keyboard-native panel with sessions, settings, voice phrases ([75cf450](https://github.com/StackOneHQ/stack-nudge/commit/75cf450443465349500122c542f1519f2f955183))
+* per-language voice phrases, AX terminal focus, polish + refactor ([a00825e](https://github.com/StackOneHQ/stack-nudge/commit/a00825e957ed206cf4b8baca410bebc52c230331))
+* sessions, in-panel settings, and PID/session enrichment ([d0c8beb](https://github.com/StackOneHQ/stack-nudge/commit/d0c8beb9949a16910365b6658c419a46f5da0ccf))
+* sessions, in-panel settings, and PID/session enrichment ([fed1c70](https://github.com/StackOneHQ/stack-nudge/commit/fed1c7093c70fb15ff03406ba12d6e9a2681a85b))
+
+
+### Bug Fixes
+
+* **#11:** make Python &lt;3.10 install failure visible ([ac2fe4a](https://github.com/StackOneHQ/stack-nudge/commit/ac2fe4ad881b3312f4df36c506ae50c700c2f4b2))
+* **#12:** replace stale stack-nudge hook entries on upgrade ([379d540](https://github.com/StackOneHQ/stack-nudge/commit/379d5404b70f1a0e02b4434d2bef06d8639e9de7))
+* auto-reinitialize audio on output device change ([aa3a7f4](https://github.com/StackOneHQ/stack-nudge/commit/aa3a7f4956f475fc28b2ab68859bb130c201a76c))
+* auto-reinitialize audio when output device changes (earbuds/speakers) ([c3c7990](https://github.com/StackOneHQ/stack-nudge/commit/c3c7990e06b90891df54502e9a0a58a62dce3d12))
+* copy app bundle to ~/Applications and update icon + logo ([46734ce](https://github.com/StackOneHQ/stack-nudge/commit/46734ce3bb7e19165c60d442c8d6e3f0c389370c))
+* declare and assign separately to satisfy shellcheck SC2155 ([60e632f](https://github.com/StackOneHQ/stack-nudge/commit/60e632f042b3784a30bc986763378629e44211e2))
+* esc closes panel from any tab; preserve active tab on hide ([6b534f6](https://github.com/StackOneHQ/stack-nudge/commit/6b534f681b2918b65eb9528deeae60c34c6931df))
+* installer Python detection visibility ([#11](https://github.com/StackOneHQ/stack-nudge/issues/11)) and stale hook cleanup ([#12](https://github.com/StackOneHQ/stack-nudge/issues/12)) ([3c9ed47](https://github.com/StackOneHQ/stack-nudge/commit/3c9ed47b5655265a6e7432b5c2998be9380978f2))
+* make dev watcher catches notify.sh + phrases edits ([ebcf747](https://github.com/StackOneHQ/stack-nudge/commit/ebcf747285a764ee4613ac5b97f747d8be541b8d))
+* migrate to stackvox 0.3.x unified CLI; voice was silently broken on fresh installs ([68efe9c](https://github.com/StackOneHQ/stack-nudge/commit/68efe9c4200c95467179d2590e9dc1b17cf95912)), closes [#14](https://github.com/StackOneHQ/stack-nudge/issues/14)
+* migrate to stackvox 0.4.x unified CLI ([a184b0b](https://github.com/StackOneHQ/stack-nudge/commit/a184b0ba730b8df93d452fced3d68bc3dbe63a32))
+* press Enter to approve permission in terminal apps on notification click ([b6d7aaa](https://github.com/StackOneHQ/stack-nudge/commit/b6d7aaab3a8de28ad3739b9132ee47d91708d6ab))
+* remove ~/Applications/stack-nudge.app on uninstall ([a1bcc18](https://github.com/StackOneHQ/stack-nudge/commit/a1bcc1874600d7c516eaf03ca841c94afdb49fac))
+* remove unused ACTIVATE_IMMEDIATELY variable (shellcheck SC2034) ([2434633](https://github.com/StackOneHQ/stack-nudge/commit/2434633fe932e986c054815ad98cff76de15f208))
+* restore STACKNUDGE_ACTIVATE_IMMEDIATELY; document STACKNUDGE_PANEL migration ([349cbe7](https://github.com/StackOneHQ/stack-nudge/commit/349cbe715ee9fa611d12fdf903f26e9bee9f628b))
+
 ## [Unreleased]
 
 ### Added
