@@ -1,6 +1,7 @@
 #!/bin/bash
 # Hindi phrase templates (romanized, matches Kokoro's hf_* / hm_* voices).
 # Formal addressing (aap). %s is the repo name.
+# shellcheck disable=SC2034  # arrays are consumed by notify.sh after sourcing
 TEMPLATES_RESPONSE=(
   "%s aapke liye taiyaar hai"
   "%s ko aapke dhyaan ki zaroorat hai"

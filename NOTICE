@@ -1,0 +1,42 @@
+stack-nudge
+Copyright 2026 StackOne Technologies Ltd.
+
+This product includes software developed by StackOne Technologies Ltd.
+(https://www.stackone.com/) and is licensed under the MIT License. A copy
+of the license is provided in the LICENSE file.
+
+--------------------------------------------------------------------------------
+Third-party components
+--------------------------------------------------------------------------------
+
+This product relies on, but does not bundle, the following components. They
+are downloaded or installed separately at install / first-run time. Their
+original copyright notices and license terms apply.
+
+stackvox (offline TTS engine)
+  Copyright (c) StackOne Technologies Ltd.
+  Licensed under the Apache License, Version 2.0
+  https://github.com/StackOneHQ/stackvox
+
+  stack-nudge installs stackvox from PyPI into an isolated venv at
+  ~/.stack-nudge/venv when ./install.sh runs. stackvox itself bundles
+  Kokoro-82M model weights downloaded on first use; see its NOTICE for
+  details.
+
+terminal-notifier (architectural reference)
+  Copyright (c) Eloy Durán, Julien Blanchard
+  Licensed under the MIT License
+  https://github.com/julienXX/terminal-notifier
+
+  stack-nudge's click-routing pattern (process exits after delivering the
+  notification, macOS re-launches the app on click and surfaces the
+  delivered notification via NSApplicationLaunchUserNotificationKey) is
+  adapted from terminal-notifier. No code is copied verbatim.
+
+stackone-say-hooks (phrase pool reference)
+  Copyright (c) StackOne Technologies Ltd.
+  Licensed under the MIT License
+  https://github.com/StackOneHQ/stackone-claude-internal-marketplace
+
+  The per-event / per-language voice phrase pools in `phrases/` were
+  initially adapted from the stackone-say-hooks plugin's phrase files.

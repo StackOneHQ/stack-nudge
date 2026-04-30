@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest a new capability or improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the use case first, not the solution.
+      placeholder: |
+        I run multiple Claude Code sessions in different VS Code windows and want to know which session each nudge came from at a glance.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Optional — if you have a shape in mind, sketch it. Keys, config flags, UI changes, etc.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+      description: Optional — other approaches you rejected, and why.
+
+  - type: checkboxes
+    id: willing-to-contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I'd be willing to open a PR for this.
