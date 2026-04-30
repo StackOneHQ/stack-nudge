@@ -11,24 +11,30 @@ echo "Installing stack-nudge..."
 
 mkdir -p "$INSTALL_DIR"
 
-# Build and install the native app bundle (single persistent binary).
-# build.sh's output (stdout + stderr — Swift emits ~120 lines of UserNotifications
-# deprecation warnings on every build) is redirected to a log so the install
-# transcript stays scannable. On real build failure the log's last 20 lines
-# are dumped so the actual error doesn't get hidden.
+# Build (or use a prebuilt) native app bundle. Release tarballs ship with a
+# universal binary already at build/stack-nudge.app — in that case skip the
+# rebuild so users who download a release don't need swiftc on their machine.
+# build.sh's output (Swift emits ~120 lines of UserNotifications deprecation
+# warnings on every build) goes to a log so the install transcript stays
+# scannable. On real build failure the log's last 20 lines are dumped.
+PREBUILT_APP="$SCRIPT_DIR/build/stack-nudge.app"
 BUILD_LOG="/tmp/stack-nudge-install-build.log"
 if [[ "$(uname -s)" == "Darwin" ]]; then
   echo ""
-  echo "Building stack-nudge.app..."
-  if ! bash "$SCRIPT_DIR/build.sh" > "$BUILD_LOG" 2>&1; then
-    echo ""
-    echo "  ✗ Build failed. Last 20 lines of $BUILD_LOG:"
-    tail -20 "$BUILD_LOG" | sed 's/^/      /'
-    exit 1
+  if [[ -d "$PREBUILT_APP" ]]; then
+    echo "Using prebuilt stack-nudge.app from release bundle..."
+  else
+    echo "Building stack-nudge.app..."
+    if ! bash "$SCRIPT_DIR/build.sh" > "$BUILD_LOG" 2>&1; then
+      echo ""
+      echo "  ✗ Build failed. Last 20 lines of $BUILD_LOG:"
+      tail -20 "$BUILD_LOG" | sed 's/^/      /'
+      exit 1
+    fi
   fi
   rm -rf "$HOME/Applications/stack-nudge.app"
   rm -rf "$HOME/Applications/stack-nudge-panel.app"  # clean up old panel binary
-  cp -r "$SCRIPT_DIR/build/stack-nudge.app" "$HOME/Applications/stack-nudge.app"
+  cp -r "$PREBUILT_APP" "$HOME/Applications/stack-nudge.app"
   echo "  Installed stack-nudge.app -> ~/Applications/stack-nudge.app"
 fi
 

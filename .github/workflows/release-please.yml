@@ -1,0 +1,24 @@
+name: release-please
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      # Watches conventional commits on main, opens (and updates) a Release PR
+      # that bumps .release-please-manifest.json + regenerates CHANGELOG.md.
+      # When the Release PR is merged, this action creates the git tag (vX.Y.Z)
+      # and the GitHub Release. The release.yml workflow then triggers on that
+      # tag to attach prebuilt asset bundles.
+      - uses: googleapis/release-please-action@v4
+        with:
+          config-file: .release-please-config.json
+          manifest-file: .release-please-manifest.json
