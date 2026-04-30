@@ -53,10 +53,12 @@ The hook calls `notify.sh <agent> <event>`, which plays a sound and shows a bann
 
 When you click the banner, `stack-nudge.app` uses System Events to raise the exact window that triggered the notification — even if you have multiple Cursor or terminal windows open. Supported apps:
 
-- Cursor, VS Code
+- Cursor, VS Code, Zed
 - iTerm2, Warp, Ghostty, Terminal.app
 
 If the target app is already in focus when the notification fires, the banner is suppressed and only the sound plays.
+
+> **Note on Zed:** Zed itself doesn't expose an external hook system, so stack-nudge relies on the agent's hooks (e.g. `~/.claude/settings.json` for Claude Code) firing from inside Zed's integrated terminal. Click-to-focus and frontmost-window suppression are wired up via `TERM_PROGRAM=zed`, which Zed sets automatically.
 
 ### Immediate focus mode
 
