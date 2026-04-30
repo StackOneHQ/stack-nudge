@@ -1,5 +1,6 @@
 #!/bin/bash
 # Portuguese (Brazilian) phrase templates. %s is the repo name.
+# shellcheck disable=SC2034  # arrays are consumed by notify.sh after sourcing
 TEMPLATES_RESPONSE=(
   "%s está pronto para você"
   "%s requer sua atenção"
