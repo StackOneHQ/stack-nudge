@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UserNotifications
 
 protocol PanelKeyDelegate: AnyObject {
     func panelHandlesKey(_ event: NSEvent) -> Bool
@@ -258,7 +259,8 @@ struct EventRow: View {
 }
 
 // Owns the panel + hotkey + listener + menu bar.
-final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate {
+final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
+                             UNUserNotificationCenterDelegate {
 
     private var panel: FloatingPanel!
     private var hotkey: Hotkey?
@@ -319,6 +321,103 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate {
         }
 
         startConfigWatcher()
+        setupNotificationCenter()
+        store.onAppend = { [weak self] event in self?.postBannerIfNeeded(event) }
+    }
+
+    // MARK: - UNUserNotificationCenter
+
+    private func setupNotificationCenter() {
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+
+        // Request permission (shows the system dialog once; subsequent calls are no-ops).
+        center.requestAuthorization(options: [.alert]) { _, _ in }
+
+        // Register categories: STOP (no actions) and PERMISSION (Allow button).
+        let allow = UNNotificationAction(identifier: "ALLOW", title: "Allow", options: [])
+        let permCategory = UNNotificationCategory(identifier: "PERMISSION",
+                                                   actions: [allow],
+                                                   intentIdentifiers: [],
+                                                   options: [])
+        let stopCategory = UNNotificationCategory(identifier: "STOP",
+                                                   actions: [],
+                                                   intentIdentifiers: [],
+                                                   options: [])
+        center.setNotificationCategories([permCategory, stopCategory])
+    }
+
+    // Post a UNUserNotification when STACKNUDGE_BANNER is enabled.
+    // Sound is omitted — afplay fires independently in notify.sh so we
+    // don't double-cue when the macOS banner is also shown.
+    // If STACKNUDGE_ACTIVATE_IMMEDIATELY is set, focus the source editor
+    // right away without waiting for the user to click.
+    private func postBannerIfNeeded(_ event: NudgeEvent) {
+        let config = PanelConfig.load()
+
+        if config.activateImmediately, let bundleID = event.bundleID {
+            DispatchQueue.global(qos: .userInitiated).async {
+                AppActivator.activate(bundleID: bundleID,
+                                      windowTitle: event.windowTitle,
+                                      ipcHook: event.ipcHook,
+                                      projectPath: event.projectPath,
+                                      sendApproval: false,
+                                      agent: event.agent)
+            }
+            return
+        }
+
+        guard config.bannerEnabled else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = event.title
+        content.body  = event.message
+        content.categoryIdentifier = event.kind == .permission ? "PERMISSION" : "STOP"
+        content.userInfo = ["eventID": event.id.uuidString]
+
+        let center = UNUserNotificationCenter.current()
+        // Remove stale delivered notifications so they don't pile up.
+        center.removeAllDeliveredNotifications()
+        let req = UNNotificationRequest(identifier: event.id.uuidString,
+                                        content: content, trigger: nil)
+        center.add(req, withCompletionHandler: nil)
+    }
+
+    // Called when the user clicks the banner or its action button.
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        defer { completionHandler() }
+        guard let eventID = response.notification.request.content.userInfo["eventID"] as? String,
+              let event = store.events.first(where: { $0.id.uuidString == eventID })
+        else { return }
+
+        store.remove(id: event.id)
+        let approve = response.actionIdentifier == "ALLOW"
+        guard let bundleID = event.bundleID else { return }
+
+        // Hide the app first so the system restores focus to the previous
+        // frontmost app before AppActivator tries to raise the target window.
+        // Without this the brief activation of stack-nudge interferes with
+        // window detection in AppActivator.
+        NSApp.hide(nil)
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            Thread.sleep(forTimeInterval: 0.15)
+            AppActivator.activate(bundleID: bundleID,
+                                  windowTitle: event.windowTitle,
+                                  ipcHook: event.ipcHook,
+                                  projectPath: event.projectPath,
+                                  sendApproval: approve,
+                                  agent: event.agent)
+        }
+    }
+
+    // Show banners even when the app is frontmost (needed for accessory apps).
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner])
     }
 
     @discardableResult
@@ -467,7 +566,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             switch event.keyCode {
             case KeyCode.escape where plain:
-                nav.mode = .events
+                hidePanel()
             case KeyCode.upArrow where plain:
                 selectPrevSession()
             case KeyCode.downArrow where plain:
@@ -496,7 +595,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate {
             let shiftOnly = mods.intersection([.command, .control, .option, .shift]) == .shift
             switch event.keyCode {
             case KeyCode.escape where plain:
-                nav.mode = .events
+                hidePanel()
             case KeyCode.upArrow where plain:
                 nav.selectPrevRow()
             case KeyCode.downArrow where plain:
@@ -646,10 +745,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate {
 
     // NSApp.hide hides all our windows AND deactivates the app, so the system
     // frontmost reverts to whatever was active before the panel was summoned.
-    // Always return to events mode on hide so the next show is predictable.
     private func hidePanel() {
         panel.orderOut(nil)
-        nav.mode = .events
         NSApp.hide(nil)
     }
 

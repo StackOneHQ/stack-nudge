@@ -68,12 +68,16 @@ final class EventStore: ObservableObject {
 
     private let maxEvents = 5
 
+    /// Called on main queue after each new event is inserted.
+    var onAppend: ((NudgeEvent) -> Void)?
+
     func append(_ event: NudgeEvent) {
         events.insert(event, at: 0)
         if events.count > maxEvents {
             events = Array(events.prefix(maxEvents))
         }
         if selectedID != event.id { selectedID = event.id }
+        onAppend?(event)
         if ProcessInfo.processInfo.environment["STACKNUDGE_PANEL_DEBUG"] != nil {
             FileHandle.standardError.write(Data(
                 "panel: received \(event.agent)/\(event.kind.rawValue): \(event.message)\n".utf8))

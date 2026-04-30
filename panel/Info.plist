@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.stackonehq.stack-nudge-panel</string>
+    <string>com.stackonehq.stack-nudge</string>
     <key>CFBundleName</key>
-    <string>stack-nudge-panel</string>
+    <string>stack-nudge</string>
     <key>CFBundleExecutable</key>
-    <string>stack-nudge-panel</string>
+    <string>stack-nudge</string>
     <key>CFBundleIconFile</key>
     <string>Icon</string>
     <key>CFBundlePackageType</key>
@@ -20,6 +20,8 @@
     <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>NSUserNotificationAlertStyle</key>
+    <string>alert</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>stack-nudge uses System Events to focus the correct window when you act on a notification.</string>
 </dict>

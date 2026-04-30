@@ -11,17 +11,15 @@ echo "Installing stack-nudge..."
 
 mkdir -p "$INSTALL_DIR"
 
-# Build and install the native app bundles (macOS click-to-focus banners + panel)
+# Build and install the native app bundle (single persistent binary)
 if [[ "$(uname -s)" == "Darwin" ]]; then
   echo ""
-  echo "Building stack-nudge.app + stack-nudge-panel.app..."
+  echo "Building stack-nudge.app..."
   bash "$SCRIPT_DIR/build.sh" >/dev/null
   rm -rf "$HOME/Applications/stack-nudge.app"
-  rm -rf "$HOME/Applications/stack-nudge-panel.app"
-  cp -r "$SCRIPT_DIR/build/stack-nudge.app"       "$HOME/Applications/stack-nudge.app"
-  cp -r "$SCRIPT_DIR/build/stack-nudge-panel.app" "$HOME/Applications/stack-nudge-panel.app"
-  echo "  Installed stack-nudge.app       -> ~/Applications/stack-nudge.app"
-  echo "  Installed stack-nudge-panel.app -> ~/Applications/stack-nudge-panel.app"
+  rm -rf "$HOME/Applications/stack-nudge-panel.app"  # clean up old panel binary
+  cp -r "$SCRIPT_DIR/build/stack-nudge.app" "$HOME/Applications/stack-nudge.app"
+  echo "  Installed stack-nudge.app -> ~/Applications/stack-nudge.app"
 fi
 
 # Pick a Python ≥ 3.10 for the venv. stackvox requires it, but `python3` on
@@ -119,23 +117,20 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     "${VENV}/bin/stackvox" "serve"
   echo "  Voice daemon registered as launchd agent (starts at login)"
 
-  # Panel launcher is config-aware: exits 0 when STACKNUDGE_PANEL isn't enabled.
-  # KeepAlive=on_crash lets launchd respect that exit and not loop.
-  PANEL_LAUNCHER="$INSTALL_DIR/panel-launcher.sh"
-  cat > "$PANEL_LAUNCHER" <<'LAUNCHER'
-#!/usr/bin/env bash
-[[ -f "$HOME/.stack-nudge/config" ]] && source "$HOME/.stack-nudge/config"
-[[ "${STACKNUDGE_PANEL:-false}" != "true" ]] && exit 0
-exec "$HOME/Applications/stack-nudge-panel.app/Contents/MacOS/stack-nudge-panel"
-LAUNCHER
-  chmod +x "$PANEL_LAUNCHER"
-
+  # Single persistent app — always running, restarts on crash.
   register_launchd_agent \
-    "com.stackonehq.stack-nudge-panel" \
-    "on_crash" \
-    "${INSTALL_DIR}/panel.log" \
-    "${PANEL_LAUNCHER}"
-  echo "  Panel daemon registered as launchd agent (starts at login when STACKNUDGE_PANEL=true)"
+    "com.stackonehq.stack-nudge" \
+    "always" \
+    "${INSTALL_DIR}/app.log" \
+    "$HOME/Applications/stack-nudge.app/Contents/MacOS/stack-nudge"
+  echo "  App registered as launchd agent (starts at login)"
+
+  # Remove old panel launchd agent if upgrading from two-binary setup
+  OLD_PANEL_PLIST="$HOME/Library/LaunchAgents/com.stackonehq.stack-nudge-panel.plist"
+  if [[ -f "$OLD_PANEL_PLIST" ]]; then
+    launchctl unload "$OLD_PANEL_PLIST" 2>/dev/null || true
+    rm -f "$OLD_PANEL_PLIST"
+  fi
 fi
 
 # Copy notify.sh and the phrase pools (sourced by notify.sh at runtime
@@ -238,6 +233,6 @@ echo ""
 echo "Config: edit ~/.stack-nudge/config to customise behaviour."
 echo "  STACKNUDGE_VOICE=true                 — speak notifications aloud"
 echo "  STACKNUDGE_ACTIVATE_IMMEDIATELY=true  — focus your editor without clicking"
-echo "  STACKNUDGE_PANEL=true                 — keyboard-native floating panel (cmd+shift+n)"
 echo "  STACKNUDGE_BANNER=false               — suppress macOS banner notifications"
+echo "  STACKNUDGE_PANEL_HOTKEY=cmd+opt+n     — global hotkey for the floating panel"
 echo "To uninstall, run: ./uninstall.sh"
