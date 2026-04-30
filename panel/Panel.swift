@@ -551,7 +551,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             switch event.keyCode {
             case KeyCode.escape where plain:
-                nav.mode = .events
+                hidePanel()
             case KeyCode.upArrow where plain:
                 selectPrevSession()
             case KeyCode.downArrow where plain:
@@ -580,7 +580,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             let shiftOnly = mods.intersection([.command, .control, .option, .shift]) == .shift
             switch event.keyCode {
             case KeyCode.escape where plain:
-                nav.mode = .events
+                hidePanel()
             case KeyCode.upArrow where plain:
                 nav.selectPrevRow()
             case KeyCode.downArrow where plain:
@@ -730,10 +730,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     // NSApp.hide hides all our windows AND deactivates the app, so the system
     // frontmost reverts to whatever was active before the panel was summoned.
-    // Always return to events mode on hide so the next show is predictable.
     private func hidePanel() {
         panel.orderOut(nil)
-        nav.mode = .events
         NSApp.hide(nil)
     }
 
