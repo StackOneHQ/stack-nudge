@@ -70,9 +70,6 @@ voice_permission_context() {
   esac
 }
 
-# Set to "true" to bring your editor to focus immediately when the notification
-# fires, instead of waiting for you to click it.
-ACTIVATE_IMMEDIATELY="${STACKNUDGE_ACTIVATE_IMMEDIATELY:-false}"
 
 # Set to "true" to speak notifications aloud via StackVox (offline TTS).
 # Requires: pip install stackvox && stackvox serve
