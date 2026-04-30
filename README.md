@@ -20,6 +20,8 @@
 
 ## Install
 
+**Prerequisites:** Python ≥ 3.10 (the bundled voice engine [stackvox](https://github.com/StackOneHQ/stackvox) requires it). macOS ships 3.9 by default — install a newer one with `brew install python@3.13`, or set `STACKNUDGE_PYTHON=/path/to/python3` to point at one explicitly.
+
 ```bash
 git clone https://github.com/StackOneHQ/stack-nudge.git
 cd stack-nudge
