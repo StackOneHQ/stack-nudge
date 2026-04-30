@@ -56,7 +56,7 @@ PY
 fi
 
 # Stop and remove launchd agents (macOS)
-for label in com.stackonehq.stack-nudge-daemon com.stackonehq.stack-nudge-panel; do
+for label in com.stackonehq.stack-nudge com.stackonehq.stack-nudge-daemon com.stackonehq.stack-nudge-panel; do
   plist="$HOME/Library/LaunchAgents/${label}.plist"
   if [[ -f "$plist" ]]; then
     launchctl unload "$plist" 2>/dev/null || true
@@ -65,10 +65,10 @@ for label in com.stackonehq.stack-nudge-daemon com.stackonehq.stack-nudge-panel;
   fi
 done
 
-# Stop any running panel process the launchd agent didn't catch
-pkill -f stack-nudge-panel 2>/dev/null || true
+# Stop any running app process the launchd agent didn't catch
+pkill -f "stack-nudge$" 2>/dev/null || true
 
-# Remove app bundles
+# Remove app bundles (including old two-binary setup)
 for app in stack-nudge.app stack-nudge-panel.app; do
   if [[ -d "$HOME/Applications/$app" ]]; then
     rm -rf "$HOME/Applications/$app"

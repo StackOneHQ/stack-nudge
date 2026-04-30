@@ -186,9 +186,6 @@ voice_phrase_for() {
   printf "$template" "$repo"
 }
 
-# Banner and panel surfaces are independent; sound/voice always fire.
-BANNER_ENABLED="${STACKNUDGE_BANNER:-true}"
-PANEL_ENABLED="${STACKNUDGE_PANEL:-false}"
 PANEL_SOCK="${HOME}/.stack-nudge/panel.sock"
 
 # Pretty-print the agent name for the notification title
@@ -227,27 +224,12 @@ speak_notification() {
 # own directory, and the repo build/ output (for in-tree development).
 # Args: app-bundle-name (e.g. "stack-nudge.app")
 # Echoes the first match, empty string if none found.
-find_app_bundle() {
-  local name="$1"
-  for candidate in \
-    "$HOME/Applications/$name" \
-    "$(dirname "$0")/$name" \
-    "$(dirname "$0")/build/$name"; do
-    if [[ -d "$candidate" ]]; then
-      printf '%s' "$candidate"
-      return
-    fi
-  done
-}
-
-ensure_panel_running() {
-  [[ "${PANEL_ENABLED}" != "true" ]] && return
+ensure_app_running() {
   [[ -S "$PANEL_SOCK" ]] && return
-  local panel_app
-  panel_app=$(find_app_bundle "stack-nudge-panel.app")
-  [[ -z "$panel_app" ]] && return
-  # -g: launch in the background, don't bring the panel app to foreground
-  open -ga "$panel_app" 2>/dev/null
+  local app_path="$HOME/Applications/stack-nudge.app"
+  [[ ! -d "$app_path" ]] && return
+  # -g: launch in the background, don't steal focus from the editor
+  open -ga "$app_path" 2>/dev/null
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     [[ -S "$PANEL_SOCK" ]] && return
     sleep 0.1
@@ -289,8 +271,7 @@ walk_session_chain() {
 # we have ~15 fields.
 # Args: title message bundle_id window_title has_action(true|false)
 post_to_panel() {
-  [[ "${PANEL_ENABLED}" != "true" ]] && return
-  ensure_panel_running
+  ensure_app_running
   [[ ! -S "$PANEL_SOCK" ]] && return
 
   walk_session_chain
@@ -434,58 +415,20 @@ notify_macos() {
   local has_action="false"
   [[ "${EVENT}" == "permission" ]] && has_action="true"
 
-  # Post first so the panel has the event queued by the time the sound plays.
-  # Backgrounded — the python3 cold-start (~50ms) shouldn't block the agent's hook.
+  # Post to the persistent app — it handles both the panel history and the
+  # UNUserNotification banner based on the user's config. Backgrounded so
+  # Python startup (~50ms) doesn't block the agent hook.
   post_to_panel "${title}" "${message}" "${bundle_id}" "${project_name:-}" "${has_action}" &
 
-  # Voice "replaces" sound — when both are configured, the spoken message
-  # is the audible signal so we don't double-cue with a chime.
-  local effective_sound="$sound"
-  [[ "${VOICE_ENABLED}" == "true" ]] && effective_sound=""
-
-  if [[ "${BANNER_ENABLED}" == "true" ]]; then
-    fire_banner "$title" "$message" "$effective_sound" "$bundle_id" \
-      "${project_name:-}" "${win_title}" "${has_action}"
-  elif [[ "${VOICE_ENABLED}" != "true" ]]; then
+  # Sound fires independently via afplay — guaranteed even if macOS throttles
+  # or the app isn't running yet. Voice replaces the chime when enabled.
+  if [[ "${VOICE_ENABLED}" != "true" ]]; then
     afplay "/System/Library/Sounds/${sound}.aiff" 2>/dev/null &
   fi
 
   speak_notification "${voice_message}"
 }
 
-fire_banner() {
-  local title="$1" message="$2" sound="$3" bundle_id="$4"
-  local project_name="$5" win_title="$6" has_action="$7"
-
-  local app_bundle
-  app_bundle=$(find_app_bundle "stack-nudge.app")
-
-  if [[ -z "$app_bundle" ]]; then
-    # Fallback path when stack-nudge.app isn't installed. `sound` is empty
-    # when voice is enabled — skip both the afplay chime and osascript's
-    # sound name so the user hears voice only.
-    if [[ -n "$sound" ]]; then
-      afplay "/System/Library/Sounds/${sound}.aiff" 2>/dev/null &
-      osascript -e "display notification \"${message}\" with title \"${title}\" sound name \"${sound}\"" 2>/dev/null
-    else
-      osascript -e "display notification \"${message}\" with title \"${title}\"" 2>/dev/null
-    fi
-    return
-  fi
-
-  local open_args=(
-    --args
-    --title "${title}" --message "${message}"
-    --sound "${sound}" --activate "${bundle_id}"
-  )
-  [[ "${ACTIVATE_IMMEDIATELY}" == "true" ]] && open_args+=(--activate-immediately)
-  [[ -n "$win_title" ]]               && open_args+=(--window-title "${project_name}")
-  [[ -n "${VSCODE_IPC_HOOK_CLI}" ]]   && open_args+=(--ipc-hook "${VSCODE_IPC_HOOK_CLI}")
-  open_args+=(--project-path "${PWD}")
-  [[ "${has_action}" == "true" ]]     && open_args+=(--has-action-button)
-
-  open -a "$app_bundle" "${open_args[@]}"
-}
 
 play_linux() {
   local sound_complete="/usr/share/sounds/freedesktop/stereo/complete.oga"
