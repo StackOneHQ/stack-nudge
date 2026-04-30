@@ -30,6 +30,7 @@ final class PanelNav: ObservableObject {
     @Published var hotkeyError:     String?
     @Published var bannerEnabled:   Bool = true
     @Published var voiceEnabled:    Bool = false
+    @Published var panelPinned:     Bool = true
     @Published var soundStop:       String = "Glass"
     @Published var soundPermission: String = "Ping"
     @Published var voice:           String = "af_heart"
@@ -68,28 +69,30 @@ final class PanelNav: ObservableObject {
         "I'd love your input on this.",
     ]
 
-    var rowCount: Int { 10 }
+    var rowCount: Int { 11 }
 
     // Row layout (kept in one place so the controller, view, and indexing
     // logic all agree on what each row index means):
     //   0  Hotkey                hotkey-record
     //   1  Banner notifications  toggle
     //   2  Voice notifications   toggle
-    //   3  Agent done sound      cycle
-    //   4  Permission sound      cycle
-    //   5  Voice                 cycle
-    //   6  Speed                 cycle
-    //   7  Check permissions…    action
-    //   8  Open config file…     action
-    //   9  Quit panel            action
+    //   3  Pin panel             toggle
+    //   4  Agent done sound      cycle
+    //   5  Permission sound      cycle
+    //   6  Voice                 cycle
+    //   7  Speed                 cycle
+    //   8  Check permissions…    action
+    //   9  Open config file…     action
+    //  10  Quit panel            action
 
     // MARK: - Disk I/O
 
     func loadFromConfig() {
         let config = ConfigFile.read()
         hotkeyDisplay   = config["STACKNUDGE_PANEL_HOTKEY"]    ?? "cmd+opt+n"
-        bannerEnabled   = ConfigFile.bool(config, "STACKNUDGE_BANNER", default: true)
-        voiceEnabled    = ConfigFile.bool(config, "STACKNUDGE_VOICE",  default: false)
+        bannerEnabled   = ConfigFile.bool(config, "STACKNUDGE_BANNER",    default: true)
+        voiceEnabled    = ConfigFile.bool(config, "STACKNUDGE_VOICE",     default: false)
+        panelPinned     = ConfigFile.bool(config, "STACKNUDGE_PANEL_PIN", default: true)
         soundStop       = config["STACKNUDGE_SOUND_STOP"]       ?? "Glass"
         soundPermission = config["STACKNUDGE_SOUND_PERMISSION"] ?? "Ping"
         voice           = config["STACKNUDGE_VOICE_NAME"]       ?? "af_heart"
@@ -143,9 +146,9 @@ final class PanelNav: ObservableObject {
     func activate() {
         switch selectedSettingIndex {
         case 0: startRecordingHotkey()
-        case 7: actions?.checkPermissions()
-        case 8: actions?.openConfig()
-        case 9: actions?.quit()
+        case 8: actions?.checkPermissions()
+        case 9: actions?.openConfig()
+        case 10: actions?.quit()
         default: applyCycle(forward: true)
         }
     }
@@ -165,15 +168,18 @@ final class PanelNav: ObservableObject {
             voiceEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_VOICE", value: voiceEnabled ? "true" : "false")
         case 3:
-            soundStop = step(soundStop, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_STOP", preview: true)
+            panelPinned.toggle()
+            ConfigFile.write(key: "STACKNUDGE_PANEL_PIN", value: panelPinned ? "true" : "false")
         case 4:
-            soundPermission = step(soundPermission, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_PERMISSION", preview: true)
+            soundStop = step(soundStop, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_STOP", preview: true)
         case 5:
+            soundPermission = step(soundPermission, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_PERMISSION", preview: true)
+        case 6:
             guard !voicesLoading, !voicesAvailable.isEmpty else { return }
             voice = step(voice, in: voicesAvailable, forward: forward, key: "STACKNUDGE_VOICE_NAME", preview: false)
             let phrase = Self.voicePreviewPhrases.randomElement() ?? "Hello."
             Speaker.speak(phrase, voice: voice, speed: String(format: "%.2f", voiceSpeed))
-        case 6:
+        case 7:
             let next = forward ? voiceSpeed + Self.speedStep : voiceSpeed - Self.speedStep
             voiceSpeed = max(Self.speedMin, min(Self.speedMax, (next * 100).rounded() / 100))
             ConfigFile.write(key: "STACKNUDGE_VOICE_SPEED", value: String(format: "%.2f", voiceSpeed))

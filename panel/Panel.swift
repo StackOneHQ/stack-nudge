@@ -323,6 +323,22 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         startConfigWatcher()
         setupNotificationCenter()
         store.onAppend = { [weak self] event in self?.postBannerIfNeeded(event) }
+        nav.loadFromConfig()  // populate panelPinned + other live values up-front
+
+        // Auto-hide when the panel loses key focus, if pin is off.
+        // Detect "click outside" without polling — NSWindow fires this when
+        // another window or app takes focus.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(panelDidResignKey),
+            name: NSWindow.didResignKeyNotification,
+            object: panel
+        )
+    }
+
+    @objc private func panelDidResignKey(_ notification: Notification) {
+        guard !nav.panelPinned, panel.isVisible else { return }
+        hidePanel()
     }
 
     // MARK: - UNUserNotificationCenter

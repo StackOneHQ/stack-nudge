@@ -30,22 +30,23 @@ struct SettingsView: View {
                         section("Toggles") {
                             row(1, label: "Banner notifications", kind: .toggle, value: nav.bannerEnabled ? "On" : "Off")
                             row(2, label: "Voice notifications",  kind: .toggle, value: nav.voiceEnabled  ? "On" : "Off")
+                            row(3, label: "Pin panel",            kind: .toggle, value: nav.panelPinned   ? "On" : "Off")
                         }
 
                         section("Sounds") {
-                            row(3, label: "Agent done", kind: .cycle, value: nav.soundStop)
-                            row(4, label: "Permission", kind: .cycle, value: nav.soundPermission)
+                            row(4, label: "Agent done", kind: .cycle, value: nav.soundStop)
+                            row(5, label: "Permission", kind: .cycle, value: nav.soundPermission)
                         }
 
                         section("Voice") {
-                            row(5, label: "Voice",  kind: .cycle, value: voiceLabel)
-                            row(6, label: "Speed",  kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed))
+                            row(6, label: "Voice",  kind: .cycle, value: voiceLabel)
+                            row(7, label: "Speed",  kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed))
                         }
 
                         section("Actions") {
-                            row(7, label: "Check permissions…", kind: .action, value: "")
-                            row(8, label: "Open config file…",  kind: .action, value: "")
-                            row(9, label: "Quit panel",         kind: .action, value: "")
+                            row(8, label: "Check permissions…", kind: .action, value: "")
+                            row(9, label: "Open config file…",  kind: .action, value: "")
+                            row(10, label: "Quit panel",        kind: .action, value: "")
                         }
                     }
                     .padding(.horizontal, 14)
