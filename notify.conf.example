@@ -8,8 +8,8 @@
 #STACKNUDGE_VOICE=true
 
 # StackVox voice ID to use. Run `~/.stack-nudge/venv/bin/stackvox voices` for the full list.
-# Default: af_heart
-#STACKNUDGE_VOICE_NAME=af_heart
+# Default: af_aoede
+#STACKNUDGE_VOICE_NAME=af_aoede
 
 # StackVox playback speed (1.0 = normal).
 # Default: 1.1

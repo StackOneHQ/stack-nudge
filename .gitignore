@@ -1,5 +1,7 @@
 # Build output
 build/
+.build/
+Package.resolved
 stack-nudge
 stack-nudge.app
 stack-nudge-panel.app

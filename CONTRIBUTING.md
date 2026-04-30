@@ -29,7 +29,23 @@ make uninstall  # remove apps, hooks, launchd agents, ~/.stack-nudge/
 
 `make dev` is the main inner-loop tool. Leave it running in another terminal while you edit Swift files or `notify.sh` — the daemon bounces with the new build in ~2 seconds.
 
-The Swift sources are compiled directly with `swiftc`. There is no Xcode project, no Swift Package Manager manifest, and no third-party Swift dependencies. The build system is intentionally minimal — see `build.sh`.
+The Swift sources are compiled directly with `swiftc` for the shipping binaries — no Xcode project, no third-party Swift dependencies. There is a `Package.swift` manifest, but it exists only so `swift test` can run a unit-test suite over the testable parts of the panel; the apps themselves are still built by `build.sh`.
+
+## Tests
+
+```bash
+make test     # equivalent to `swift test`
+```
+
+Tests live in `Tests/StackNudgePanelCoreTests/` and cover the pure-logic surfaces: `Hotkey.parse` / `encode`, `ConfigFile.parse` / `apply` / `bool`, `NudgeKind`, and `EventStore`.
+
+`swift test` on macOS needs `XCTest`, which only ships with full Xcode. If you only have the Command Line Tools installed (`xcode-select -p` returns `/Library/Developer/CommandLineTools`), install Xcode and run:
+
+```bash
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+```
+
+CI runs the suite on every push and PR — `swift test` is one of the required checks.
 
 ## Source layout
 

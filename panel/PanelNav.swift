@@ -32,7 +32,7 @@ final class PanelNav: ObservableObject {
     @Published var voiceEnabled:    Bool = false
     @Published var soundStop:       String = "Glass"
     @Published var soundPermission: String = "Ping"
-    @Published var voice:           String = "af_heart"
+    @Published var voice:           String = "af_aoede"
     @Published var voiceSpeed:      Double = 1.1
     @Published var voicesAvailable: [String] = []
     @Published var voicesLoading:   Bool = true
@@ -92,7 +92,7 @@ final class PanelNav: ObservableObject {
         voiceEnabled    = ConfigFile.bool(config, "STACKNUDGE_VOICE",  default: false)
         soundStop       = config["STACKNUDGE_SOUND_STOP"]       ?? "Glass"
         soundPermission = config["STACKNUDGE_SOUND_PERMISSION"] ?? "Ping"
-        voice           = config["STACKNUDGE_VOICE_NAME"]       ?? "af_heart"
+        voice           = config["STACKNUDGE_VOICE_NAME"]       ?? "af_aoede"
         voiceSpeed      = Double(config["STACKNUDGE_VOICE_SPEED"] ?? "") ?? 1.1
     }
 

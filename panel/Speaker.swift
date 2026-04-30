@@ -21,7 +21,7 @@ enum Speaker {
         }
 
         let config = ConfigFile.read()
-        let resolvedVoice = voice ?? config["STACKNUDGE_VOICE_NAME"]  ?? "af_heart"
+        let resolvedVoice = voice ?? config["STACKNUDGE_VOICE_NAME"]  ?? "af_aoede"
         let resolvedSpeed = speed ?? config["STACKNUDGE_VOICE_SPEED"] ?? "1.1"
         let say = Process()
         say.executableURL = URL(fileURLWithPath: stackvoxSay)

@@ -73,10 +73,10 @@ voice_permission_context() {
 
 # Set to "true" to speak notifications aloud via StackVox (offline TTS).
 # Requires: pip install stackvox && stackvox serve
-# Optional: set STACKNUDGE_VOICE_NAME to a StackVox voice ID (default: af_heart)
+# Optional: set STACKNUDGE_VOICE_NAME to a StackVox voice ID (default: af_aoede)
 # Optional: set STACKNUDGE_VOICE_SPEED to playback speed (default: 1.1)
 VOICE_ENABLED="${STACKNUDGE_VOICE:-false}"
-VOICE_NAME="${STACKNUDGE_VOICE_NAME:-af_heart}"
+VOICE_NAME="${STACKNUDGE_VOICE_NAME:-af_aoede}"
 VOICE_SPEED="${STACKNUDGE_VOICE_SPEED:-1.1}"
 
 # Map a Kokoro voice prefix to a phrase-file language code.

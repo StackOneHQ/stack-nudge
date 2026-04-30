@@ -16,7 +16,8 @@ help:
 	@echo "  make uninstall  remove app, hooks, launchd agents, ~/.stack-nudge/"
 	@echo "  make reload     rebuild + replace installed app + bounce the daemon"
 	@echo "  make dev        watch sources; auto-reload on change (ctrl-c to stop)"
-	@echo "  make clean      remove build/ output"
+	@echo "  make test       run swift test (needs full Xcode for XCTest)"
+	@echo "  make clean      remove build/ and .build/"
 
 .PHONY: build
 build:
@@ -32,7 +33,17 @@ uninstall:
 
 .PHONY: clean
 clean:
-	@rm -rf build
+	@rm -rf build .build
+
+.PHONY: test
+test:
+	@if ! xcrun --find xctest >/dev/null 2>&1; then \
+		echo "swift test needs XCTest, which only ships with full Xcode."; \
+		echo "Install Xcode and run:"; \
+		echo "  sudo xcode-select -s /Applications/Xcode.app/Contents/Developer"; \
+		exit 1; \
+	fi
+	@swift test
 
 # One-shot dev cycle: rebuild, reinstall the app, refresh notify.sh in
 # ~/.stack-nudge so hook-side changes propagate, kickstart the daemon.
