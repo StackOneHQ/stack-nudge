@@ -172,14 +172,19 @@ else:
     settings = {}
 
 hooks = settings.setdefault("hooks", {})
-for event, arg in [("Stop", "stop"), ("PermissionRequest", "permission")]:
+# Permission hook blocks on a FIFO until the user approves via stack-nudge,
+# so it needs a longer timeout than Claude Code's 600s default.
+for event, arg, timeout in [("Stop", "stop", 30), ("PermissionRequest", "permission", 600)]:
     groups = hooks.setdefault(event, [])
     cmd = f"{notify} claude-code {arg}"
     if not any(
         any(h.get("command") == cmd for h in g.get("hooks", []))
         for g in groups
     ):
-        groups.append({"matcher": "", "hooks": [{"type": "command", "command": cmd}]})
+        groups.append({
+            "matcher": "",
+            "hooks": [{"type": "command", "command": cmd, "timeout": timeout}],
+        })
 
 path.write_text(json.dumps(settings, indent=2) + "\n")
 print(f"  Updated {path}")

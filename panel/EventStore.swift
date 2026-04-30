@@ -33,6 +33,10 @@ struct NudgeEvent: Identifiable, Equatable {
     let terminalApp: String?
     let termProgram: String?
     let sessionID: String?
+    // FIFO that the source notify.sh hook is blocking on. Writing
+    // "allow" or "deny" to it lets stack-nudge return a PermissionRequest
+    // decision to Claude Code without touching the terminal UI.
+    let fifoPath: String?
 
     init(agent: String, kind: NudgeKind, title: String, message: String,
          projectPath: String? = nil, bundleID: String? = nil,
@@ -40,7 +44,8 @@ struct NudgeEvent: Identifiable, Equatable {
          hasActionButton: Bool = false, timestamp: Date = Date(),
          agentPID: Int? = nil, shellPID: Int? = nil,
          terminalPID: Int? = nil, terminalApp: String? = nil,
-         termProgram: String? = nil, sessionID: String? = nil) {
+         termProgram: String? = nil, sessionID: String? = nil,
+         fifoPath: String? = nil) {
         self.id = UUID()
         self.agent = agent
         self.kind = kind
@@ -58,6 +63,7 @@ struct NudgeEvent: Identifiable, Equatable {
         self.terminalApp = terminalApp
         self.termProgram = termProgram
         self.sessionID = sessionID
+        self.fifoPath = fifoPath
     }
 }
 
