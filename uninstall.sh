@@ -4,26 +4,32 @@
 set -e
 
 INSTALL_DIR="${HOME}/.stack-nudge"
-NOTIFY="$INSTALL_DIR/notify.sh"
 
 echo "Uninstalling stack-nudge..."
 
-# Remove hooks from Claude Code
+# Remove hooks from Claude Code. Matches anything inside a `tinynudge` or
+# `stack-nudge` install dir so legacy entries (and dev checkouts pointing at
+# moved paths) get cleaned up too, not just the current $NOTIFY path.
 if [[ -f "$HOME/.claude/settings.json" ]]; then
-  python3 - "$HOME/.claude/settings.json" "$NOTIFY" <<'PY'
-import json, sys
+  python3 - "$HOME/.claude/settings.json" <<'PY'
+import json, re, sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
-notify = sys.argv[2]
-prefix = f"{notify} claude-code"
+STALE = re.compile(r"(?:^|/)\.?(?:tinynudge|stack-nudge)/notify\.sh(?:\s|$)")
 settings = json.loads(path.read_text())
 hooks = settings.get("hooks", {})
 for event in list(hooks.keys()):
-    hooks[event] = [
-        g for g in hooks[event]
-        if not all((h.get("command") or "").startswith(prefix) for h in g.get("hooks", []))
-    ]
+    cleaned = []
+    for g in hooks[event]:
+        inner = g.get("hooks", [])
+        kept = [h for h in inner if not STALE.search(h.get("command", "") or "")]
+        if not kept:
+            continue
+        if kept != inner:
+            g = {**g, "hooks": kept}
+        cleaned.append(g)
+    hooks[event] = cleaned
     if not hooks[event]:
         del hooks[event]
 if not hooks:
@@ -33,19 +39,18 @@ print(f"  Cleaned {path}")
 PY
 fi
 
-# Remove hooks from Cursor
+# Remove hooks from Cursor. Same path-agnostic match as the Claude block.
 if [[ -f "$HOME/.cursor/hooks.json" ]]; then
-  python3 - "$HOME/.cursor/hooks.json" "$NOTIFY" <<'PY'
-import json, sys
+  python3 - "$HOME/.cursor/hooks.json" <<'PY'
+import json, re, sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
-notify = sys.argv[2]
-prefix = f"{notify} cursor"
+STALE = re.compile(r"(?:^|/)\.?(?:tinynudge|stack-nudge)/notify\.sh(?:\s|$)")
 settings = json.loads(path.read_text())
 hooks = settings.get("hooks", {})
 for event in list(hooks.keys()):
-    hooks[event] = [h for h in hooks[event] if not (h.get("command") or "").startswith(prefix)]
+    hooks[event] = [h for h in hooks[event] if not STALE.search(h.get("command", "") or "")]
     if not hooks[event]:
         del hooks[event]
 if not hooks:
