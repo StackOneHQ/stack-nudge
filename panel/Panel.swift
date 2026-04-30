@@ -84,26 +84,25 @@ struct PanelContentView: View {
                 .foregroundStyle(.tertiary)
                 .padding(.trailing, 4)
 
-            tab(.events,
-                label: "Events",
-                count: store.events.count,
-                shortcutKeys: ["⌘", "1"])
-            tab(.sessions,
-                label: "Sessions",
-                count: sessions.sessions.filter { $0.status == .active }.count,
-                shortcutKeys: ["⌘", "2"])
-            tab(.settings,
-                label: "Settings",
-                count: 0,
-                shortcutKeys: ["⌘", "3"])
+            tab(.events,   label: "Events",   count: store.events.count)
+            tab(.sessions, label: "Sessions", count: sessions.sessions.filter { $0.status == .active }.count)
+            tab(.settings, label: "Settings", count: 0)
 
             Spacer()
+
+            // One combined hint instead of per-tab keycaps — keeps the strip
+            // uncluttered while still surfacing the shortcut range.
+            HStack(spacing: 2) {
+                KeyCapView(symbol: "⌘")
+                KeyCapView(symbol: "1-3")
+            }
+            .opacity(0.7)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
     }
 
-    private func tab(_ mode: PanelMode, label: String, count: Int, shortcutKeys: [String]) -> some View {
+    private func tab(_ mode: PanelMode, label: String, count: Int) -> some View {
         let isActive = nav.mode == mode
         return Button {
             nav.mode = mode
@@ -120,10 +119,6 @@ struct PanelContentView: View {
                             Capsule().fill(Color.primary.opacity(isActive ? 0.18 : 0.10))
                         )
                 }
-                HStack(spacing: 2) {
-                    ForEach(shortcutKeys, id: \.self) { KeyCapView(symbol: $0) }
-                }
-                .opacity(isActive ? 0.5 : 0.85)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
@@ -172,15 +167,12 @@ struct PanelContentView: View {
                 }
             }
             .padding(.vertical, 4)
+            .background(ThinScrollers())
         }
     }
 
     private var footer: some View {
-        HStack(spacing: 0) {
-            Image(systemName: "bell.badge.fill")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-            Spacer()
+        PageFooter {
             if store.events.isEmpty {
                 FooterHint(label: "Hide", keys: ["esc"])
             } else {
@@ -188,22 +180,11 @@ struct PanelContentView: View {
                     FooterHint(label: primary, keys: ["⏎"], primary: true)
                     FooterDivider()
                 }
-                FooterHint(label: "Select", keys: ["↑", "↓"])
+                FooterHint(label: "Select",  keys: ["↑", "↓"])
                 FooterHint(label: "Dismiss", keys: ["⌫"])
-                FooterHint(label: "Hide", keys: ["esc"])
+                FooterHint(label: "Hide",    keys: ["esc"])
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .background(
-            ZStack {
-                Color.primary.opacity(0.05)
-                Rectangle()
-                    .fill(Color.primary.opacity(0.1))
-                    .frame(height: 0.5)
-                    .frame(maxHeight: .infinity, alignment: .top)
-            }
-        )
     }
 
     private var primaryActionLabel: String? {
@@ -212,53 +193,6 @@ struct PanelContentView: View {
     }
 }
 
-struct FooterHint: View {
-    let label: String
-    let keys: [String]
-    var primary: Bool = false
-
-    var body: some View {
-        HStack(spacing: 5) {
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(primary ? Color.primary : Color.secondary)
-            HStack(spacing: 2) {
-                ForEach(keys, id: \.self) { KeyCapView(symbol: $0) }
-            }
-        }
-        .padding(.leading, 10)
-    }
-}
-
-struct KeyCapView: View {
-    let symbol: String
-
-    var body: some View {
-        Text(symbol)
-            .font(.caption2.weight(.medium))
-            .foregroundStyle(.primary.opacity(0.85))
-            .frame(minWidth: 14, minHeight: 16)
-            .padding(.horizontal, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(Color.primary.opacity(0.1))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5)
-                    )
-            )
-    }
-}
-
-struct FooterDivider: View {
-    var body: some View {
-        Rectangle()
-            .fill(Color.primary.opacity(0.15))
-            .frame(width: 1, height: 14)
-            .padding(.leading, 14)
-            .padding(.trailing, 4)
-    }
-}
 
 struct EventRow: View {
 
@@ -371,7 +305,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate {
 
         nav.actions = SettingsActions(
             checkPermissions: { [weak self] in self?.showPermissions() },
-            openConfig:       { NSWorkspace.shared.open(URL(fileURLWithPath: ConfigFile.path)) },
+            openConfig: { [weak self] in
+                // Same z-order issue: the editor app's regular window opens
+                // below our floating panel. Hide the panel first.
+                self?.panel.orderOut(nil)
+                self?.nav.mode = .events
+                NSWorkspace.shared.open(URL(fileURLWithPath: ConfigFile.path))
+            },
             quit:             { NSApp.terminate(nil) }
         )
         nav.setHotkey = { [weak self] spec in
@@ -446,8 +386,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate {
     }
 
     func showPermissions() {
-        if permissionsWC == nil { permissionsWC = PermissionsWindowController() }
-        permissionsWC?.showAndRaise()
+        // Defer to next runloop tick so we're not constructing a new
+        // NSHostingView in the middle of the current SwiftUI/event-handling
+        // pass — re-entrant construction surfaced as a deadlock.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if self.permissionsWC == nil {
+                self.permissionsWC = PermissionsWindowController()
+            }
+            self.permissionsWC?.showAndRaise()
+            self.panel.orderOut(nil)
+            self.nav.mode = .events
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -461,16 +411,31 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate {
         let blockingMods: NSEvent.ModifierFlags = [.control, .option]
         let cmdOnly = mods.intersection([.command, .control, .option, .shift]) == .command
 
-        // While recording a hotkey, swallow every key so the new combo
-        // doesn't accidentally fire some other shortcut.
+        // While recording a hotkey, capture the next combo. Arrow keys / Tab
+        // bail out gracefully — otherwise users who entered record mode by
+        // mistake would be stuck on row 0 with all their keypresses swallowed.
         if nav.recordingHotkey {
-            if event.keyCode == KeyCode.escape && mods.intersection([.command, .control, .option, .shift]).isEmpty {
-                nav.cancelRecordingHotkey()
-                return true
+            let plainNav = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            if plainNav {
+                switch event.keyCode {
+                case KeyCode.escape:
+                    nav.cancelRecordingHotkey()
+                    return true
+                case KeyCode.upArrow:
+                    nav.cancelRecordingHotkey()
+                    nav.selectPrevRow()
+                    return true
+                case KeyCode.downArrow, KeyCode.tab:
+                    nav.cancelRecordingHotkey()
+                    nav.selectNextRow()
+                    return true
+                default:
+                    break
+                }
             }
             let captured = mods.intersection([.command, .control, .option, .shift])
-            // Need at least one modifier (Carbon RegisterEventHotKey rejects
-            // bare keys, and we don't want to accidentally bind plain "n").
+            // Need at least one modifier — Carbon RegisterEventHotKey rejects
+            // bare keys, and we don't want to bind plain "n" by accident.
             guard !captured.isEmpty else { return true }
             if let spec = Hotkey.encode(eventModifiers: mods.rawValue, keyCode: event.keyCode) {
                 nav.commitHotkey(spec)

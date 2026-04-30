@@ -54,6 +54,9 @@ build_app "$PANEL_APP" "stack-nudge-panel" \
   panel/EventStore.swift \
   panel/EventListener.swift \
   panel/Panel.swift \
+  panel/PanelNav.swift \
+  panel/Components.swift \
+  panel/Speaker.swift \
   panel/MenuBar.swift \
   panel/Permissions.swift \
   panel/Settings.swift \

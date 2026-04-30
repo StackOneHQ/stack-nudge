@@ -138,10 +138,17 @@ LAUNCHER
   echo "  Panel daemon registered as launchd agent (starts at login when STACKNUDGE_PANEL=true)"
 fi
 
-# Copy notify.sh to shared install dir
+# Copy notify.sh and the phrase pools (sourced by notify.sh at runtime
+# based on the configured voice's language) to the shared install dir.
 cp "$SCRIPT_DIR/notify.sh" "$INSTALL_DIR/notify.sh"
 chmod +x "$INSTALL_DIR/notify.sh"
 echo "  Installed notify.sh    -> $INSTALL_DIR/notify.sh"
+
+if [[ -d "$SCRIPT_DIR/phrases" ]]; then
+  rm -rf "$INSTALL_DIR/phrases"
+  cp -R "$SCRIPT_DIR/phrases" "$INSTALL_DIR/phrases"
+  echo "  Installed phrases/     -> $INSTALL_DIR/phrases"
+fi
 NOTIFY="$INSTALL_DIR/notify.sh"
 
 # Copy example config only if no config exists yet (preserve user customisations on reinstall)

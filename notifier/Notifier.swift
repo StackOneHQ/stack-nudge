@@ -33,7 +33,9 @@ class Notifier: NSObject, NSApplicationDelegate, NSUserNotificationCenterDelegat
         let n = NSUserNotification()
         n.title = config.title
         n.informativeText = config.message
-        n.soundName = config.sound
+        // Empty value = silent banner — used when STACKNUDGE_VOICE=true so
+        // voice replaces the chime instead of playing alongside it.
+        n.soundName = config.sound.isEmpty ? nil : config.sound
         if config.hasActionButton {
             n.hasActionButton = true
             n.actionButtonTitle = "Allow"

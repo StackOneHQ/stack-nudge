@@ -189,10 +189,13 @@ final class PermissionsWindowController: NSWindowController {
         window.title = "stack-nudge — Permissions"
         window.center()
         window.isReleasedWhenClosed = false
-        // Float above System Settings so the user can flip between the two
-        // and grant both permissions in one pass.
-        window.level = .floating
-        window.collectionBehavior = [.canJoinAllSpaces, .moveToActiveSpace]
+        // Above the panel's .floating level so this window can't be hidden
+        // behind it. Modal-panel level still sits below the menu bar/dock.
+        window.level = .modalPanel
+        // .canJoinAllSpaces and .moveToActiveSpace are mutually exclusive —
+        // the latter follows the user to whatever Space they're on, which is
+        // what we want for an on-demand permissions window.
+        window.collectionBehavior = [.moveToActiveSpace]
         window.contentView = NSHostingView(rootView: PermissionsView())
         self.init(window: window)
     }
