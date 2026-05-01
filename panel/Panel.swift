@@ -17,6 +17,7 @@ private enum KeyCode {
     static let space:     UInt16 = 49
     static let tab:       UInt16 = 48
     static let oKey:      UInt16 = 31
+    static let sKey:      UInt16 = 1
     static let rKey:      UInt16 = 15
     static let delete:    UInt16 = 51
     static let forwardDelete: UInt16 = 117
@@ -191,6 +192,10 @@ struct PanelContentView: View {
                     FooterDivider()
                 }
                 FooterHint(label: "Select",  keys: ["↑", "↓"])
+                if let selected = store.selectedEvent,
+                   selected.kind == .permission, selected.hasActionButton {
+                    FooterHint(label: "Snooze",  keys: ["S"])
+                }
                 FooterHint(label: "Dismiss", keys: ["⌫"])
                 FooterHint(label: "Hide",    keys: ["esc"])
             }
@@ -237,7 +242,7 @@ struct EventRow: View {
                             .truncationMode(.middle)
                     }
                     Spacer(minLength: 8)
-                    Text(Self.timeFormatter.localizedString(for: event.timestamp, relativeTo: Date()))
+                    Text(rightTimestamp)
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
@@ -248,6 +253,7 @@ struct EventRow: View {
                     .truncationMode(.tail)
             }
         }
+        .opacity(isSnoozed ? 0.55 : 1.0)
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -258,12 +264,28 @@ struct EventRow: View {
         .padding(.horizontal, 6)
     }
 
+    private var isSnoozed: Bool {
+        guard let until = event.snoozedUntil else { return false }
+        return until > Date()
+    }
+
+    // For snoozed events show "snoozed Xm" in place of the relative
+    // timestamp so the user can see how long is left until the re-fire.
+    private var rightTimestamp: String {
+        if let until = event.snoozedUntil, until > Date() {
+            return "snoozed " + Self.timeFormatter.localizedString(for: until, relativeTo: Date())
+        }
+        return Self.timeFormatter.localizedString(for: event.timestamp, relativeTo: Date())
+    }
+
     private var glyph: String {
-        event.kind == .permission ? "questionmark.circle.fill" : "checkmark.circle.fill"
+        if isSnoozed { return "moon.zzz.fill" }
+        return event.kind == .permission ? "questionmark.circle.fill" : "checkmark.circle.fill"
     }
 
     private var glyphColor: Color {
-        event.kind == .permission ? .orange : .green
+        if isSnoozed { return .gray }
+        return event.kind == .permission ? .orange : .green
     }
 }
 
@@ -383,10 +405,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // Request permission (shows the system dialog once; subsequent calls are no-ops).
         center.requestAuthorization(options: [.alert]) { _, _ in }
 
-        // Register categories: STOP (no actions) and PERMISSION (Allow button).
-        let allow = UNNotificationAction(identifier: "ALLOW", title: "Allow", options: [])
+        // Register categories: STOP (no actions) and PERMISSION with Allow +
+        // two snooze options. macOS surfaces the first action as a primary
+        // button on the banner and collapses the rest into the chevron
+        // expansion automatically once the action count exceeds two.
+        let allow = UNNotificationAction(identifier: "ALLOW",
+                                          title: "Allow", options: [])
+        let snooze5 = UNNotificationAction(identifier: "SNOOZE_5M",
+                                            title: "Snooze 5 min", options: [])
+        let snooze15 = UNNotificationAction(identifier: "SNOOZE_15M",
+                                             title: "Snooze 15 min", options: [])
         let permCategory = UNNotificationCategory(identifier: "PERMISSION",
-                                                   actions: [allow],
+                                                   actions: [allow, snooze5, snooze15],
                                                    intentIdentifiers: [],
                                                    options: [])
         let stopCategory = UNNotificationCategory(identifier: "STOP",
@@ -417,7 +447,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
 
         guard config.bannerEnabled else { return }
+        postBanner(for: event)
+    }
 
+    // Posts a UNNotificationRequest for an event. Used by postBannerIfNeeded
+    // for the initial fire and by the snooze timer for re-fires. Request
+    // identifier is a fresh UUID each time (macOS replaces by identifier);
+    // event.id stays in userInfo so click handlers can find the source.
+    private func postBanner(for event: NudgeEvent) {
         let content = UNMutableNotificationContent()
         content.title = event.title
         content.body  = event.message
@@ -425,11 +462,28 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         content.userInfo = ["eventID": event.id.uuidString]
 
         let center = UNUserNotificationCenter.current()
-        // Remove stale delivered notifications so they don't pile up.
         center.removeAllDeliveredNotifications()
-        let req = UNNotificationRequest(identifier: event.id.uuidString,
+        let req = UNNotificationRequest(identifier: UUID().uuidString,
                                         content: content, trigger: nil)
         center.add(req, withCompletionHandler: nil)
+    }
+
+    // Snooze: mark the event, schedule a Timer to clear the snooze flag and
+    // re-post a fresh banner after `seconds`. The hook stays blocked on the
+    // FIFO the whole time. If the event is removed (resolved or dismissed)
+    // before the timer fires, the timer becomes a no-op via the lookup.
+    private func snoozeEvent(_ event: NudgeEvent, for seconds: TimeInterval) {
+        let until = Date().addingTimeInterval(seconds)
+        store.setSnoozedUntil(id: event.id, until)
+        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+
+        Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
+            guard let self,
+                  let current = self.store.events.first(where: { $0.id == event.id })
+            else { return }
+            self.store.setSnoozedUntil(id: current.id, nil)
+            self.postBanner(for: current.with(snoozedUntil: nil))
+        }
     }
 
     // Called when the user clicks the banner or its action button.
@@ -440,6 +494,20 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         guard let eventID = response.notification.request.content.userInfo["eventID"] as? String,
               let event = store.events.first(where: { $0.id.uuidString == eventID })
         else { return }
+
+        // Snooze: don't write the FIFO, don't remove the event. Just mark
+        // it as snoozed and schedule a re-fire of the banner after the
+        // chosen duration. The hook stays blocked the whole time.
+        switch response.actionIdentifier {
+        case "SNOOZE_5M":
+            snoozeEvent(event, for: 5 * 60)
+            return
+        case "SNOOZE_15M":
+            snoozeEvent(event, for: 15 * 60)
+            return
+        default:
+            break
+        }
 
         store.remove(id: event.id)
         let approve = response.actionIdentifier == "ALLOW"
@@ -705,10 +773,21 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
 
         // Events mode: filter out cmd/ctrl/opt-modified keys so app-level
-        // shortcuts pass through to the responder chain.
+        // shortcuts pass through to the responder chain. Shift is allowed
+        // since we use Shift+S for the longer snooze.
         guard mods.intersection(blockingMods.union([.command])).isEmpty else {
             return false
         }
+        let shifted = mods.contains(.shift)
+
+        // S/Shift+S handled before the no-shift switch since both variants
+        // are valid; everything else requires no shift.
+        if event.keyCode == KeyCode.sKey {
+            snoozeSelected(for: shifted ? 15 * 60 : 5 * 60)
+            return true
+        }
+        guard !shifted else { return false }
+
         switch event.keyCode {
         case KeyCode.escape:
             hidePanel()
@@ -726,6 +805,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return false
         }
         return true
+    }
+
+    private func snoozeSelected(for seconds: TimeInterval) {
+        guard let event = store.selectedEvent,
+              event.kind == .permission,
+              event.hasActionButton
+        else { return }
+        snoozeEvent(event, for: seconds)
     }
 
     // MARK: - Actions

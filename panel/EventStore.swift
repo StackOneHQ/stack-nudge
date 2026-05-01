@@ -23,6 +23,11 @@ struct NudgeEvent: Identifiable, Equatable {
     let ipcHook: String?
     let hasActionButton: Bool
     let timestamp: Date
+    // When set and in the future, the user has snoozed this event. The panel
+    // dims it; a timer scheduled in PanelController will fire a fresh banner
+    // when the snooze elapses. EventStore.setSnoozedUntil replaces the
+    // whole struct since we keep all fields immutable.
+    let snoozedUntil: Date?
     // Session enrichment — populated by notify.sh's walk_session_chain. Used
     // by AppActivator for precise pane focus and by the future sessions
     // feature for grouping events back to their source CC/Gemini/Codex
@@ -45,8 +50,10 @@ struct NudgeEvent: Identifiable, Equatable {
          agentPID: Int? = nil, shellPID: Int? = nil,
          terminalPID: Int? = nil, terminalApp: String? = nil,
          termProgram: String? = nil, sessionID: String? = nil,
-         fifoPath: String? = nil) {
-        self.id = UUID()
+         fifoPath: String? = nil,
+         snoozedUntil: Date? = nil,
+         id: UUID = UUID()) {
+        self.id = id
         self.agent = agent
         self.kind = kind
         self.title = title
@@ -64,6 +71,23 @@ struct NudgeEvent: Identifiable, Equatable {
         self.termProgram = termProgram
         self.sessionID = sessionID
         self.fifoPath = fifoPath
+        self.snoozedUntil = snoozedUntil
+    }
+
+    // Whole-struct copy with the snoozedUntil overridden. EventStore uses
+    // this when the user snoozes / when the snooze elapses.
+    func with(snoozedUntil: Date?) -> NudgeEvent {
+        NudgeEvent(
+            agent: agent, kind: kind, title: title, message: message,
+            projectPath: projectPath, bundleID: bundleID,
+            windowTitle: windowTitle, ipcHook: ipcHook,
+            hasActionButton: hasActionButton, timestamp: timestamp,
+            agentPID: agentPID, shellPID: shellPID,
+            terminalPID: terminalPID, terminalApp: terminalApp,
+            termProgram: termProgram, sessionID: sessionID,
+            fifoPath: fifoPath, snoozedUntil: snoozedUntil,
+            id: id  // preserve identity across snooze cycles
+        )
     }
 }
 
@@ -93,6 +117,13 @@ final class EventStore: ObservableObject {
     func remove(id: NudgeEvent.ID) {
         events.removeAll { $0.id == id }
         if selectedID == id { selectedID = events.first?.id }
+    }
+
+    // Replace the event in-place with a new copy that has snoozedUntil set
+    // (or cleared with nil). Triggers SwiftUI updates because @Published.
+    func setSnoozedUntil(id: NudgeEvent.ID, _ until: Date?) {
+        guard let idx = events.firstIndex(where: { $0.id == id }) else { return }
+        events[idx] = events[idx].with(snoozedUntil: until)
     }
 
     func selectNext() {

@@ -35,10 +35,13 @@ struct FooterHint: View {
             Text(label)
                 .font(.caption)
                 .foregroundStyle(primary ? Color.primary : Color.secondary)
+                .fixedSize(horizontal: true, vertical: false)
             HStack(spacing: 2) {
                 ForEach(keys, id: \.self) { KeyCapView(symbol: $0) }
             }
+            .fixedSize()
         }
+        .fixedSize()
         .padding(.leading, 10)
     }
 }
