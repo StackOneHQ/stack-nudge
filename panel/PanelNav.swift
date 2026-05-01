@@ -5,6 +5,7 @@ enum PanelMode {
     case events
     case sessions
     case settings
+    case phrases
 }
 
 // Action callbacks the controller wires into nav so settings rows like
@@ -13,6 +14,7 @@ enum PanelMode {
 struct SettingsActions {
     let checkPermissions: () -> Void
     let openConfig:       () -> Void
+    let editPhrases:      () -> Void
     let quit:             () -> Void
 }
 
@@ -71,7 +73,7 @@ final class PanelNav: ObservableObject {
         "I'd love your input on this.",
     ]
 
-    var rowCount: Int { 12 }
+    var rowCount: Int { 13 }
 
     // Row layout (kept in one place so the controller, view, and indexing
     // logic all agree on what each row index means):
@@ -84,9 +86,10 @@ final class PanelNav: ObservableObject {
     //   6  Permission sound      cycle
     //   7  Voice                 cycle
     //   8  Speed                 cycle
-    //   9  Check permissions…    action
-    //  10  Open config file…     action
-    //  11  Quit panel            action
+    //   9  Edit phrases…         action
+    //  10  Check permissions…    action
+    //  11  Open config file…     action
+    //  12  Quit panel            action
 
     // MARK: - Disk I/O
 
@@ -160,9 +163,10 @@ final class PanelNav: ObservableObject {
     func activate() {
         switch selectedSettingIndex {
         case 0: startRecordingHotkey()
-        case 9: actions?.checkPermissions()
-        case 10: actions?.openConfig()
-        case 11: actions?.quit()
+        case 9:  actions?.editPhrases()
+        case 10: actions?.checkPermissions()
+        case 11: actions?.openConfig()
+        case 12: actions?.quit()
         default: applyCycle(forward: true)
         }
     }
