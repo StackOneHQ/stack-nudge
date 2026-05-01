@@ -407,8 +407,11 @@ notify_macos() {
 
   # Suppress banner only if the exact source window is currently frontmost.
   # Gated on STACKNUDGE_MUTE_WHEN_FOCUSED — set to false to always notify
-  # regardless of which window has focus.
+  # regardless of which window has focus. The welcome event always fires
+  # (post-install confirmation must reach the user even though they're
+  # staring at the install terminal at that moment).
   local mute_when_focused="${STACKNUDGE_MUTE_WHEN_FOCUSED:-true}"
+  [[ "${EVENT}" == "welcome" ]] && mute_when_focused="false"
   if [[ "$mute_when_focused" == "true" ]]; then
     local frontmost_id
     frontmost_id=$(osascript -e "id of app (path to frontmost application as text)" 2>/dev/null)
@@ -545,6 +548,12 @@ case "$OS" in
         ctx=$(permission_context)
         voice_msg=$(voice_phrase_for permission)
         notify_macos "$TITLE" "${ctx:-Waiting for your approval}" "$SOUND_PERMISSION" "$voice_msg"
+        ;;
+      welcome)
+        # Fired once by install.sh so the user sees what a notification
+        # looks like and macOS prompts for notification permission while
+        # they're still in the install terminal, not mid-work later.
+        notify_macos "stack-nudge" "You're all set. Press ⌘⌥N to open the panel." "$SOUND_STOP" ""
         ;;
       *)
         voice_msg=$(voice_phrase_for stop)

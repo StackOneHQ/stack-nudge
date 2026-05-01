@@ -314,3 +314,15 @@ echo "  STACKNUDGE_BANNER=false               — suppress macOS banner notifica
 echo "  STACKNUDGE_PANEL_HOTKEY=cmd+opt+n     — global hotkey for the floating panel"
 echo ""
 echo "To uninstall, run: ./uninstall.sh"
+
+# Fire a welcome notification so the user immediately sees what a nudge
+# looks like AND macOS prompts for notification permission now (during
+# install) rather than ambushing them mid-task later. Briefly wait for
+# the launchd-managed app to come up before posting.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  for _ in 1 2 3 4 5 6 7 8; do
+    [[ -S "$INSTALL_DIR/panel.sock" ]] && break
+    sleep 0.25
+  done
+  "$NOTIFY" stack-nudge welcome >/dev/null 2>&1 &
+fi
