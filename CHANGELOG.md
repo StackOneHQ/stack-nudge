@@ -4,6 +4,23 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.3.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.2.0...v1.3.0) (2026-05-01)
+
+
+### Features
+
+* fire a welcome notification at end of install ([08b2621](https://github.com/StackOneHQ/stack-nudge/commit/08b2621926bc4b8eb1ab6027b154070a50de8563))
+* install hardening + first-run welcome screen + about footer ([3e93dd3](https://github.com/StackOneHQ/stack-nudge/commit/3e93dd3263aac35b73a4a0d815e80e03f76c71b2))
+* opt-in permissions flow + cleaner welcome UX ([37e04df](https://github.com/StackOneHQ/stack-nudge/commit/37e04df9dbe98eea11a25444de21a4a7ceba9536))
+* snooze permission events (5 / 15 min) ([761c349](https://github.com/StackOneHQ/stack-nudge/commit/761c349410f425307dada2a925bb93c66e82a433))
+* snooze permission events for 5 or 15 minutes ([f15970a](https://github.com/StackOneHQ/stack-nudge/commit/f15970a96ba4575df72eac01a49867177a8ca4f9))
+* space activates settings rows alongside enter ([a6870cd](https://github.com/StackOneHQ/stack-nudge/commit/a6870cde483c576945249ef4d99ab5f68bb02abe))
+
+
+### Bug Fixes
+
+* install hardening + first-run welcome + about footer ([40e9d0a](https://github.com/StackOneHQ/stack-nudge/commit/40e9d0ac2e3b941eb4fa33703d104b914198d1a1))
+
 ## [1.2.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.1.2...v1.2.0) (2026-04-30)
 
 
