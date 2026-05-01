@@ -65,10 +65,14 @@ struct PanelContentView: View {
     @ObservedObject var sessions: SessionStore
     @ObservedObject var nav: PanelNav
 
+    let onGrantPermissions: () -> Void
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if !nav.welcomed {
-                WelcomeView(nav: nav, hotkeyDisplay: nav.hotkeyDisplay)
+                WelcomeView(nav: nav,
+                            hotkeyDisplay: nav.hotkeyDisplay,
+                            onGrantPermissions: onGrantPermissions)
             } else {
                 tabStrip
                 Divider().opacity(0.4)
@@ -289,7 +293,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         blur.layer?.cornerRadius = 12
         blur.layer?.masksToBounds = true
 
-        let host = NSHostingView(rootView: PanelContentView(store: store, sessions: sessions, nav: nav))
+        let host = NSHostingView(rootView: PanelContentView(
+            store: store, sessions: sessions, nav: nav,
+            onGrantPermissions: { [weak self] in self?.handleGrantPermissions() }
+        ))
         host.translatesAutoresizingMaskIntoConstraints = false
         blur.addSubview(host)
         NSLayoutConstraint.activate([
@@ -330,8 +337,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         nav.loadFromConfig()  // populate panelPinned + other live values up-front
 
         // First-run welcome: auto-open the panel if STACKNUDGE_WELCOMED isn't
-        // set yet. Brief delay so install.sh's launchctl bounce settles and
-        // the dialog isn't fighting macOS's notification permission prompt.
+        // set yet. Brief delay so install.sh's launchctl bounce settles.
+        // Permission prompts are user-triggered from the welcome screen,
+        // not auto-fired.
         if !nav.welcomed {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
                 guard let self, !self.nav.welcomed else { return }
@@ -349,6 +357,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             name: NSWindow.didResignKeyNotification,
             object: panel
         )
+    }
+
+    // Triggered from the welcome screen's "Grant permissions" button. Opens
+    // the in-app Permissions window — it shows live status for Notifications,
+    // Accessibility, and Automation, with per-row "Prompt" and "Settings"
+    // buttons so the user can drive each grant without surprise modal dialogs
+    // covering anything.
+    private func handleGrantPermissions() {
+        showPermissions()
     }
 
     @objc private func panelDidResignKey(_ notification: Notification) {

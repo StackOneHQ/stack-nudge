@@ -2,11 +2,12 @@ import SwiftUI
 
 // One-time welcome shown the first time the panel opens after install.
 // Replaces the tab strip + content until the user presses Enter / clicks
-// "Got it"; then PanelNav.dismissWelcome() persists the dismissal.
+// "Got it"; PanelNav.dismissWelcome() persists the dismissal.
 struct WelcomeView: View {
 
     @ObservedObject var nav: PanelNav
     let hotkeyDisplay: String
+    let onGrantPermissions: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -14,7 +15,7 @@ struct WelcomeView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     header
 
-                    Text("Notifications for AI coding agents — banners, voice, and a keyboard-driven panel.")
+                    Text("Notifications for AI coding agents. Banners, voice, and a keyboard-driven panel.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -22,14 +23,15 @@ struct WelcomeView: View {
                     hotkeyHint
 
                     tabsSummary
+
+                    permissionsHint
                 }
                 .padding(.horizontal, 18)
                 .padding(.vertical, 18)
+                .background(ThinScrollers())
             }
 
-            PageFooter {
-                FooterHint(label: "Got it", keys: ["⏎"], primary: true)
-            }
+            actionBar
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
@@ -71,13 +73,27 @@ struct WelcomeView: View {
 
             tabRow(systemImage: "bell.fill",
                    title: "Events",
-                   detail: "Recent nudges, approve / focus with the keyboard")
+                   detail: "Recent nudges; approve and focus with the keyboard")
             tabRow(systemImage: "list.bullet.rectangle",
                    title: "Sessions",
-                   detail: "Running agents — focus, rename, terminate")
+                   detail: "Running agents you can focus, rename, or terminate")
             tabRow(systemImage: "gearshape.fill",
                    title: "Settings",
                    detail: "Hotkey, sounds, voice, and more")
+        }
+    }
+
+    private var permissionsHint: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "lock.shield.fill")
+                .font(.callout)
+                .foregroundStyle(Color.orange.opacity(0.8))
+                .frame(width: 20, alignment: .center)
+                .padding(.top, 2)
+            Text("Notifications and Accessibility permissions are needed for banners and 'Allow' approvals. You can grant them now or later from Settings.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -93,6 +109,54 @@ struct WelcomeView: View {
                 Text(detail).font(.caption).foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var actionBar: some View {
+        HStack(spacing: 10) {
+            Button {
+                onGrantPermissions()
+            } label: {
+                Text("Grant permissions")
+                    .font(.subheadline)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+            }
+            .buttonStyle(.plain)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(0.08))
+            )
+
+            Spacer()
+
+            Button {
+                nav.dismissWelcome()
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Got it")
+                        .font(.subheadline.weight(.medium))
+                    KeyCapView(symbol: "⏎")
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+            }
+            .buttonStyle(.plain)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.25))
+            )
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(
+            ZStack {
+                Color.primary.opacity(0.05)
+                Rectangle()
+                    .fill(Color.primary.opacity(0.1))
+                    .frame(height: 0.5)
+                    .frame(maxHeight: .infinity, alignment: .top)
+            }
+        )
     }
 }
 
