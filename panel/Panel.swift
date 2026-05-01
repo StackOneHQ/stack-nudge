@@ -66,6 +66,7 @@ struct PanelContentView: View {
     @ObservedObject var store: EventStore
     @ObservedObject var sessions: SessionStore
     @ObservedObject var nav: PanelNav
+    @ObservedObject var phrases: PhrasesViewModel
 
     let onGrantPermissions: () -> Void
 
@@ -83,6 +84,7 @@ struct PanelContentView: View {
                 case .events:   eventsBody
                 case .sessions: SessionsView(store: sessions)
                 case .settings: SettingsView(nav: nav)
+                case .phrases:  PhrasesView(model: phrases) { nav.mode = .settings }
                 }
             }
         }
@@ -298,6 +300,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private let store = EventStore()
     private let sessions = SessionStore()
     private let nav = PanelNav()
+    private let phrases = PhrasesViewModel()
     private var listener: EventListener?
     private var menuBar: MenuBarController?
     private var permissionsWC: PermissionsWindowController?
@@ -317,7 +320,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         blur.layer?.masksToBounds = true
 
         let host = NSHostingView(rootView: PanelContentView(
-            store: store, sessions: sessions, nav: nav,
+            store: store, sessions: sessions, nav: nav, phrases: phrases,
             onGrantPermissions: { [weak self] in self?.handleGrantPermissions() }
         ))
         host.translatesAutoresizingMaskIntoConstraints = false
@@ -347,6 +350,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self?.panel.orderOut(nil)
                 self?.nav.mode = .events
                 NSWorkspace.shared.open(URL(fileURLWithPath: ConfigFile.path))
+            },
+            editPhrases:      { [weak self] in
+                self?.phrases.load()
+                self?.phrases.selectedRow = nil
+                self?.nav.mode = .phrases
             },
             quit:             { NSApp.terminate(nil) }
         )
@@ -741,6 +749,36 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 return false
             }
             return true
+        }
+
+        // Phrases mode: ↑/↓ navigate every row (defaults + custom),
+        // Space toggles the selected default, ⌫ removes the selected
+        // custom, Esc returns to Settings. Typing / Tab / Enter for
+        // adding still fall through to SwiftUI's TextField.
+        if nav.mode == .phrases {
+            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            guard plain else { return false }
+            switch event.keyCode {
+            case KeyCode.escape:
+                nav.mode = .settings
+                return true
+            case KeyCode.upArrow:
+                phrases.selectPrevious()
+                return true
+            case KeyCode.downArrow:
+                phrases.selectNext()
+                return true
+            case KeyCode.space:
+                guard let row = phrases.selectedRow, row.isDefault else { return false }
+                phrases.toggleSelected()
+                return true
+            case KeyCode.delete, KeyCode.forwardDelete:
+                guard let row = phrases.selectedRow, !row.isDefault else { return false }
+                phrases.removeSelected()
+                return true
+            default:
+                return false
+            }
         }
 
         // In settings mode, the controller drives row selection and value

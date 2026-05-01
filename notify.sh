@@ -167,6 +167,41 @@ voice_phrase_for() {
   # shellcheck disable=SC1090
   source "$lang_file"
 
+  # Layer user-managed phrases from phrases.user.json on top of the shipped
+  # arrays. Each pool can declare disabled defaults (skipped) and custom
+  # additions (appended). Quiet failure if jq isn't installed or the file's
+  # missing — the user just gets the unmodified defaults.
+  local user_json="${HOME}/.stack-nudge/phrases.user.json"
+  if [[ -f "$user_json" ]] && command -v jq >/dev/null 2>&1; then
+    # filter_pool <jq-path-prefix> <bash-array-name>
+    filter_pool() {
+      local pool="$1" arr="$2"
+      local disabled
+      disabled=$(jq -r --arg lang "$lang" --arg pool "$pool" \
+                 '.[$lang][$pool].disabled[]?' "$user_json" 2>/dev/null)
+      if [[ -n "$disabled" ]]; then
+        local kept=()
+        local existing
+        eval "existing=(\"\${${arr}[@]}\")"
+        for existing_item in "${existing[@]}"; do
+          local skip=0
+          while IFS= read -r d; do
+            [[ "$existing_item" == "$d" ]] && { skip=1; break; }
+          done <<< "$disabled"
+          [[ $skip -eq 0 ]] && kept+=("$existing_item")
+        done
+        eval "${arr}=(\"\${kept[@]}\")"
+      fi
+      local extra
+      while IFS= read -r extra; do
+        [[ -n "$extra" ]] && eval "${arr}+=(\"\$extra\")"
+      done < <(jq -r --arg lang "$lang" --arg pool "$pool" \
+               '.[$lang][$pool].custom[]?' "$user_json" 2>/dev/null)
+    }
+    filter_pool "response"     TEMPLATES_RESPONSE
+    filter_pool "notification" TEMPLATES_NOTIFICATION
+  fi
+
   local templates=()
   case "$event" in
     permission) templates=("${TEMPLATES_NOTIFICATION[@]}") ;;

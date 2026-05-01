@@ -45,9 +45,10 @@ struct SettingsView: View {
                         }
 
                         section("Actions") {
-                            row(9,  label: "Check permissions…", kind: .action, value: "")
-                            row(10, label: "Open config file…",  kind: .action, value: "")
-                            row(11, label: "Quit panel",         kind: .action, value: "")
+                            row(9,  label: "Edit phrases…",      kind: .action, value: "")
+                            row(10, label: "Check permissions…", kind: .action, value: "")
+                            row(11, label: "Open config file…",  kind: .action, value: "")
+                            row(12, label: "Quit panel",         kind: .action, value: "")
                         }
 
                         aboutFooter
