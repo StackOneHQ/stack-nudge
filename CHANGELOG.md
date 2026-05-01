@@ -4,6 +4,14 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.4.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.3.0...v1.4.0) (2026-05-01)
+
+
+### Features
+
+* customisable voice phrase pools ([a475922](https://github.com/StackOneHQ/stack-nudge/commit/a475922b1385ba2926a8ae9b3648d2b6ba5ebe32))
+* customisable voice phrase pools ([6d66495](https://github.com/StackOneHQ/stack-nudge/commit/6d664956fe9b842eaa606014d8e47d224aef814a))
+
 ## [1.3.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.2.0...v1.3.0) (2026-05-01)
 
 
