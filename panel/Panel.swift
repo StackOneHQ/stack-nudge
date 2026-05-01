@@ -14,6 +14,7 @@ private enum KeyCode {
     static let rightArrow: UInt16 = 124
     static let returnKey: UInt16 = 36
     static let numpadEnter: UInt16 = 76
+    static let space:     UInt16 = 49
     static let tab:       UInt16 = 48
     static let oKey:      UInt16 = 31
     static let rKey:      UInt16 = 15
@@ -694,7 +695,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 nav.cycleBackward()
             case KeyCode.rightArrow where plain:
                 nav.cycleForward()
-            case KeyCode.returnKey, KeyCode.numpadEnter:
+            case KeyCode.returnKey, KeyCode.numpadEnter, KeyCode.space:
                 guard plain else { return false }
                 nav.activate()
             default:
