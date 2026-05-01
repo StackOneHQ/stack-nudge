@@ -52,6 +52,7 @@ build_app "$APP" "stack-nudge" \
   panel/Settings.swift \
   panel/SessionStore.swift \
   panel/Sessions.swift \
+  panel/Welcome.swift \
   shared/AppActivator.swift \
   -framework Foundation -framework AppKit -framework SwiftUI -framework Carbon \
   -framework UserNotifications

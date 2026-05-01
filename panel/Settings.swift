@@ -49,6 +49,8 @@ struct SettingsView: View {
                             row(10, label: "Open config file…",  kind: .action, value: "")
                             row(11, label: "Quit panel",         kind: .action, value: "")
                         }
+
+                        aboutFooter
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 14)
@@ -84,6 +86,32 @@ struct SettingsView: View {
         if nav.voicesLoading { return "Loading…" }
         if nav.voicesAvailable.isEmpty { return "Voices unavailable" }
         return nav.voice
+    }
+
+    // Non-navigable footer with version info. Sits below the action rows so
+    // keyboard nav (rowCount=12) doesn't need to know about it. Clicking the
+    // GitHub link opens the repo in the user's browser.
+    private var aboutFooter: some View {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        return VStack(spacing: 4) {
+            Text("stack-nudge v\(version)")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.tertiary)
+            Button {
+                if let url = URL(string: "https://github.com/StackOneHQ/stack-nudge") {
+                    NSWorkspace.shared.open(url)
+                }
+            } label: {
+                Text("github.com/StackOneHQ/stack-nudge")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .underline()
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 12)
+        .padding(.bottom, 4)
     }
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {

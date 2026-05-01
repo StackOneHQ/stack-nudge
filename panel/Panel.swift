@@ -67,13 +67,17 @@ struct PanelContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            tabStrip
-            Divider().opacity(0.4)
+            if !nav.welcomed {
+                WelcomeView(nav: nav, hotkeyDisplay: nav.hotkeyDisplay)
+            } else {
+                tabStrip
+                Divider().opacity(0.4)
 
-            switch nav.mode {
-            case .events:   eventsBody
-            case .sessions: SessionsView(store: sessions)
-            case .settings: SettingsView(nav: nav)
+                switch nav.mode {
+                case .events:   eventsBody
+                case .sessions: SessionsView(store: sessions)
+                case .settings: SettingsView(nav: nav)
+                }
             }
         }
     }
@@ -325,6 +329,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         store.onAppend = { [weak self] event in self?.postBannerIfNeeded(event) }
         nav.loadFromConfig()  // populate panelPinned + other live values up-front
 
+        // First-run welcome: auto-open the panel if STACKNUDGE_WELCOMED isn't
+        // set yet. Brief delay so install.sh's launchctl bounce settles and
+        // the dialog isn't fighting macOS's notification permission prompt.
+        if !nav.welcomed {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                guard let self, !self.nav.welcomed else { return }
+                NSApp.activate(ignoringOtherApps: true)
+                self.panel.makeKeyAndOrderFront(nil)
+            }
+        }
+
         // Auto-hide when the panel loses key focus, if pin is off.
         // Detect "click outside" without polling — NSWindow fires this when
         // another window or app takes focus.
@@ -546,6 +561,23 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         let mods = event.modifierFlags
         let blockingMods: NSEvent.ModifierFlags = [.control, .option]
         let cmdOnly = mods.intersection([.command, .control, .option, .shift]) == .command
+
+        // Welcome view: only Enter (dismiss) and Esc (hide) are meaningful.
+        // Swallow everything else so the user can't navigate to a non-existent
+        // tab strip while welcome is showing.
+        if !nav.welcomed {
+            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            guard plain else { return true }
+            switch event.keyCode {
+            case KeyCode.returnKey, KeyCode.numpadEnter:
+                nav.dismissWelcome()
+            case KeyCode.escape:
+                hidePanel()
+            default:
+                break
+            }
+            return true
+        }
 
         // While recording a hotkey, capture the next combo. Arrow keys / Tab
         // bail out gracefully — otherwise users who entered record mode by

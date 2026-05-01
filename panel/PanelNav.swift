@@ -32,6 +32,7 @@ final class PanelNav: ObservableObject {
     @Published var voiceEnabled:    Bool = false
     @Published var muteWhenFocused: Bool = true
     @Published var panelPinned:     Bool = true
+    @Published var welcomed:        Bool = true  // default true; install creates a fresh config without it set
     @Published var soundStop:       String = "Glass"
     @Published var soundPermission: String = "Ping"
     @Published var voice:           String = "af_aoede"
@@ -96,6 +97,9 @@ final class PanelNav: ObservableObject {
         voiceEnabled    = ConfigFile.bool(config, "STACKNUDGE_VOICE",     default: false)
         muteWhenFocused = ConfigFile.bool(config, "STACKNUDGE_MUTE_WHEN_FOCUSED", default: true)
         panelPinned     = ConfigFile.bool(config, "STACKNUDGE_PANEL_PIN", default: true)
+        // Default false on first run so the welcome view shows. We also write
+        // STACKNUDGE_WELCOMED=true the first time the user dismisses it.
+        welcomed        = ConfigFile.bool(config, "STACKNUDGE_WELCOMED", default: false)
         soundStop       = config["STACKNUDGE_SOUND_STOP"]       ?? "Glass"
         soundPermission = config["STACKNUDGE_SOUND_PERMISSION"] ?? "Ping"
         voice           = config["STACKNUDGE_VOICE_NAME"]       ?? "af_aoede"
@@ -128,6 +132,13 @@ final class PanelNav: ObservableObject {
             .split(separator: "\n")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty && !$0.contains(" ") }
+    }
+
+    // MARK: - Welcome
+
+    func dismissWelcome() {
+        welcomed = true
+        ConfigFile.write(key: "STACKNUDGE_WELCOMED", value: "true")
     }
 
     // MARK: - Row movement

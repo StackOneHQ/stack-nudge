@@ -131,6 +131,28 @@ PLIST
 }
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
+  # Rotate logs (>10 MB) before launchd starts writing to them again. We move
+  # rather than truncate so users can still inspect the previous session if a
+  # bug shows up post-upgrade.
+  rotate_log() {
+    local log="$1"
+    [[ ! -f "$log" ]] && return
+    local size
+    size=$(stat -f%z "$log" 2>/dev/null || echo 0)
+    if (( size > 10485760 )); then
+      mv -f "$log" "${log}.old"
+    fi
+  }
+  rotate_log "${INSTALL_DIR}/daemon.log"
+  rotate_log "${INSTALL_DIR}/app.log"
+
+  # Belt-and-suspenders: kill any survivor processes from a prior install
+  # BEFORE we re-register the launchd agents, so the unload-then-load below
+  # doesn't race with an old instance still hanging on. Matching the exact
+  # binary path so we don't reap unrelated processes.
+  pkill -f "Applications/stack-nudge\.app/Contents/MacOS/stack-nudge$" 2>/dev/null || true
+  pkill -f "venv/bin/stackvox serve$"                                  2>/dev/null || true
+
   register_launchd_agent \
     "com.stackonehq.stack-nudge-daemon" \
     "always" \
