@@ -131,6 +131,28 @@ PLIST
 }
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
+  # Rotate logs (>10 MB) before launchd starts writing to them again. We move
+  # rather than truncate so users can still inspect the previous session if a
+  # bug shows up post-upgrade.
+  rotate_log() {
+    local log="$1"
+    [[ ! -f "$log" ]] && return
+    local size
+    size=$(stat -f%z "$log" 2>/dev/null || echo 0)
+    if (( size > 10485760 )); then
+      mv -f "$log" "${log}.old"
+    fi
+  }
+  rotate_log "${INSTALL_DIR}/daemon.log"
+  rotate_log "${INSTALL_DIR}/app.log"
+
+  # Belt-and-suspenders: kill any survivor processes from a prior install
+  # BEFORE we re-register the launchd agents, so the unload-then-load below
+  # doesn't race with an old instance still hanging on. Matching the exact
+  # binary path so we don't reap unrelated processes.
+  pkill -f "Applications/stack-nudge\.app/Contents/MacOS/stack-nudge$" 2>/dev/null || true
+  pkill -f "venv/bin/stackvox serve$"                                  2>/dev/null || true
+
   register_launchd_agent \
     "com.stackonehq.stack-nudge-daemon" \
     "always" \
@@ -277,9 +299,30 @@ fi
 echo ""
 echo "Done! Hooks are wired up."
 echo ""
-echo "Config: edit ~/.stack-nudge/config to customise behaviour."
+echo "  ┌──────────────────────────────────────────────┐"
+echo "  │  Press  ⌘ + ⌥ + N  to open the stack-nudge   │"
+echo "  │  panel — events, sessions, and settings.     │"
+echo "  └──────────────────────────────────────────────┘"
+echo ""
+echo "macOS may ask for notification + accessibility permissions on first launch."
+echo "Grant them so banners appear and 'Allow' on permission nudges can press Enter."
+echo ""
+echo "Config: edit ~/.stack-nudge/config (or use the Settings tab in the panel)."
 echo "  STACKNUDGE_VOICE=true                 — speak notifications aloud"
 echo "  STACKNUDGE_ACTIVATE_IMMEDIATELY=true  — focus your editor without clicking"
 echo "  STACKNUDGE_BANNER=false               — suppress macOS banner notifications"
 echo "  STACKNUDGE_PANEL_HOTKEY=cmd+opt+n     — global hotkey for the floating panel"
+echo ""
 echo "To uninstall, run: ./uninstall.sh"
+
+# Fire a welcome notification so the user immediately sees what a nudge
+# looks like AND macOS prompts for notification permission now (during
+# install) rather than ambushing them mid-task later. Briefly wait for
+# the launchd-managed app to come up before posting.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  for _ in 1 2 3 4 5 6 7 8; do
+    [[ -S "$INSTALL_DIR/panel.sock" ]] && break
+    sleep 0.25
+  done
+  "$NOTIFY" stack-nudge welcome >/dev/null 2>&1 &
+fi

@@ -14,6 +14,7 @@ private enum KeyCode {
     static let rightArrow: UInt16 = 124
     static let returnKey: UInt16 = 36
     static let numpadEnter: UInt16 = 76
+    static let space:     UInt16 = 49
     static let tab:       UInt16 = 48
     static let oKey:      UInt16 = 31
     static let rKey:      UInt16 = 15
@@ -65,15 +66,23 @@ struct PanelContentView: View {
     @ObservedObject var sessions: SessionStore
     @ObservedObject var nav: PanelNav
 
+    let onGrantPermissions: () -> Void
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            tabStrip
-            Divider().opacity(0.4)
+            if !nav.welcomed {
+                WelcomeView(nav: nav,
+                            hotkeyDisplay: nav.hotkeyDisplay,
+                            onGrantPermissions: onGrantPermissions)
+            } else {
+                tabStrip
+                Divider().opacity(0.4)
 
-            switch nav.mode {
-            case .events:   eventsBody
-            case .sessions: SessionsView(store: sessions)
-            case .settings: SettingsView(nav: nav)
+                switch nav.mode {
+                case .events:   eventsBody
+                case .sessions: SessionsView(store: sessions)
+                case .settings: SettingsView(nav: nav)
+                }
             }
         }
     }
@@ -285,7 +294,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         blur.layer?.cornerRadius = 12
         blur.layer?.masksToBounds = true
 
-        let host = NSHostingView(rootView: PanelContentView(store: store, sessions: sessions, nav: nav))
+        let host = NSHostingView(rootView: PanelContentView(
+            store: store, sessions: sessions, nav: nav,
+            onGrantPermissions: { [weak self] in self?.handleGrantPermissions() }
+        ))
         host.translatesAutoresizingMaskIntoConstraints = false
         blur.addSubview(host)
         NSLayoutConstraint.activate([
@@ -325,6 +337,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         store.onAppend = { [weak self] event in self?.postBannerIfNeeded(event) }
         nav.loadFromConfig()  // populate panelPinned + other live values up-front
 
+        // First-run welcome: auto-open the panel if STACKNUDGE_WELCOMED isn't
+        // set yet. Brief delay so install.sh's launchctl bounce settles.
+        // Permission prompts are user-triggered from the welcome screen,
+        // not auto-fired.
+        if !nav.welcomed {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                guard let self, !self.nav.welcomed else { return }
+                NSApp.activate(ignoringOtherApps: true)
+                self.panel.makeKeyAndOrderFront(nil)
+            }
+        }
+
         // Auto-hide when the panel loses key focus, if pin is off.
         // Detect "click outside" without polling — NSWindow fires this when
         // another window or app takes focus.
@@ -334,6 +358,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             name: NSWindow.didResignKeyNotification,
             object: panel
         )
+    }
+
+    // Triggered from the welcome screen's "Grant permissions" button. Opens
+    // the in-app Permissions window — it shows live status for Notifications,
+    // Accessibility, and Automation, with per-row "Prompt" and "Settings"
+    // buttons so the user can drive each grant without surprise modal dialogs
+    // covering anything.
+    private func handleGrantPermissions() {
+        showPermissions()
     }
 
     @objc private func panelDidResignKey(_ notification: Notification) {
@@ -547,6 +580,23 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         let blockingMods: NSEvent.ModifierFlags = [.control, .option]
         let cmdOnly = mods.intersection([.command, .control, .option, .shift]) == .command
 
+        // Welcome view: only Enter (dismiss) and Esc (hide) are meaningful.
+        // Swallow everything else so the user can't navigate to a non-existent
+        // tab strip while welcome is showing.
+        if !nav.welcomed {
+            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            guard plain else { return true }
+            switch event.keyCode {
+            case KeyCode.returnKey, KeyCode.numpadEnter:
+                nav.dismissWelcome()
+            case KeyCode.escape:
+                hidePanel()
+            default:
+                break
+            }
+            return true
+        }
+
         // While recording a hotkey, capture the next combo. Arrow keys / Tab
         // bail out gracefully — otherwise users who entered record mode by
         // mistake would be stuck on row 0 with all their keypresses swallowed.
@@ -645,7 +695,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 nav.cycleBackward()
             case KeyCode.rightArrow where plain:
                 nav.cycleForward()
-            case KeyCode.returnKey, KeyCode.numpadEnter:
+            case KeyCode.returnKey, KeyCode.numpadEnter, KeyCode.space:
                 guard plain else { return false }
                 nav.activate()
             default:
