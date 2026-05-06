@@ -4,6 +4,14 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.4.1](https://github.com/StackOneHQ/stack-nudge/compare/v1.4.0...v1.4.1) (2026-05-06)
+
+
+### Bug Fixes
+
+* open panel on the screen with the cursor ([56daeb4](https://github.com/StackOneHQ/stack-nudge/commit/56daeb44b6395782a2a91861eee9a48c1caf013f))
+* open the panel on the screen with the cursor, not the main display ([a2ac086](https://github.com/StackOneHQ/stack-nudge/commit/a2ac086ab5e38c3f404d8ae82c22efa5005f509b))
+
 ## [1.4.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.3.0...v1.4.0) (2026-05-01)
 
 
