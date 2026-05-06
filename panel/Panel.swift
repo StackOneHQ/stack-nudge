@@ -961,6 +961,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     }
 
     func showPanel() {
+        positionPanel()  // re-resolve in case the user moved to a different display
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
     }
@@ -975,7 +976,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // MARK: - Setup helpers
 
     private func positionPanel() {
-        guard let screen = NSScreen.main else { return }
+        let screen = activeScreen()
         let visible = screen.visibleFrame
         let size = panel.frame.size
         let origin = NSPoint(
@@ -983,6 +984,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             y: visible.maxY - size.height - 24
         )
         panel.setFrameOrigin(origin)
+    }
+
+    // Pick the screen the user is most likely looking at: the one under
+    // the mouse cursor. Falls back to NSScreen.main if for some reason we
+    // can't resolve a screen (e.g., headless or screens just being
+    // reconfigured). Cursor location works regardless of which app or
+    // window has focus, and is what most multi-screen mac apps use.
+    private func activeScreen() -> NSScreen {
+        let mouse = NSEvent.mouseLocation
+        if let match = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) {
+            return match
+        }
+        return NSScreen.main ?? NSScreen.screens.first ?? panel.screen ?? NSScreen()
     }
 
     private func startListener() {
