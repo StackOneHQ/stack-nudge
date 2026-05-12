@@ -6,7 +6,13 @@
     ".": {
       "package-name": "stack-nudge",
       "release-type": "simple",
-      "changelog-path": "CHANGELOG.md"
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "generic",
+          "path": "panel/Info.plist"
+        }
+      ]
     }
   }
 }
