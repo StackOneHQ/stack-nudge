@@ -4,6 +4,14 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.4.2](https://github.com/StackOneHQ/stack-nudge/compare/v1.4.1...v1.4.2) (2026-05-12)
+
+
+### Bug Fixes
+
+* report correct CFBundleShortVersionString in installed bundles ([54f9815](https://github.com/StackOneHQ/stack-nudge/commit/54f9815774b6830bcc533311f4dd45e2acebaaeb))
+* report correct CFBundleShortVersionString in installed bundles ([1bb25c5](https://github.com/StackOneHQ/stack-nudge/commit/1bb25c55f5639647ee026800dc628290addbaca3))
+
 ## [1.4.1](https://github.com/StackOneHQ/stack-nudge/compare/v1.4.0...v1.4.1) (2026-05-06)
 
 
