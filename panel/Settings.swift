@@ -14,8 +14,15 @@ struct SettingsView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
+                        // Index 0 when present, shifting everything else by
+                        // +1. The offset is held on nav (updateRowOffset).
+                        if let version = nav.updateAvailable {
+                            updateRow(version: version)
+                        }
+                        let off = nav.updateRowOffset
+
                         section("Hotkey") {
-                            row(0, label: "Panel shortcut",
+                            row(0 + off, label: "Panel shortcut",
                                 kind: .cycle,
                                 value: nav.recordingHotkey ? "Press combo…" : nav.hotkeyDisplay)
                             if let error = nav.hotkeyError {
@@ -28,27 +35,27 @@ struct SettingsView: View {
                         }
 
                         section("Toggles") {
-                            row(1, label: "Banner notifications", kind: .toggle, value: nav.bannerEnabled   ? "On" : "Off")
-                            row(2, label: "Voice notifications",  kind: .toggle, value: nav.voiceEnabled    ? "On" : "Off")
-                            row(3, label: "Mute when focused",    kind: .toggle, value: nav.muteWhenFocused ? "On" : "Off")
-                            row(4, label: "Pin panel",            kind: .toggle, value: nav.panelPinned     ? "On" : "Off")
+                            row(1 + off, label: "Banner notifications", kind: .toggle, value: nav.bannerEnabled   ? "On" : "Off")
+                            row(2 + off, label: "Voice notifications",  kind: .toggle, value: nav.voiceEnabled    ? "On" : "Off")
+                            row(3 + off, label: "Mute when focused",    kind: .toggle, value: nav.muteWhenFocused ? "On" : "Off")
+                            row(4 + off, label: "Pin panel",            kind: .toggle, value: nav.panelPinned     ? "On" : "Off")
                         }
 
                         section("Sounds") {
-                            row(5, label: "Agent done", kind: .cycle, value: nav.soundStop)
-                            row(6, label: "Permission", kind: .cycle, value: nav.soundPermission)
+                            row(5 + off, label: "Agent done", kind: .cycle, value: nav.soundStop)
+                            row(6 + off, label: "Permission", kind: .cycle, value: nav.soundPermission)
                         }
 
                         section("Voice") {
-                            row(7, label: "Voice",  kind: .cycle, value: voiceLabel)
-                            row(8, label: "Speed",  kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed))
+                            row(7 + off, label: "Voice",  kind: .cycle, value: voiceLabel)
+                            row(8 + off, label: "Speed",  kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed))
                         }
 
                         section("Actions") {
-                            row(9,  label: "Edit phrases…",      kind: .action, value: "")
-                            row(10, label: "Check permissions…", kind: .action, value: "")
-                            row(11, label: "Open config file…",  kind: .action, value: "")
-                            row(12, label: "Quit panel",         kind: .action, value: "")
+                            row(9 + off,  label: "Edit phrases…",      kind: .action, value: "")
+                            row(10 + off, label: "Check permissions…", kind: .action, value: "")
+                            row(11 + off, label: "Open config file…",  kind: .action, value: "")
+                            row(12 + off, label: "Quit panel",         kind: .action, value: "")
                         }
 
                         aboutFooter
@@ -87,6 +94,43 @@ struct SettingsView: View {
         if nav.voicesLoading { return "Loading…" }
         if nav.voicesAvailable.isEmpty { return "Voices unavailable" }
         return nav.voice
+    }
+
+    // Conditional top-of-list row. Pinned at index 0 when an update is
+    // available — visually distinct (accent fill always-on) so the user's
+    // eye lands on it first. Acts on click or Enter; opens the GitHub
+    // releases page via the openReleasePage action.
+    @ViewBuilder
+    private func updateRow(version: String) -> some View {
+        let selected = nav.selectedSettingIndex == 0
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.down.circle.fill")
+                .font(.body)
+                .foregroundStyle(Color.accentColor)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Update available")
+                    .font(.subheadline.weight(.medium))
+                Text("v\(version)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.accentColor.opacity(selected ? 0.32 : 0.18))
+        )
+        .contentShape(Rectangle())
+        .id(0)
+        .onTapGesture {
+            nav.selectedSettingIndex = 0
+            nav.activate()
+        }
     }
 
     // Non-navigable footer with version info. Sits below the action rows so

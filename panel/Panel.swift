@@ -76,6 +76,14 @@ struct PanelContentView: View {
                 WelcomeView(nav: nav,
                             hotkeyDisplay: nav.hotkeyDisplay,
                             onGrantPermissions: onGrantPermissions)
+            } else if nav.mode == .postUpdate {
+                // Full-screen takeover, no tab strip — matches welcome's
+                // single-purpose first-launch feel.
+                PostUpdateView(nav: nav, onDismiss: {
+                    nav.postUpdateVersion = nil
+                    nav.postUpdateNotes = nil
+                    nav.mode = .events
+                })
             } else {
                 tabStrip
                 Divider().opacity(0.4)
@@ -85,6 +93,14 @@ struct PanelContentView: View {
                 case .sessions: SessionsView(store: sessions)
                 case .settings: SettingsView(nav: nav)
                 case .phrases:  PhrasesView(model: phrases) { nav.mode = .settings }
+                case .updateConfirm:
+                    UpdateConfirmView(
+                        nav: nav,
+                        onCancel: { nav.mode = .settings },
+                        onConfirm: { nav.actions?.runUpdate() }
+                    )
+                case .updating: UpdatingView(nav: nav)
+                case .postUpdate: EmptyView() // handled above
                 }
             }
         }
@@ -99,7 +115,7 @@ struct PanelContentView: View {
 
             tab(.events,   label: "Events",   count: store.events.count)
             tab(.sessions, label: "Sessions", count: sessions.sessions.filter { $0.status == .active }.count)
-            tab(.settings, label: "Settings", count: 0)
+            tab(.settings, label: "Settings", count: 0, dot: nav.updateAvailable != nil)
 
             Spacer()
 
@@ -115,7 +131,7 @@ struct PanelContentView: View {
         .padding(.vertical, 8)
     }
 
-    private func tab(_ mode: PanelMode, label: String, count: Int) -> some View {
+    private func tab(_ mode: PanelMode, label: String, count: Int, dot: Bool = false) -> some View {
         let isActive = nav.mode == mode
         return Button {
             nav.mode = mode
@@ -131,6 +147,11 @@ struct PanelContentView: View {
                         .background(
                             Capsule().fill(Color.primary.opacity(isActive ? 0.18 : 0.10))
                         )
+                }
+                if dot {
+                    Circle()
+                        .fill(Color.accentColor)
+                        .frame(width: 6, height: 6)
                 }
             }
             .padding(.horizontal, 8)
@@ -304,6 +325,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private var listener: EventListener?
     private var menuBar: MenuBarController?
     private var permissionsWC: PermissionsWindowController?
+    private var updateChecker: UpdateChecker?
+    private var updater: Updater?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let frame = NSRect(x: 0, y: 0, width: 420, height: 280)
@@ -356,6 +379,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self?.phrases.selectedRow = nil
                 self?.nav.mode = .phrases
             },
+            beginUpdate:      { [weak self] in self?.beginUpdateFlow() },
+            runUpdate:        { [weak self] in self?.updater?.run() },
             quit:             { NSApp.terminate(nil) }
         )
         nav.setHotkey = { [weak self] spec in
@@ -366,6 +391,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         setupNotificationCenter()
         store.onAppend = { [weak self] event in self?.postBannerIfNeeded(event) }
         nav.loadFromConfig()  // populate panelPinned + other live values up-front
+
+        updateChecker = UpdateChecker(nav: nav)
+        updateChecker?.start()
+        updater = Updater(nav: nav)
+
+        // If a previous panel instance was pkilled mid-update by install.sh,
+        // it left a status file behind. Read it now and surface a brief toast
+        // so the user knows the update completed (or failed).
+        if let result = Updater.consumePostUpdateStatus() {
+            handlePostUpdateStatus(result: result)
+        }
 
         // First-run welcome: auto-open the panel if STACKNUDGE_WELCOMED isn't
         // set yet. Brief delay so install.sh's launchctl bounce settles.
@@ -397,6 +433,52 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // covering anything.
     private func handleGrantPermissions() {
         showPermissions()
+    }
+
+    // Click on the "Update available" row → load release notes (if not
+    // already populated by the background checker) and switch to the
+    // confirmation mode. The actual install kicks off only when the user
+    // hits Update Now / Enter from the confirm view.
+    private func beginUpdateFlow() {
+        nav.mode = .updateConfirm
+        // Fetch release notes lazily if we haven't already.
+        if nav.updateReleaseNotes == nil {
+            updateChecker?.fetchReleaseNotes { [weak self] body in
+                self?.nav.updateReleaseNotes = body
+            }
+        }
+    }
+
+    // Surface the post-update view on first launch after a successful
+    // update. Sets the version + mode immediately so the user sees the
+    // confirmation right away, then kicks off an async release-notes
+    // fetch (gh CLI fallback for private repos) that fills in the body
+    // when it arrives. Failures during update get a one-line message
+    // logged to stderr — no UI for that case yet.
+    private func handlePostUpdateStatus(result: (state: String, version: String, error: String?)) {
+        switch result.state {
+        case "success":
+            nav.postUpdateVersion = result.version.isEmpty ? "?" : result.version
+            nav.postUpdateNotes = nil
+            nav.mode = .postUpdate
+            // Auto-open the panel so the user immediately sees the
+            // "what shipped" view rather than discovering it via hotkey.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                guard let self else { return }
+                NSApp.activate(ignoringOtherApps: true)
+                self.panel.makeKeyAndOrderFront(nil)
+            }
+            if !result.version.isEmpty {
+                updateChecker?.fetchReleaseNotes(for: result.version) { [weak self] body in
+                    self?.nav.postUpdateNotes = body
+                }
+            }
+        case "failed":
+            FileHandle.standardError.write(Data(
+                "stack-nudge: previous update failed: \(result.error ?? "unknown")\n".utf8))
+        default:
+            return
+        }
     }
 
     @objc private func panelDidResignKey(_ notification: Notification) {
@@ -717,6 +799,56 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 nav.mode = .settings; return true
             default:
                 break
+            }
+        }
+
+        // Post-update view: Enter or Esc both dismiss to the events tab.
+        // Mirrors WelcomeView's keyboard contract — single-purpose screen, two
+        // keys to exit, no other navigation allowed while it's up.
+        if nav.mode == .postUpdate {
+            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            guard plain else { return true }
+            switch event.keyCode {
+            case KeyCode.escape, KeyCode.returnKey, KeyCode.numpadEnter:
+                nav.postUpdateVersion = nil
+                nav.postUpdateNotes = nil
+                nav.mode = .events
+                return true
+            default:
+                return true
+            }
+        }
+
+        // Update-confirm: Enter triggers install, Esc cancels back to Settings.
+        if nav.mode == .updateConfirm {
+            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            guard plain else { return false }
+            switch event.keyCode {
+            case KeyCode.escape:
+                nav.mode = .settings
+                return true
+            case KeyCode.returnKey, KeyCode.numpadEnter:
+                nav.actions?.runUpdate()
+                return true
+            default:
+                return false
+            }
+        }
+
+        // Updating: only Esc, and only after a failure (so the user can't
+        // accidentally abandon a live install). Space toggles the log.
+        if nav.mode == .updating {
+            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            guard plain else { return false }
+            switch event.keyCode {
+            case KeyCode.escape where nav.updaterPhase == .failed:
+                nav.mode = .settings
+                return true
+            case KeyCode.space:
+                nav.updaterShowLog.toggle()
+                return true
+            default:
+                return false
             }
         }
 
