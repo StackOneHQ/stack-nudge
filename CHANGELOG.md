@@ -4,6 +4,14 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.5.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.4.2...v1.5.0) (2026-05-12)
+
+
+### Features
+
+* in-app auto-updater ([aa30bb9](https://github.com/StackOneHQ/stack-nudge/commit/aa30bb9ea70b2532133e70ecdb40270c55796744))
+* in-app auto-updater ([d4e4e98](https://github.com/StackOneHQ/stack-nudge/commit/d4e4e98df2ef874c27de5a4c09985140d3142881))
+
 ## [1.4.2](https://github.com/StackOneHQ/stack-nudge/compare/v1.4.1...v1.4.2) (2026-05-12)
 
 
