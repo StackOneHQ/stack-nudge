@@ -53,6 +53,8 @@ build_app "$APP" "stack-nudge" \
   panel/SessionStore.swift \
   panel/Sessions.swift \
   panel/Phrases.swift \
+  panel/UpdateChecker.swift \
+  panel/Updater.swift \
   panel/Welcome.swift \
   shared/AppActivator.swift \
   -framework Foundation -framework AppKit -framework SwiftUI -framework Carbon \

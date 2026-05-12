@@ -21,6 +21,7 @@ PREBUILT_APP="$SCRIPT_DIR/build/stack-nudge.app"
 BUILD_LOG="/tmp/stack-nudge-install-build.log"
 if [[ "$(uname -s)" == "Darwin" ]]; then
   echo ""
+  echo "# STAGE: building"
   if [[ -d "$PREBUILT_APP" ]]; then
     echo "Using prebuilt stack-nudge.app from release bundle..."
   else
@@ -63,6 +64,7 @@ find_python() {
 
 # Install the voice engine (stackvox) from PyPI into an isolated venv.
 echo ""
+echo "# STAGE: venv"
 echo "Setting up voice engine..."
 STACKVOX_SPEC="stackvox>=0.4.0"
 PYTHON=$(find_python)
@@ -146,6 +148,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   rotate_log "${INSTALL_DIR}/daemon.log"
   rotate_log "${INSTALL_DIR}/app.log"
 
+  echo "# STAGE: launchd"
   # Belt-and-suspenders: kill any survivor processes from a prior install
   # BEFORE we re-register the launchd agents, so the unload-then-load below
   # doesn't race with an old instance still hanging on. Matching the exact
@@ -195,6 +198,7 @@ if [[ ! -f "$INSTALL_DIR/config" && -f "$SCRIPT_DIR/notify.conf.example" ]]; the
   echo "  Created config         -> $INSTALL_DIR/config"
 fi
 
+echo "# STAGE: hooks"
 # Detect agents and wire up their hooks
 installed_any=false
 
@@ -297,6 +301,7 @@ if [[ "$installed_any" == "false" ]]; then
 fi
 
 echo ""
+echo "# STAGE: done"
 echo "Done! Hooks are wired up."
 echo ""
 echo "  ┌──────────────────────────────────────────────┐"

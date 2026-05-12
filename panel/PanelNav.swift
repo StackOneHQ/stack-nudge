@@ -6,6 +6,18 @@ enum PanelMode {
     case sessions
     case settings
     case phrases
+    // Confirmation step after the user clicks the "Update available" row.
+    // Shows release notes (when available) + Cancel / Update Now buttons.
+    case updateConfirm
+    // Live install progress driven by Updater. Replaces the panel content
+    // until the install completes or fails — at which point the panel is
+    // typically pkilled and respawned by launchd, so this mode is short
+    // lived in the happy path.
+    case updating
+    // Welcome-style "what shipped" view shown automatically on first launch
+    // after a successful update. Driven by the status file the runner wrote
+    // before the previous instance died.
+    case postUpdate
 }
 
 // Action callbacks the controller wires into nav so settings rows like
@@ -15,6 +27,8 @@ struct SettingsActions {
     let checkPermissions: () -> Void
     let openConfig:       () -> Void
     let editPhrases:      () -> Void
+    let beginUpdate:      () -> Void
+    let runUpdate:        () -> Void
     let quit:             () -> Void
 }
 
@@ -41,6 +55,26 @@ final class PanelNav: ObservableObject {
     @Published var voiceSpeed:      Double = 1.1
     @Published var voicesAvailable: [String] = []
     @Published var voicesLoading:   Bool = true
+    // The latest release tag from GitHub when newer than this bundle's
+    // CFBundleShortVersionString — nil otherwise. Drives both the Settings
+    // tab dot badge and the conditional "Update available" row at the top
+    // of the Settings list. Populated by UpdateChecker.
+    @Published var updateAvailable: String?
+    // Release notes body (markdown) for the available update — shown in the
+    // confirmation step. nil before notes have loaded or when fetch failed
+    // (e.g. private repo without auth).
+    @Published var updateReleaseNotes: String?
+    // Live updater state. updaterPhase advances as install.sh emits STAGE
+    // markers; updaterLog accumulates the raw install output for the
+    // expandable "Show output" detail in UpdatingView.
+    @Published var updaterPhase: UpdatePhase = .idle
+    @Published var updaterLog: String = ""
+    @Published var updaterShowLog: Bool = false
+    // Post-update screen state. Populated on launch when the status file
+    // from a previous in-flight update is found; drives the welcome-style
+    // PostUpdateView (mode = .postUpdate). Cleared on dismiss.
+    @Published var postUpdateVersion: String?
+    @Published var postUpdateNotes:   String?
 
     var actions: SettingsActions?
     // Wired by PanelController so nav can re-register the global hotkey
@@ -73,10 +107,17 @@ final class PanelNav: ObservableObject {
         "I'd love your input on this.",
     ]
 
-    var rowCount: Int { 13 }
+    // +1 when an update is available and the "Update to vX.Y.Z" row is
+    // pinned at the top of the Settings list. All other indices shift down
+    // when the offset is 1.
+    var updateRowOffset: Int { updateAvailable != nil ? 1 : 0 }
+
+    var rowCount: Int { 13 + updateRowOffset }
 
     // Row layout (kept in one place so the controller, view, and indexing
-    // logic all agree on what each row index means):
+    // logic all agree on what each row index means). When updateAvailable
+    // is non-nil, row 0 becomes "Update to vX.Y.Z" and every following row
+    // shifts down by one — use `index - updateRowOffset` when matching:
     //   0  Hotkey                hotkey-record
     //   1  Banner notifications  toggle
     //   2  Voice notifications   toggle
@@ -161,7 +202,11 @@ final class PanelNav: ObservableObject {
     // Enter: toggles flip, cycle rows step forward, actions fire, hotkey
     // row enters record mode.
     func activate() {
-        switch selectedSettingIndex {
+        if updateRowOffset == 1, selectedSettingIndex == 0 {
+            actions?.beginUpdate()
+            return
+        }
+        switch selectedSettingIndex - updateRowOffset {
         case 0: startRecordingHotkey()
         case 9:  actions?.editPhrases()
         case 10: actions?.checkPermissions()
@@ -175,7 +220,13 @@ final class PanelNav: ObservableObject {
     func cycleBackward() { applyCycle(forward: false) }
 
     private func applyCycle(forward: Bool) {
-        switch selectedSettingIndex {
+        // Update row (when present at index 0) treats left/right arrows the
+        // same as Enter — there's nothing to cycle, so just begin update.
+        if updateRowOffset == 1, selectedSettingIndex == 0 {
+            actions?.beginUpdate()
+            return
+        }
+        switch selectedSettingIndex - updateRowOffset {
         case 0:
             // Cycle on the hotkey row also enters record mode.
             startRecordingHotkey()
