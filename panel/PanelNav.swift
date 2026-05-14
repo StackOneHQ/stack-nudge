@@ -4,6 +4,7 @@ import SwiftUI
 enum PanelMode {
     case events
     case sessions
+    case usage
     case settings
     case phrases
     // Confirmation step after the user clicks the "Update available" row.
@@ -75,12 +76,26 @@ final class PanelNav: ObservableObject {
     // PostUpdateView (mode = .postUpdate). Cleared on dismiss.
     @Published var postUpdateVersion: String?
     @Published var postUpdateNotes:   String?
+    // Latest /api/oauth/usage snapshot. Driven by the QuotaProbe poller in
+    // PanelController. nil before the first probe completes, or when the
+    // probe failed (e.g. user denied keychain access, 401, 429).
+    @Published var quota:            QuotaSnapshot?
+    @Published var quotaLastUpdated: Date?
+    // Threshold-crossing notifications. quotaAlertsEnabled is the master
+    // switch; quotaAlertThreshold is the single percent value used across
+    // all tiers — banner fires once per period when any tier reaches it.
+    @Published var quotaAlertsEnabled:  Bool = true
+    @Published var quotaAlertThreshold: Int  = 80
 
     var actions: SettingsActions?
     // Wired by PanelController so nav can re-register the global hotkey
     // without owning the Hotkey instance directly. Returns true if the
     // new spec registered successfully.
     var setHotkey: ((String) -> Bool)?
+
+    // Selectable thresholds for the Usage "Alert threshold" cycle row.
+    // Sorted ascending so left/right arrows feel intuitive.
+    static let quotaThresholds: [Int] = [50, 70, 80, 90, 95]
 
     static let macSounds = [
         "Basso", "Blow", "Bottle", "Frog", "Funk", "Glass", "Hero",
@@ -112,7 +127,7 @@ final class PanelNav: ObservableObject {
     // when the offset is 1.
     var updateRowOffset: Int { updateAvailable != nil ? 1 : 0 }
 
-    var rowCount: Int { 13 + updateRowOffset }
+    var rowCount: Int { 15 + updateRowOffset }
 
     // Row layout (kept in one place so the controller, view, and indexing
     // logic all agree on what each row index means). When updateAvailable
@@ -127,10 +142,12 @@ final class PanelNav: ObservableObject {
     //   6  Permission sound      cycle
     //   7  Voice                 cycle
     //   8  Speed                 cycle
-    //   9  Edit phrases…         action
-    //  10  Check permissions…    action
-    //  11  Open config file…     action
-    //  12  Quit panel            action
+    //   9  Quota alerts          toggle
+    //  10  Alert threshold       cycle
+    //  11  Edit phrases…         action
+    //  12  Check permissions…    action
+    //  13  Open config file…     action
+    //  14  Quit panel            action
 
     // MARK: - Disk I/O
 
@@ -148,6 +165,11 @@ final class PanelNav: ObservableObject {
         soundPermission = config["STACKNUDGE_SOUND_PERMISSION"] ?? "Ping"
         voice           = config["STACKNUDGE_VOICE_NAME"]       ?? "af_aoede"
         voiceSpeed      = Double(config["STACKNUDGE_VOICE_SPEED"] ?? "") ?? 1.1
+        quotaAlertsEnabled  = ConfigFile.bool(config, "STACKNUDGE_QUOTA_ALERTS", default: true)
+        // Coerce out-of-list values to the nearest valid threshold so a
+        // hand-edited config can't desync the cycle row's selection.
+        let rawThreshold = Int(config["STACKNUDGE_QUOTA_THRESHOLD"] ?? "") ?? 80
+        quotaAlertThreshold = Self.quotaThresholds.min(by: { abs($0 - rawThreshold) < abs($1 - rawThreshold) }) ?? 80
     }
 
     func loadVoices() {
@@ -208,10 +230,10 @@ final class PanelNav: ObservableObject {
         }
         switch selectedSettingIndex - updateRowOffset {
         case 0: startRecordingHotkey()
-        case 9:  actions?.editPhrases()
-        case 10: actions?.checkPermissions()
-        case 11: actions?.openConfig()
-        case 12: actions?.quit()
+        case 11: actions?.editPhrases()
+        case 12: actions?.checkPermissions()
+        case 13: actions?.openConfig()
+        case 14: actions?.quit()
         default: applyCycle(forward: true)
         }
     }
@@ -255,6 +277,19 @@ final class PanelNav: ObservableObject {
             let next = forward ? voiceSpeed + Self.speedStep : voiceSpeed - Self.speedStep
             voiceSpeed = max(Self.speedMin, min(Self.speedMax, (next * 100).rounded() / 100))
             ConfigFile.write(key: "STACKNUDGE_VOICE_SPEED", value: String(format: "%.2f", voiceSpeed))
+        case 9:
+            quotaAlertsEnabled.toggle()
+            ConfigFile.write(key: "STACKNUDGE_QUOTA_ALERTS",
+                             value: quotaAlertsEnabled ? "true" : "false")
+        case 10:
+            // Cycle through the static thresholds list. Index wraps in both
+            // directions so the user can dial in either way.
+            let list = Self.quotaThresholds
+            let idx = list.firstIndex(of: quotaAlertThreshold) ?? 2
+            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+            quotaAlertThreshold = list[next]
+            ConfigFile.write(key: "STACKNUDGE_QUOTA_THRESHOLD",
+                             value: String(quotaAlertThreshold))
         default:
             break
         }

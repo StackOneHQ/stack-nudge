@@ -25,6 +25,7 @@ private enum KeyCode {
     static let one:       UInt16 = 18
     static let two:       UInt16 = 19
     static let three:     UInt16 = 20
+    static let four:      UInt16 = 21
     static let nKey:      UInt16 = 45
 }
 
@@ -91,6 +92,7 @@ struct PanelContentView: View {
                 switch nav.mode {
                 case .events:   eventsBody
                 case .sessions: SessionsView(store: sessions)
+                case .usage:    UsageView(nav: nav)
                 case .settings: SettingsView(nav: nav)
                 case .phrases:  PhrasesView(model: phrases) { nav.mode = .settings }
                 case .updateConfirm:
@@ -115,6 +117,7 @@ struct PanelContentView: View {
 
             tab(.events,   label: "Events",   count: store.events.count)
             tab(.sessions, label: "Sessions", count: sessions.sessions.filter { $0.status == .active }.count)
+            tab(.usage,    label: "Usage",    count: 0)
             tab(.settings, label: "Settings", count: 0, dot: nav.updateAvailable != nil)
 
             Spacer()
@@ -123,7 +126,7 @@ struct PanelContentView: View {
             // uncluttered while still surfacing the shortcut range.
             HStack(spacing: 2) {
                 KeyCapView(symbol: "⌘")
-                KeyCapView(symbol: "1-3")
+                KeyCapView(symbol: "1-4")
             }
             .opacity(0.7)
         }
@@ -327,6 +330,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private var permissionsWC: PermissionsWindowController?
     private var updateChecker: UpdateChecker?
     private var updater: Updater?
+    private let quotaProbe = QuotaProbe()
+    private var quotaTimer: Timer?
+    // Tracks whether the banner has already fired this period per tier so
+    // we don't refire on every poll. Reset when the tier's resets_at
+    // advances (a new period started, fresh budget).
+    private var quotaLastFired: [String: (resetsAt: Date?, fired: Bool)] = [:]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let frame = NSRect(x: 0, y: 0, width: 420, height: 280)
@@ -395,6 +404,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         updateChecker = UpdateChecker(nav: nav)
         updateChecker?.start()
         updater = Updater(nav: nav)
+
+        startQuotaPolling()
 
         // If a previous panel instance was pkilled mid-update by install.sh,
         // it left a status file behind. Read it now and surface a brief toast
@@ -484,6 +495,92 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     @objc private func panelDidResignKey(_ notification: Notification) {
         guard !nav.panelPinned, panel.isVisible else { return }
         hidePanel()
+    }
+
+    // MARK: - Quota polling
+
+    // Fires QuotaProbe on a recurring timer. Cadence varies: 60s while the
+    // panel is visible (keeps the Usage tab feeling alive), longer when
+    // hidden (default 5 min, configurable via STACKNUDGE_USAGE_POLL_MIN).
+    // Re-evaluating on every tick keeps the timer schedule responsive to
+    // the panel being shown/hidden.
+    private static let quotaPollVisibleInterval: TimeInterval = 60
+    private var quotaPollHiddenInterval: TimeInterval {
+        let mins = Double(ConfigFile.read()["STACKNUDGE_USAGE_POLL_MIN"] ?? "") ?? 5
+        return max(60, mins * 60)  // floor at 60s to avoid hammering the endpoint
+    }
+
+    private func startQuotaPolling() {
+        runQuotaProbe()
+        scheduleNextQuotaPoll()
+    }
+
+    private func scheduleNextQuotaPoll() {
+        quotaTimer?.invalidate()
+        let interval = panel.isVisible ? Self.quotaPollVisibleInterval : quotaPollHiddenInterval
+        quotaTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
+            self?.runQuotaProbe()
+            self?.scheduleNextQuotaPoll()
+        }
+    }
+
+    private func runQuotaProbe() {
+        quotaProbe.fetch { [weak self] snapshot in
+            guard let self, let snapshot else { return }
+            self.nav.quota = snapshot
+            self.nav.quotaLastUpdated = Date()
+            self.evaluateQuotaThresholds(snapshot)
+        }
+    }
+
+    // Fire a banner when a tier crosses the user's configured threshold —
+    // once per period (reset when the tier's resets_at advances past the
+    // prior recorded reset, i.e. a new period started with a fresh budget).
+    // Master switch on PanelNav silences everything when toggled off.
+    private func evaluateQuotaThresholds(_ snapshot: QuotaSnapshot) {
+        guard nav.quotaAlertsEnabled else { return }
+        let threshold = Double(nav.quotaAlertThreshold)
+
+        let tiers: [(name: String, label: String, tier: QuotaTier?)] = [
+            ("five_hour",        "Session",         snapshot.fiveHour),
+            ("seven_day",        "Weekly",          snapshot.sevenDay),
+            ("seven_day_opus",   "Weekly (Opus)",   snapshot.sevenDayOpus),
+            ("seven_day_sonnet", "Weekly (Sonnet)", snapshot.sevenDaySonnet),
+        ]
+
+        for (name, label, tier) in tiers {
+            guard let tier else { continue }
+            var state = quotaLastFired[name] ?? (resetsAt: tier.resetsAt, fired: false)
+            // Reset the fired flag if the period has rolled over.
+            if let prior = state.resetsAt, let now = tier.resetsAt, now > prior {
+                state = (resetsAt: now, fired: false)
+            }
+            if tier.utilization >= threshold, !state.fired {
+                postQuotaBanner(label: label,
+                                percent: Int(tier.utilization.rounded()),
+                                resetsAt: tier.resetsAt)
+                state.fired = true
+            }
+            quotaLastFired[name] = state
+        }
+    }
+
+    private func postQuotaBanner(label: String, percent: Int, resetsAt: Date?) {
+        let body: String
+        if let resetsAt {
+            let formatter = RelativeDateTimeFormatter()
+            formatter.unitsStyle = .full
+            body = "\(percent)% used. Resets \(formatter.localizedString(for: resetsAt, relativeTo: Date()))."
+        } else {
+            body = "\(percent)% used."
+        }
+        let content = UNMutableNotificationContent()
+        content.title = "\(label) quota at \(percent)%"
+        content.body  = body
+        content.categoryIdentifier = "STOP"
+        let req = UNNotificationRequest(identifier: UUID().uuidString,
+                                        content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
     }
 
     // MARK: - UNUserNotificationCenter
@@ -787,7 +884,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return true
         }
 
-        // Cmd+1/2/3 jump directly between modes; the in-panel tab strip is
+        // Cmd+1/2/3/4 jump directly between modes; the in-panel tab strip is
         // the discoverable mouse equivalent.
         if cmdOnly {
             switch event.keyCode {
@@ -796,6 +893,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             case KeyCode.two:
                 nav.mode = .sessions; return true
             case KeyCode.three:
+                nav.mode = .usage; return true
+            case KeyCode.four:
                 nav.mode = .settings; return true
             default:
                 break
@@ -940,6 +1039,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 return false
             }
             return true
+        }
+
+        // Usage tab: only Esc — no selection / list semantics here, but we
+        // don't want arrow keys to leak through to the events store either.
+        if nav.mode == .usage {
+            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            guard plain else { return false }
+            if event.keyCode == KeyCode.escape {
+                hidePanel()
+                return true
+            }
+            return true  // swallow other keys so they don't navigate events
         }
 
         // Events mode: filter out cmd/ctrl/opt-modified keys so app-level
