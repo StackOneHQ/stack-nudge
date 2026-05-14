@@ -565,12 +565,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
     }
 
+    // Cached — banner posts can fire frequently in test/edge cases; avoid
+    // allocating a fresh formatter every time.
+    private static let quotaBannerFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .full
+        return f
+    }()
+
     private func postQuotaBanner(label: String, percent: Int, resetsAt: Date?) {
         let body: String
         if let resetsAt {
-            let formatter = RelativeDateTimeFormatter()
-            formatter.unitsStyle = .full
-            body = "\(percent)% used. Resets \(formatter.localizedString(for: resetsAt, relativeTo: Date()))."
+            body = "\(percent)% used. Resets \(Self.quotaBannerFormatter.localizedString(for: resetsAt, relativeTo: Date()))."
         } else {
             body = "\(percent)% used."
         }
@@ -826,6 +832,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     func applicationWillTerminate(_ notification: Notification) {
         listener?.stop()
+        quotaTimer?.invalidate()
+        quotaTimer = nil
     }
 
     // MARK: - PanelKeyDelegate

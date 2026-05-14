@@ -18,21 +18,11 @@ struct QuotaTier: Equatable {
 // sevenDay       → "Current week (all models)".
 // sevenDayOpus   → "Current week (Opus only)" — nil on plans without one.
 // sevenDaySonnet → "Current week (Sonnet only)" — nil on plans without one.
-// extraUsage     → Max-plan top-up balance. Distinct shape, hence its own type.
 struct QuotaSnapshot: Equatable {
     let fiveHour: QuotaTier?
     let sevenDay: QuotaTier?
     let sevenDayOpus: QuotaTier?
     let sevenDaySonnet: QuotaTier?
-    let extraUsage: ExtraUsage?
-
-    struct ExtraUsage: Equatable {
-        let isEnabled: Bool
-        let utilization: Double  // 0…100
-        let usedCredits: Double
-        let monthlyLimit: Double
-        let currency: String     // e.g. "GBP", "USD"
-    }
 }
 
 // Reads the Claude Code OAuth token and calls the (unofficial)
@@ -41,8 +31,9 @@ struct QuotaSnapshot: Equatable {
 // matches `/usage` 1:1.
 //
 // Failure paths (no token, denied keychain access, network error, 401, 429)
-// return nil and log to stderr — auto-update is a soft signal, never a
-// critical path.
+// return nil and log to stderr — quota tracking is informational, never a
+// critical path. The caller (PanelController) will just retry on the next
+// poll tick.
 final class QuotaProbe {
 
     static let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
@@ -136,8 +127,7 @@ final class QuotaProbe {
             fiveHour:       tier(json["five_hour"]),
             sevenDay:       tier(json["seven_day"]),
             sevenDayOpus:   tier(json["seven_day_opus"]),
-            sevenDaySonnet: tier(json["seven_day_sonnet"]),
-            extraUsage:     extra(json["extra_usage"])
+            sevenDaySonnet: tier(json["seven_day_sonnet"])
         )
     }
 
@@ -148,18 +138,6 @@ final class QuotaProbe {
             iso.date(from: $0) ?? isoNoFrac.date(from: $0)
         }
         return QuotaTier(utilization: utilization, resetsAt: resetsAt)
-    }
-
-    private static func extra(_ raw: Any?) -> QuotaSnapshot.ExtraUsage? {
-        guard let dict = raw as? [String: Any],
-              let isEnabled = dict["is_enabled"] as? Bool else { return nil }
-        return QuotaSnapshot.ExtraUsage(
-            isEnabled:    isEnabled,
-            utilization:  dict["utilization"]   as? Double ?? 0,
-            usedCredits:  dict["used_credits"]  as? Double ?? 0,
-            monthlyLimit: dict["monthly_limit"] as? Double ?? 0,
-            currency:    (dict["currency"]      as? String) ?? "USD"
-        )
     }
 }
 
@@ -177,16 +155,14 @@ struct UsageView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let snapshot = nav.quota {
+            if let snapshot = nav.quota, !isAllNil(snapshot) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        section("Current session") {
-                            if let tier = snapshot.fiveHour { tierRow(tier) }
-                            else { unavailable }
+                        if let tier = snapshot.fiveHour {
+                            section("Current session") { tierRow(tier) }
                         }
-                        section("Current week (all models)") {
-                            if let tier = snapshot.sevenDay { tierRow(tier) }
-                            else { unavailable }
+                        if let tier = snapshot.sevenDay {
+                            section("Current week (all models)") { tierRow(tier) }
                         }
                         if let tier = snapshot.sevenDayOpus {
                             section("Current week (Opus only)") { tierRow(tier) }
@@ -241,11 +217,12 @@ struct UsageView: View {
         .padding(.horizontal, 6)
     }
 
-    private var unavailable: some View {
-        Text("Not available on this plan")
-            .font(.caption)
-            .foregroundStyle(.tertiary)
-            .padding(.horizontal, 6)
+    // Treat a snapshot with all tiers nil the same as no snapshot at all —
+    // user sees the empty state rather than a blank page. Shouldn't happen
+    // for a real subscription, but covers anomalous endpoint responses.
+    private func isAllNil(_ s: QuotaSnapshot) -> Bool {
+        s.fiveHour == nil && s.sevenDay == nil
+            && s.sevenDayOpus == nil && s.sevenDaySonnet == nil
     }
 
     private var emptyState: some View {
@@ -279,13 +256,24 @@ struct UsageView: View {
         return "Updated \(Self.relative(.abbreviated, updated))"
     }
 
-    // RelativeDateTimeFormatter usage outside ViewBuilder — its property
-    // assignment doesn't compose into SwiftUI's view tree.
+    // Cached so SwiftUI re-renders don't allocate a fresh formatter on
+    // every call. Two styles cover all current uses (full for "Resets in
+    // 3 days", abbreviated for footer "Updated 5s ago").
+    private static let fullFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .full
+        return f
+    }()
+    private static let abbreviatedFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        return f
+    }()
+
     private static func relative(_ style: RelativeDateTimeFormatter.UnitsStyle,
                                  _ date: Date) -> String {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = style
-        return f.localizedString(for: date, relativeTo: Date())
+        let formatter = (style == .abbreviated) ? abbreviatedFormatter : fullFormatter
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 
 }
