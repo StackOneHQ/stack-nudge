@@ -4,6 +4,14 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.6.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.5.0...v1.6.0) (2026-05-14)
+
+
+### Features
+
+* quota tracking via /api/oauth/usage ([6bad9a7](https://github.com/StackOneHQ/stack-nudge/commit/6bad9a7d59230c5eafbe90e30168df9a58fbeeee))
+* quota tracking via /api/oauth/usage ([4b69002](https://github.com/StackOneHQ/stack-nudge/commit/4b6900261549359499f7eb23ca4b74f5852abb82))
+
 ## [1.5.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.4.2...v1.5.0) (2026-05-12)
 
 
