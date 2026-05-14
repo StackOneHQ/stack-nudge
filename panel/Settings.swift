@@ -51,11 +51,16 @@ struct SettingsView: View {
                             row(8 + off, label: "Speed",  kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed))
                         }
 
+                        section("Usage") {
+                            row(9 + off,  label: "Quota alerts",     kind: .toggle, value: nav.quotaAlertsEnabled ? "On" : "Off")
+                            row(10 + off, label: "Alert threshold",  kind: .cycle,  value: "\(nav.quotaAlertThreshold)%")
+                        }
+
                         section("Actions") {
-                            row(9 + off,  label: "Edit phrases…",      kind: .action, value: "")
-                            row(10 + off, label: "Check permissions…", kind: .action, value: "")
-                            row(11 + off, label: "Open config file…",  kind: .action, value: "")
-                            row(12 + off, label: "Quit panel",         kind: .action, value: "")
+                            row(11 + off, label: "Edit phrases…",      kind: .action, value: "")
+                            row(12 + off, label: "Check permissions…", kind: .action, value: "")
+                            row(13 + off, label: "Open config file…",  kind: .action, value: "")
+                            row(14 + off, label: "Quit panel",         kind: .action, value: "")
                         }
 
                         aboutFooter
