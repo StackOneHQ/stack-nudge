@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Hardened-runtime entitlements for stack-nudge.app.
+
+        We bundle a Python interpreter (python-build-standalone) plus
+        stackvox's transitive deps (Kokoro + ONNX runtime) inside the
+        .app at Contents/Resources/venv/. Hardened runtime is required
+        for notarization, but its defaults block exactly the patterns an
+        embedded interpreter relies on. These three opt-ins keep us
+        notarization-eligible while letting the bundled Python work.
+
+        allow-jit + allow-unsigned-executable-memory:
+          ONNX runtime and PyTorch (when present as a transitive dep)
+          JIT-compile inference kernels at runtime, writing executable
+          pages to memory. Hardened runtime blocks this by default.
+
+        disable-library-validation:
+          The bundled venv contains .so / .dylib extensions whose
+          identity differs from the .app's signing identity. Library
+          validation would reject them; this opt-out is standard for
+          apps shipping their own Python.
+
+        These entitlements weaken the sandbox protections we'd otherwise
+        inherit. The trade-off is intentional and matches the precedent
+        set by other Python-bundled Mac apps (Beam, Reflex's app bundles,
+        etc.). Notarization accepts the combination.
+    -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>
