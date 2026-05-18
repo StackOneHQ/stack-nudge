@@ -109,6 +109,7 @@ build_app "$APP" "stack-nudge" \
   panel/UpdateChecker.swift \
   panel/Updater.swift \
   panel/Welcome.swift \
+  panel/Bootstrap.swift \
   shared/AppActivator.swift \
   -framework Foundation -framework AppKit -framework SwiftUI -framework Carbon \
   -framework UserNotifications
