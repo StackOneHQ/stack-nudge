@@ -19,6 +19,12 @@ enum PanelMode {
     // after a successful update. Driven by the status file the runner wrote
     // before the previous instance died.
     case postUpdate
+    // First-launch wizard shown when Bootstrap.isInstalled() returns false.
+    // User picks which detected agents to wire up; Install runs Bootstrap.install.
+    case bootstrap
+    // Two-step uninstall reachable from Settings → "Uninstall stack-nudge…".
+    // Confirmation alert, then progress, then app quits.
+    case uninstall
 }
 
 // Action callbacks the controller wires into nav so settings rows like
@@ -30,6 +36,9 @@ struct SettingsActions {
     let editPhrases:      () -> Void
     let beginUpdate:      () -> Void
     let runUpdate:        () -> Void
+    let beginUninstall:   () -> Void
+    let runUninstall:     () -> Void
+    let runBootstrap:     () -> Void
     let quit:             () -> Void
 }
 
@@ -86,6 +95,16 @@ final class PanelNav: ObservableObject {
     // all tiers — banner fires once per period when any tier reaches it.
     @Published var quotaAlertsEnabled:  Bool = true
     @Published var quotaAlertThreshold: Int  = 80
+    // First-launch bootstrap wizard state. Populated by PanelController
+    // on launch when Bootstrap.isInstalled() returns false; drives
+    // BootstrapView (mode = .bootstrap).
+    @Published var bootstrapAvailableAgents: [BootstrapAgent] = []
+    @Published var bootstrapSelectedAgents:  Set<BootstrapAgent> = []
+    @Published var bootstrapPhase:           BootstrapPhase = .idle
+    @Published var bootstrapLog:             String = ""
+    // Uninstall flow state. Reachable from Settings → "Uninstall stack-nudge…".
+    @Published var uninstallPhase: UninstallPhase = .confirm
+    @Published var uninstallLog:   String = ""
 
     var actions: SettingsActions?
     // Wired by PanelController so nav can re-register the global hotkey
@@ -127,7 +146,7 @@ final class PanelNav: ObservableObject {
     // when the offset is 1.
     var updateRowOffset: Int { updateAvailable != nil ? 1 : 0 }
 
-    var rowCount: Int { 15 + updateRowOffset }
+    var rowCount: Int { 16 + updateRowOffset }
 
     // Row layout (kept in one place so the controller, view, and indexing
     // logic all agree on what each row index means). When updateAvailable
@@ -147,7 +166,8 @@ final class PanelNav: ObservableObject {
     //  11  Edit phrases…         action
     //  12  Check permissions…    action
     //  13  Open config file…     action
-    //  14  Quit panel            action
+    //  14  Uninstall stack-nudge action
+    //  15  Quit panel            action
 
     // MARK: - Disk I/O
 
@@ -233,7 +253,8 @@ final class PanelNav: ObservableObject {
         case 11: actions?.editPhrases()
         case 12: actions?.checkPermissions()
         case 13: actions?.openConfig()
-        case 14: actions?.quit()
+        case 14: actions?.beginUninstall()
+        case 15: actions?.quit()
         default: applyCycle(forward: true)
         }
     }

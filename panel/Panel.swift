@@ -73,7 +73,15 @@ struct PanelContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if !nav.welcomed {
+            if nav.mode == .bootstrap {
+                // Full-screen first-launch wizard, takes priority over
+                // welcome (which is a separate post-bootstrap screen).
+                BootstrapView(
+                    nav: nav,
+                    onInstall: { nav.actions?.runBootstrap() },
+                    onQuit: { NSApp.terminate(nil) }
+                )
+            } else if !nav.welcomed {
                 WelcomeView(nav: nav,
                             hotkeyDisplay: nav.hotkeyDisplay,
                             onGrantPermissions: onGrantPermissions)
@@ -102,7 +110,14 @@ struct PanelContentView: View {
                         onConfirm: { nav.actions?.runUpdate() }
                     )
                 case .updating: UpdatingView(nav: nav)
-                case .postUpdate: EmptyView() // handled above
+                case .postUpdate: EmptyView()  // handled above
+                case .bootstrap:  EmptyView()  // handled above
+                case .uninstall:
+                    UninstallView(
+                        nav: nav,
+                        onCancel: { nav.mode = .settings },
+                        onConfirm: { nav.actions?.runUninstall() }
+                    )
                 }
             }
         }
@@ -390,6 +405,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             },
             beginUpdate:      { [weak self] in self?.beginUpdateFlow() },
             runUpdate:        { [weak self] in self?.updater?.run() },
+            beginUninstall:   { [weak self] in self?.beginUninstallFlow() },
+            runUninstall:     { [weak self] in self?.runUninstall() },
+            runBootstrap:     { [weak self] in self?.runBootstrap() },
             quit:             { NSApp.terminate(nil) }
         )
         nav.setHotkey = { [weak self] spec in
@@ -412,6 +430,23 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // so the user knows the update completed (or failed).
         if let result = Updater.consumePostUpdateStatus() {
             handlePostUpdateStatus(result: result)
+        }
+
+        // First-launch detection: if no install artifacts exist on this Mac,
+        // route the user through the bootstrap wizard before they can use
+        // anything else. handlePostUpdateStatus took priority above so a
+        // freshly-installed user upgrading via auto-update doesn't see the
+        // wizard again.
+        if !Bootstrap.isInstalled(), nav.mode != .postUpdate {
+            nav.bootstrapAvailableAgents = Bootstrap.availableAgents()
+            nav.bootstrapSelectedAgents  = Set(nav.bootstrapAvailableAgents)
+            nav.bootstrapPhase           = .idle
+            nav.mode                     = .bootstrap
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                guard let self else { return }
+                NSApp.activate(ignoringOtherApps: true)
+                self.panel.makeKeyAndOrderFront(nil)
+            }
         }
 
         // First-run welcome: auto-open the panel if STACKNUDGE_WELCOMED isn't
@@ -495,6 +530,75 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     @objc private func panelDidResignKey(_ notification: Notification) {
         guard !nav.panelPinned, panel.isVisible else { return }
         hidePanel()
+    }
+
+    // MARK: - Bootstrap (first-launch install)
+
+    // Run Bootstrap.install on a background queue, stream progress lines
+    // into nav.bootstrapLog so the wizard updates live. Switch phase to
+    // .done on success, .failed on error.
+    private func runBootstrap() {
+        let agents = nav.bootstrapSelectedAgents
+        nav.bootstrapPhase = .installing
+        nav.bootstrapLog = ""
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                try Bootstrap.install(agents: agents) { line in
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        let prefix = self.nav.bootstrapLog.isEmpty ? "" : "\n"
+                        self.nav.bootstrapLog += prefix + line
+                    }
+                }
+                DispatchQueue.main.async { [weak self] in
+                    self?.nav.bootstrapPhase = .done
+                }
+            } catch {
+                DispatchQueue.main.async { [weak self] in
+                    self?.nav.bootstrapPhase = .failed(
+                        (error as? LocalizedError)?.errorDescription
+                            ?? error.localizedDescription
+                    )
+                }
+            }
+        }
+    }
+
+    // MARK: - Uninstall
+
+    // Switch to the uninstall confirmation view from anywhere in Settings.
+    private func beginUninstallFlow() {
+        nav.uninstallPhase = .confirm
+        nav.uninstallLog = ""
+        nav.mode = .uninstall
+    }
+
+    // User confirmed uninstall. Run Bootstrap.uninstall on a background
+    // queue. The final step (recycle + NSApp.terminate) is dispatched
+    // from inside Bootstrap.uninstall so the app exits cleanly.
+    private func runUninstall() {
+        nav.uninstallPhase = .uninstalling
+        nav.uninstallLog = ""
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                try Bootstrap.uninstall { line in
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        let prefix = self.nav.uninstallLog.isEmpty ? "" : "\n"
+                        self.nav.uninstallLog += prefix + line
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async { [weak self] in
+                    self?.nav.uninstallPhase = .failed(
+                        (error as? LocalizedError)?.errorDescription
+                            ?? error.localizedDescription
+                    )
+                }
+            }
+        }
     }
 
     // MARK: - Quota polling
@@ -906,6 +1010,52 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 nav.mode = .settings; return true
             default:
                 break
+            }
+        }
+
+        // Bootstrap wizard: Enter triggers install when idle / dismisses
+        // when done; Esc quits the app entirely. No other key handling —
+        // the agent checkboxes are click-only for v1.
+        if nav.mode == .bootstrap {
+            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            guard plain else { return false }
+            switch event.keyCode {
+            case KeyCode.escape:
+                NSApp.terminate(nil)
+                return true
+            case KeyCode.returnKey, KeyCode.numpadEnter:
+                switch nav.bootstrapPhase {
+                case .idle:
+                    nav.actions?.runBootstrap()
+                case .done:
+                    nav.mode = .events
+                case .installing, .failed:
+                    break  // running or failed — Enter does nothing
+                }
+                return true
+            default:
+                return true  // swallow other keys; wizard is single-purpose
+            }
+        }
+
+        // Uninstall flow: Enter confirms (when on the confirm step),
+        // Esc cancels back to settings (only when not mid-run).
+        if nav.mode == .uninstall {
+            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            guard plain else { return false }
+            switch event.keyCode {
+            case KeyCode.escape:
+                if nav.uninstallPhase == .confirm {
+                    nav.mode = .settings
+                }
+                return true
+            case KeyCode.returnKey, KeyCode.numpadEnter:
+                if nav.uninstallPhase == .confirm {
+                    nav.actions?.runUninstall()
+                }
+                return true
+            default:
+                return true
             }
         }
 

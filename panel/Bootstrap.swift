@@ -531,6 +531,356 @@ enum Bootstrap {
     }
 }
 
+// MARK: - Bootstrap UI state
+
+// Phase of the bootstrap install. Drives BootstrapView's rendering.
+enum BootstrapPhase: Equatable {
+    case idle                 // pre-install: wizard with agent checklist
+    case installing           // running Bootstrap.install
+    case done                 // install complete; ready to dismiss
+    case failed(String)       // install failed with this error message
+}
+
+// Phase of the uninstall flow. Drives UninstallView's rendering.
+enum UninstallPhase: Equatable {
+    case confirm              // confirmation alert with Cancel/Uninstall
+    case uninstalling         // running Bootstrap.uninstall
+    case failed(String)       // failed mid-uninstall (rare; partial-state allowed)
+}
+
+// MARK: - Bootstrap view (first-launch wizard)
+
+// Single-screen first-launch wizard. Shown automatically when the app
+// detects no prior install (Bootstrap.isInstalled() == false). User
+// picks which detected agents to wire up and clicks Install — the
+// progress UI then streams Bootstrap.install's callbacks until done.
+struct BootstrapView: View {
+
+    @ObservedObject var nav: PanelNav
+    let onInstall: () -> Void
+    let onQuit: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    header
+                    tagline
+                    if nav.bootstrapPhase == .idle {
+                        agentList
+                    } else {
+                        progress
+                    }
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 18)
+                .background(ThinScrollers())
+            }
+            actionBar
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "bell.badge.fill")
+                .font(.title3)
+                .foregroundStyle(Color.accentColor)
+            Text("Welcome to stack-nudge")
+                .font(.title3.weight(.semibold))
+            Spacer()
+        }
+    }
+
+    private var tagline: some View {
+        Text("Notifications for AI coding agents. We'll wire stack-nudge into each agent you've selected below, set up background services, and you'll be ready to go in a few seconds.")
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private var agentList: some View {
+        if nav.bootstrapAvailableAgents.isEmpty {
+            Text("No supported agents detected (~/.claude, ~/.cursor, ~/.gemini). Install one and restart stack-nudge to wire it up.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Detected agents")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                    .padding(.bottom, 2)
+                ForEach(nav.bootstrapAvailableAgents) { agent in
+                    agentRow(agent)
+                }
+            }
+        }
+    }
+
+    private func agentRow(_ agent: BootstrapAgent) -> some View {
+        let isSelected = nav.bootstrapSelectedAgents.contains(agent)
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                .font(.callout)
+                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                .frame(width: 20, alignment: .center)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(agent.displayName).font(.subheadline.weight(.medium))
+                Text(agent == .gemini
+                     ? "Detection only — hook wiring is experimental, see README"
+                     : "Hooks will be added to \(agent.hookConfigPath)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if isSelected {
+                nav.bootstrapSelectedAgents.remove(agent)
+            } else {
+                nav.bootstrapSelectedAgents.insert(agent)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var progress: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                if case .installing = nav.bootstrapPhase {
+                    ProgressView().controlSize(.small)
+                    Text("Installing stack-nudge…").font(.subheadline)
+                } else if case .done = nav.bootstrapPhase {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .font(.title3)
+                    Text("Install complete").font(.subheadline.weight(.medium))
+                } else if case .failed = nav.bootstrapPhase {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                        .font(.title3)
+                    Text("Install failed").font(.subheadline.weight(.medium))
+                }
+            }
+            // Tail of the progress log — last few lines, monospaced.
+            // No full scrollback; this is a transient view.
+            Text(nav.bootstrapLog.isEmpty ? "Starting…" : nav.bootstrapLog)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.primary.opacity(0.05))
+                )
+            if case .failed(let msg) = nav.bootstrapPhase {
+                Text(msg)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var actionBar: some View {
+        HStack(spacing: 10) {
+            if nav.bootstrapPhase == .idle || isFailed {
+                Button {
+                    onQuit()
+                } label: {
+                    Text("Quit")
+                        .font(.subheadline)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.plain)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.primary.opacity(0.08))
+                )
+            }
+
+            Spacer()
+
+            if nav.bootstrapPhase == .idle {
+                Button {
+                    onInstall()
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("Install")
+                            .font(.subheadline.weight(.medium))
+                        KeyCapView(symbol: "⏎")
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                }
+                .buttonStyle(.plain)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.25))
+                )
+                .disabled(nav.bootstrapSelectedAgents.isEmpty
+                          && !nav.bootstrapAvailableAgents.isEmpty)
+            }
+
+            if case .done = nav.bootstrapPhase {
+                Button {
+                    nav.mode = .events
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("Continue")
+                            .font(.subheadline.weight(.medium))
+                        KeyCapView(symbol: "⏎")
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                }
+                .buttonStyle(.plain)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.25))
+                )
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(
+            ZStack {
+                Color.primary.opacity(0.05)
+                Rectangle()
+                    .fill(Color.primary.opacity(0.1))
+                    .frame(height: 0.5)
+                    .frame(maxHeight: .infinity, alignment: .top)
+            }
+        )
+    }
+
+    private var isFailed: Bool {
+        if case .failed = nav.bootstrapPhase { return true }
+        return false
+    }
+}
+
+// MARK: - Uninstall view
+
+// Two-step uninstall: confirmation alert → progress → app quits.
+// Mirrors UpdatingView's spinner+progress pattern for the running phase.
+struct UninstallView: View {
+
+    @ObservedObject var nav: PanelNav
+    let onCancel: () -> Void
+    let onConfirm: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    header
+                    if nav.uninstallPhase == .confirm {
+                        confirmCopy
+                    } else {
+                        progress
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 14)
+                .background(ThinScrollers())
+            }
+            footer
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: "trash.circle.fill")
+                .font(.title2)
+                .foregroundStyle(.red)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(nav.uninstallPhase == .confirm
+                     ? "Remove stack-nudge?"
+                     : "Uninstalling…")
+                    .font(.headline)
+                if nav.uninstallPhase == .confirm {
+                    Text("This action is permanent.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+        }
+    }
+
+    private var confirmCopy: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("The following will be removed from your Mac:")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                bullet("Hook entries in your Claude Code / Cursor configs")
+                bullet("Background launchd agents (panel + voice daemon)")
+                bullet("~/.stack-nudge/ (config, phrases, notify.sh)")
+                bullet("stack-nudge.app (moved to Trash)")
+            }
+            Text("Settings, the macOS keychain entry for Claude Code, and the cached Kokoro voice model in ~/.cache/huggingface/ are not touched.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .padding(.top, 4)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func bullet(_ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("•").foregroundStyle(.secondary)
+            Text(text)
+                .font(.callout)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private var progress: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text("Tearing down…").font(.subheadline)
+        }
+        Text(nav.uninstallLog.isEmpty ? "Starting…" : nav.uninstallLog)
+            .font(.caption.monospaced())
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(8)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(0.05))
+            )
+        if case .failed(let msg) = nav.uninstallPhase {
+            Text(msg)
+                .font(.caption)
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var footer: some View {
+        PageFooter {
+            if nav.uninstallPhase == .confirm {
+                FooterHint(label: "Uninstall", keys: ["⏎"], primary: true)
+                FooterDivider()
+                FooterHint(label: "Cancel", keys: ["esc"])
+            } else {
+                FooterHint(label: "Don't quit stack-nudge during uninstall", keys: [])
+            }
+        }
+    }
+}
+
 // MARK: - Errors
 
 enum BootstrapError: LocalizedError {

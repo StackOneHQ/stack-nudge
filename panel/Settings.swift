@@ -57,10 +57,11 @@ struct SettingsView: View {
                         }
 
                         section("Actions") {
-                            row(11 + off, label: "Edit phrases…",      kind: .action, value: "")
-                            row(12 + off, label: "Check permissions…", kind: .action, value: "")
-                            row(13 + off, label: "Open config file…",  kind: .action, value: "")
-                            row(14 + off, label: "Quit panel",         kind: .action, value: "")
+                            row(11 + off, label: "Edit phrases…",         kind: .action, value: "")
+                            row(12 + off, label: "Check permissions…",    kind: .action, value: "")
+                            row(13 + off, label: "Open config file…",     kind: .action, value: "")
+                            row(14 + off, label: "Uninstall stack-nudge…", kind: .action, value: "")
+                            row(15 + off, label: "Quit panel",            kind: .action, value: "")
                         }
 
                         aboutFooter
