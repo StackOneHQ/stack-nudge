@@ -28,9 +28,45 @@ build_app() {
     cp "$icon_path" "$contents/Resources/Icon.icns"
   fi
 
-  # Sign the bundle so Info.plist is bound into the signature.
-  # Without this, macOS records the wrong identity for TCC (AXIsProcessTrusted = false).
-  codesign --force --deep --sign - "$app"
+  sign_bundle "$app"
+}
+
+# Sign the bundle so Info.plist is bound into the signature. Without this,
+# macOS records the wrong identity for TCC (AXIsProcessTrusted = false).
+#
+# Resolution order:
+#   1. $STACKNUDGE_SIGN_IDENTITY (explicit override — used by CI when a
+#      release artifact needs to be signed with a known identity from a
+#      secret-loaded keychain).
+#   2. First "Developer ID Application" identity in the user's keychain
+#      (devs with the cert get stable code-sig hashes across rebuilds, so
+#      macOS TCC/Keychain grants stick).
+#   3. Ad-hoc (`codesign -s -`) — old behaviour. Works for everyone but the
+#      cdhash changes on every build, which means TCC + Keychain prompts
+#      re-fire on each rebuild and each release.
+#
+# Hardened runtime (--options runtime) is enabled when a real identity is
+# present so the signed bundle is notarisation-eligible. It's omitted from
+# the ad-hoc path because it makes the binary slightly more restricted
+# without any of the benefits (notarisation requires Developer ID).
+sign_bundle() {
+  local app="$1"
+  local identity="${STACKNUDGE_SIGN_IDENTITY:-}"
+
+  if [[ -z "$identity" ]]; then
+    identity=$(
+      security find-identity -v -p codesigning 2>/dev/null \
+        | awk -F'"' '/"Developer ID Application/ {print $2; exit}'
+    )
+  fi
+
+  if [[ -n "$identity" ]]; then
+    codesign --force --deep --options runtime --sign "$identity" "$app"
+    echo "  Signed: $identity"
+  else
+    codesign --force --deep --sign - "$app"
+    echo "  Signed: ad-hoc (no Developer ID Application cert in keychain)"
+  fi
 }
 
 echo "Building stack-nudge ($ARCH)..."

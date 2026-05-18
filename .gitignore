@@ -26,3 +26,4 @@ venv/
 # Stack-nudge dev artifacts
 /tmp/
 *.log
+keys/
