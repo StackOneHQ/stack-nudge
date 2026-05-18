@@ -1,5 +1,21 @@
 #!/usr/bin/env bash
-# stack-nudge installer — wires up hooks for whichever agents you have
+# stack-nudge installer
+#
+# macOS users: prefer the prebuilt .app from GitHub Releases —
+#   https://github.com/StackOneHQ/stack-nudge/releases/latest
+# Download the .tar.gz, drag stack-nudge.app to ~/Applications/, and
+# launch it. The first-launch wizard runs the same install steps this
+# script does, in-process, with no Xcode CLT or Python prerequisite.
+#
+# This script remains for:
+#   - Linux + Windows (where the panel .app doesn't apply; notify.sh +
+#     audio is all that's needed)
+#   - Source-build devs on macOS who want to iterate without the
+#     prebuilt cycle
+#
+# Wires hooks for whichever agents you have, sets up the Python venv
+# for stackvox voice notifications, and registers launchd agents on
+# macOS.
 
 set -e
 
