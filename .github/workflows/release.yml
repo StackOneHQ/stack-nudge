@@ -1,5 +1,14 @@
 name: Build and Release
 
+# Triggered when release-please pushes a vX.Y.Z tag. Produces two
+# fully-signed and notarized .tar.gz artifacts (arm64 + x86_64) plus
+# sha256 sidecars, attached to the release that release-please created.
+#
+# Per-arch artifacts (rather than a universal binary) because the
+# bundled Python venv is arch-specific — its native extensions (.so /
+# .dylib) only carry one architecture, and a universal2 Python is more
+# trouble than two separate artifacts.
+
 on:
   push:
     tags:
@@ -7,64 +16,129 @@ on:
 
 jobs:
   release:
-    name: Build universal binary, attach to release
+    name: Build, sign, notarize (${{ matrix.arch }})
     runs-on: macos-15
     permissions:
       contents: write
+    strategy:
+      matrix:
+        arch: [arm64, x86_64]
+      fail-fast: false  # let one arch's failure not block the other
+
+    env:
+      # Tells build.sh to bundle the stackvox Python venv into
+      # Resources/venv/. Local dev iteration leaves this unset for speed.
+      STACKNUDGE_BUNDLE_VENV: "1"
+      KEYCHAIN: build-stack-nudge.keychain
+
     steps:
       - uses: actions/checkout@v6
 
-      # Stamp the tag's version into Info.plist so the bundled app advertises
-      # the right version regardless of what's checked into main.
+      # Stamp the tag's version into Info.plist so the bundled app
+      # advertises the right version regardless of what's checked into
+      # main. The release-please extra-files mechanism keeps main in
+      # sync too, but stamping at build time is belt-and-braces.
       - name: Stamp version from tag
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" panel/Info.plist
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" panel/Info.plist
 
-      # Build each arch sequentially via swiftc's -target flag (cross-compiles
-      # fine on macos-15 runners). Stash the per-arch mach-o so we can lipo
-      # them into a universal binary afterward.
-      - name: Build arm64
-        run: bash build.sh arm64
-      - name: Stash arm64 binary
-        run: cp build/stack-nudge.app/Contents/MacOS/stack-nudge /tmp/stack-nudge-arm64
-
-      - name: Build x86_64
-        run: bash build.sh x86_64
-      - name: Stash x86_64 binary
-        run: cp build/stack-nudge.app/Contents/MacOS/stack-nudge /tmp/stack-nudge-x86_64
-
-      - name: Combine into universal binary
+      # Decode the Developer ID Application cert from secrets, import
+      # it into a temporary keychain, unlock it, set the partition list
+      # so codesign can use the private key without prompts. Stores the
+      # resolved identity in $GITHUB_ENV so the build step picks it up
+      # via build.sh's $STACKNUDGE_SIGN_IDENTITY override path.
+      - name: Set up signing identity
+        env:
+          MACOS_CERTIFICATE:     ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          MACOS_KEYCHAIN_PWD:    ${{ secrets.MACOS_KEYCHAIN_PWD }}
         run: |
-          # The x86_64 build is what's currently in build/, so just replace
-          # its mach-o with the lipo'd universal one.
-          lipo -create /tmp/stack-nudge-arm64 /tmp/stack-nudge-x86_64 \
-               -output build/stack-nudge.app/Contents/MacOS/stack-nudge
-          # lipo invalidates the per-arch ad-hoc signatures — re-sign the bundle.
-          codesign --force --deep --sign - build/stack-nudge.app
-          file build/stack-nudge.app/Contents/MacOS/stack-nudge
+          set -euo pipefail
+          echo "$MACOS_CERTIFICATE" | base64 --decode > /tmp/cert.p12
+          security create-keychain -p "$MACOS_KEYCHAIN_PWD" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PWD" "$KEYCHAIN"
+          # Keep the keychain unlocked for the whole job — codesign on
+          # bundled venv files runs many times and a re-lock mid-build
+          # would force every invocation through a system prompt.
+          security set-keychain-settings -lut 7200 "$KEYCHAIN"
+          security import /tmp/cert.p12 -k "$KEYCHAIN" \
+            -P "$MACOS_CERTIFICATE_PWD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          # Grant codesign + apple tooling access without further prompts.
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$MACOS_KEYCHAIN_PWD" "$KEYCHAIN"
+          IDENTITY=$(
+            security find-identity -v -p codesigning "$KEYCHAIN" \
+              | awk -F'"' '/"Developer ID Application/ {print $2; exit}'
+          )
+          if [[ -z "$IDENTITY" ]]; then
+            echo "::error::No Developer ID Application identity found in keychain after import"
+            exit 1
+          fi
+          echo "Identity: $IDENTITY"
+          echo "STACKNUDGE_SIGN_IDENTITY=$IDENTITY" >> $GITHUB_ENV
+          rm -f /tmp/cert.p12
 
-      # Tarball includes the prebuilt bundle plus everything install.sh needs
-      # at runtime. install.sh skips the build step when build/stack-nudge.app
-      # is already present, so users who download the release run a fast
-      # install (no swiftc dependency on the user's machine).
-      - name: Package
+      # build.sh handles everything once env vars are set:
+      # - swiftc per-arch
+      # - bundle_venv (downloads python-build-standalone + pip installs stackvox)
+      # - sign_bundle recursively signs venv + .app with entitlements
+      - name: Build ${{ matrix.arch }}
+        run: bash build.sh ${{ matrix.arch }}
+
+      # Submit the signed .app to Apple's notarization service. ditto
+      # produces the zip Apple expects (preserves bundle metadata + xattrs).
+      # --wait blocks until the service responds (typically a few minutes).
+      # If notarization fails, the log dump points at which inner binary
+      # is the culprit.
+      - name: Notarize ${{ matrix.arch }}
+        env:
+          MACOS_NOTARY_API_KEY:       ${{ secrets.MACOS_NOTARY_API_KEY }}
+          MACOS_NOTARY_API_KEY_ID:    ${{ secrets.MACOS_NOTARY_API_KEY_ID }}
+          MACOS_NOTARY_API_ISSUER_ID: ${{ secrets.MACOS_NOTARY_API_ISSUER_ID }}
         run: |
+          set -euo pipefail
+          echo "$MACOS_NOTARY_API_KEY" | base64 --decode > /tmp/notary-key.p8
+          ditto -c -k --keepParent build/stack-nudge.app /tmp/notarize.zip
+          xcrun notarytool submit /tmp/notarize.zip \
+            --key /tmp/notary-key.p8 \
+            --key-id "$MACOS_NOTARY_API_KEY_ID" \
+            --issuer "$MACOS_NOTARY_API_ISSUER_ID" \
+            --wait
+          xcrun stapler staple build/stack-nudge.app
+          # Sanity: confirm the stapled bundle passes Gatekeeper's check.
+          spctl -a -vv build/stack-nudge.app || true
+          rm -f /tmp/notary-key.p8 /tmp/notarize.zip
+
+      - name: Package ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          mkdir -p release/build
-          cp -R build/stack-nudge.app release/build/
-          cp notify.sh install.sh uninstall.sh notify.conf.example release/
-          cp -R phrases release/
-          tar czf "stack-nudge-${VERSION}-universal.tar.gz" -C release .
-          shasum -a 256 "stack-nudge-${VERSION}-universal.tar.gz" \
-            | awk '{print $1}' > "stack-nudge-${VERSION}-universal.sha256"
+          ARTIFACT="stack-nudge-${VERSION}-macos-${{ matrix.arch }}.tar.gz"
+          # Tarball wraps just the .app — it's now self-contained
+          # (Bootstrap.swift owns the install side on first launch).
+          tar czf "$ARTIFACT" -C build stack-nudge.app
+          shasum -a 256 "$ARTIFACT" | awk '{print $1 "  " "'"$ARTIFACT"'"}' \
+            > "$ARTIFACT.sha256"
+          ls -la "$ARTIFACT" "$ARTIFACT.sha256"
 
-      # release-please creates the GitHub Release before this workflow runs,
-      # so action-gh-release attaches assets to the existing release rather
-      # than creating a duplicate.
+      # release-please creates the GitHub Release before this workflow
+      # runs, so action-gh-release attaches assets to the existing
+      # release rather than creating a duplicate.
       - uses: softprops/action-gh-release@v3
         with:
           files: |
-            stack-nudge-*-universal.tar.gz
-            stack-nudge-*-universal.sha256
+            stack-nudge-*-macos-${{ matrix.arch }}.tar.gz
+            stack-nudge-*-macos-${{ matrix.arch }}.tar.gz.sha256
+
+      # Always clean up the temporary keychain — leaves no signing
+      # material on the runner if a subsequent job runs the same runner.
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          security delete-keychain "$KEYCHAIN" || true
