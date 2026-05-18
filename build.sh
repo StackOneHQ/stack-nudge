@@ -28,6 +28,22 @@ build_app() {
     cp "$icon_path" "$contents/Resources/Icon.icns"
   fi
 
+  # Bundle the user-facing runtime payload (hook script, phrase pools,
+  # example config) into the .app so Bootstrap.swift can copy them out
+  # to ~/.stack-nudge/ on first launch. Previously these lived only at
+  # the repo root and install.sh copied them; now the .app is self-
+  # contained — drop in Applications/, no source clone needed.
+  local repo_root
+  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  cp "$repo_root/notify.sh" "$contents/Resources/notify.sh"
+  chmod +x "$contents/Resources/notify.sh"
+  if [[ -d "$repo_root/phrases" ]]; then
+    cp -R "$repo_root/phrases" "$contents/Resources/phrases"
+  fi
+  if [[ -f "$repo_root/notify.conf.example" ]]; then
+    cp "$repo_root/notify.conf.example" "$contents/Resources/notify.conf.example"
+  fi
+
   sign_bundle "$app"
 }
 
