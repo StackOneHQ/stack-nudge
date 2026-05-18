@@ -8,15 +8,16 @@ INSTALL_DIR="${HOME}/.stack-nudge"
 echo "Uninstalling stack-nudge..."
 
 # Remove hooks from Claude Code. Matches anything inside a `tinynudge` or
-# `stack-nudge` install dir so legacy entries (and dev checkouts pointing at
-# moved paths) get cleaned up too, not just the current $NOTIFY path.
+# `stack-nudge` install dir — including quoted forms like
+# `"$HOME/.stack-nudge/notify.sh"` — so legacy entries (and dev checkouts
+# pointing at moved paths) get cleaned up too, not just the current $NOTIFY.
 if [[ -f "$HOME/.claude/settings.json" ]]; then
   python3 - "$HOME/.claude/settings.json" <<'PY'
 import json, re, sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
-STALE = re.compile(r"(?:^|/)\.?(?:tinynudge|stack-nudge)/notify\.sh(?:\s|$)")
+STALE = re.compile(r'(?:^|/|")\.?(?:tinynudge|stack-nudge)/notify\.sh')
 settings = json.loads(path.read_text())
 hooks = settings.get("hooks", {})
 for event in list(hooks.keys()):
@@ -46,7 +47,7 @@ import json, re, sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
-STALE = re.compile(r"(?:^|/)\.?(?:tinynudge|stack-nudge)/notify\.sh(?:\s|$)")
+STALE = re.compile(r'(?:^|/|")\.?(?:tinynudge|stack-nudge)/notify\.sh')
 settings = json.loads(path.read_text())
 hooks = settings.get("hooks", {})
 for event in list(hooks.keys()):

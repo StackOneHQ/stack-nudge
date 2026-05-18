@@ -16,7 +16,7 @@
 | Codex | ✅ *(experimental)* |
 | Any hooks-capable agent | ✅ — point it at `notify.sh` |
 
-**Platforms:** macOS (native banners + click-to-focus) · Linux (PulseAudio / ALSA / libnotify) · Windows (Git Bash / WSL)
+**Platforms:** macOS — full app with panel, click-to-focus banners, auto-update, quota tracking, voice. Linux (PulseAudio / ALSA / libnotify) and Windows (Git Bash / WSL) get audio + basic notifications via `notify.sh` only.
 
 ## Install
 
@@ -28,9 +28,9 @@ cd stack-nudge
 ./install.sh
 ```
 
-The installer auto-detects which agents you have configured (`~/.claude`, `~/.cursor`, `~/.gemini`) and wires up their hooks.
+The installer auto-wires hooks for **Claude Code** (`~/.claude/settings.json`) and **Cursor** (`~/.cursor/hooks.json`). Gemini CLI and Codex are supported through the same `notify.sh` entry-point, but their hooks must be wired manually — see [Manual setup](#manual-setup) below.
 
-On macOS it also installs the native `stack-nudge.app` for click-to-focus banners. Without the binary, macOS falls back to `osascript` notifications (no click-to-focus).
+On macOS it also installs the native `stack-nudge.app`, which provides the floating panel, click-to-focus banners, auto-update, and quota tracking. The first launch will show a welcome screen with a "Grant permissions" button — taking that step up-front unlocks click-to-focus and the keystroke-based "Allow" approvals.
 
 ## How it works
 
@@ -72,18 +72,15 @@ Add that to your shell profile.
 
 ### Keyboard-native panel (macOS)
 
-If you'd rather not click banners with the mouse, stack-nudge can run a small floating panel that you summon with a hotkey. It has three tabs — **Events**, **Sessions**, and **Settings** — and is fully keyboard-driven.
+If you'd rather not click banners with the mouse, stack-nudge runs a small floating panel that you summon with a hotkey. It has four tabs — **Events**, **Sessions**, **Usage**, and **Settings** — and is fully keyboard-driven.
 
-Enable it in `~/.stack-nudge/config`:
+The panel is installed and registered as a launchd agent by `./install.sh` — no opt-in needed. To run quietly without macOS banners (panel-only):
 
 ```bash
-STACKNUDGE_PANEL=true
 STACKNUDGE_BANNER=false   # optional — suppress macOS banners when using the panel
 ```
 
-Default hotkey is `cmd+opt+n`. Hit it from anywhere to summon the panel; hit it again while focused to hide. Switch tabs with `Cmd+1` (Events), `Cmd+2` (Sessions), `Cmd+3` (Settings) — or click them.
-
-The panel registers a launchd agent so it starts at login when enabled. Banner and panel can run together, alone, or both off — the sound and voice still fire as passive signals.
+Default hotkey is `cmd+opt+n`. Hit it from anywhere to summon the panel; hit it again while focused to hide. Switch tabs with `Cmd+1` (Events), `Cmd+2` (Sessions), `Cmd+3` (Usage), `Cmd+4` (Settings) — or click them. Banner and panel can run together, alone, or both off — the sound and voice still fire as passive signals.
 
 #### Events tab
 
@@ -111,9 +108,31 @@ Live list of running agent processes (`claude`, `gemini`, `codex` — including 
 | `⌫` | Send SIGTERM to the agent process |
 | `Esc` | Hide the panel |
 
+#### Usage tab
+
+Reachable from the tab strip or `Cmd+3`. Renders your Claude Code subscription quota — the same numbers `claude /usage` shows in the terminal — but always available without typing the command:
+
+- **Current session** (5-hour rolling window)
+- **Current week (all models)**
+- **Current week (Opus only)** *(when your plan has the tier)*
+- **Current week (Sonnet only)** *(when your plan has the tier)*
+
+Bars are color-coded: green below 50%, yellow 50–80%, red 80%+. Reset times shown per tier.
+
+Data is fetched from the same endpoint Claude Code's own statusline uses (`/api/oauth/usage`), reading your OAuth token from the macOS Keychain. **The first time stack-nudge polls you'll see a keychain dialog — click "Always Allow"** to grant access (one-time, per release).
+
+Polls every 60 seconds while the panel is visible, or every 5 minutes (`STACKNUDGE_USAGE_POLL_MIN`) in the background.
+
+#### Threshold-crossing notifications
+
+When any tier reaches your configured threshold, stack-nudge fires a banner — *"Weekly quota at 85% — resets May 17"* — once per period per tier, so you get a heads-up before hitting the cap. Configure in Settings → Usage:
+
+- **Quota alerts** — master switch (default on)
+- **Alert threshold** — 50% / 70% / 80% / 90% / 95% (default 80%)
+
 #### Settings tab
 
-Reachable from the tab strip or `Cmd+3`. Keyboard-driven rows for hotkey, banner/voice toggles, sound picks (with preview-on-cycle), voice picker (with preview-on-cycle using a random conversational phrase), speed, and shortcuts to the permissions checker, config file, and quit.
+Reachable from the tab strip or `Cmd+4`. Keyboard-driven rows for hotkey, banner/voice toggles, sound picks (with preview-on-cycle), voice picker (with preview-on-cycle using a random conversational phrase), speed, quota alert config, and shortcuts to the permissions checker, config file, phrase editor, and quit.
 
 | Key | Action |
 |-----|--------|
@@ -163,6 +182,27 @@ The window is set to float above System Settings so you can grant both in one pa
 stack-nudge's apps are **ad-hoc signed**, so every rebuild produces a new cdhash. macOS's TCC database binds permissions to that cdhash, which means a fresh build silently invalidates prior grants — even though System Settings still *shows* the entry as "on". `AXIsProcessTrusted()` returns false because the running binary's hash no longer matches.
 
 If approval has stopped working after a rebuild, hit **Reset & prompt** in the permissions checker. It runs `tccutil reset`, then triggers a fresh dialog bound to the current cdhash.
+
+### Auto-update
+
+stack-nudge polls GitHub Releases on launch and every 6 hours. When a newer release exists, the Settings tab gets a small accent dot and an "Update available · vX.Y.Z" row at the top of the list. Click it (or press Enter while it's selected) for a confirmation view with the release notes, then "Update Now" runs the install:
+
+1. Clones the repo to `/tmp`
+2. Runs `install.sh` against the cloned source (rebuild + replace `~/Applications/stack-nudge.app` + reload launchd)
+3. After completion, the panel auto-quits; launchd brings up the new bundle
+4. The new bundle's first launch shows a welcome-style "Updated to vX.Y.Z" screen with the release notes
+
+While the StackOne stack-nudge repo is private the auto-updater falls back to your local `gh` CLI auth (`gh api`) to read the release metadata; the in-app git clone uses your existing git credentials (keychain or SSH). Org members with `gh` configured see no friction.
+
+### Phrase editor
+
+The phrase pools that power [Voice notifications](#voice-notifications) can be customised in-app. Settings → "Edit phrases…" opens a keyboard-driven editor where you can:
+
+- Toggle individual built-in phrases on or off (`Space`)
+- Add your own custom phrases (typed inline, `Enter` to commit)
+- Remove custom phrases (`⌫`)
+
+Per-pool customisations are stored in `~/.stack-nudge/phrases.user.json` and merged with the built-in pools at notification time. Disable a built-in phrase you find too cheery, add ones in your own voice — the same random-selection logic still applies.
 
 ### Voice notifications
 
@@ -215,10 +255,16 @@ The Settings tab exposes the same picks with audio preview on each change.
 ## Uninstall
 
 ```bash
+git pull        # if you cloned a while back — older uninstall.sh lacks hook cleanup
 ./uninstall.sh
 ```
 
-Removes the hooks from each agent's config and deletes `~/.stack-nudge/`.
+Cleans up:
+
+- Hook entries in `~/.claude/settings.json`, `~/.cursor/hooks.json`, and `~/.gemini/settings.json`
+- The launchd agents (`com.stackonehq.stack-nudge`, `…-daemon`)
+- `~/Applications/stack-nudge.app`
+- `~/.stack-nudge/` (including the Python venv and `notify.sh`)
 
 ## Manual setup
 
@@ -240,22 +286,21 @@ Every supported agent just needs a hook that runs `notify.sh <agent-name> <event
 ## Development
 
 ```bash
-make build      # builds both .app bundles into build/
+make build      # builds stack-nudge.app into build/
 make install    # full install (build + copy + register hooks + launchd)
-make reload     # rebuild + replace installed panel + refresh notify.sh + bounce daemon
+make reload     # rebuild + replace installed app + refresh notify.sh + bounce the daemon
 make dev        # watch sources; auto-reload on .swift / Info.plist / notify.sh / phrase changes
-make uninstall  # remove apps, hooks, launchd agents, ~/.stack-nudge/
+make uninstall  # remove app, hooks, launchd agents, ~/.stack-nudge/
 ```
 
 `make dev` is the inner-loop tool — leave it running in another terminal, save a Swift file or `notify.sh`, and the daemon bounces with the new build in ~2 seconds.
 
 Source layout:
 
-- `notifier/` — the transient banner-renderer that fires per nudge and exits
-- `panel/` — the persistent floating-panel daemon (hotkey, NSPanel, socket listener, menu bar, sessions list, settings, permissions window)
-- `shared/` — code shared by both binaries (currently `AppActivator.swift`)
+- `panel/` — the single persistent `stack-nudge.app` binary: hotkey, floating NSPanel, socket listener for incoming events, macOS banner posting via `UNUserNotificationCenter`, sessions list, settings, permissions window, auto-updater, quota probe
+- `shared/` — code shared with the standalone Linux/Windows surfaces (currently `AppActivator.swift`)
 - `phrases/` — per-language voice phrase pools sourced by `notify.sh` at hook time
-- `notify.sh` — the shell entry-point CC/Cursor/Gemini hooks invoke; routes events to banner / panel / voice surfaces
+- `notify.sh` — the shell entry-point CC/Cursor/Gemini hooks invoke; on macOS posts events to the running app via Unix-domain socket, on Linux/Windows handles audio + libnotify directly
 
 Swift compiled with `swiftc` directly. No Xcode, no SPM, no dependencies.
 
