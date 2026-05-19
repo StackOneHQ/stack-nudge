@@ -249,11 +249,21 @@ final class PanelNav: ObservableObject {
     }
 
     private nonisolated static func runStackvoxVoices() -> [String] {
-        let stackvox = "\(NSHomeDirectory())/.stack-nudge/venv/bin/stackvox"
-        guard FileManager.default.isExecutableFile(atPath: stackvox) else { return [] }
+        // Invoke python3 with stackvox as a script argument rather than
+        // executing the stackvox script directly. pip stamps an absolute
+        // shebang at install time pointing at the build machine's python3
+        // path — CI-built bundles end up with /Users/runner/... shebangs
+        // that don't exist on user machines, so direct execution fails
+        // with "bad interpreter". Calling python3 directly bypasses it.
+        let venvBin = "\(NSHomeDirectory())/.stack-nudge/venv/bin"
+        let python = "\(venvBin)/python3"
+        let stackvox = "\(venvBin)/stackvox"
+        guard FileManager.default.isExecutableFile(atPath: python),
+              FileManager.default.isReadableFile(atPath: stackvox)
+        else { return [] }
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: stackvox)
-        task.arguments = ["voices"]
+        task.executableURL = URL(fileURLWithPath: python)
+        task.arguments = [stackvox, "voices"]
         let pipe = Pipe()
         task.standardOutput = pipe
         task.standardError = Pipe()
