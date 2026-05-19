@@ -20,7 +20,33 @@
 
 ## Install
 
-**Prerequisites:** Python ≥ 3.10 (the bundled voice engine [stackvox](https://github.com/StackOneHQ/stackvox) requires it). macOS ships 3.9 by default — install a newer one with `brew install python@3.13`, or set `STACKNUDGE_PYTHON=/path/to/python3` to point at one explicitly.
+### macOS
+
+Download the latest release from [GitHub Releases](https://github.com/StackOneHQ/stack-nudge/releases/latest):
+
+```bash
+# Pick the tarball matching your Mac's architecture:
+# arm64  → Apple Silicon (M1/M2/M3/M4)
+# x86_64 → Intel
+curl -fsSLO https://github.com/StackOneHQ/stack-nudge/releases/latest/download/stack-nudge-macos-arm64.tar.gz
+tar xzf stack-nudge-macos-arm64.tar.gz
+mv stack-nudge.app ~/Applications/
+open ~/Applications/stack-nudge.app
+```
+
+On first launch, stack-nudge runs a one-screen wizard:
+
+1. Detects which agents you have configured (`~/.claude`, `~/.cursor`, `~/.gemini`).
+2. Wires their hook configs to `notify.sh`.
+3. Registers itself + the voice engine as launchd agents so they start at login.
+
+Everything is self-contained inside the `.app` — no Xcode CLT, no Python, no shell-script bootstrap required. The bundle ships with a portable Python + stackvox (the offline voice engine) already installed. The Kokoro voice model downloads lazily the first time you enable voice notifications.
+
+Subsequent releases install automatically via the in-app auto-updater (Settings → "Update available · vX.Y.Z" when a new release exists).
+
+### Linux / Windows
+
+These platforms get the audio + libnotify path only — no panel, no click-to-focus, no auto-update. The shell installer is what wires `notify.sh` into agent hooks:
 
 ```bash
 git clone https://github.com/StackOneHQ/stack-nudge.git
@@ -28,9 +54,21 @@ cd stack-nudge
 ./install.sh
 ```
 
+**Prerequisites:** Python ≥ 3.10 (the bundled voice engine [stackvox](https://github.com/StackOneHQ/stackvox) requires it).
+
 The installer auto-wires hooks for **Claude Code** (`~/.claude/settings.json`) and **Cursor** (`~/.cursor/hooks.json`). Gemini CLI and Codex are supported through the same `notify.sh` entry-point, but their hooks must be wired manually — see [Manual setup](#manual-setup) below.
 
-On macOS it also installs the native `stack-nudge.app`, which provides the floating panel, click-to-focus banners, auto-update, and quota tracking. The first launch will show a welcome screen with a "Grant permissions" button — taking that step up-front unlocks click-to-focus and the keystroke-based "Allow" approvals.
+### From source (macOS dev)
+
+If you're working on stack-nudge itself and want to build from source rather than download a release:
+
+```bash
+git clone https://github.com/StackOneHQ/stack-nudge.git
+cd stack-nudge
+./install.sh
+```
+
+Same script as Linux/Windows; on macOS it additionally builds and installs the panel `.app`. Requires Xcode CLT. See [Development](#development) for the inner-loop tools.
 
 ## How it works
 
@@ -187,12 +225,16 @@ If approval has stopped working after a rebuild, hit **Reset & prompt** in the p
 
 stack-nudge polls GitHub Releases on launch and every 6 hours. When a newer release exists, the Settings tab gets a small accent dot and an "Update available · vX.Y.Z" row at the top of the list. Click it (or press Enter while it's selected) for a confirmation view with the release notes, then "Update Now" runs the install:
 
-1. Clones the repo to `/tmp`
-2. Runs `install.sh` against the cloned source (rebuild + replace `~/Applications/stack-nudge.app` + reload launchd)
-3. After completion, the panel auto-quits; launchd brings up the new bundle
-4. The new bundle's first launch shows a welcome-style "Updated to vX.Y.Z" screen with the release notes
+1. Downloads the arch-appropriate `.tar.gz` artifact for your Mac (~150–200 MB)
+2. Verifies the SHA256 against the sidecar checksum file
+3. Extracts to a temp directory, strips the `com.apple.quarantine` xattr
+4. Atomic-swaps `~/Applications/stack-nudge.app` with the new bundle (keeps the old as `.app.old` for safety)
+5. Runs `launchctl kickstart -k` — the current process dies, launchd brings up the new bundle
+6. The new bundle's first launch shows a welcome-style "Updated to vX.Y.Z" screen with the release notes
 
-While the StackOne stack-nudge repo is private the auto-updater falls back to your local `gh` CLI auth (`gh api`) to read the release metadata; the in-app git clone uses your existing git credentials (keychain or SSH). Org members with `gh` configured see no friction.
+No source clone, no swiftc rebuild on the user's machine — the new bundle is the already-signed-and-notarized artifact from CI. Updates are fast and don't disturb the user's Xcode CLT or Python install (or lack thereof).
+
+While the StackOne stack-nudge repo is private the auto-updater falls back to your local `gh` CLI auth (`gh api`) to read the release metadata. Org members with `gh` configured see no friction; the actual artifact download uses the release's signed asset URL.
 
 ### Phrase editor
 
@@ -254,17 +296,25 @@ The Settings tab exposes the same picks with audio preview on each change.
 
 ## Uninstall
 
+### macOS — in-app
+
+Open the panel (`⌘⌥N`), go to **Settings → Uninstall stack-nudge…**, confirm. The app tears down:
+
+- Hook entries in `~/.claude/settings.json`, `~/.cursor/hooks.json`, and `~/.gemini/settings.json`
+- The launchd agents (`com.stackonehq.stack-nudge`, `…-daemon`)
+- `~/.stack-nudge/` (config, `notify.sh`, phrases)
+- Moves `stack-nudge.app` to Trash and quits
+
+Settings (config, the cached Kokoro voice model in `~/.cache/huggingface/`, your macOS keychain entry for Claude Code) are not touched.
+
+### Linux / Windows / fallback
+
 ```bash
 git pull        # if you cloned a while back — older uninstall.sh lacks hook cleanup
 ./uninstall.sh
 ```
 
-Cleans up:
-
-- Hook entries in `~/.claude/settings.json`, `~/.cursor/hooks.json`, and `~/.gemini/settings.json`
-- The launchd agents (`com.stackonehq.stack-nudge`, `…-daemon`)
-- `~/Applications/stack-nudge.app`
-- `~/.stack-nudge/` (including the Python venv and `notify.sh`)
+Same set of cleanups as the in-app path, useful when the .app isn't reachable or the in-app uninstall failed mid-flight.
 
 ## Manual setup
 

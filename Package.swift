@@ -22,6 +22,7 @@ let package = Package(
                 // App entry points / resources are not library code.
                 "panel/main.swift",
                 "panel/Info.plist",
+                "panel/entitlements.plist",
                 "notifier",
 
                 // Top-level scripts, docs, and build artefacts.
@@ -39,6 +40,7 @@ let package = Package(
                 "CODE_OF_CONDUCT.md",
                 "SECURITY.md",
                 "CHANGELOG.md",
+                "ui_improvements.md",
 
                 // Directories not part of the testable surface.
                 "build",

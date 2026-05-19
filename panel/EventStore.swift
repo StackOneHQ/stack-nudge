@@ -42,6 +42,18 @@ struct NudgeEvent: Identifiable, Equatable {
     // "allow" or "deny" to it lets stack-nudge return a PermissionRequest
     // decision to Claude Code without touching the terminal UI.
     let fifoPath: String?
+    // Curated phrase for the voice engine (different from the visible
+    // `message` — the banner shows the tool / file context, the voice
+    // speaks a conversational sentence).
+    let voiceMessage: String?
+    // Name of a /System/Library/Sounds/*.aiff chime to play. Picked by
+    // notify.sh based on event kind (Glass for stop, Ping for permission)
+    // and overridable via STACKNUDGE_SOUND_STOP / STACKNUDGE_SOUND_PERMISSION.
+    let soundName: String?
+    // When true, this event bypasses the mute-when-focused gate. Used by
+    // the legacy install.sh `welcome` event, fired while the user is
+    // staring at the install terminal.
+    let bypassMute: Bool
 
     init(agent: String, kind: NudgeKind, title: String, message: String,
          projectPath: String? = nil, bundleID: String? = nil,
@@ -51,6 +63,9 @@ struct NudgeEvent: Identifiable, Equatable {
          terminalPID: Int? = nil, terminalApp: String? = nil,
          termProgram: String? = nil, sessionID: String? = nil,
          fifoPath: String? = nil,
+         voiceMessage: String? = nil,
+         soundName: String? = nil,
+         bypassMute: Bool = false,
          snoozedUntil: Date? = nil,
          id: UUID = UUID()) {
         self.id = id
@@ -71,6 +86,9 @@ struct NudgeEvent: Identifiable, Equatable {
         self.termProgram = termProgram
         self.sessionID = sessionID
         self.fifoPath = fifoPath
+        self.voiceMessage = voiceMessage
+        self.soundName = soundName
+        self.bypassMute = bypassMute
         self.snoozedUntil = snoozedUntil
     }
 
@@ -85,7 +103,11 @@ struct NudgeEvent: Identifiable, Equatable {
             agentPID: agentPID, shellPID: shellPID,
             terminalPID: terminalPID, terminalApp: terminalApp,
             termProgram: termProgram, sessionID: sessionID,
-            fifoPath: fifoPath, snoozedUntil: snoozedUntil,
+            fifoPath: fifoPath,
+            voiceMessage: voiceMessage,
+            soundName: soundName,
+            bypassMute: bypassMute,
+            snoozedUntil: snoozedUntil,
             id: id  // preserve identity across snooze cycles
         )
     }

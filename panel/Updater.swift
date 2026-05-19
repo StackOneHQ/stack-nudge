@@ -1,46 +1,44 @@
 import AppKit
+import CryptoKit
 import Foundation
 import SwiftUI
 
-// Phase of the auto-update flow. Parsed from `# STAGE: …` markers written
-// by install.sh into the runner log file. Drives the progress UI in
-// UpdatingView.
+// Phase of the auto-update flow. Drives the progress UI in UpdatingView.
+// Updated in-place from Swift as each step of the download/swap pipeline
+// completes — no longer driven by a shell runner's STAGE markers.
 enum UpdatePhase: String {
     case idle
-    case cloning
-    case building
-    case venv
-    case launchd
-    case hooks
+    case fetching       // GET /releases/latest
+    case downloading    // streaming the .tar.gz
+    case verifying      // SHA256 check
+    case extracting     // tar -xzf
+    case installing     // atomic swap + launchctl kickstart
     case done
     case failed
 }
 
 extension UpdatePhase {
-    // Human-readable label shown alongside the spinner.
     var label: String {
         switch self {
-        case .idle:     return "Preparing…"
-        case .cloning:  return "Cloning repository…"
-        case .building: return "Building app…"
-        case .venv:     return "Setting up voice engine…"
-        case .launchd:  return "Registering background agents…"
-        case .hooks:    return "Wiring agent hooks…"
-        case .done:     return "Restarting stack-nudge…"
-        case .failed:   return "Update failed"
+        case .idle:        return "Preparing…"
+        case .fetching:    return "Fetching release…"
+        case .downloading: return "Downloading update…"
+        case .verifying:   return "Verifying checksum…"
+        case .extracting:  return "Extracting…"
+        case .installing:  return "Installing…"
+        case .done:        return "Restarting stack-nudge…"
+        case .failed:      return "Update failed"
         }
     }
 
-    // Ordinal position used to render the progress bar. `failed` shares the
-    // last fillable slot so the bar doesn't suddenly empty on failure.
     var step: Int {
         switch self {
-        case .idle:     return 0
-        case .cloning:  return 1
-        case .building: return 2
-        case .venv:     return 3
-        case .launchd:  return 4
-        case .hooks:    return 5
+        case .idle:        return 0
+        case .fetching:    return 1
+        case .downloading: return 2
+        case .verifying:   return 3
+        case .extracting:  return 4
+        case .installing:  return 5
         case .done, .failed: return 6
         }
     }
@@ -48,38 +46,35 @@ extension UpdatePhase {
     static let totalSteps: Int = 6
 }
 
-// Drives the click-to-update flow. Spawns install.sh in a detached session
-// (via Python `os.setsid()`) so it survives the pkill install.sh runs on the
-// running panel mid-flight. Tails the runner log file for live phase + log
-// updates that the UI binds to.
+// Click-to-update flow: download the latest signed/notarized artifact from
+// GitHub Releases, verify its sha256, atomic-swap the existing bundle, kick
+// launchd → new bundle starts. No shell runner, no source clone, no rebuild
+// — the artifact is already what we want.
 //
-// On completion the runner writes /tmp/stack-nudge-update-status.json so
-// the next panel instance (started by launchctl after the swap) can pick up
-// where the dying instance left off and show a confirmation toast.
+// On success we write /tmp/stack-nudge-update-status.json before triggering
+// the relaunch, so the new bundle picks up the "Updated to vX.Y.Z" welcome
+// view on its first launch.
 final class Updater {
 
-    // GitHub HTTPS clone URL. SSH (`git@github.com:…`) would require key
-    // setup; HTTPS works for any user with credential-helper auth (macOS
-    // keychain or gh CLI integration), which is the org-member default.
-    static let cloneURL = "https://github.com/StackOneHQ/stack-nudge.git"
-
-    static let logPath    = "/tmp/stack-nudge-update.log"
     static let statusPath = "/tmp/stack-nudge-update-status.json"
+    static let releasesAPI = URL(
+        string: "https://api.github.com/repos/StackOneHQ/stack-nudge/releases/latest"
+    )!
+    static let releasesGHPath = "repos/StackOneHQ/stack-nudge/releases/latest"
 
     private weak var nav: PanelNav?
-    private var tailHandle: DispatchSourceFileSystemObject?
-    private var tailFD: Int32 = -1
-    private var tailOffset: off_t = 0
-    private var logBuffer = ""
+    private let session: URLSession
 
     init(nav: PanelNav) {
         self.nav = nav
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest  = 30
+        cfg.timeoutIntervalForResource = 1800  // bundle is ~200 MB; allow up to 30 min
+        self.session = URLSession(configuration: cfg)
     }
 
-    // Kicks off the install in a detached session. Returns immediately —
-    // progress flows back to the panel via nav.updaterPhase / nav.updaterLog.
-    // The runner survives our death (when install.sh pkills us) because of
-    // setsid; launchctl reload brings a fresh panel up afterwards.
+    // Kicks off the update on a background queue. Returns immediately;
+    // progress flows back via nav.updaterPhase / nav.updaterLog.
     func run() {
         guard let nav else { return }
         DispatchQueue.main.async {
@@ -88,239 +83,469 @@ final class Updater {
             nav.mode = .updating
         }
 
-        // Clean slate: any prior log + status file from a previous run.
-        try? FileManager.default.removeItem(atPath: Self.logPath)
+        // Wipe any prior status file so the new bundle doesn't see stale
+        // success/failure from a previous run.
         try? FileManager.default.removeItem(atPath: Self.statusPath)
-        FileManager.default.createFile(atPath: Self.logPath, contents: nil)
 
-        let runnerPath = "/tmp/stack-nudge-update-runner.sh"
-        let runnerScript = Self.makeRunnerScript()
-        try? runnerScript.write(toFile: runnerPath,
-                                atomically: true, encoding: .utf8)
-        _ = chmod(runnerPath, 0o755)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            do {
+                try self.performUpdate()
+            } catch {
+                self.fail(error)
+            }
+        }
+    }
 
-        startTailing()
+    // MARK: - Pipeline
 
-        // Spawn the runner detached via Python's os.setsid + execvp so the
-        // child process gets its own session and won't be torn down when
-        // launchd unloads the panel job mid-update.
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        // Fork before setsid: Foundation.Process places the spawned child
-        // in its own process group as the leader, so calling setsid() on
-        // python directly raises EPERM. We fork once; the child (not a
-        // pgroup leader) can setsid + exec bash cleanly while the parent
-        // exits, fully detaching the runner from our session.
-        task.arguments = [
-            "python3", "-c",
-            """
-            import os, sys
-            pid = os.fork()
-            if pid == 0:
-                os.setsid()
-                os.execvp('bash', ['bash'] + sys.argv[1:])
-            else:
-                os._exit(0)
-            """,
-            runnerPath,
-        ]
-        task.standardInput  = FileHandle.nullDevice
-        task.standardOutput = FileHandle.nullDevice
-        // Diagnostic: capture stderr to a file so silent Python errors
-        // (e.g. PermissionError from setsid()) become visible. Inspect with
-        // `cat /tmp/stack-nudge-update-spawn.err` after a failed run.
-        let stderrPath = "/tmp/stack-nudge-update-spawn.err"
-        try? FileManager.default.removeItem(atPath: stderrPath)
-        FileManager.default.createFile(atPath: stderrPath, contents: nil)
-        if let stderrHandle = FileHandle(forWritingAtPath: stderrPath) {
-            task.standardError = stderrHandle
+    private func performUpdate() throws {
+        // 1. Resolve which artifact to download.
+        setPhase(.fetching)
+        appendLog("Fetching release manifest…")
+        let release = try fetchRelease()
+        appendLog("Latest release: v\(release.version)")
+
+        let arch = currentArch()
+        guard let asset = release.assets.first(where: {
+            $0.name.contains("-macos-\(arch).tar.gz") && !$0.name.hasSuffix(".sha256")
+        }) else {
+            throw UpdateError.noArtifactForArch(arch: arch)
+        }
+        let shaAsset = release.assets.first {
+            $0.name == "\(asset.name).sha256"
+        }
+        appendLog("Selected artifact: \(asset.name) (\(byteCount(asset.size)))")
+
+        // 2. Download the .tar.gz.
+        setPhase(.downloading)
+        let tarballURL = try downloadAsset(url: asset.downloadURL,
+                                          expectedSize: asset.size)
+        appendLog("Downloaded to \(tarballURL.path)")
+
+        // 3. Verify checksum if a sidecar was published.
+        if let sha = shaAsset {
+            setPhase(.verifying)
+            try verifyChecksum(tarballURL: tarballURL,
+                               shaAssetURL: sha.downloadURL,
+                               assetName: asset.name)
+            appendLog("Checksum OK")
         } else {
-            task.standardError = FileHandle.nullDevice
+            appendLog("No .sha256 sidecar — skipping checksum (release isn't yet wired for it)")
+        }
+
+        // 4. Extract.
+        setPhase(.extracting)
+        let extractedAppURL = try extractTarball(tarballURL)
+        appendLog("Extracted to \(extractedAppURL.path)")
+
+        // 5. Strip quarantine xattr so the new bundle doesn't trigger
+        //    Gatekeeper "downloaded from the internet" prompts.
+        try stripQuarantine(at: extractedAppURL)
+
+        // 6. Atomic swap into ~/Applications/.
+        setPhase(.installing)
+        try atomicSwap(extractedAppURL: extractedAppURL)
+        appendLog("Installed to \(Self.installedAppPath)")
+
+        // 7. Write status file so the next launch surfaces the welcome view.
+        try writeStatusFile(state: "success", version: release.version, error: nil)
+
+        // 8. Restart launchd → current process dies, new bundle starts.
+        setPhase(.done)
+        appendLog("Restarting via launchd…")
+        try kickstartLaunchd()
+
+        // launchctl kickstart -k will SIGTERM us; if for some reason it
+        // doesn't, fall back to a self-quit after a brief delay so the
+        // user isn't stuck staring at "Restarting…" forever.
+        scheduleAutoQuit()
+    }
+
+    // MARK: - Release manifest
+
+    private struct ReleaseInfo {
+        let version: String
+        let assets: [Asset]
+    }
+    private struct Asset {
+        let name: String
+        let size: Int
+        let downloadURL: URL
+    }
+
+    private func fetchRelease() throws -> ReleaseInfo {
+        if let json = httpFetchJSON(Self.releasesAPI) {
+            return try parseRelease(json)
+        }
+        // Fall back to gh CLI for private-repo dev cycles (same pattern as
+        // UpdateChecker's poller).
+        if let json = ghFetchJSON(Self.releasesGHPath) {
+            return try parseRelease(json)
+        }
+        throw UpdateError.releaseFetchFailed
+    }
+
+    private func parseRelease(_ json: [String: Any]) throws -> ReleaseInfo {
+        guard let tag = json["tag_name"] as? String else {
+            throw UpdateError.malformedReleaseJSON("tag_name missing")
+        }
+        let version = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+        let assetsRaw = (json["assets"] as? [[String: Any]]) ?? []
+        let assets: [Asset] = assetsRaw.compactMap {
+            guard let name = $0["name"] as? String,
+                  let size = $0["size"] as? Int,
+                  let urlStr = $0["browser_download_url"] as? String,
+                  let url = URL(string: urlStr) else { return nil }
+            return Asset(name: name, size: size, downloadURL: url)
+        }
+        guard !assets.isEmpty else {
+            throw UpdateError.malformedReleaseJSON("no assets attached to release")
+        }
+        return ReleaseInfo(version: version, assets: assets)
+    }
+
+    // Unauthenticated GitHub API call (public repo path). Returns nil on
+    // 404 / 5xx so the caller can fall back to gh.
+    private func httpFetchJSON(_ url: URL) -> [String: Any]? {
+        var request = URLRequest(url: url)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("stack-nudge",                  forHTTPHeaderField: "User-Agent")
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: [String: Any]?
+        session.dataTask(with: request) { data, response, _ in
+            defer { semaphore.signal() }
+            let http = response as? HTTPURLResponse
+            guard let data, http?.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return }
+            result = json
+        }.resume()
+        semaphore.wait()
+        return result
+    }
+
+    // gh CLI fallback for private repos. Mirrors UpdateChecker.fetchViaGH.
+    private func ghFetchJSON(_ apiPath: String) -> [String: Any]? {
+        let candidates = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"]
+        guard let ghPath = candidates.first(where: {
+            FileManager.default.isExecutableFile(atPath: $0)
+        }) else { return nil }
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: ghPath)
+        task.arguments = ["api", apiPath]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+        do { try task.run() } catch { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        guard task.terminationStatus == 0,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return json
+    }
+
+    // MARK: - Download
+
+    // Downloads the asset via a regular dataTask + writes to disk. We use
+    // dataTask (not downloadTask) because URLSession's authenticated-redirect
+    // handling for GitHub's release CDN is fiddly, and the bundle size at
+    // 200-ish MB is comfortably in-memory on modern Macs.
+    private func downloadAsset(url: URL, expectedSize: Int) throws -> URL {
+        var request = URLRequest(url: url)
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
+        request.setValue("stack-nudge",              forHTTPHeaderField: "User-Agent")
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var resultData: Data?
+        var taskError: Error?
+        let task = session.dataTask(with: request) { data, response, error in
+            defer { semaphore.signal() }
+            if let error { taskError = error; return }
+            let http = response as? HTTPURLResponse
+            guard let data, http?.statusCode == 200 else {
+                taskError = UpdateError.downloadHTTP(status: http?.statusCode ?? 0)
+                return
+            }
+            resultData = data
+        }
+        task.resume()
+        semaphore.wait()
+
+        if let taskError { throw taskError }
+        guard let data = resultData else {
+            throw UpdateError.downloadHTTP(status: 0)
+        }
+        if expectedSize > 0, data.count != expectedSize {
+            throw UpdateError.downloadSizeMismatch(expected: expectedSize, got: data.count)
+        }
+
+        // Write to a stable temp path so the rest of the pipeline can run
+        // tar/xattr against it.
+        let tmpDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("stack-nudge-update-\(UUID().uuidString)",
+                                    isDirectory: true)
+        try FileManager.default.createDirectory(at: tmpDir,
+                                                withIntermediateDirectories: true)
+        let dest = tmpDir.appendingPathComponent("stack-nudge.tar.gz")
+        try data.write(to: dest)
+        return dest
+    }
+
+    // MARK: - Verify
+
+    private func verifyChecksum(tarballURL: URL,
+                                shaAssetURL: URL,
+                                assetName: String) throws {
+        // The .sha256 sidecar is small (~64 bytes); reuse the JSON fetch
+        // session for it via a plain dataTask. Body format: "<hex>  <name>".
+        var request = URLRequest(url: shaAssetURL)
+        request.setValue("text/plain",  forHTTPHeaderField: "Accept")
+        request.setValue("stack-nudge", forHTTPHeaderField: "User-Agent")
+        let semaphore = DispatchSemaphore(value: 0)
+        var expectedHex: String?
+        var fetchError: Error?
+        session.dataTask(with: request) { data, response, error in
+            defer { semaphore.signal() }
+            if let error { fetchError = error; return }
+            let http = response as? HTTPURLResponse
+            guard let data, http?.statusCode == 200,
+                  let body = String(data: data, encoding: .utf8) else {
+                fetchError = UpdateError.checksumFetchFailed
+                return
+            }
+            // Take the first whitespace-separated token.
+            expectedHex = body
+                .split(whereSeparator: { $0.isWhitespace })
+                .first
+                .map(String.init)
+        }.resume()
+        semaphore.wait()
+        if let err = fetchError { throw err }
+        guard let expectedHex else { throw UpdateError.checksumFetchFailed }
+
+        let data = try Data(contentsOf: tarballURL)
+        let digest = SHA256.hash(data: data)
+        let actualHex = digest.map { String(format: "%02x", $0) }.joined()
+        if actualHex.lowercased() != expectedHex.lowercased() {
+            throw UpdateError.checksumMismatch(expected: expectedHex, actual: actualHex,
+                                               assetName: assetName)
+        }
+    }
+
+    // MARK: - Extract + filesystem
+
+    private func extractTarball(_ tarballURL: URL) throws -> URL {
+        let workDir = tarballURL.deletingLastPathComponent()
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+        task.arguments = ["-xzf", tarballURL.path, "-C", workDir.path]
+        task.standardOutput = Pipe()
+        let errPipe = Pipe()
+        task.standardError = errPipe
+        try task.run()
+        task.waitUntilExit()
+        if task.terminationStatus != 0 {
+            let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(),
+                             encoding: .utf8) ?? ""
+            throw UpdateError.extractFailed(stderr: err)
+        }
+        // Find the extracted .app — tarball wraps StackNudge.app at the top level.
+        let contents = try FileManager.default
+            .contentsOfDirectory(at: workDir,
+                                 includingPropertiesForKeys: nil)
+        guard let appURL = contents.first(where: { $0.pathExtension == "app" }) else {
+            throw UpdateError.extractFailed(stderr: "no .app in tarball")
+        }
+        return appURL
+    }
+
+    private func stripQuarantine(at url: URL) throws {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+        task.arguments = ["-dr", "com.apple.quarantine", url.path]
+        task.standardOutput = Pipe()
+        task.standardError = Pipe()
+        try task.run()
+        task.waitUntilExit()
+        // Ignore exit status — xattr -d is "success" even when the attr
+        // wasn't set on macOS. Non-zero may be benign.
+    }
+
+    static let installedAppPath = "\(NSHomeDirectory())/Applications/StackNudge.app"
+    // Pre-rename path; migrated away on launch via Bootstrap.migrateBundleNameIfNeeded.
+    // Kept here so the Updater can detect a pre-1.7 install and delete its
+    // bundle after the new one is in place.
+    static let legacyInstalledAppPath = "\(NSHomeDirectory())/Applications/stack-nudge.app"
+
+    // Move the existing bundle aside, move the new bundle into place. On
+    // any error the swap reverts so the user isn't left with a half-
+    // installed app. The .old bundle stays on disk until the next clean
+    // shutdown — that's intentional, providing one extra layer of safety.
+    private func atomicSwap(extractedAppURL: URL) throws {
+        let fm = FileManager.default
+        let target = URL(fileURLWithPath: Self.installedAppPath)
+        let backup = URL(fileURLWithPath: Self.installedAppPath + ".old")
+
+        if fm.fileExists(atPath: backup.path) {
+            try? fm.removeItem(at: backup)
+        }
+        let hadOriginal = fm.fileExists(atPath: target.path)
+        if hadOriginal {
+            try fm.moveItem(at: target, to: backup)
         }
         do {
-            try task.run()
+            try fm.moveItem(at: extractedAppURL, to: target)
         } catch {
-            DispatchQueue.main.async {
-                nav.updaterPhase = .failed
-                nav.updaterLog = "Failed to start updater: \(error.localizedDescription)"
+            // Best-effort restore.
+            if hadOriginal {
+                try? fm.moveItem(at: backup, to: target)
             }
+            throw UpdateError.swapFailed(underlying: error)
+        }
+
+        // Post-swap: scrub the pre-1.7 bundle name if a migrating user
+        // still has it sitting in ~/Applications. The plist already points
+        // at the new path (Bootstrap.migrateBundleNameIfNeeded rewrote it
+        // on first launch of the new bundle), so the old .app is just
+        // dead weight at this point.
+        let legacy = URL(fileURLWithPath: Self.legacyInstalledAppPath)
+        if fm.fileExists(atPath: legacy.path) {
+            try? fm.removeItem(at: legacy)
         }
     }
 
-    // Build the bash runner. It clones the repo to a fresh tmp dir, runs
-    // install.sh, and writes a JSON status file at the end. Output and STAGE
-    // markers go through tee so we get both file persistence and live-tail
-    // visibility from the panel.
-    private static func makeRunnerScript() -> String {
-        let cloneURL = Self.cloneURL
-        let logPath = Self.logPath
-        let statusPath = Self.statusPath
-        return """
-        #!/usr/bin/env bash
-        # stack-nudge auto-updater runner. Spawned in a detached session by
-        # Updater.swift; survives the pkill install.sh runs on the panel.
-        set -o pipefail
-        LOG=\(logPath)
-        STATUS=\(statusPath)
-        WORK=$(mktemp -d -t stack-nudge-update)
-        trap 'rm -rf "$WORK"' EXIT
+    // MARK: - Launchd
 
-        write_status() {
-          local state="$1" version="$2" error_message="$3"
-          python3 - "$STATUS" "$state" "$version" "$error_message" <<'PY'
-        import json, sys
-        path, state, version, err = sys.argv[1:5]
-        d = {"state": state, "version": version}
-        if err:
-            d["error"] = err
-        with open(path, "w") as f:
-            json.dump(d, f)
-        PY
-        }
-
-        run() {
-          echo "# STAGE: cloning"
-          echo "Cloning \(cloneURL) ..."
-          git clone --depth 1 \(cloneURL) "$WORK" 2>&1 || return 1
-          local version
-          version=$(git -C "$WORK" describe --tags --abbrev=0 2>/dev/null || true)
-          echo "Cloned $(git -C "$WORK" rev-parse --short HEAD) (tag: ${version:-none})"
-          cd "$WORK"
-          bash ./install.sh 2>&1 || return 1
-          write_status "success" "${version#v}" ""
-          return 0
-        }
-
-        run > "$LOG" 2>&1
-        rc=$?
-        if [[ $rc -ne 0 ]]; then
-          # install.sh's failure already in the log; record the failed state
-          # for the post-swap panel to surface.
-          write_status "failed" "" "exit code $rc"
-        fi
-        exit $rc
-
-        """
-    }
-
-    // MARK: - Live log tailing
-
-    // Watches the runner log for writes and parses any new content. Each
-    // STAGE marker advances nav.updaterPhase; the full content backs the
-    // expandable "Show output" detail panel.
-    //
-    // Uses DispatchSource for filesystem events instead of polling so we
-    // get near-instant UI updates. Safe to call multiple times — any prior
-    // tail is torn down and offset is reset, so a re-triggered run() picks
-    // up from byte 0 of the fresh log file.
-    private func startTailing() {
-        // Tear down any prior tail before opening a fresh one. Without this,
-        // a second run() call would inherit the previous run's offset and
-        // skip all output (since the truncate makes the new file smaller
-        // than the saved offset).
-        tailHandle?.cancel()
-        tailHandle = nil
-        if tailFD >= 0 { close(tailFD); tailFD = -1 }
-        tailOffset = 0
-        logBuffer = ""
-
-        tailFD = open(Self.logPath, O_RDONLY)
-        guard tailFD >= 0 else { return }
-        let source = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: tailFD,
-            eventMask: [.write, .extend],
-            queue: .main
-        )
-        source.setEventHandler { [weak self] in self?.consume() }
-        source.resume()
-        tailHandle = source
-
-        // Read whatever's already there in case the first event fires
-        // after install.sh has already written.
-        consume()
-    }
-
-    private func consume() {
-        guard tailFD >= 0 else { return }
-        let size = lseek(tailFD, 0, SEEK_END)
-        guard size > tailOffset else { return }
-        let toRead = Int(size - tailOffset)
-        _ = lseek(tailFD, tailOffset, SEEK_SET)
-        var data = Data(count: toRead)
-        let bytesRead = data.withUnsafeMutableBytes { buf -> Int in
-            guard let base = buf.baseAddress else { return 0 }
-            return read(tailFD, base, toRead)
-        }
-        if bytesRead > 0 {
-            tailOffset += off_t(bytesRead)
-            if let chunk = String(data: data.prefix(bytesRead), encoding: .utf8) {
-                logBuffer += chunk
-                processChunk(chunk)
-            }
+    private func kickstartLaunchd() throws {
+        let uid = getuid()
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        task.arguments = ["kickstart", "-k",
+                          "gui/\(uid)/\(Bootstrap.appLabel)"]
+        task.standardOutput = Pipe()
+        task.standardError = Pipe()
+        try task.run()
+        task.waitUntilExit()
+        if task.terminationStatus != 0 {
+            // Not fatal — the kickstart can fail if the agent isn't loaded
+            // (e.g. fresh dev install). The new bundle is in place; user
+            // can hit the hotkey to launch it manually next time.
+            appendLog("launchctl kickstart exited \(task.terminationStatus) (non-fatal)")
         }
     }
 
-    // Parse STAGE markers (preferred) and natural install.sh output lines
-    // (fallback) out of newly-arrived log content. The fallback path keeps
-    // the progress UI accurate when the cloned install.sh is from an older
-    // release that predates the STAGE markers — otherwise the UI would
-    // stick on .cloning until the runner finished.
-    private func processChunk(_ chunk: String) {
-        for line in chunk.split(separator: "\n", omittingEmptySubsequences: false) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("# STAGE: ") {
-                let name = String(trimmed.dropFirst("# STAGE: ".count))
-                if let phase = UpdatePhase(rawValue: name) { advance(to: phase) }
-            } else if let phase = Self.heuristicPhase(for: trimmed) {
-                advance(to: phase)
-            }
-        }
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.nav?.updaterLog = self.logBuffer
-        }
+    // MARK: - Status file
+
+    private func writeStatusFile(state: String, version: String, error: String?) throws {
+        var dict: [String: String] = ["state": state, "version": version]
+        if let error { dict["error"] = error }
+        let data = try JSONSerialization.data(withJSONObject: dict)
+        try data.write(to: URL(fileURLWithPath: Self.statusPath))
     }
 
-    // Only ever moves forward — guards against an out-of-order line bumping
-    // the phase backwards (e.g. seeing the runner's older "Cloning..." echo
-    // after install.sh has already advanced us). When .done is reached for
-    // the first time, schedules a graceful self-quit so the freshly-installed
-    // bundle (relaunched by launchd) takes over without two panels lingering.
-    private func advance(to phase: UpdatePhase) {
+    // MARK: - State helpers
+
+    private func setPhase(_ phase: UpdatePhase) {
         DispatchQueue.main.async { [weak self] in
             guard let nav = self?.nav else { return }
-            guard phase.step >= nav.updaterPhase.step else { return }
-            let firstTimeReachingDone = (phase == .done && nav.updaterPhase != .done)
-            nav.updaterPhase = phase
-            if firstTimeReachingDone {
-                self?.scheduleAutoQuit()
+            if phase.step >= nav.updaterPhase.step {
+                nav.updaterPhase = phase
             }
         }
     }
 
-    // Quit ~2s after the install finishes so the user can read the "Done"
-    // confirmation before the panel disappears. install.sh's launchctl
-    // reload will then own the newly-installed binary's lifecycle.
+    private func appendLog(_ line: String) {
+        DispatchQueue.main.async { [weak self] in
+            guard let nav = self?.nav else { return }
+            let prefix = nav.updaterLog.isEmpty ? "" : "\n"
+            nav.updaterLog += prefix + line
+        }
+    }
+
+    private func fail(_ error: Error) {
+        let message = (error as? LocalizedError)?.errorDescription
+                   ?? error.localizedDescription
+        DispatchQueue.main.async { [weak self] in
+            self?.nav?.updaterPhase = .failed
+            let prefix = self?.nav?.updaterLog.isEmpty == false ? "\n" : ""
+            self?.nav?.updaterLog = (self?.nav?.updaterLog ?? "") + prefix
+                + "ERROR: " + message
+        }
+        // Persist for the next-launch toast so a relaunched panel can
+        // surface the failure (mostly defensive — we don't expect launchd
+        // to restart us mid-update, but if it does, we want context).
+        try? writeStatusFile(state: "failed", version: "", error: message)
+    }
+
     private func scheduleAutoQuit() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             NSApp.terminate(nil)
         }
     }
 
-    // Recognise canonical install.sh output lines as phase markers. Order
-    // matters: more specific matches first so "Done!" doesn't get classified
-    // as something else. Used only when explicit STAGE markers are absent.
-    private static func heuristicPhase(for line: String) -> UpdatePhase? {
-        if line.hasPrefix("Done!") { return .done }
-        if line.contains("registered as launchd agent") { return .launchd }
-        if line.hasPrefix("Setting up voice engine") { return .venv }
-        if line.hasPrefix("Building stack-nudge") { return .building }
-        if line.hasPrefix("Installing stack-nudge") { return .building }
-        if line.hasPrefix("Detected ") { return .hooks }
-        return nil
+    private func currentArch() -> String {
+        var sysinfo = utsname()
+        uname(&sysinfo)
+        let raw = withUnsafePointer(to: &sysinfo.machine) {
+            $0.withMemoryRebound(to: CChar.self, capacity: 1) {
+                String(cString: $0)
+            }
+        }
+        // Normalize: uname returns "arm64" or "x86_64" on macOS already.
+        return raw
+    }
+
+    private func byteCount(_ bytes: Int) -> String {
+        let mb = Double(bytes) / 1_048_576
+        return String(format: "%.1f MB", mb)
     }
 
     // MARK: - Post-launch status pickup
+}
+
+// Pipeline errors surfaced into nav.updaterLog via fail(). Each case
+// carries enough context to debug a CI artifact gone wrong without
+// dropping into stderr.
+enum UpdateError: LocalizedError {
+    case releaseFetchFailed
+    case malformedReleaseJSON(String)
+    case noArtifactForArch(arch: String)
+    case downloadHTTP(status: Int)
+    case downloadSizeMismatch(expected: Int, got: Int)
+    case checksumFetchFailed
+    case checksumMismatch(expected: String, actual: String, assetName: String)
+    case extractFailed(stderr: String)
+    case swapFailed(underlying: Error)
+
+    var errorDescription: String? {
+        switch self {
+        case .releaseFetchFailed:
+            return "Couldn't reach GitHub Releases (and gh CLI fallback also failed)."
+        case .malformedReleaseJSON(let detail):
+            return "Release JSON didn't match expected shape: \(detail)"
+        case .noArtifactForArch(let arch):
+            return "No release artifact found for arch '\(arch)'. Expected something like stack-nudge-vX.Y.Z-macos-\(arch).tar.gz."
+        case .downloadHTTP(let status):
+            return "Download failed with HTTP status \(status)."
+        case .downloadSizeMismatch(let expected, let got):
+            return "Downloaded \(got) bytes, expected \(expected) bytes."
+        case .checksumFetchFailed:
+            return "Couldn't fetch the .sha256 sidecar for the release artifact."
+        case .checksumMismatch(let expected, let actual, let assetName):
+            return "Checksum mismatch for \(assetName). Expected \(expected), got \(actual)."
+        case .extractFailed(let stderr):
+            return "tar failed during extract: \(stderr)"
+        case .swapFailed(let underlying):
+            return "Failed to swap installed bundle: \(underlying.localizedDescription)"
+        }
+    }
+}
+
+// Wrapper extension so we can keep the existing class members + the
+// post-launch status pickup in the original file structure.
+extension Updater {
 
     // Called from PanelController.applicationDidFinishLaunching to read any
     // status file the runner left behind during the previous panel's death

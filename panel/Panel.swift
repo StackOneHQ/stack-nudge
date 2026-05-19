@@ -38,7 +38,7 @@ final class FloatingPanel: NSPanel {
 
     init(contentRect: NSRect) {
         super.init(contentRect: contentRect,
-                   styleMask: [.borderless, .nonactivatingPanel],
+                   styleMask: [.borderless, .resizable, .nonactivatingPanel],
                    backing: .buffered, defer: false)
         self.level = .floating
         self.isFloatingPanel = true
@@ -49,6 +49,11 @@ final class FloatingPanel: NSPanel {
         self.isMovableByWindowBackground = true
         self.isReleasedWhenClosed = false
         self.hasShadow = true
+        // borderless + resizable: no visible chrome but mouse-drag on edges
+        // still works (standard Mac borderless-but-resizable pattern).
+        // contentMinSize keeps the layout from breaking; no max — let users
+        // expand to whatever fits their workflow.
+        self.contentMinSize = NSSize(width: 340, height: 240)
     }
 
     override var canBecomeKey: Bool { true }
@@ -73,10 +78,16 @@ struct PanelContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if !nav.welcomed {
-                WelcomeView(nav: nav,
-                            hotkeyDisplay: nav.hotkeyDisplay,
-                            onGrantPermissions: onGrantPermissions)
+            if nav.mode == .bootstrap {
+                // Full-screen first-launch experience: install + onboarding
+                // + Grant Permissions, all in one cohesive flow.
+                BootstrapView(
+                    nav: nav,
+                    hotkeyDisplay: nav.hotkeyDisplay,
+                    onInstall: { nav.actions?.runBootstrap() },
+                    onGrantPermissions: onGrantPermissions,
+                    onQuit: { NSApp.terminate(nil) }
+                )
             } else if nav.mode == .postUpdate {
                 // Full-screen takeover, no tab strip — matches welcome's
                 // single-purpose first-launch feel.
@@ -102,7 +113,14 @@ struct PanelContentView: View {
                         onConfirm: { nav.actions?.runUpdate() }
                     )
                 case .updating: UpdatingView(nav: nav)
-                case .postUpdate: EmptyView() // handled above
+                case .postUpdate: EmptyView()  // handled above
+                case .bootstrap:  EmptyView()  // handled above
+                case .uninstall:
+                    UninstallView(
+                        nav: nav,
+                        onCancel: { nav.mode = .settings },
+                        onConfirm: { nav.actions?.runUninstall() }
+                    )
                 }
             }
         }
@@ -335,10 +353,31 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // Tracks whether the banner has already fired this period per tier so
     // we don't refire on every poll. Reset when the tier's resets_at
     // advances (a new period started, fresh budget).
-    private var quotaLastFired: [String: (resetsAt: Date?, fired: Bool)] = [:]
+    // Per-tier alert state. `maxBucketFired` is the highest 5%-bucket
+    // (80, 85, 90, …) we've already alerted on; further alerts only fire
+    // when utilization crosses into a *new* higher bucket. `peakUtil`
+    // detects period rollover heuristically — a >30 pp drop from the
+    // running peak resets the bucket gate (the 5-hour window's
+    // resets_at slides forward every poll so we can't trust it).
+    private var quotaLastFired: [String: (maxBucketFired: Int, peakUtil: Double)] = [:]
+
+    // UserDefaults keys for panel size + origin persistence. UserDefaults
+    // lives in ~/Library/Preferences/com.stackonehq.stack-nudge.plist, so it
+    // survives uninstall/reinstall cycles of ~/.stack-nudge/ and across
+    // app updates that swap the .app bundle.
+    private static let panelSizeKey   = "PanelSize"
+    private static let panelOriginKey = "PanelOrigin"
+    private static let panelDefaultSize = NSSize(width: 420, height: 280)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let frame = NSRect(x: 0, y: 0, width: 420, height: 280)
+        // Pre-1.7 users had `stack-nudge.app` in ~/Applications/. If we're
+        // running from the new `StackNudge.app` location, scrub the
+        // stale bundle + rewrite the launchd plist so launchctl points
+        // at us, not the old path.
+        Bootstrap.migrateBundleNameIfNeeded()
+
+        let size = Self.loadSavedPanelSize()
+        let frame = NSRect(origin: .zero, size: size)
         panel = FloatingPanel(contentRect: frame)
         panel.keyDelegate = self
 
@@ -355,6 +394,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             store: store, sessions: sessions, nav: nav, phrases: phrases,
             onGrantPermissions: { [weak self] in self?.handleGrantPermissions() }
         ))
+        // Don't let SwiftUI's preferred / intrinsic content size drive
+        // the NSPanel frame. The panel is user-resizable + size-persisted;
+        // a tab whose root view reports a different sizeThatFits (e.g.,
+        // the Loading-quota empty state) was causing the window to
+        // resize on every switch.
+        host.sizingOptions = []
         host.translatesAutoresizingMaskIntoConstraints = false
         blur.addSubview(host)
         NSLayoutConstraint.activate([
@@ -366,6 +411,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         panel.contentView = blur
 
         positionPanel()
+        observePanelFrameChanges()
 
         let config = PanelConfig.load()
         nav.hotkeyDisplay = config.hotkeySpec
@@ -390,6 +436,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             },
             beginUpdate:      { [weak self] in self?.beginUpdateFlow() },
             runUpdate:        { [weak self] in self?.updater?.run() },
+            beginUninstall:   { [weak self] in self?.beginUninstallFlow() },
+            runUninstall:     { [weak self] in self?.runUninstall() },
+            runBootstrap:     { [weak self] in self?.runBootstrap() },
             quit:             { NSApp.terminate(nil) }
         )
         nav.setHotkey = { [weak self] spec in
@@ -414,13 +463,23 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             handlePostUpdateStatus(result: result)
         }
 
-        // First-run welcome: auto-open the panel if STACKNUDGE_WELCOMED isn't
-        // set yet. Brief delay so install.sh's launchctl bounce settles.
-        // Permission prompts are user-triggered from the welcome screen,
-        // not auto-fired.
-        if !nav.welcomed {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-                guard let self, !self.nav.welcomed else { return }
+        // First-launch detection: if no install artifacts exist on this Mac,
+        // route the user through the bootstrap wizard before they can use
+        // anything else. handlePostUpdateStatus took priority above so a
+        // freshly-installed user upgrading via auto-update doesn't see the
+        // wizard again.
+        if !Bootstrap.isInstalled(), nav.mode != .postUpdate {
+            nav.bootstrapAvailableAgents = Bootstrap.availableAgents()
+            // Exclude Gemini from the default-selected set — its row is
+            // info-only (hook wiring is manual), so pre-selecting it would
+            // mislead the user into thinking we'll wire something.
+            nav.bootstrapSelectedAgents  = Set(
+                nav.bootstrapAvailableAgents.filter { $0 != .gemini }
+            )
+            nav.bootstrapPhase           = .idle
+            nav.mode                     = .bootstrap
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                guard let self else { return }
                 NSApp.activate(ignoringOtherApps: true)
                 self.panel.makeKeyAndOrderFront(nil)
             }
@@ -497,6 +556,75 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         hidePanel()
     }
 
+    // MARK: - Bootstrap (first-launch install)
+
+    // Run Bootstrap.install on a background queue, stream progress lines
+    // into nav.bootstrapLog so the wizard updates live. Switch phase to
+    // .done on success, .failed on error.
+    private func runBootstrap() {
+        let agents = nav.bootstrapSelectedAgents
+        nav.bootstrapPhase = .installing
+        nav.bootstrapLog = ""
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                try Bootstrap.install(agents: agents) { line in
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        let prefix = self.nav.bootstrapLog.isEmpty ? "" : "\n"
+                        self.nav.bootstrapLog += prefix + line
+                    }
+                }
+                DispatchQueue.main.async { [weak self] in
+                    self?.nav.bootstrapPhase = .done
+                }
+            } catch {
+                DispatchQueue.main.async { [weak self] in
+                    self?.nav.bootstrapPhase = .failed(
+                        (error as? LocalizedError)?.errorDescription
+                            ?? error.localizedDescription
+                    )
+                }
+            }
+        }
+    }
+
+    // MARK: - Uninstall
+
+    // Switch to the uninstall confirmation view from anywhere in Settings.
+    private func beginUninstallFlow() {
+        nav.uninstallPhase = .confirm
+        nav.uninstallLog = ""
+        nav.mode = .uninstall
+    }
+
+    // User confirmed uninstall. Run Bootstrap.uninstall on a background
+    // queue. The final step (recycle + NSApp.terminate) is dispatched
+    // from inside Bootstrap.uninstall so the app exits cleanly.
+    private func runUninstall() {
+        nav.uninstallPhase = .uninstalling
+        nav.uninstallLog = ""
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                try Bootstrap.uninstall { line in
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        let prefix = self.nav.uninstallLog.isEmpty ? "" : "\n"
+                        self.nav.uninstallLog += prefix + line
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async { [weak self] in
+                    self?.nav.uninstallPhase = .failed(
+                        (error as? LocalizedError)?.errorDescription
+                            ?? error.localizedDescription
+                    )
+                }
+            }
+        }
+    }
+
     // MARK: - Quota polling
 
     // Fires QuotaProbe on a recurring timer. Cadence varies: 60s while the
@@ -533,10 +661,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
     }
 
-    // Fire a banner when a tier crosses the user's configured threshold —
-    // once per period (reset when the tier's resets_at advances past the
-    // prior recorded reset, i.e. a new period started with a fresh budget).
-    // Master switch on PanelNav silences everything when toggled off.
+    // Fire a banner each time a tier crosses into a new 5% bucket at or
+    // above the user's configured threshold. With threshold=80, the user
+    // sees one alert at 80%, one at 85%, one at 90%, etc. — never more
+    // than once per bucket. Buckets reset when we detect a sharp drop in
+    // utilization (period rollover).
+    //
+    // Previous logic used the tier's `resets_at` to detect rollover, but
+    // the 5-hour window's reset is a rolling timestamp that advances on
+    // every poll, which caused spurious re-fires every few minutes.
+    private static let quotaBucketSize: Int = 5
+    private static let quotaResetDropThreshold: Double = 30   // pp
+
     private func evaluateQuotaThresholds(_ snapshot: QuotaSnapshot) {
         guard nav.quotaAlertsEnabled else { return }
         let threshold = Double(nav.quotaAlertThreshold)
@@ -548,18 +684,29 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             ("seven_day_sonnet", "Weekly (Sonnet)", snapshot.sevenDaySonnet),
         ]
 
+        let bucketSize = Self.quotaBucketSize
+
         for (name, label, tier) in tiers {
             guard let tier else { continue }
-            var state = quotaLastFired[name] ?? (resetsAt: tier.resetsAt, fired: false)
-            // Reset the fired flag if the period has rolled over.
-            if let prior = state.resetsAt, let now = tier.resetsAt, now > prior {
-                state = (resetsAt: now, fired: false)
+            var state = quotaLastFired[name] ?? (maxBucketFired: 0, peakUtil: 0)
+
+            // Heuristic period-rollover: a >30 pp drop from our running
+            // peak means a window rolled over (or the user is on a fresh
+            // billing cycle). Clear the bucket gate so future climbs
+            // alert again.
+            if state.peakUtil - tier.utilization > Self.quotaResetDropThreshold {
+                state = (maxBucketFired: 0, peakUtil: tier.utilization)
+            } else {
+                state.peakUtil = max(state.peakUtil, tier.utilization)
             }
-            if tier.utilization >= threshold, !state.fired {
+
+            // Current 5% bucket: floor utilization to the nearest 5.
+            let currentBucket = (Int(tier.utilization) / bucketSize) * bucketSize
+            if currentBucket >= Int(threshold), currentBucket > state.maxBucketFired {
                 postQuotaBanner(label: label,
                                 percent: Int(tier.utilization.rounded()),
                                 resetsAt: tier.resetsAt)
-                state.fired = true
+                state.maxBucketFired = currentBucket
             }
             quotaLastFired[name] = state
         }
@@ -619,11 +766,20 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         center.setNotificationCategories([permCategory, stopCategory])
     }
 
-    // Post a UNUserNotification when STACKNUDGE_BANNER is enabled.
-    // Sound is omitted — afplay fires independently in notify.sh so we
-    // don't double-cue when the macOS banner is also shown.
+    // Fire the user-facing cues (chime + voice + banner) for an incoming
+    // event. Audio used to live in notify.sh (`afplay` and `stackvox say`
+    // forked from the shell hook), but that meant quitting stack-nudge
+    // didn't stop the bell — bash had already detached the child. Owning
+    // playback here means Speaker.stopAllAudio() on quit silences us.
+    //
+    // Mute-when-focused: when the user is staring at the source editor
+    // window we suppress the banner + voice, keeping only a subtle chime —
+    // unless voice is on, in which case we stay fully silent (voice
+    // replaces the chime in the existing UX contract).
+    //
     // If STACKNUDGE_ACTIVATE_IMMEDIATELY is set, focus the source editor
-    // right away without waiting for the user to click.
+    // right away without waiting for the user to click; we skip cues
+    // entirely in that flow since the editor jump is the signal.
     private func postBannerIfNeeded(_ event: NudgeEvent) {
         let config = PanelConfig.load()
 
@@ -639,8 +795,91 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return
         }
 
+        let muted = !event.bypassMute
+            && config.muteWhenFocused
+            && isEventSourceFocused(event)
+
+        if muted {
+            // Source window is frontmost — keep a minimal cue (chime when
+            // voice is off and sound is on; nothing otherwise, matching
+            // notify.sh's prior contract). No banner, no voice utterance.
+            if config.soundEnabled, !config.voiceEnabled, let sound = event.soundName {
+                Speaker.playSound(named: sound)
+            }
+            return
+        }
+
+        if config.soundEnabled, !config.voiceEnabled, let sound = event.soundName {
+            Speaker.playSound(named: sound)
+        }
+        if config.voiceEnabled, let phrase = event.voiceMessage, !phrase.isEmpty {
+            Speaker.speak(phrase, voice: config.voiceName, speed: config.voiceSpeed)
+        }
+
         guard config.bannerEnabled else { return }
         postBanner(for: event)
+    }
+
+    // Returns true if the event's source editor window appears to be the
+    // user's current focus. Ported from notify.sh's mute_when_focused
+    // block: match the frontmost app's bundle ID first (cheap), and when
+    // we have a window title to compare against, confirm via System Events.
+    private func isEventSourceFocused(_ event: NudgeEvent) -> Bool {
+        guard let sourceBundle = event.bundleID,
+              let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+              front == sourceBundle
+        else { return false }
+
+        guard let want = event.windowTitle, !want.isEmpty,
+              let processName = processName(for: sourceBundle)
+        else {
+            // No window title to disambiguate — bundle match alone is
+            // enough (single-window editors, or the user has just the one
+            // project open in this app).
+            return true
+        }
+
+        let script = """
+        tell application "System Events"
+          tell process "\(processName)"
+            try
+              return title of window 1
+            end try
+          end tell
+        end tell
+        """
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        p.arguments = ["-e", script]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = FileHandle.nullDevice
+        do {
+            try p.run()
+            p.waitUntilExit()
+        } catch {
+            return false
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let frontTitle = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return frontTitle == want
+    }
+
+    // Same bundle-ID → System Events process-name mapping as notify.sh's
+    // notify_macos(); only the editors/terminals we already special-case
+    // for click-to-focus need an entry here.
+    private func processName(for bundleID: String) -> String? {
+        switch bundleID {
+        case "com.todesktop.230313mzl4w4u92": return "Cursor"
+        case "com.microsoft.VSCode":          return "Code"
+        case "dev.zed.Zed":                   return "Zed"
+        case "com.googlecode.iterm2":         return "iTerm2"
+        case "dev.warp.Warp-Stable":          return "Warp"
+        case "com.mitchellh.ghostty":         return "Ghostty"
+        case "com.apple.Terminal":            return "Terminal"
+        default: return nil
+        }
     }
 
     // Posts a UNNotificationRequest for an event. Used by postBannerIfNeeded
@@ -830,10 +1069,24 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
     }
 
+    // Fired when the user re-opens the app while it's already running —
+    // double-click from Finder, `open -a StackNudge`, Spotlight, etc.
+    // LSUIElement apps have no Dock icon, so this is the single entry
+    // point for "I clicked the app." Show the panel and return false so
+    // macOS knows we handled it and doesn't spawn a second process.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        showPanel()
+        return false
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         listener?.stop()
         quotaTimer?.invalidate()
         quotaTimer = nil
+        // Stop any in-flight afplay/stackvox children so Quit silences
+        // audio that was triggered by us — the original bug that motivated
+        // moving the bell from notify.sh into the app.
+        Speaker.stopAllAudio()
     }
 
     // MARK: - PanelKeyDelegate
@@ -842,23 +1095,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         let mods = event.modifierFlags
         let blockingMods: NSEvent.ModifierFlags = [.control, .option]
         let cmdOnly = mods.intersection([.command, .control, .option, .shift]) == .command
-
-        // Welcome view: only Enter (dismiss) and Esc (hide) are meaningful.
-        // Swallow everything else so the user can't navigate to a non-existent
-        // tab strip while welcome is showing.
-        if !nav.welcomed {
-            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
-            guard plain else { return true }
-            switch event.keyCode {
-            case KeyCode.returnKey, KeyCode.numpadEnter:
-                nav.dismissWelcome()
-            case KeyCode.escape:
-                hidePanel()
-            default:
-                break
-            }
-            return true
-        }
 
         // While recording a hotkey, capture the next combo. Arrow keys / Tab
         // bail out gracefully — otherwise users who entered record mode by
@@ -906,6 +1142,62 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 nav.mode = .settings; return true
             default:
                 break
+            }
+        }
+
+        // Bootstrap experience:
+        //   .idle:       Enter → install, Esc → quit (user opting out)
+        //   .installing: Enter/Esc both no-op (install is running)
+        //   .done:       Enter → continue to events, Esc also → continue
+        //                (the install already happened; Esc shouldn't quit)
+        //   .failed:     Enter no-op, Esc → quit (user gives up)
+        if nav.mode == .bootstrap {
+            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            guard plain else { return false }
+            switch event.keyCode {
+            case KeyCode.escape:
+                switch nav.bootstrapPhase {
+                case .done:
+                    nav.mode = .events
+                case .idle, .failed:
+                    NSApp.terminate(nil)
+                case .installing:
+                    break  // ignore while running
+                }
+                return true
+            case KeyCode.returnKey, KeyCode.numpadEnter:
+                switch nav.bootstrapPhase {
+                case .idle:
+                    nav.actions?.runBootstrap()
+                case .done:
+                    nav.mode = .events
+                case .installing, .failed:
+                    break
+                }
+                return true
+            default:
+                return true  // swallow other keys; wizard is single-purpose
+            }
+        }
+
+        // Uninstall flow: Enter confirms (when on the confirm step),
+        // Esc cancels back to settings (only when not mid-run).
+        if nav.mode == .uninstall {
+            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            guard plain else { return false }
+            switch event.keyCode {
+            case KeyCode.escape:
+                if nav.uninstallPhase == .confirm {
+                    nav.mode = .settings
+                }
+                return true
+            case KeyCode.returnKey, KeyCode.numpadEnter:
+                if nav.uninstallPhase == .confirm {
+                    nav.actions?.runUninstall()
+                }
+                return true
+            default:
+                return true
             }
         }
 
@@ -1226,7 +1518,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     // MARK: - Setup helpers
 
+    // Restore the user's saved position if it still falls inside an attached
+    // screen; otherwise fall back to top-right of whichever screen the
+    // cursor's on. Re-arranged monitors or laptops opening lidless can leave
+    // a saved origin pointing nowhere, so the validation is important.
     private func positionPanel() {
+        let savedOrigin = Self.loadSavedPanelOrigin()
+        if let origin = savedOrigin,
+           NSScreen.screens.contains(where: { $0.frame.contains(origin) }) {
+            panel.setFrameOrigin(origin)
+            return
+        }
         let screen = activeScreen()
         let visible = screen.visibleFrame
         let size = panel.frame.size
@@ -1235,6 +1537,53 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             y: visible.maxY - size.height - 24
         )
         panel.setFrameOrigin(origin)
+    }
+
+    // MARK: - Panel size + origin persistence
+
+    static func loadSavedPanelSize() -> NSSize {
+        guard let dict = UserDefaults.standard.dictionary(forKey: panelSizeKey),
+              let w = dict["width"] as? CGFloat,
+              let h = dict["height"] as? CGFloat
+        else { return panelDefaultSize }
+        // Floor at the panel's minimum to defend against pathological values.
+        return NSSize(width: max(w, 340), height: max(h, 240))
+    }
+
+    static func loadSavedPanelOrigin() -> NSPoint? {
+        guard let dict = UserDefaults.standard.dictionary(forKey: panelOriginKey),
+              let x = dict["x"] as? CGFloat,
+              let y = dict["y"] as? CGFloat
+        else { return nil }
+        return NSPoint(x: x, y: y)
+    }
+
+    // Observe NSWindow resize/move so the user's preference is preserved
+    // across launches, app updates, and reinstalls (UserDefaults lives at
+    // ~/Library/Preferences/com.stackonehq.stack-nudge.plist).
+    private func observePanelFrameChanges() {
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification,
+            object: panel,
+            queue: .main
+        ) { [weak self] _ in
+            guard let panel = self?.panel else { return }
+            UserDefaults.standard.set(
+                ["width": panel.frame.width, "height": panel.frame.height],
+                forKey: Self.panelSizeKey
+            )
+        }
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didMoveNotification,
+            object: panel,
+            queue: .main
+        ) { [weak self] _ in
+            guard let panel = self?.panel else { return }
+            UserDefaults.standard.set(
+                ["x": panel.frame.origin.x, "y": panel.frame.origin.y],
+                forKey: Self.panelOriginKey
+            )
+        }
     }
 
     // Pick the screen the user is most likely looking at: the one under

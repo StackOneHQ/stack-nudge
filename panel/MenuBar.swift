@@ -93,7 +93,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         super.init()
 
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "bell", accessibilityDescription: "stack-nudge")
+            button.image = NSImage(systemSymbolName: "bell", accessibilityDescription: "StackNudge")
             button.image?.isTemplate = true
         }
 
@@ -130,7 +130,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(action("Open config file…",  #selector(openConfigAction)))
         menu.addItem(.separator())
 
-        menu.addItem(action("Quit stack-nudge panel", #selector(quitAction), keyEquivalent: "q"))
+        menu.addItem(action("Quit StackNudge panel", #selector(quitAction), keyEquivalent: "q"))
     }
 
     private func toggle(_ title: String, state: Bool, key: String) -> NSMenuItem {
@@ -162,13 +162,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // Confirmation banner via the existing notifier app — same channel a real
     // nudge would use, so the user sees exactly what's being enabled.
     private func fireBanner(message: String) {
-        let appPath = "\(NSHomeDirectory())/Applications/stack-nudge.app"
+        let appPath = "\(NSHomeDirectory())/Applications/StackNudge.app"
         guard FileManager.default.fileExists(atPath: appPath) else { return }
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
         task.arguments = [
             "-a", appPath, "--args",
-            "--title",   "stack-nudge",
+            "--title",   "StackNudge",
             "--message", message,
             "--sound",   "Glass",
         ]

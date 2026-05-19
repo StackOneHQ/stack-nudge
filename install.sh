@@ -1,5 +1,21 @@
 #!/usr/bin/env bash
-# stack-nudge installer — wires up hooks for whichever agents you have
+# stack-nudge installer
+#
+# macOS users: prefer the prebuilt .app from GitHub Releases —
+#   https://github.com/StackOneHQ/stack-nudge/releases/latest
+# Download the .tar.gz, drag StackNudge.app to ~/Applications/, and
+# launch it. The first-launch wizard runs the same install steps this
+# script does, in-process, with no Xcode CLT or Python prerequisite.
+#
+# This script remains for:
+#   - Linux + Windows (where the panel .app doesn't apply; notify.sh +
+#     audio is all that's needed)
+#   - Source-build devs on macOS who want to iterate without the
+#     prebuilt cycle
+#
+# Wires hooks for whichever agents you have, sets up the Python venv
+# for stackvox voice notifications, and registers launchd agents on
+# macOS.
 
 set -e
 
@@ -12,20 +28,20 @@ echo "Installing stack-nudge..."
 mkdir -p "$INSTALL_DIR"
 
 # Build (or use a prebuilt) native app bundle. Release tarballs ship with a
-# universal binary already at build/stack-nudge.app — in that case skip the
+# universal binary already at build/StackNudge.app — in that case skip the
 # rebuild so users who download a release don't need swiftc on their machine.
 # build.sh's output (Swift emits ~120 lines of UserNotifications deprecation
 # warnings on every build) goes to a log so the install transcript stays
 # scannable. On real build failure the log's last 20 lines are dumped.
-PREBUILT_APP="$SCRIPT_DIR/build/stack-nudge.app"
+PREBUILT_APP="$SCRIPT_DIR/build/StackNudge.app"
 BUILD_LOG="/tmp/stack-nudge-install-build.log"
 if [[ "$(uname -s)" == "Darwin" ]]; then
   echo ""
   echo "# STAGE: building"
   if [[ -d "$PREBUILT_APP" ]]; then
-    echo "Using prebuilt stack-nudge.app from release bundle..."
+    echo "Using prebuilt StackNudge.app from release bundle..."
   else
-    echo "Building stack-nudge.app..."
+    echo "Building StackNudge.app..."
     if ! bash "$SCRIPT_DIR/build.sh" > "$BUILD_LOG" 2>&1; then
       echo ""
       echo "  ✗ Build failed. Last 20 lines of $BUILD_LOG:"
@@ -33,10 +49,10 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
       exit 1
     fi
   fi
-  rm -rf "$HOME/Applications/stack-nudge.app"
+  rm -rf "$HOME/Applications/StackNudge.app"
   rm -rf "$HOME/Applications/stack-nudge-panel.app"  # clean up old panel binary
-  cp -r "$PREBUILT_APP" "$HOME/Applications/stack-nudge.app"
-  echo "  Installed stack-nudge.app -> ~/Applications/stack-nudge.app"
+  cp -r "$PREBUILT_APP" "$HOME/Applications/StackNudge.app"
+  echo "  Installed StackNudge.app -> ~/Applications/StackNudge.app"
 fi
 
 # Pick a Python ≥ 3.10 for the venv. stackvox requires it, but `python3` on
@@ -168,7 +184,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     "com.stackonehq.stack-nudge" \
     "always" \
     "${INSTALL_DIR}/app.log" \
-    "$HOME/Applications/stack-nudge.app/Contents/MacOS/stack-nudge"
+    "$HOME/Applications/StackNudge.app/Contents/MacOS/stack-nudge"
   echo "  App registered as launchd agent (starts at login)"
 
   # Remove old panel launchd agent if upgrading from two-binary setup

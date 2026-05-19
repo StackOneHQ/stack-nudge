@@ -42,25 +42,31 @@ struct SettingsView: View {
                         }
 
                         section("Sounds") {
-                            row(5 + off, label: "Agent done", kind: .cycle, value: nav.soundStop)
-                            row(6 + off, label: "Permission", kind: .cycle, value: nav.soundPermission)
+                            row(5 + off, label: "Sound enabled", kind: .toggle, value: nav.soundEnabled ? "On" : "Off")
+                            row(6 + off, label: "Agent done",    kind: .cycle,  value: nav.soundStop)
+                            row(7 + off, label: "Permission",    kind: .cycle,  value: nav.soundPermission)
                         }
 
                         section("Voice") {
-                            row(7 + off, label: "Voice",  kind: .cycle, value: voiceLabel)
-                            row(8 + off, label: "Speed",  kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed))
+                            if nav.voiceModelCached {
+                                row(8 + off, label: "Voice",  kind: .cycle, value: voiceLabel)
+                                row(9 + off, label: "Speed",  kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed))
+                            } else {
+                                voiceModelDownloadRow(index: 8 + off)
+                            }
                         }
 
                         section("Usage") {
-                            row(9 + off,  label: "Quota alerts",     kind: .toggle, value: nav.quotaAlertsEnabled ? "On" : "Off")
-                            row(10 + off, label: "Alert threshold",  kind: .cycle,  value: "\(nav.quotaAlertThreshold)%")
+                            row(10 + off, label: "Quota alerts",    kind: .toggle, value: nav.quotaAlertsEnabled ? "On" : "Off")
+                            row(11 + off, label: "Alert threshold", kind: .cycle,  value: "\(nav.quotaAlertThreshold)%")
                         }
 
                         section("Actions") {
-                            row(11 + off, label: "Edit phrases…",      kind: .action, value: "")
-                            row(12 + off, label: "Check permissions…", kind: .action, value: "")
-                            row(13 + off, label: "Open config file…",  kind: .action, value: "")
-                            row(14 + off, label: "Quit panel",         kind: .action, value: "")
+                            row(12 + off, label: "Edit phrases…",         kind: .action, value: "")
+                            row(13 + off, label: "Check permissions…",    kind: .action, value: "")
+                            row(14 + off, label: "Open config file…",     kind: .action, value: "")
+                            row(15 + off, label: "Uninstall StackNudge…", kind: .action, value: "")
+                            row(16 + off, label: "Quit panel",            kind: .action, value: "")
                         }
 
                         aboutFooter
@@ -91,7 +97,74 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             nav.loadFromConfig()
-            if nav.voicesAvailable.isEmpty { nav.loadVoices() }
+            nav.refreshVoiceModelCached()
+            if nav.voiceModelCached, nav.voicesAvailable.isEmpty {
+                nav.loadVoices()
+            }
+        }
+    }
+
+    // Replaces the Voice + Speed rows when the Kokoro model hasn't been
+    // fetched yet. Click (or Enter on the row) kicks off
+    // PanelNav.startVoiceModelDownload(); while in flight the row shows
+    // a determinate progress bar that flips back to Voice + Speed
+    // automatically once Speaker.voiceModelCached() flips true.
+    @ViewBuilder
+    private func voiceModelDownloadRow(index: Int) -> some View {
+        let selected = nav.selectedSettingIndex == index
+
+        HStack(spacing: 10) {
+            Image(systemName: nav.voiceModelDownloading ? "arrow.down.circle.fill" : "arrow.down.circle")
+                .font(.body)
+                .foregroundStyle(nav.voiceModelDownloading ? Color.accentColor : Color.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(nav.voiceModelDownloading ? "Downloading voice model…" : "Voice model not downloaded")
+                    .font(.subheadline.weight(.medium))
+                if nav.voiceModelDownloading {
+                    if nav.voiceModelProgress < 0 {
+                        ProgressView()
+                            .progressViewStyle(.linear)
+                            .controlSize(.small)
+                    } else {
+                        ProgressView(value: nav.voiceModelProgress)
+                            .progressViewStyle(.linear)
+                            .controlSize(.small)
+                        Text("\(Int((nav.voiceModelProgress * 100).rounded()))% · ~325 MB total")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                    }
+                } else if let err = nav.voiceModelError {
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                } else {
+                    Text("~325 MB · downloads from GitHub on first run")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            if nav.voiceModelDownloading {
+                Text("Cancel")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.red.opacity(0.85))
+            } else {
+                Text("Download")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Color.accentColor)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(selected ? Color.accentColor.opacity(0.22) : Color.clear)
+        )
+        .contentShape(Rectangle())
+        .id(index)
+        .onTapGesture {
+            nav.selectedSettingIndex = index
+            nav.activate()
         }
     }
 
@@ -144,7 +217,7 @@ struct SettingsView: View {
     private var aboutFooter: some View {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         return VStack(spacing: 4) {
-            Text("stack-nudge v\(version)")
+            Text("StackNudge v\(version)")
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.tertiary)
             Button {

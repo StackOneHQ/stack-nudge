@@ -5,7 +5,9 @@
     <key>CFBundleIdentifier</key>
     <string>com.stackonehq.stack-nudge</string>
     <key>CFBundleName</key>
-    <string>stack-nudge</string>
+    <string>StackNudge</string>
+    <key>CFBundleDisplayName</key>
+    <string>StackNudge</string>
     <key>CFBundleExecutable</key>
     <string>stack-nudge</string>
     <key>CFBundleIconFile</key>
@@ -23,6 +25,6 @@
     <key>NSUserNotificationAlertStyle</key>
     <string>alert</string>
     <key>NSAppleEventsUsageDescription</key>
-    <string>stack-nudge uses System Events to focus the correct window when you act on a notification.</string>
+    <string>StackNudge uses System Events to focus the correct window when you act on a notification.</string>
 </dict>
 </plist>

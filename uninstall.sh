@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 # stack-nudge uninstaller
+#
+# macOS users: prefer the in-app uninstall — open the panel via your
+# hotkey (default ⌘⌥N), go to Settings, click "Uninstall stack-nudge…".
+# It removes the same things this script does (hooks, launchd agents,
+# ~/.stack-nudge/) plus trashes the .app.
+#
+# This script remains as a fallback for Linux/Windows + source-build
+# macOS dev cycles, and as a safety net if the in-app uninstall fails
+# partway and leaves state behind.
 
 set -e
 
@@ -75,7 +84,7 @@ done
 pkill -f "stack-nudge$" 2>/dev/null || true
 
 # Remove app bundles (including old two-binary setup)
-for app in stack-nudge.app stack-nudge-panel.app; do
+for app in StackNudge.app stack-nudge.app stack-nudge-panel.app; do
   if [[ -d "$HOME/Applications/$app" ]]; then
     rm -rf "$HOME/Applications/$app"
     echo "  Removed ~/Applications/$app"
