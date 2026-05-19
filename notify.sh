@@ -438,7 +438,11 @@ notify_macos() {
   local bypass_mute="false"
   [[ "${EVENT}" == "welcome" ]] && bypass_mute="true"
 
-  post_to_panel "${title}" "${message}" "${bundle_id}" "${project_name}" \
+  # Pass the captured window title (not the project basename) so the
+  # in-app mute-when-focused check has the right value to compare
+  # against the frontmost window. project_name is still derived from $PWD
+  # via NUDGE_PROJECT inside post_to_panel.
+  post_to_panel "${title}" "${message}" "${bundle_id}" "${win_title}" \
     "${has_action}" "${fifo_path}" "${voice_message}" "${sound}" "${bypass_mute}" &
 
   # For permission events, block reading from the FIFO. The user's Allow
