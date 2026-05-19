@@ -550,14 +550,24 @@ enum UninstallPhase: Equatable {
 
 // MARK: - Bootstrap view (first-launch wizard)
 
-// Single-screen first-launch wizard. Shown automatically when the app
-// detects no prior install (Bootstrap.isInstalled() == false). User
-// picks which detected agents to wire up and clicks Install — the
-// progress UI then streams Bootstrap.install's callbacks until done.
+// Single-screen first-launch experience. Shown automatically when the app
+// detects no prior install (Bootstrap.isInstalled() == false). Walks the
+// user through three phases:
+//
+//   .idle       — pick which detected agents to wire up + Install button
+//   .installing — progress streamed from Bootstrap.install's callbacks
+//   .done       — onboarding content (hotkey hint, tabs summary, Grant
+//                 Permissions button) + Continue to drop into the events tab
+//
+// Folds in what used to be a separate Welcome.swift screen — the two were
+// effectively two consecutive "Welcome to stack-nudge" screens, which felt
+// redundant. Now first-launch is one cohesive flow.
 struct BootstrapView: View {
 
     @ObservedObject var nav: PanelNav
+    let hotkeyDisplay: String
     let onInstall: () -> Void
+    let onGrantPermissions: () -> Void
     let onQuit: () -> Void
 
     var body: some View {
@@ -565,12 +575,7 @@ struct BootstrapView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     header
-                    tagline
-                    if nav.bootstrapPhase == .idle {
-                        agentList
-                    } else {
-                        progress
-                    }
+                    phaseBody
                 }
                 .padding(.horizontal, 18)
                 .padding(.vertical, 18)
@@ -583,12 +588,53 @@ struct BootstrapView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Image(systemName: "bell.badge.fill")
+            Image(systemName: headerIcon)
                 .font(.title3)
-                .foregroundStyle(Color.accentColor)
-            Text("Welcome to stack-nudge")
+                .foregroundStyle(headerIconColor)
+            Text(headerTitle)
                 .font(.title3.weight(.semibold))
             Spacer()
+        }
+    }
+
+    private var headerIcon: String {
+        switch nav.bootstrapPhase {
+        case .done:   return "checkmark.seal.fill"
+        case .failed: return "exclamationmark.triangle.fill"
+        default:      return "bell.badge.fill"
+        }
+    }
+
+    private var headerIconColor: Color {
+        switch nav.bootstrapPhase {
+        case .done:   return .green
+        case .failed: return .red
+        default:      return .accentColor
+        }
+    }
+
+    private var headerTitle: String {
+        switch nav.bootstrapPhase {
+        case .idle:       return "Welcome to stack-nudge"
+        case .installing: return "Setting up…"
+        case .done:       return "You're all set"
+        case .failed:     return "Setup failed"
+        }
+    }
+
+    @ViewBuilder
+    private var phaseBody: some View {
+        switch nav.bootstrapPhase {
+        case .idle:
+            tagline
+            agentList
+        case .installing, .failed:
+            progress
+        case .done:
+            completedBlurb
+            hotkeyHint
+            tabsSummary
+            permissionsHint
         }
     }
 
@@ -597,6 +643,82 @@ struct BootstrapView: View {
             .font(.subheadline)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
+    }
+
+    // MARK: - Post-install onboarding content (was Welcome.swift)
+
+    private var completedBlurb: some View {
+        Text("stack-nudge runs from your menu bar. Here's how to use it:")
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var hotkeyHint: some View {
+        HStack(spacing: 8) {
+            Text("Press")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 3) {
+                ForEach(hotkeyDisplay.keyCapTokens, id: \.self) { token in
+                    KeyCapView(symbol: token)
+                }
+            }
+            Text("anytime to open this panel.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var tabsSummary: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Four tabs")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .padding(.bottom, 2)
+
+            tabRow(systemImage: "bell.fill",
+                   title: "Events",
+                   detail: "Recent nudges; approve and focus with the keyboard")
+            tabRow(systemImage: "list.bullet.rectangle",
+                   title: "Sessions",
+                   detail: "Running agents you can focus, rename, or terminate")
+            tabRow(systemImage: "chart.bar.fill",
+                   title: "Usage",
+                   detail: "Claude Code quota — session, weekly, per-model")
+            tabRow(systemImage: "gearshape.fill",
+                   title: "Settings",
+                   detail: "Hotkey, sounds, voice, and more")
+        }
+    }
+
+    private var permissionsHint: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "lock.shield.fill")
+                .font(.callout)
+                .foregroundStyle(Color.orange.opacity(0.8))
+                .frame(width: 20, alignment: .center)
+                .padding(.top, 2)
+            Text("Notifications and Accessibility permissions are needed for banners and 'Allow' approvals. You can grant them now or later from Settings.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func tabRow(systemImage: String, title: String, detail: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.callout)
+                .foregroundStyle(Color.accentColor.opacity(0.8))
+                .frame(width: 20, alignment: .center)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.subheadline.weight(.medium))
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+            }
+        }
     }
 
     @ViewBuilder
@@ -620,30 +742,49 @@ struct BootstrapView: View {
         }
     }
 
+    @ViewBuilder
     private func agentRow(_ agent: BootstrapAgent) -> some View {
-        let isSelected = nav.bootstrapSelectedAgents.contains(agent)
-        return HStack(alignment: .top, spacing: 10) {
-            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                .font(.callout)
-                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                .frame(width: 20, alignment: .center)
-                .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(agent.displayName).font(.subheadline.weight(.medium))
-                Text(agent == .gemini
-                     ? "Detection only — hook wiring is experimental, see README"
-                     : "Hooks will be added to \(agent.hookConfigPath)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        if agent == .gemini {
+            // Gemini hook wiring isn't implemented — show the row as
+            // informational only so the user doesn't think they can toggle
+            // it on.
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "info.circle")
+                    .font(.callout)
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 20, alignment: .center)
+                    .padding(.top, 2)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(agent.displayName).font(.subheadline.weight(.medium))
+                    Text("Detected, but hook wiring is manual. See README for setup.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
             }
-            Spacer()
-        }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if isSelected {
-                nav.bootstrapSelectedAgents.remove(agent)
-            } else {
-                nav.bootstrapSelectedAgents.insert(agent)
+        } else {
+            let isSelected = nav.bootstrapSelectedAgents.contains(agent)
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.callout)
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    .frame(width: 20, alignment: .center)
+                    .padding(.top, 2)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(agent.displayName).font(.subheadline.weight(.medium))
+                    Text("Hooks will be added to \((agent.hookConfigPath as NSString).abbreviatingWithTildeInPath)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if isSelected {
+                    nav.bootstrapSelectedAgents.remove(agent)
+                } else {
+                    nav.bootstrapSelectedAgents.insert(agent)
+                }
             }
         }
     }
@@ -689,62 +830,23 @@ struct BootstrapView: View {
 
     private var actionBar: some View {
         HStack(spacing: 10) {
+            // Left-side button: Quit when idle/failed, Grant Permissions when done.
             if nav.bootstrapPhase == .idle || isFailed {
-                Button {
-                    onQuit()
-                } label: {
-                    Text("Quit")
-                        .font(.subheadline)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                }
-                .buttonStyle(.plain)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.primary.opacity(0.08))
-                )
+                secondaryButton(label: "Quit", action: onQuit)
+            } else if case .done = nav.bootstrapPhase {
+                secondaryButton(label: "Grant permissions", action: onGrantPermissions)
             }
 
             Spacer()
 
+            // Right-side primary: Set up when idle, Continue when done.
             if nav.bootstrapPhase == .idle {
-                Button {
-                    onInstall()
-                } label: {
-                    HStack(spacing: 6) {
-                        Text("Install")
-                            .font(.subheadline.weight(.medium))
-                        KeyCapView(symbol: "⏎")
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                }
-                .buttonStyle(.plain)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.accentColor.opacity(0.25))
-                )
-                .disabled(nav.bootstrapSelectedAgents.isEmpty
-                          && !nav.bootstrapAvailableAgents.isEmpty)
-            }
-
-            if case .done = nav.bootstrapPhase {
-                Button {
-                    nav.mode = .events
-                } label: {
-                    HStack(spacing: 6) {
-                        Text("Continue")
-                            .font(.subheadline.weight(.medium))
-                        KeyCapView(symbol: "⏎")
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                }
-                .buttonStyle(.plain)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.accentColor.opacity(0.25))
-                )
+                // Always enabled — even with no agents selected, the install
+                // copies bundled resources + registers launchd agents, which
+                // is still useful. The user can wire hooks manually later.
+                primaryButton(label: "Set up", action: onInstall)
+            } else if case .done = nav.bootstrapPhase {
+                primaryButton(label: "Continue") { nav.mode = .events }
             }
         }
         .padding(.horizontal, 14)
@@ -760,9 +862,57 @@ struct BootstrapView: View {
         )
     }
 
+    private func secondaryButton(label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.subheadline)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+        }
+        .buttonStyle(.plain)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.primary.opacity(0.08))
+        )
+    }
+
+    private func primaryButton(label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Text(label).font(.subheadline.weight(.medium))
+                KeyCapView(symbol: "⏎")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+        }
+        .buttonStyle(.plain)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.accentColor.opacity(0.25))
+        )
+    }
+
     private var isFailed: Bool {
         if case .failed = nav.bootstrapPhase { return true }
         return false
+    }
+}
+
+// Split a hotkey spec like "cmd+opt+n" into the key cap tokens BootstrapView
+// renders. Modifier names map to the macOS glyphs the rest of the panel
+// uses; everything else is uppercased verbatim.
+private extension String {
+    var keyCapTokens: [String] {
+        split(separator: "+").map { part in
+            let p = part.trimmingCharacters(in: .whitespaces).lowercased()
+            switch p {
+            case "cmd", "command":         return "⌘"
+            case "shift":                  return "⇧"
+            case "opt", "alt", "option":   return "⌥"
+            case "ctrl", "control":        return "⌃"
+            default:                       return p.uppercased()
+            }
+        }
     }
 }
 

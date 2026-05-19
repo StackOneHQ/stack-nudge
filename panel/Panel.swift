@@ -38,7 +38,7 @@ final class FloatingPanel: NSPanel {
 
     init(contentRect: NSRect) {
         super.init(contentRect: contentRect,
-                   styleMask: [.borderless, .nonactivatingPanel],
+                   styleMask: [.borderless, .resizable, .nonactivatingPanel],
                    backing: .buffered, defer: false)
         self.level = .floating
         self.isFloatingPanel = true
@@ -49,6 +49,11 @@ final class FloatingPanel: NSPanel {
         self.isMovableByWindowBackground = true
         self.isReleasedWhenClosed = false
         self.hasShadow = true
+        // borderless + resizable: no visible chrome but mouse-drag on edges
+        // still works (standard Mac borderless-but-resizable pattern).
+        // contentMinSize keeps the layout from breaking; no max — let users
+        // expand to whatever fits their workflow.
+        self.contentMinSize = NSSize(width: 340, height: 240)
     }
 
     override var canBecomeKey: Bool { true }
@@ -74,17 +79,15 @@ struct PanelContentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if nav.mode == .bootstrap {
-                // Full-screen first-launch wizard, takes priority over
-                // welcome (which is a separate post-bootstrap screen).
+                // Full-screen first-launch experience: install + onboarding
+                // + Grant Permissions, all in one cohesive flow.
                 BootstrapView(
                     nav: nav,
+                    hotkeyDisplay: nav.hotkeyDisplay,
                     onInstall: { nav.actions?.runBootstrap() },
+                    onGrantPermissions: onGrantPermissions,
                     onQuit: { NSApp.terminate(nil) }
                 )
-            } else if !nav.welcomed {
-                WelcomeView(nav: nav,
-                            hotkeyDisplay: nav.hotkeyDisplay,
-                            onGrantPermissions: onGrantPermissions)
             } else if nav.mode == .postUpdate {
                 // Full-screen takeover, no tab strip — matches welcome's
                 // single-purpose first-launch feel.
@@ -352,8 +355,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // advances (a new period started, fresh budget).
     private var quotaLastFired: [String: (resetsAt: Date?, fired: Bool)] = [:]
 
+    // UserDefaults keys for panel size + origin persistence. UserDefaults
+    // lives in ~/Library/Preferences/com.stackonehq.stack-nudge.plist, so it
+    // survives uninstall/reinstall cycles of ~/.stack-nudge/ and across
+    // app updates that swap the .app bundle.
+    private static let panelSizeKey   = "PanelSize"
+    private static let panelOriginKey = "PanelOrigin"
+    private static let panelDefaultSize = NSSize(width: 420, height: 280)
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let frame = NSRect(x: 0, y: 0, width: 420, height: 280)
+        let size = Self.loadSavedPanelSize()
+        let frame = NSRect(origin: .zero, size: size)
         panel = FloatingPanel(contentRect: frame)
         panel.keyDelegate = self
 
@@ -381,6 +393,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         panel.contentView = blur
 
         positionPanel()
+        observePanelFrameChanges()
 
         let config = PanelConfig.load()
         nav.hotkeyDisplay = config.hotkeySpec
@@ -439,23 +452,16 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // wizard again.
         if !Bootstrap.isInstalled(), nav.mode != .postUpdate {
             nav.bootstrapAvailableAgents = Bootstrap.availableAgents()
-            nav.bootstrapSelectedAgents  = Set(nav.bootstrapAvailableAgents)
+            // Exclude Gemini from the default-selected set — its row is
+            // info-only (hook wiring is manual), so pre-selecting it would
+            // mislead the user into thinking we'll wire something.
+            nav.bootstrapSelectedAgents  = Set(
+                nav.bootstrapAvailableAgents.filter { $0 != .gemini }
+            )
             nav.bootstrapPhase           = .idle
             nav.mode                     = .bootstrap
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
                 guard let self else { return }
-                NSApp.activate(ignoringOtherApps: true)
-                self.panel.makeKeyAndOrderFront(nil)
-            }
-        }
-
-        // First-run welcome: auto-open the panel if STACKNUDGE_WELCOMED isn't
-        // set yet. Brief delay so install.sh's launchctl bounce settles.
-        // Permission prompts are user-triggered from the welcome screen,
-        // not auto-fired.
-        if !nav.welcomed {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-                guard let self, !self.nav.welcomed else { return }
                 NSApp.activate(ignoringOtherApps: true)
                 self.panel.makeKeyAndOrderFront(nil)
             }
@@ -947,23 +953,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         let blockingMods: NSEvent.ModifierFlags = [.control, .option]
         let cmdOnly = mods.intersection([.command, .control, .option, .shift]) == .command
 
-        // Welcome view: only Enter (dismiss) and Esc (hide) are meaningful.
-        // Swallow everything else so the user can't navigate to a non-existent
-        // tab strip while welcome is showing.
-        if !nav.welcomed {
-            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
-            guard plain else { return true }
-            switch event.keyCode {
-            case KeyCode.returnKey, KeyCode.numpadEnter:
-                nav.dismissWelcome()
-            case KeyCode.escape:
-                hidePanel()
-            default:
-                break
-            }
-            return true
-        }
-
         // While recording a hotkey, capture the next combo. Arrow keys / Tab
         // bail out gracefully — otherwise users who entered record mode by
         // mistake would be stuck on row 0 with all their keypresses swallowed.
@@ -1013,15 +1002,25 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             }
         }
 
-        // Bootstrap wizard: Enter triggers install when idle / dismisses
-        // when done; Esc quits the app entirely. No other key handling —
-        // the agent checkboxes are click-only for v1.
+        // Bootstrap experience:
+        //   .idle:       Enter → install, Esc → quit (user opting out)
+        //   .installing: Enter/Esc both no-op (install is running)
+        //   .done:       Enter → continue to events, Esc also → continue
+        //                (the install already happened; Esc shouldn't quit)
+        //   .failed:     Enter no-op, Esc → quit (user gives up)
         if nav.mode == .bootstrap {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain else { return false }
             switch event.keyCode {
             case KeyCode.escape:
-                NSApp.terminate(nil)
+                switch nav.bootstrapPhase {
+                case .done:
+                    nav.mode = .events
+                case .idle, .failed:
+                    NSApp.terminate(nil)
+                case .installing:
+                    break  // ignore while running
+                }
                 return true
             case KeyCode.returnKey, KeyCode.numpadEnter:
                 switch nav.bootstrapPhase {
@@ -1030,7 +1029,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 case .done:
                     nav.mode = .events
                 case .installing, .failed:
-                    break  // running or failed — Enter does nothing
+                    break
                 }
                 return true
             default:
@@ -1376,7 +1375,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     // MARK: - Setup helpers
 
+    // Restore the user's saved position if it still falls inside an attached
+    // screen; otherwise fall back to top-right of whichever screen the
+    // cursor's on. Re-arranged monitors or laptops opening lidless can leave
+    // a saved origin pointing nowhere, so the validation is important.
     private func positionPanel() {
+        let savedOrigin = Self.loadSavedPanelOrigin()
+        if let origin = savedOrigin,
+           NSScreen.screens.contains(where: { $0.frame.contains(origin) }) {
+            panel.setFrameOrigin(origin)
+            return
+        }
         let screen = activeScreen()
         let visible = screen.visibleFrame
         let size = panel.frame.size
@@ -1385,6 +1394,53 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             y: visible.maxY - size.height - 24
         )
         panel.setFrameOrigin(origin)
+    }
+
+    // MARK: - Panel size + origin persistence
+
+    static func loadSavedPanelSize() -> NSSize {
+        guard let dict = UserDefaults.standard.dictionary(forKey: panelSizeKey),
+              let w = dict["width"] as? CGFloat,
+              let h = dict["height"] as? CGFloat
+        else { return panelDefaultSize }
+        // Floor at the panel's minimum to defend against pathological values.
+        return NSSize(width: max(w, 340), height: max(h, 240))
+    }
+
+    static func loadSavedPanelOrigin() -> NSPoint? {
+        guard let dict = UserDefaults.standard.dictionary(forKey: panelOriginKey),
+              let x = dict["x"] as? CGFloat,
+              let y = dict["y"] as? CGFloat
+        else { return nil }
+        return NSPoint(x: x, y: y)
+    }
+
+    // Observe NSWindow resize/move so the user's preference is preserved
+    // across launches, app updates, and reinstalls (UserDefaults lives at
+    // ~/Library/Preferences/com.stackonehq.stack-nudge.plist).
+    private func observePanelFrameChanges() {
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification,
+            object: panel,
+            queue: .main
+        ) { [weak self] _ in
+            guard let panel = self?.panel else { return }
+            UserDefaults.standard.set(
+                ["width": panel.frame.width, "height": panel.frame.height],
+                forKey: Self.panelSizeKey
+            )
+        }
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didMoveNotification,
+            object: panel,
+            queue: .main
+        ) { [weak self] _ in
+            guard let panel = self?.panel else { return }
+            UserDefaults.standard.set(
+                ["x": panel.frame.origin.x, "y": panel.frame.origin.y],
+                forKey: Self.panelOriginKey
+            )
+        }
     }
 
     // Pick the screen the user is most likely looking at: the one under
