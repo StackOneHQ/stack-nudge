@@ -18,7 +18,17 @@ jobs:
       # When the Release PR is merged, this action creates the git tag (vX.Y.Z)
       # and the GitHub Release. The release.yml workflow then triggers on that
       # tag to attach prebuilt asset bundles.
+      #
+      # `token` must be a Personal Access Token (RELEASE_PAT), NOT the
+      # default GITHUB_TOKEN. GitHub deliberately doesn't fire downstream
+      # workflows from pushes made with the default token — including the
+      # tag push release-please-action makes when the Release PR merges.
+      # That left v1.7.0 sitting in Releases with zero assets because the
+      # tagged-release `Build and Release` workflow never observed the tag.
+      # A PAT with `Contents: read/write` makes the tag push look like a
+      # normal user push, which DOES fire downstream workflows.
       - uses: googleapis/release-please-action@v4
         with:
+          token: ${{ secrets.RELEASE_PAT }}
           config-file: .release-please-config.json
           manifest-file: .release-please-manifest.json
