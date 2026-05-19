@@ -175,6 +175,13 @@ struct UsageView: View {
                     .padding(.vertical, 14)
                     .background(ThinScrollers())
                 }
+                // Explicit max-height claim so the ScrollView reliably
+                // bounds itself to the panel's available area instead of
+                // expanding to fit its content (which clipped behind the
+                // PageFooter without a visible scrollbar hint). Force the
+                // indicator visible so users can tell there's more to see.
+                .frame(maxHeight: .infinity)
+                .scrollIndicators(.visible)
             } else {
                 emptyState
             }
