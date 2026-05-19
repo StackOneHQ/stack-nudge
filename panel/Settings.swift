@@ -42,30 +42,31 @@ struct SettingsView: View {
                         }
 
                         section("Sounds") {
-                            row(5 + off, label: "Agent done", kind: .cycle, value: nav.soundStop)
-                            row(6 + off, label: "Permission", kind: .cycle, value: nav.soundPermission)
+                            row(5 + off, label: "Sound enabled", kind: .toggle, value: nav.soundEnabled ? "On" : "Off")
+                            row(6 + off, label: "Agent done",    kind: .cycle,  value: nav.soundStop)
+                            row(7 + off, label: "Permission",    kind: .cycle,  value: nav.soundPermission)
                         }
 
                         section("Voice") {
                             if nav.voiceModelCached {
-                                row(7 + off, label: "Voice",  kind: .cycle, value: voiceLabel)
-                                row(8 + off, label: "Speed",  kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed))
+                                row(8 + off, label: "Voice",  kind: .cycle, value: voiceLabel)
+                                row(9 + off, label: "Speed",  kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed))
                             } else {
-                                voiceModelDownloadRow(index: 7 + off)
+                                voiceModelDownloadRow(index: 8 + off)
                             }
                         }
 
                         section("Usage") {
-                            row(9 + off,  label: "Quota alerts",     kind: .toggle, value: nav.quotaAlertsEnabled ? "On" : "Off")
-                            row(10 + off, label: "Alert threshold",  kind: .cycle,  value: "\(nav.quotaAlertThreshold)%")
+                            row(10 + off, label: "Quota alerts",    kind: .toggle, value: nav.quotaAlertsEnabled ? "On" : "Off")
+                            row(11 + off, label: "Alert threshold", kind: .cycle,  value: "\(nav.quotaAlertThreshold)%")
                         }
 
                         section("Actions") {
-                            row(11 + off, label: "Edit phrases…",         kind: .action, value: "")
-                            row(12 + off, label: "Check permissions…",    kind: .action, value: "")
-                            row(13 + off, label: "Open config file…",     kind: .action, value: "")
-                            row(14 + off, label: "Uninstall StackNudge…", kind: .action, value: "")
-                            row(15 + off, label: "Quit panel",            kind: .action, value: "")
+                            row(12 + off, label: "Edit phrases…",         kind: .action, value: "")
+                            row(13 + off, label: "Check permissions…",    kind: .action, value: "")
+                            row(14 + off, label: "Open config file…",     kind: .action, value: "")
+                            row(15 + off, label: "Uninstall StackNudge…", kind: .action, value: "")
+                            row(16 + off, label: "Quit panel",            kind: .action, value: "")
                         }
 
                         aboutFooter

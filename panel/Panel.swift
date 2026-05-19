@@ -801,15 +801,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
         if muted {
             // Source window is frontmost — keep a minimal cue (chime when
-            // voice is off; nothing when voice is on, matching notify.sh's
-            // prior contract). No banner, no voice utterance.
-            if !config.voiceEnabled, let sound = event.soundName {
+            // voice is off and sound is on; nothing otherwise, matching
+            // notify.sh's prior contract). No banner, no voice utterance.
+            if config.soundEnabled, !config.voiceEnabled, let sound = event.soundName {
                 Speaker.playSound(named: sound)
             }
             return
         }
 
-        if let sound = event.soundName, !config.voiceEnabled {
+        if config.soundEnabled, !config.voiceEnabled, let sound = event.soundName {
             Speaker.playSound(named: sound)
         }
         if config.voiceEnabled, let phrase = event.voiceMessage, !phrase.isEmpty {

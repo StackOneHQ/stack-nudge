@@ -55,6 +55,7 @@ final class PanelNav: ObservableObject {
     @Published var recordingHotkey: Bool = false
     @Published var hotkeyError:     String?
     @Published var bannerEnabled:   Bool = true
+    @Published var soundEnabled:    Bool = true
     @Published var voiceEnabled:    Bool = false
     @Published var muteWhenFocused: Bool = true
     @Published var panelPinned:     Bool = true
@@ -153,7 +154,7 @@ final class PanelNav: ObservableObject {
     // when the offset is 1.
     var updateRowOffset: Int { updateAvailable != nil ? 1 : 0 }
 
-    var rowCount: Int { 16 + updateRowOffset }
+    var rowCount: Int { 17 + updateRowOffset }
 
     // Row layout (kept in one place so the controller, view, and indexing
     // logic all agree on what each row index means). When updateAvailable
@@ -164,17 +165,18 @@ final class PanelNav: ObservableObject {
     //   2  Voice notifications   toggle
     //   3  Mute when focused     toggle
     //   4  Pin panel             toggle
-    //   5  Agent done sound      cycle
-    //   6  Permission sound      cycle
-    //   7  Voice                 cycle
-    //   8  Speed                 cycle
-    //   9  Quota alerts          toggle
-    //  10  Alert threshold       cycle
-    //  11  Edit phrases…         action
-    //  12  Check permissions…    action
-    //  13  Open config file…     action
-    //  14  Uninstall stack-nudge action
-    //  15  Quit panel            action
+    //   5  Sound enabled         toggle      (gates rows 6 + 7)
+    //   6  Agent done sound      cycle
+    //   7  Permission sound      cycle
+    //   8  Voice                 cycle       (or "Download model" action)
+    //   9  Speed                 cycle
+    //  10  Quota alerts          toggle
+    //  11  Alert threshold       cycle
+    //  12  Edit phrases…         action
+    //  13  Check permissions…    action
+    //  14  Open config file…     action
+    //  15  Uninstall stack-nudge action
+    //  16  Quit panel            action
 
     // MARK: - Disk I/O
 
@@ -182,6 +184,7 @@ final class PanelNav: ObservableObject {
         let config = ConfigFile.read()
         hotkeyDisplay   = config["STACKNUDGE_PANEL_HOTKEY"]    ?? "cmd+opt+n"
         bannerEnabled   = ConfigFile.bool(config, "STACKNUDGE_BANNER",    default: true)
+        soundEnabled    = ConfigFile.bool(config, "STACKNUDGE_SOUND",     default: true)
         voiceEnabled    = ConfigFile.bool(config, "STACKNUDGE_VOICE",     default: false)
         muteWhenFocused = ConfigFile.bool(config, "STACKNUDGE_MUTE_WHEN_FOCUSED", default: true)
         panelPinned     = ConfigFile.bool(config, "STACKNUDGE_PANEL_PIN", default: true)
@@ -271,7 +274,7 @@ final class PanelNav: ObservableObject {
         // When the voice model isn't cached we collapse Voice + Speed
         // into a single "Download voice model" action at index 7. Index 8
         // (Speed) doesn't render; skip it during keyboard nav.
-        if !voiceModelCached, next - updateRowOffset == 8 {
+        if !voiceModelCached, next - updateRowOffset == 9 {
             next = (next + 1) % rowCount
         }
         selectedSettingIndex = next
@@ -280,7 +283,7 @@ final class PanelNav: ObservableObject {
     func selectPrevRow() {
         guard rowCount > 0 else { return }
         var prev = (selectedSettingIndex - 1 + rowCount) % rowCount
-        if !voiceModelCached, prev - updateRowOffset == 8 {
+        if !voiceModelCached, prev - updateRowOffset == 9 {
             prev = (prev - 1 + rowCount) % rowCount
         }
         selectedSettingIndex = prev
@@ -297,8 +300,8 @@ final class PanelNav: ObservableObject {
         }
         switch selectedSettingIndex - updateRowOffset {
         case 0: startRecordingHotkey()
-        case 7 where !voiceModelCached:
-            // Pre-download state: index 7 is the "Download voice model"
+        case 8 where !voiceModelCached:
+            // Pre-download state: index 8 is the "Download voice model"
             // action, not a cycle. Enter triggers (or cancels) the
             // download.
             if voiceModelDownloading {
@@ -306,11 +309,11 @@ final class PanelNav: ObservableObject {
             } else {
                 startVoiceModelDownload()
             }
-        case 11: actions?.editPhrases()
-        case 12: actions?.checkPermissions()
-        case 13: actions?.openConfig()
-        case 14: actions?.beginUninstall()
-        case 15: actions?.quit()
+        case 12: actions?.editPhrases()
+        case 13: actions?.checkPermissions()
+        case 14: actions?.openConfig()
+        case 15: actions?.beginUninstall()
+        case 16: actions?.quit()
         default: applyCycle(forward: true)
         }
     }
@@ -342,10 +345,13 @@ final class PanelNav: ObservableObject {
             panelPinned.toggle()
             ConfigFile.write(key: "STACKNUDGE_PANEL_PIN", value: panelPinned ? "true" : "false")
         case 5:
-            soundStop = step(soundStop, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_STOP", preview: true)
+            soundEnabled.toggle()
+            ConfigFile.write(key: "STACKNUDGE_SOUND", value: soundEnabled ? "true" : "false")
         case 6:
-            soundPermission = step(soundPermission, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_PERMISSION", preview: true)
+            soundStop = step(soundStop, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_STOP", preview: true)
         case 7:
+            soundPermission = step(soundPermission, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_PERMISSION", preview: true)
+        case 8:
             // Pre-download: the row is an action, not a cycle. Treat
             // left/right arrow as a trigger so a user discovering the
             // row keyboard-only can still start the download.
@@ -357,15 +363,15 @@ final class PanelNav: ObservableObject {
             voice = step(voice, in: voicesAvailable, forward: forward, key: "STACKNUDGE_VOICE_NAME", preview: false)
             let phrase = Self.voicePreviewPhrases.randomElement() ?? "Hello."
             Speaker.speak(phrase, voice: voice, speed: String(format: "%.2f", voiceSpeed))
-        case 8:
+        case 9:
             let next = forward ? voiceSpeed + Self.speedStep : voiceSpeed - Self.speedStep
             voiceSpeed = max(Self.speedMin, min(Self.speedMax, (next * 100).rounded() / 100))
             ConfigFile.write(key: "STACKNUDGE_VOICE_SPEED", value: String(format: "%.2f", voiceSpeed))
-        case 9:
+        case 10:
             quotaAlertsEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_QUOTA_ALERTS",
                              value: quotaAlertsEnabled ? "true" : "false")
-        case 10:
+        case 11:
             // Cycle through the static thresholds list. Index wraps in both
             // directions so the user can dial in either way.
             let list = Self.quotaThresholds
