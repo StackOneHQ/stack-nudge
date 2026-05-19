@@ -351,7 +351,7 @@ final class Updater {
                              encoding: .utf8) ?? ""
             throw UpdateError.extractFailed(stderr: err)
         }
-        // Find the extracted .app — tarball wraps stack-nudge.app at the top level.
+        // Find the extracted .app — tarball wraps StackNudge.app at the top level.
         let contents = try FileManager.default
             .contentsOfDirectory(at: workDir,
                                  includingPropertiesForKeys: nil)
@@ -373,7 +373,11 @@ final class Updater {
         // wasn't set on macOS. Non-zero may be benign.
     }
 
-    static let installedAppPath = "\(NSHomeDirectory())/Applications/stack-nudge.app"
+    static let installedAppPath = "\(NSHomeDirectory())/Applications/StackNudge.app"
+    // Pre-rename path; migrated away on launch via Bootstrap.migrateBundleNameIfNeeded.
+    // Kept here so the Updater can detect a pre-1.7 install and delete its
+    // bundle after the new one is in place.
+    static let legacyInstalledAppPath = "\(NSHomeDirectory())/Applications/stack-nudge.app"
 
     // Move the existing bundle aside, move the new bundle into place. On
     // any error the swap reverts so the user isn't left with a half-
@@ -399,6 +403,16 @@ final class Updater {
                 try? fm.moveItem(at: backup, to: target)
             }
             throw UpdateError.swapFailed(underlying: error)
+        }
+
+        // Post-swap: scrub the pre-1.7 bundle name if a migrating user
+        // still has it sitting in ~/Applications. The plist already points
+        // at the new path (Bootstrap.migrateBundleNameIfNeeded rewrote it
+        // on first launch of the new bundle), so the old .app is just
+        // dead weight at this point.
+        let legacy = URL(fileURLWithPath: Self.legacyInstalledAppPath)
+        if fm.fileExists(atPath: legacy.path) {
+            try? fm.removeItem(at: legacy)
         }
     }
 

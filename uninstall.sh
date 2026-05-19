@@ -84,7 +84,7 @@ done
 pkill -f "stack-nudge$" 2>/dev/null || true
 
 # Remove app bundles (including old two-binary setup)
-for app in stack-nudge.app stack-nudge-panel.app; do
+for app in StackNudge.app stack-nudge.app stack-nudge-panel.app; do
   if [[ -d "$HOME/Applications/$app" ]]; then
     rm -rf "$HOME/Applications/$app"
     echo "  Removed ~/Applications/$app"

@@ -104,15 +104,15 @@ jobs:
         run: |
           set -euo pipefail
           echo "$MACOS_NOTARY_API_KEY" | base64 --decode > /tmp/notary-key.p8
-          ditto -c -k --keepParent build/stack-nudge.app /tmp/notarize.zip
+          ditto -c -k --keepParent build/StackNudge.app /tmp/notarize.zip
           xcrun notarytool submit /tmp/notarize.zip \
             --key /tmp/notary-key.p8 \
             --key-id "$MACOS_NOTARY_API_KEY_ID" \
             --issuer "$MACOS_NOTARY_API_ISSUER_ID" \
             --wait
-          xcrun stapler staple build/stack-nudge.app
+          xcrun stapler staple build/StackNudge.app
           # Sanity: confirm the stapled bundle passes Gatekeeper's check.
-          spctl -a -vv build/stack-nudge.app || true
+          spctl -a -vv build/StackNudge.app || true
           rm -f /tmp/notary-key.p8 /tmp/notarize.zip
 
       - name: Package ${{ matrix.arch }}
@@ -122,7 +122,7 @@ jobs:
           ARTIFACT="stack-nudge-${VERSION}-macos-${{ matrix.arch }}.tar.gz"
           # Tarball wraps just the .app — it's now self-contained
           # (Bootstrap.swift owns the install side on first launch).
-          tar czf "$ARTIFACT" -C build stack-nudge.app
+          tar czf "$ARTIFACT" -C build StackNudge.app
           shasum -a 256 "$ARTIFACT" | awk '{print $1 "  " "'"$ARTIFACT"'"}' \
             > "$ARTIFACT.sha256"
           ls -la "$ARTIFACT" "$ARTIFACT.sha256"

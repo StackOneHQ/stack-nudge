@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Builds stack-nudge.app (single persistent binary: panel + banners + voice)
+# Builds StackNudge.app (single persistent binary: panel + banners + voice)
 # Usage: ./build.sh [arm64|x86_64]  (defaults to host arch)
 
 set -e
 
 ARCH="${1:-$(uname -m)}"
-APP="build/stack-nudge.app"
+APP="build/StackNudge.app"
 
 build_app() {
   local app="$1"

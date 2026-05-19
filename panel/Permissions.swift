@@ -140,7 +140,7 @@ struct PermissionsView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Permissions")
                     .font(.title3.weight(.semibold))
-                Text("stack-nudge needs these grants to show banners, focus the right window, and send the Enter keystroke when you approve a permission nudge.")
+                Text("StackNudge needs these grants to show banners, focus the right window, and send the Enter keystroke when you approve a permission nudge.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -247,7 +247,7 @@ final class PermissionsWindowController: NSWindowController {
             contentRect: NSRect(x: 0, y: 0, width: 480, height: 440),
             styleMask: [.titled, .closable],
             backing: .buffered, defer: false)
-        window.title = "stack-nudge — Permissions"
+        window.title = "StackNudge — Permissions"
         window.isReleasedWhenClosed = false
         window.center()
         // .moveToActiveSpace follows the user to whatever Space they're on,

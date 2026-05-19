@@ -87,12 +87,72 @@ enum Bootstrap {
     // purpose: any one of these signals is enough, so a partially-
     // installed machine doesn't repeatedly re-trigger the wizard.
     static func isInstalled() -> Bool {
+        // notify.sh is the authoritative marker — Bootstrap.install copies
+        // it as one of its first steps, and uninstall removes the whole
+        // dotdir. A standalone launchd plist is no longer sufficient
+        // (the bundle-rename migration used to write one before install
+        // had run, which falsely signalled "installed" on a fresh wizard).
+        FileManager.default.fileExists(atPath: notifyPath)
+    }
+
+    // Path-level rename migration (pre-1.7 → 1.7+). The .app bundle is
+    // now `StackNudge.app` so Finder/Spotlight show the brand name; the
+    // CFBundle identifiers and the `~/.stack-nudge/` dotdir are untouched
+    // so existing TCC grants and user data carry over. Idempotent.
+    //
+    // Called from PanelController.applicationDidFinishLaunching when we
+    // detect we're running from the new path. Three things to fix up:
+    //   1. The old `stack-nudge.app` bundle next to us in ~/Applications/
+    //      (recycle it — keeps Finder tidy).
+    //   2. The launchd plist's `ProgramArguments[0]` still points at the
+    //      old binary path. Rewrite + reload.
+    //   3. The agent hook entries reference the old `…/notify.sh` —
+    //      already covered by the existing stale-entry regex, which
+    //      matches both `tinynudge/` and `stack-nudge/`. Nothing to do.
+    static func migrateBundleNameIfNeeded() {
         let fm = FileManager.default
-        if fm.fileExists(atPath: notifyPath) { return true }
-        if fm.fileExists(atPath: "\(launchAgentsDir)/\(appLabel).plist") {
-            return true
+        let runningFromNewPath = Bundle.main.bundleURL.lastPathComponent == "StackNudge.app"
+        guard runningFromNewPath else { return }
+
+        let legacy = "\(NSHomeDirectory())/Applications/stack-nudge.app"
+        if fm.fileExists(atPath: legacy) {
+            NSWorkspace.shared.recycle([URL(fileURLWithPath: legacy)]) { _, _ in }
         }
-        return false
+
+        // Retarget existing launchd plists whose ProgramArguments still
+        // reference the pre-1.7 path. We intentionally do NOT create
+        // plists from scratch here — a missing plist means this is a
+        // fresh install (no migration needed) and Bootstrap.install will
+        // write them when the user finishes the wizard.
+        retargetLaunchAgentIfNeeded(label: appLabel)
+        retargetLaunchAgentIfNeeded(label: daemonLabel)
+    }
+
+    // Read the on-disk launchd plist for `label`; if its first program-
+    // argument still references the pre-1.7 path, rewrite that argument
+    // to the equivalent path inside the currently-running bundle and
+    // reload the agent. No-op when the plist isn't present.
+    private static func retargetLaunchAgentIfNeeded(label: String) {
+        let fm = FileManager.default
+        let plistPath = "\(launchAgentsDir)/\(label).plist"
+        guard fm.fileExists(atPath: plistPath) else { return }
+
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: plistPath)),
+              var plist = (try? PropertyListSerialization.propertyList(
+                  from: data, options: [], format: nil)) as? [String: Any],
+              var args = plist["ProgramArguments"] as? [String],
+              let first = args.first,
+              first.contains("/stack-nudge.app/")
+        else { return }
+
+        let newFirst = first.replacingOccurrences(of: "/stack-nudge.app/", with: "/StackNudge.app/")
+        args[0] = newFirst
+        plist["ProgramArguments"] = args
+        guard let updated = try? PropertyListSerialization.data(
+            fromPropertyList: plist, format: .xml, options: 0) else { return }
+        try? updated.write(to: URL(fileURLWithPath: plistPath), options: [.atomic])
+        _ = try? runLaunchctl(["unload", plistPath])
+        _ = try? runLaunchctl(["load", plistPath])
     }
 
     // Agents present on this Mac. The bootstrap wizard checks all of these
@@ -201,7 +261,7 @@ enum Bootstrap {
         progress("Removing \(installDir)…")
         try? fm.removeItem(atPath: installDir)
 
-        progress("Moving stack-nudge.app to Trash…")
+        progress("Moving StackNudge.app to Trash…")
         // NSWorkspace.recycle is async; we kick it off and let the
         // current app terminate normally. macOS Finder handles the
         // actual deletion once we exit.
@@ -459,15 +519,30 @@ enum Bootstrap {
         let logPath = "\(installDir)/daemon.log"
         try writePlist(label: daemonLabel,
                        programArgs: [stackvox, "serve"],
-                       logPath: logPath)
+                       logPath: logPath,
+                       env: stackvoxEnv(venvURL: venvURL))
+    }
+
+    // libespeak-ng.dylib inside the bundled espeakng_loader wheel was
+    // compiled on the CI runner with its phoneme-data dir baked in
+    // (/Users/runner/work/...) — that path doesn't exist on user
+    // machines, so phonemization fails before any audio is generated.
+    // ESPEAK_DATA_PATH overrides the compile-time path at runtime; point
+    // it at the espeak-ng-data dir that ships inside the wheel.
+    static func stackvoxEnv(venvURL: URL) -> [String: String] {
+        let dataDir = venvURL
+            .appendingPathComponent("lib/python3.12/site-packages/espeakng_loader/espeak-ng-data")
+            .path
+        return ["ESPEAK_DATA_PATH": dataDir]
     }
 
     // Common plist serialiser: emits the same XML shape install.sh's
     // register_launchd_agent function produces, via PropertyListSerialization.
     private static func writePlist(label: String,
                                    programArgs: [String],
-                                   logPath: String) throws {
-        let plist: [String: Any] = [
+                                   logPath: String,
+                                   env: [String: String] = [:]) throws {
+        var plist: [String: Any] = [
             "Label":             label,
             "ProgramArguments":  programArgs,
             "RunAtLoad":         true,
@@ -475,6 +550,9 @@ enum Bootstrap {
             "StandardOutPath":   logPath,
             "StandardErrorPath": logPath,
         ]
+        if !env.isEmpty {
+            plist["EnvironmentVariables"] = env
+        }
         let data = try PropertyListSerialization.data(
             fromPropertyList: plist,
             format: .xml,
@@ -615,7 +693,7 @@ struct BootstrapView: View {
 
     private var headerTitle: String {
         switch nav.bootstrapPhase {
-        case .idle:       return "Welcome to stack-nudge"
+        case .idle:       return "Welcome to StackNudge"
         case .installing: return "Setting up…"
         case .done:       return "You're all set"
         case .failed:     return "Setup failed"
@@ -639,7 +717,7 @@ struct BootstrapView: View {
     }
 
     private var tagline: some View {
-        Text("Notifications for AI coding agents. We'll wire stack-nudge into each agent you've selected below, set up background services, and you'll be ready to go in a few seconds.")
+        Text("Notifications for AI coding agents. We'll wire StackNudge into each agent you've selected below, set up background services, and you'll be ready to go in a few seconds.")
             .font(.subheadline)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -648,7 +726,7 @@ struct BootstrapView: View {
     // MARK: - Post-install onboarding content (was Welcome.swift)
 
     private var completedBlurb: some View {
-        Text("stack-nudge runs from your menu bar. Here's how to use it:")
+        Text("StackNudge runs from your menu bar. Here's how to use it:")
             .font(.subheadline)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -724,7 +802,7 @@ struct BootstrapView: View {
     @ViewBuilder
     private var agentList: some View {
         if nav.bootstrapAvailableAgents.isEmpty {
-            Text("No supported agents detected (~/.claude, ~/.cursor, ~/.gemini). Install one and restart stack-nudge to wire it up.")
+            Text("No supported agents detected (~/.claude, ~/.cursor, ~/.gemini). Install one and restart StackNudge to wire it up.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -795,7 +873,7 @@ struct BootstrapView: View {
             HStack(spacing: 8) {
                 if case .installing = nav.bootstrapPhase {
                     ProgressView().controlSize(.small)
-                    Text("Installing stack-nudge…").font(.subheadline)
+                    Text("Installing StackNudge…").font(.subheadline)
                 } else if case .done = nav.bootstrapPhase {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.green)
@@ -953,7 +1031,7 @@ struct UninstallView: View {
                 .foregroundStyle(.red)
             VStack(alignment: .leading, spacing: 2) {
                 Text(nav.uninstallPhase == .confirm
-                     ? "Remove stack-nudge?"
+                     ? "Remove StackNudge?"
                      : "Uninstalling…")
                     .font(.headline)
                 if nav.uninstallPhase == .confirm {
@@ -975,7 +1053,7 @@ struct UninstallView: View {
                 bullet("Hook entries in your Claude Code / Cursor configs")
                 bullet("Background launchd agents (panel + voice daemon)")
                 bullet("~/.stack-nudge/ (config, phrases, notify.sh)")
-                bullet("stack-nudge.app (moved to Trash)")
+                bullet("StackNudge.app (moved to Trash)")
             }
             Text("Settings, the macOS keychain entry for Claude Code, and the cached Kokoro voice model in ~/.cache/huggingface/ are not touched.")
                 .font(.caption)
@@ -1025,7 +1103,7 @@ struct UninstallView: View {
                 FooterDivider()
                 FooterHint(label: "Cancel", keys: ["esc"])
             } else {
-                FooterHint(label: "Don't quit stack-nudge during uninstall", keys: [])
+                FooterHint(label: "Don't quit StackNudge during uninstall", keys: [])
             }
         }
     }

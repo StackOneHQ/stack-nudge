@@ -230,14 +230,20 @@ nudge_debug() {
   printf '[stack-nudge] %s\n' "$*" >&2
 }
 
-# Locate one of our .app bundles. Searches ~/Applications, the script's
-# own directory, and the repo build/ output (for in-tree development).
-# Args: app-bundle-name (e.g. "stack-nudge.app")
-# Echoes the first match, empty string if none found.
+# Auto-launch the .app if the panel socket isn't already up. Checks the
+# new bundle name first (StackNudge.app, 1.7+) then falls back to the
+# pre-rename name (stack-nudge.app) so an in-flight upgrade — where the
+# old bundle is still running with the new hook script — keeps working.
 ensure_app_running() {
   [[ -S "$PANEL_SOCK" ]] && return
-  local app_path="$HOME/Applications/stack-nudge.app"
-  [[ ! -d "$app_path" ]] && return
+  local app_path=""
+  if [[ -d "$HOME/Applications/StackNudge.app" ]]; then
+    app_path="$HOME/Applications/StackNudge.app"
+  elif [[ -d "$HOME/Applications/stack-nudge.app" ]]; then
+    app_path="$HOME/Applications/stack-nudge.app"
+  else
+    return
+  fi
   # -g: launch in the background, don't steal focus from the editor
   open -ga "$app_path" 2>/dev/null
   for _ in 1 2 3 4 5 6 7 8 9 10; do

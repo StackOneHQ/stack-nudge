@@ -43,15 +43,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: build stack-nudge.app
+      - name: build StackNudge.app
         run: ./build.sh ${{ matrix.arch }}
 
       - name: verify executable exists + is correct arch
         run: |
           set -e
-          bin=$(ls build/stack-nudge.app/Contents/MacOS/)
-          file "build/stack-nudge.app/Contents/MacOS/$bin"
-          file "build/stack-nudge.app/Contents/MacOS/$bin" | grep -q "${{ matrix.arch }}"
+          bin=$(ls build/StackNudge.app/Contents/MacOS/)
+          file "build/StackNudge.app/Contents/MacOS/$bin"
+          file "build/StackNudge.app/Contents/MacOS/$bin" | grep -q "${{ matrix.arch }}"
 
       - name: verify Info.plist is valid
         run: plutil -lint panel/Info.plist
