@@ -10,9 +10,21 @@ name: Build and Release
 # trouble than two separate artifacts.
 
 on:
+  # Auto-fire when a vX.Y.Z tag is pushed by a user account.
   push:
     tags:
       - 'v*'
+  # Manual fallback for tags pushed by release-please-action — the default
+  # GITHUB_TOKEN deliberately suppresses downstream workflow triggers, so
+  # release-please-created tags don't auto-fire the `push: tags: v*` path
+  # above. Re-running this workflow from Actions → "Run workflow" picks up
+  # any existing tag and attaches its artifacts to the matching release.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. v1.7.0). Must already exist as a Release.'
+        required: true
+        type: string
 
 jobs:
   release:
@@ -30,9 +42,18 @@ jobs:
       # Resources/venv/. Local dev iteration leaves this unset for speed.
       STACKNUDGE_BUNDLE_VENV: "1"
       KEYCHAIN: build-stack-nudge.keychain
+      # Tag we're operating on, regardless of trigger source. For push
+      # events this resolves to the tag that fired the workflow; for
+      # workflow_dispatch it's the input the user typed in the UI.
+      TARGET_TAG: ${{ inputs.tag || github.ref_name }}
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Check out the actual tag's commit rather than the workflow's
+          # ref, so workflow_dispatch builds the same source the original
+          # tag pointed at (not whatever HEAD on main looks like now).
+          ref: ${{ inputs.tag || github.ref }}
 
       # Stamp the tag's version into Info.plist so the bundled app
       # advertises the right version regardless of what's checked into
@@ -40,7 +61,7 @@ jobs:
       # sync too, but stamping at build time is belt-and-braces.
       - name: Stamp version from tag
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${TARGET_TAG#v}"
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" panel/Info.plist
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" panel/Info.plist
 
@@ -118,7 +139,7 @@ jobs:
       - name: Package ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${TARGET_TAG#v}"
           ARTIFACT="stack-nudge-${VERSION}-macos-${{ matrix.arch }}.tar.gz"
           # Tarball wraps just the .app — it's now self-contained
           # (Bootstrap.swift owns the install side on first launch).
@@ -130,8 +151,12 @@ jobs:
       # release-please creates the GitHub Release before this workflow
       # runs, so action-gh-release attaches assets to the existing
       # release rather than creating a duplicate.
+      # tag_name explicit so workflow_dispatch attaches to the right release
+      # — without it action-gh-release uses github.ref which is "main"-ish
+      # for manual dispatches and fails to find a matching release.
       - uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ env.TARGET_TAG }}
           files: |
             stack-nudge-*-macos-${{ matrix.arch }}.tar.gz
             stack-nudge-*-macos-${{ matrix.arch }}.tar.gz.sha256
