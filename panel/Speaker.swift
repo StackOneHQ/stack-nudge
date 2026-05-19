@@ -9,23 +9,29 @@ import AppKit
 // binary anymore; speech goes through `stackvox say <text>` as a subcommand.
 enum Speaker {
 
+    // Never invoke the `stackvox` script directly — pip stamps an absolute
+    // shebang at install time, so a venv built on the CI runner has a
+    // shebang pointing at /Users/runner/... that doesn't exist on user
+    // machines. Always go through `python3 <script-path>` so the shebang
+    // is bypassed and python3's own binary (a real Mach-O) handles loading.
     static func speak(_ text: String, voice: String? = nil, speed: String? = nil) {
         let venvBin = "\(NSHomeDirectory())/.stack-nudge/venv/bin"
-        let stackvox    = "\(venvBin)/stackvox"
-        let socketPath  = "\(NSHomeDirectory())/.cache/stackvox/daemon.sock"
-        guard FileManager.default.isExecutableFile(atPath: stackvox) else { return }
+        let python = "\(venvBin)/python3"
+        let stackvox = "\(venvBin)/stackvox"
+        let socketPath = "\(NSHomeDirectory())/.cache/stackvox/daemon.sock"
+        guard FileManager.default.isExecutableFile(atPath: python),
+              FileManager.default.isReadableFile(atPath: stackvox)
+        else { return }
+
+        let venvURL = URL(fileURLWithPath: "\(NSHomeDirectory())/.stack-nudge/venv")
+            .resolvingSymlinksInPath()
+        var env = ProcessInfo.processInfo.environment
+        env.merge(Bootstrap.stackvoxEnv(venvURL: venvURL)) { _, new in new }
 
         if !FileManager.default.fileExists(atPath: socketPath) {
             let serve = Process()
-            serve.executableURL = URL(fileURLWithPath: stackvox)
-            serve.arguments = ["serve"]
-            // Same espeak-ng data-path workaround as the launchd plist —
-            // the wheel's libespeak-ng.dylib has a CI-build phontab path
-            // baked in; ESPEAK_DATA_PATH overrides it at runtime.
-            let venvURL = URL(fileURLWithPath: "\(NSHomeDirectory())/.stack-nudge/venv")
-                .resolvingSymlinksInPath()
-            var env = ProcessInfo.processInfo.environment
-            env.merge(Bootstrap.stackvoxEnv(venvURL: venvURL)) { _, new in new }
+            serve.executableURL = URL(fileURLWithPath: python)
+            serve.arguments = [stackvox, "serve"]
             serve.environment = env
             try? serve.run()
         }
@@ -34,8 +40,9 @@ enum Speaker {
         let resolvedVoice = voice ?? config["STACKNUDGE_VOICE_NAME"]  ?? "af_aoede"
         let resolvedSpeed = speed ?? config["STACKNUDGE_VOICE_SPEED"] ?? "1.1"
         let say = Process()
-        say.executableURL = URL(fileURLWithPath: stackvox)
-        say.arguments = ["say", "--voice", resolvedVoice, "--speed", resolvedSpeed, text]
+        say.executableURL = URL(fileURLWithPath: python)
+        say.arguments = [stackvox, "say", "--voice", resolvedVoice, "--speed", resolvedSpeed, text]
+        say.environment = env
         say.standardOutput = FileHandle.nullDevice
         say.standardError = FileHandle.nullDevice
         say.terminationHandler = { ended in

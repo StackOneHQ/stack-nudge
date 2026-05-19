@@ -515,10 +515,17 @@ enum Bootstrap {
     // benefit, not the daemon's).
     private static func writeDaemonPlistIfVenvPresent() throws {
         guard let venvURL = bundledVenvURL() else { return }
+        // Invoke via python3 with stackvox as a script argument. pip
+        // stamps an absolute build-time shebang into the stackvox script
+        // — CI-built bundles end up with /Users/runner/... which doesn't
+        // exist on user machines, so running the script directly fails
+        // with "bad interpreter". python3 is a real Mach-O binary that's
+        // relocatable; calling it directly bypasses the shebang entirely.
+        let python = venvURL.appendingPathComponent("bin/python3").path
         let stackvox = venvURL.appendingPathComponent("bin/stackvox").path
         let logPath = "\(installDir)/daemon.log"
         try writePlist(label: daemonLabel,
-                       programArgs: [stackvox, "serve"],
+                       programArgs: [python, stackvox, "serve"],
                        logPath: logPath,
                        env: stackvoxEnv(venvURL: venvURL))
     }
