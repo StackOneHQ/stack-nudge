@@ -729,11 +729,20 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         center.setNotificationCategories([permCategory, stopCategory])
     }
 
-    // Post a UNUserNotification when STACKNUDGE_BANNER is enabled.
-    // Sound is omitted — afplay fires independently in notify.sh so we
-    // don't double-cue when the macOS banner is also shown.
+    // Fire the user-facing cues (chime + voice + banner) for an incoming
+    // event. Audio used to live in notify.sh (`afplay` and `stackvox say`
+    // forked from the shell hook), but that meant quitting stack-nudge
+    // didn't stop the bell — bash had already detached the child. Owning
+    // playback here means Speaker.stopAllAudio() on quit silences us.
+    //
+    // Mute-when-focused: when the user is staring at the source editor
+    // window we suppress the banner + voice, keeping only a subtle chime —
+    // unless voice is on, in which case we stay fully silent (voice
+    // replaces the chime in the existing UX contract).
+    //
     // If STACKNUDGE_ACTIVATE_IMMEDIATELY is set, focus the source editor
-    // right away without waiting for the user to click.
+    // right away without waiting for the user to click; we skip cues
+    // entirely in that flow since the editor jump is the signal.
     private func postBannerIfNeeded(_ event: NudgeEvent) {
         let config = PanelConfig.load()
 
@@ -749,8 +758,91 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return
         }
 
+        let muted = !event.bypassMute
+            && config.muteWhenFocused
+            && isEventSourceFocused(event)
+
+        if muted {
+            // Source window is frontmost — keep a minimal cue (chime when
+            // voice is off; nothing when voice is on, matching notify.sh's
+            // prior contract). No banner, no voice utterance.
+            if !config.voiceEnabled, let sound = event.soundName {
+                Speaker.playSound(named: sound)
+            }
+            return
+        }
+
+        if let sound = event.soundName, !config.voiceEnabled {
+            Speaker.playSound(named: sound)
+        }
+        if config.voiceEnabled, let phrase = event.voiceMessage, !phrase.isEmpty {
+            Speaker.speak(phrase, voice: config.voiceName, speed: config.voiceSpeed)
+        }
+
         guard config.bannerEnabled else { return }
         postBanner(for: event)
+    }
+
+    // Returns true if the event's source editor window appears to be the
+    // user's current focus. Ported from notify.sh's mute_when_focused
+    // block: match the frontmost app's bundle ID first (cheap), and when
+    // we have a window title to compare against, confirm via System Events.
+    private func isEventSourceFocused(_ event: NudgeEvent) -> Bool {
+        guard let sourceBundle = event.bundleID,
+              let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+              front == sourceBundle
+        else { return false }
+
+        guard let want = event.windowTitle, !want.isEmpty,
+              let processName = processName(for: sourceBundle)
+        else {
+            // No window title to disambiguate — bundle match alone is
+            // enough (single-window editors, or the user has just the one
+            // project open in this app).
+            return true
+        }
+
+        let script = """
+        tell application "System Events"
+          tell process "\(processName)"
+            try
+              return title of window 1
+            end try
+          end tell
+        end tell
+        """
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        p.arguments = ["-e", script]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = FileHandle.nullDevice
+        do {
+            try p.run()
+            p.waitUntilExit()
+        } catch {
+            return false
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let frontTitle = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return frontTitle == want
+    }
+
+    // Same bundle-ID → System Events process-name mapping as notify.sh's
+    // notify_macos(); only the editors/terminals we already special-case
+    // for click-to-focus need an entry here.
+    private func processName(for bundleID: String) -> String? {
+        switch bundleID {
+        case "com.todesktop.230313mzl4w4u92": return "Cursor"
+        case "com.microsoft.VSCode":          return "Code"
+        case "dev.zed.Zed":                   return "Zed"
+        case "com.googlecode.iterm2":         return "iTerm2"
+        case "dev.warp.Warp-Stable":          return "Warp"
+        case "com.mitchellh.ghostty":         return "Ghostty"
+        case "com.apple.Terminal":            return "Terminal"
+        default: return nil
+        }
     }
 
     // Posts a UNNotificationRequest for an event. Used by postBannerIfNeeded
@@ -944,6 +1036,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         listener?.stop()
         quotaTimer?.invalidate()
         quotaTimer = nil
+        // Stop any in-flight afplay/stackvox children so Quit silences
+        // audio that was triggered by us — the original bug that motivated
+        // moving the bell from notify.sh into the app.
+        Speaker.stopAllAudio()
     }
 
     // MARK: - PanelKeyDelegate

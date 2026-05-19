@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 // Thin wrapper around the stackvox CLI. Spawns the daemon if its socket
 // isn't up yet (mirrors notify.sh's auto-start) and falls back to a no-op
@@ -27,6 +28,67 @@ enum Speaker {
         let say = Process()
         say.executableURL = URL(fileURLWithPath: stackvox)
         say.arguments = ["say", "--voice", resolvedVoice, "--speed", resolvedSpeed, text]
-        try? say.run()
+        say.standardOutput = FileHandle.nullDevice
+        say.standardError = FileHandle.nullDevice
+        say.terminationHandler = { ended in
+            audioLock.lock(); defer { audioLock.unlock() }
+            activeAudio.removeAll { $0 === ended }
+        }
+        do {
+            try say.run()
+            audioLock.lock()
+            activeAudio.append(say)
+            audioLock.unlock()
+        } catch {
+            // best-effort; stackvox missing → silent fallback
+        }
+    }
+
+    // Play a /System/Library/Sounds/*.aiff chime. The afplay path is identical
+    // to what notify.sh used; we keep it as a Process call (rather than NSSound)
+    // because afplay terminates on app quit — fixing the "bell keeps ringing
+    // after quitting stack-nudge" complaint that motivated this move. NSSound
+    // would play asynchronously without that lifecycle guarantee.
+    @discardableResult
+    static func playSound(named name: String) -> Process? {
+        let path = "/System/Library/Sounds/\(name).aiff"
+        guard FileManager.default.fileExists(atPath: path) else { return nil }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
+        p.arguments = [path]
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        // Track so applicationWillTerminate can kill any still-playing
+        // afplay children — the whole point of moving this in-app is that
+        // quitting the app stops the bell.
+        p.terminationHandler = { ended in
+            audioLock.lock(); defer { audioLock.unlock() }
+            activeAudio.removeAll { $0 === ended }
+        }
+        do {
+            try p.run()
+            audioLock.lock()
+            activeAudio.append(p)
+            audioLock.unlock()
+            return p
+        } catch {
+            return nil
+        }
+    }
+
+    // Kill any in-flight afplay or stackvox children. Called from
+    // PanelController.applicationWillTerminate so a user-initiated Quit
+    // also silences the audio that this event chain spawned.
+    static func stopAllAudio() {
+        audioLock.lock()
+        let snapshot = activeAudio
+        activeAudio.removeAll()
+        audioLock.unlock()
+        for p in snapshot where p.isRunning {
+            p.terminate()
+        }
     }
 }
+
+private var activeAudio: [Process] = []
+private let audioLock = NSLock()

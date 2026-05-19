@@ -7,6 +7,10 @@ struct PanelConfig {
     var hotkeySpec: String = "cmd+opt+n"
     var bannerEnabled: Bool = true
     var activateImmediately: Bool = false
+    var voiceEnabled: Bool = false
+    var voiceName: String? = nil
+    var voiceSpeed: String? = nil
+    var muteWhenFocused: Bool = true
 
     static func load() -> PanelConfig {
         var config = PanelConfig()
@@ -25,6 +29,10 @@ struct PanelConfig {
             case "STACKNUDGE_PANEL_HOTKEY":         config.hotkeySpec = value
             case "STACKNUDGE_BANNER":               config.bannerEnabled = value.lowercased() != "false"
             case "STACKNUDGE_ACTIVATE_IMMEDIATELY": config.activateImmediately = value.lowercased() == "true"
+            case "STACKNUDGE_VOICE":                config.voiceEnabled = value.lowercased() == "true"
+            case "STACKNUDGE_VOICE_NAME":           config.voiceName = value
+            case "STACKNUDGE_VOICE_SPEED":          config.voiceSpeed = value
+            case "STACKNUDGE_MUTE_WHEN_FOCUSED":    config.muteWhenFocused = value.lowercased() != "false"
             default: break
             }
         }

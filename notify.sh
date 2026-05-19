@@ -71,13 +71,12 @@ voice_permission_context() {
 }
 
 
-# Set to "true" to speak notifications aloud via StackVox (offline TTS).
-# Requires: pip install stackvox && stackvox serve
-# Optional: set STACKNUDGE_VOICE_NAME to a StackVox voice ID (default: af_aoede)
-# Optional: set STACKNUDGE_VOICE_SPEED to playback speed (default: 1.1)
-VOICE_ENABLED="${STACKNUDGE_VOICE:-false}"
+# STACKNUDGE_VOICE_NAME is read by the .app to pick the Kokoro voice. We
+# keep a local copy here only for phrase-language selection — voice_phrase_for
+# uses it to pick the right phrases/<lang>.sh file. Voice playback itself
+# is the app's job (see Speaker.swift) so afplay/stackvox children get
+# torn down when the user quits the app.
 VOICE_NAME="${STACKNUDGE_VOICE_NAME:-af_aoede}"
-VOICE_SPEED="${STACKNUDGE_VOICE_SPEED:-1.1}"
 
 # Map a Kokoro voice prefix to a phrase-file language code.
 voice_to_lang() {
@@ -88,19 +87,6 @@ voice_to_lang() {
     if|im)       echo "it" ;;
     pf|pm)       echo "pt" ;;
     *)           echo "en" ;;
-  esac
-}
-
-# Map a Kokoro voice prefix to the --lang code stackvox expects.
-voice_to_kokoro_lang() {
-  case "${1:0:2}" in
-    af|am) echo "en-us" ;;
-    bf|bm) echo "en-gb" ;;
-    ff)    echo "fr-fr" ;;
-    hf|hm) echo "hi" ;;
-    if|im) echo "it" ;;
-    pf|pm) echo "pt-br" ;;
-    *)     echo "en-us" ;;
   esac
 }
 
@@ -244,26 +230,6 @@ nudge_debug() {
   printf '[stack-nudge] %s\n' "$*" >&2
 }
 
-# Speak a message aloud via the bundled StackVox daemon.
-# Auto-starts the daemon if it isn't running. Falls back silently if the
-# venv isn't installed or the daemon fails to respond — set STACKNUDGE_DEBUG=true
-# to surface why.
-speak_notification() {
-  [[ "${VOICE_ENABLED}" != "true" ]] && return
-  if [[ ! -x "$STACKVOX" ]]; then
-    nudge_debug "voice requested but stackvox not found at $STACKVOX"
-    return
-  fi
-  local text="$1"
-  if [[ ! -S "${HOME}/.cache/stackvox/daemon.sock" ]]; then
-    nudge_debug "stackvox daemon socket missing — starting daemon"
-    nohup "$STACKVOX" serve >/dev/null 2>&1 &
-  fi
-  local kokoro_lang
-  kokoro_lang=$(voice_to_kokoro_lang "$VOICE_NAME")
-  "$STACKVOX" say --voice "${VOICE_NAME}" --lang "${kokoro_lang}" --speed "${VOICE_SPEED}" "${text}" 2>/dev/null &
-}
-
 # Locate one of our .app bundles. Searches ~/Applications, the script's
 # own directory, and the repo build/ output (for in-tree development).
 # Args: app-bundle-name (e.g. "stack-nudge.app")
@@ -315,6 +281,7 @@ walk_session_chain() {
 # env vars rather than positional argv to keep the heredoc readable now that
 # we have ~15 fields.
 # Args: title message bundle_id window_title has_action(true|false)
+#       fifo_path voice_message sound_name bypass_mute(true|false)
 post_to_panel() {
   ensure_app_running
   [[ ! -S "$PANEL_SOCK" ]] && return
@@ -331,6 +298,9 @@ post_to_panel() {
   NUDGE_IPC_HOOK="${VSCODE_IPC_HOOK_CLI:-}" \
   NUDGE_HAS_ACTION="$5" \
   NUDGE_FIFO="${6:-}" \
+  NUDGE_VOICE_MESSAGE="${7:-}" \
+  NUDGE_SOUND="${8:-}" \
+  NUDGE_BYPASS_MUTE="${9:-false}" \
   NUDGE_SOCK="$PANEL_SOCK" \
   NUDGE_AGENT_PID="${AGENT_PID:-}" \
   NUDGE_SHELL_PID="${SHELL_PID:-}" \
@@ -349,6 +319,7 @@ out = {
     "message":           env["NUDGE_MESSAGE"],
     "timestamp":         time.time(),
     "has_action_button": env["NUDGE_HAS_ACTION"] == "true",
+    "bypass_mute":       env.get("NUDGE_BYPASS_MUTE", "false") == "true",
 }
 
 # Only emit fields that have values — keeps the wire payload clean.
@@ -364,6 +335,8 @@ optional = {
     "terminal_app":  env.get("NUDGE_TERMINAL_APP"),
     "term_program":  env.get("NUDGE_TERM_PROGRAM"),
     "session_id":    env.get("NUDGE_SESSION_ID"),
+    "voice_message": env.get("NUDGE_VOICE_MESSAGE"),
+    "sound_name":    env.get("NUDGE_SOUND"),
 }
 for key, value in optional.items():
     if not value:
@@ -424,12 +397,12 @@ notify_macos() {
   esac
 
   # Identify the source window by matching the project name ($PWD basename)
-  # to window titles. This lets us suppress and focus the right window even
-  # when multiple windows of the same app are open.
+  # to window titles. The app uses this to disambiguate which editor window
+  # is the source (for both click-to-focus and mute-when-focused).
   local win_title=""
+  local project_name
+  project_name=$(basename "$PWD")
   if [[ -n "$process_name" ]]; then
-    local project_name
-    project_name=$(basename "$PWD")
     win_title=$(osascript \
       -e "tell application \"System Events\"" \
       -e "  tell process \"${process_name}\"" \
@@ -440,36 +413,6 @@ notify_macos() {
       -e "end tell" 2>/dev/null)
   fi
 
-  # Suppress banner only if the exact source window is currently frontmost.
-  # Gated on STACKNUDGE_MUTE_WHEN_FOCUSED — set to false to always notify
-  # regardless of which window has focus. The welcome event always fires
-  # (post-install confirmation must reach the user even though they're
-  # staring at the install terminal at that moment).
-  local mute_when_focused="${STACKNUDGE_MUTE_WHEN_FOCUSED:-true}"
-  [[ "${EVENT}" == "welcome" ]] && mute_when_focused="false"
-  if [[ "$mute_when_focused" == "true" ]]; then
-    local frontmost_id
-    frontmost_id=$(osascript -e "id of app (path to frontmost application as text)" 2>/dev/null)
-    if [[ "$frontmost_id" == "$bundle_id" && -n "$process_name" && -n "$win_title" ]]; then
-      local frontmost_win
-      frontmost_win=$(osascript \
-        -e "tell application \"System Events\"" \
-        -e "  tell process \"${process_name}\"" \
-        -e "    get title of window 1" \
-        -e "  end tell" \
-        -e "end tell" 2>/dev/null)
-      if [[ "$frontmost_win" == "$win_title" ]]; then
-        # Source window is already focused — minimal signal. Skip sound when
-        # voice is on (voice itself is suppressed here too, but keep the
-        # "voice replaces sound" rule consistent across all paths).
-        if [[ "${VOICE_ENABLED}" != "true" ]]; then
-          afplay "/System/Library/Sounds/${sound}.aiff" 2>/dev/null
-        fi
-        return
-      fi
-    fi
-  fi
-
   local has_action="false"
   local fifo_path=""
   if [[ "${EVENT}" == "permission" ]]; then
@@ -477,18 +420,20 @@ notify_macos() {
     fifo_path=$(create_perm_fifo)
   fi
 
-  # Post to the persistent app — it handles both the panel history and the
-  # UNUserNotification banner based on the user's config. Backgrounded so
-  # Python startup (~50ms) doesn't block the agent hook.
-  post_to_panel "${title}" "${message}" "${bundle_id}" "${project_name:-}" "${has_action}" "${fifo_path}" &
+  # Audio (chime + voice) and mute-when-focused now live in the .app —
+  # so quitting stack-nudge actually silences the bell, and the cdhash-
+  # stable signed bundle can manage afplay/stackvox child lifetimes.
+  # This hook just forwards the curated phrase and sound name; the app
+  # decides whether to play them based on PanelConfig + frontmost window.
+  #
+  # The welcome event (legacy install.sh post-install confirmation) sets
+  # bypass_mute=true so the user hears it even while looking at the
+  # install terminal.
+  local bypass_mute="false"
+  [[ "${EVENT}" == "welcome" ]] && bypass_mute="true"
 
-  # Sound fires independently via afplay — guaranteed even if macOS throttles
-  # or the app isn't running yet. Voice replaces the chime when enabled.
-  if [[ "${VOICE_ENABLED}" != "true" ]]; then
-    afplay "/System/Library/Sounds/${sound}.aiff" 2>/dev/null &
-  fi
-
-  speak_notification "${voice_message}"
+  post_to_panel "${title}" "${message}" "${bundle_id}" "${project_name}" \
+    "${has_action}" "${fifo_path}" "${voice_message}" "${sound}" "${bypass_mute}" &
 
   # For permission events, block reading from the FIFO. The user's Allow
   # click in the panel/banner writes "allow" to it; we then output the
