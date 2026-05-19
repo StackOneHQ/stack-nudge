@@ -64,6 +64,14 @@ final class PanelNav: ObservableObject {
     @Published var voiceSpeed:      Double = 1.1
     @Published var voicesAvailable: [String] = []
     @Published var voicesLoading:   Bool = true
+    // Kokoro voice model is fetched on first synthesis (~325 MB to
+    // ~/.cache/huggingface/). UI hides Voice + Speed rows behind a
+    // "Download voice model" action until the cache directory appears.
+    @Published var voiceModelCached:      Bool    = false
+    @Published var voiceModelDownloading: Bool    = false
+    @Published var voiceModelProgress:    Double  = 0  // 0…1; -1 = indeterminate
+    @Published var voiceModelError:       String?
+    private var voiceModelDownloadProcess: Process?
     // The latest release tag from GitHub when newer than this bundle's
     // CFBundleShortVersionString — nil otherwise. Drives both the Settings
     // tab dot badge and the conditional "Update available" row at the top
@@ -188,7 +196,46 @@ final class PanelNav: ObservableObject {
         quotaAlertThreshold = Self.quotaThresholds.min(by: { abs($0 - rawThreshold) < abs($1 - rawThreshold) }) ?? 80
     }
 
+    func refreshVoiceModelCached() {
+        voiceModelCached = Speaker.voiceModelCached()
+    }
+
+    func startVoiceModelDownload() {
+        guard !voiceModelDownloading else { return }
+        voiceModelError = nil
+        voiceModelProgress = -1   // indeterminate until first tqdm line
+        voiceModelDownloading = true
+        voiceModelDownloadProcess = Speaker.downloadVoiceModel(
+            progress: { [weak self] value in
+                self?.voiceModelProgress = value
+            },
+            completion: { [weak self] error in
+                guard let self else { return }
+                self.voiceModelDownloading = false
+                self.voiceModelDownloadProcess = nil
+                if let error {
+                    self.voiceModelError = error.localizedDescription
+                    self.voiceModelCached = Speaker.voiceModelCached()
+                } else {
+                    self.voiceModelProgress = 1
+                    self.voiceModelCached = true
+                    // Now that the model is present, populate the voice
+                    // list so the dropdown is ready when SwiftUI re-renders.
+                    self.loadVoices()
+                }
+            }
+        )
+    }
+
+    func cancelVoiceModelDownload() {
+        voiceModelDownloadProcess?.terminate()
+    }
+
     func loadVoices() {
+        // Flip into loading state immediately so the UI shows "Loading…"
+        // instead of a stale "Voices unavailable" while the Process call
+        // is in flight. Common when called right after a model download.
+        voicesLoading = true
         Task.detached(priority: .userInitiated) {
             let names = Self.runStackvoxVoices()
             await MainActor.run { [weak self] in
@@ -220,12 +267,23 @@ final class PanelNav: ObservableObject {
 
     func selectNextRow() {
         guard rowCount > 0 else { return }
-        selectedSettingIndex = (selectedSettingIndex + 1) % rowCount
+        var next = (selectedSettingIndex + 1) % rowCount
+        // When the voice model isn't cached we collapse Voice + Speed
+        // into a single "Download voice model" action at index 7. Index 8
+        // (Speed) doesn't render; skip it during keyboard nav.
+        if !voiceModelCached, next - updateRowOffset == 8 {
+            next = (next + 1) % rowCount
+        }
+        selectedSettingIndex = next
     }
 
     func selectPrevRow() {
         guard rowCount > 0 else { return }
-        selectedSettingIndex = (selectedSettingIndex - 1 + rowCount) % rowCount
+        var prev = (selectedSettingIndex - 1 + rowCount) % rowCount
+        if !voiceModelCached, prev - updateRowOffset == 8 {
+            prev = (prev - 1 + rowCount) % rowCount
+        }
+        selectedSettingIndex = prev
     }
 
     // MARK: - Cycle / activate
@@ -239,6 +297,15 @@ final class PanelNav: ObservableObject {
         }
         switch selectedSettingIndex - updateRowOffset {
         case 0: startRecordingHotkey()
+        case 7 where !voiceModelCached:
+            // Pre-download state: index 7 is the "Download voice model"
+            // action, not a cycle. Enter triggers (or cancels) the
+            // download.
+            if voiceModelDownloading {
+                cancelVoiceModelDownload()
+            } else {
+                startVoiceModelDownload()
+            }
         case 11: actions?.editPhrases()
         case 12: actions?.checkPermissions()
         case 13: actions?.openConfig()
@@ -279,6 +346,13 @@ final class PanelNav: ObservableObject {
         case 6:
             soundPermission = step(soundPermission, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_PERMISSION", preview: true)
         case 7:
+            // Pre-download: the row is an action, not a cycle. Treat
+            // left/right arrow as a trigger so a user discovering the
+            // row keyboard-only can still start the download.
+            if !voiceModelCached {
+                if !voiceModelDownloading { startVoiceModelDownload() }
+                return
+            }
             guard !voicesLoading, !voicesAvailable.isEmpty else { return }
             voice = step(voice, in: voicesAvailable, forward: forward, key: "STACKNUDGE_VOICE_NAME", preview: false)
             let phrase = Self.voicePreviewPhrases.randomElement() ?? "Hello."
