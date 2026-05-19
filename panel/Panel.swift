@@ -1129,7 +1129,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
 
         // Cmd+1/2/3/4 jump directly between modes; the in-panel tab strip is
-        // the discoverable mouse equivalent.
+        // the discoverable mouse equivalent. Cmd+←/→ steps through the same
+        // ordered tab list without wrapping.
         if cmdOnly {
             switch event.keyCode {
             case KeyCode.one:
@@ -1140,6 +1141,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 nav.mode = .usage; return true
             case KeyCode.four:
                 nav.mode = .settings; return true
+            case KeyCode.leftArrow, KeyCode.rightArrow:
+                let tabs: [PanelMode] = [.events, .sessions, .usage, .settings]
+                if let idx = tabs.firstIndex(of: nav.mode) {
+                    let next = event.keyCode == KeyCode.leftArrow ? idx - 1 : idx + 1
+                    if tabs.indices.contains(next) {
+                        nav.mode = tabs[next]
+                    }
+                    return true
+                }
             default:
                 break
             }
