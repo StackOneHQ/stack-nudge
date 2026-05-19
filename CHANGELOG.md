@@ -4,6 +4,15 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.7.2](https://github.com/StackOneHQ/stack-nudge/compare/v1.7.1...v1.7.2) (2026-05-19)
+
+
+### Bug Fixes
+
+* invoke stackvox via python3 to bypass pip's baked-in shebang ([f035d60](https://github.com/StackOneHQ/stack-nudge/commit/f035d60d21708feb53316c5277b4b3989272de21))
+* **usage:** bound ScrollView height + show indicators ([112b272](https://github.com/StackOneHQ/stack-nudge/commit/112b2720a2771c88450f58ef43a361f0feea62be))
+* voice broken on user machines + Usage view scroll clipping ([3da4bf5](https://github.com/StackOneHQ/stack-nudge/commit/3da4bf5126954e89bf2a20cb7e3bba8aa5d30abb))
+
 ## [1.7.1](https://github.com/StackOneHQ/stack-nudge/compare/v1.7.0...v1.7.1) (2026-05-19)
 
 
