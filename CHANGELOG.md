@@ -4,6 +4,25 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.7.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.6.0...v1.7.0) (2026-05-19)
+
+
+### Features
+
+* add Sound toggle in Settings ([f0d44a0](https://github.com/StackOneHQ/stack-nudge/commit/f0d44a082f984566e84288ed394ab8e6aa35dc35))
+* Bootstrap UI + first-launch wizard + Settings uninstall row ([f8d796e](https://github.com/StackOneHQ/stack-nudge/commit/f8d796e1c624ce2320f41f8aa704181e8437e0d3))
+* Bootstrap.swift core install/uninstall logic ([f7efc06](https://github.com/StackOneHQ/stack-nudge/commit/f7efc061c55660c15b6ecf13912d19b724c8d8a4))
+* move audio + voice from notify.sh into the app ([571ccb3](https://github.com/StackOneHQ/stack-nudge/commit/571ccb31ce8fd660c7ce6eca72704f49c5043d1b))
+* native Mac install — signed releases + self-install/uninstall + artifact auto-update ([6ec86fd](https://github.com/StackOneHQ/stack-nudge/commit/6ec86fded3c0919d84bab7041e3c0f758bd2bbcd))
+* Updater downloads + atomic-swaps signed release artifact ([63bdde2](https://github.com/StackOneHQ/stack-nudge/commit/63bdde2e6f9f23ed950c33df230db2f25b4bfe26))
+* voice model download UI + integrity checks ([82fc16a](https://github.com/StackOneHQ/stack-nudge/commit/82fc16a6c47194495ff14a060bd381f2db5d8b3a))
+
+
+### Bug Fixes
+
+* **ci:** exclude entitlements.plist from SPM + forward win_title ([d1469be](https://github.com/StackOneHQ/stack-nudge/commit/d1469be16a86a605ad196260afdf665e7a3644b3))
+* panel auto-resize, dup-instance on reopen, quota alert spam ([9102681](https://github.com/StackOneHQ/stack-nudge/commit/91026819bed7758f7843393d9e12d0a7e6e5264b))
+
 ## [1.6.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.5.0...v1.6.0) (2026-05-14)
 
 
