@@ -353,7 +353,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // Tracks whether the banner has already fired this period per tier so
     // we don't refire on every poll. Reset when the tier's resets_at
     // advances (a new period started, fresh budget).
-    private var quotaLastFired: [String: (resetsAt: Date?, fired: Bool)] = [:]
+    // Per-tier alert state. `maxBucketFired` is the highest 5%-bucket
+    // (80, 85, 90, …) we've already alerted on; further alerts only fire
+    // when utilization crosses into a *new* higher bucket. `peakUtil`
+    // detects period rollover heuristically — a >30 pp drop from the
+    // running peak resets the bucket gate (the 5-hour window's
+    // resets_at slides forward every poll so we can't trust it).
+    private var quotaLastFired: [String: (maxBucketFired: Int, peakUtil: Double)] = [:]
 
     // UserDefaults keys for panel size + origin persistence. UserDefaults
     // lives in ~/Library/Preferences/com.stackonehq.stack-nudge.plist, so it
@@ -364,6 +370,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private static let panelDefaultSize = NSSize(width: 420, height: 280)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Pre-1.7 users had `stack-nudge.app` in ~/Applications/. If we're
+        // running from the new `StackNudge.app` location, scrub the
+        // stale bundle + rewrite the launchd plist so launchctl points
+        // at us, not the old path.
+        Bootstrap.migrateBundleNameIfNeeded()
+
         let size = Self.loadSavedPanelSize()
         let frame = NSRect(origin: .zero, size: size)
         panel = FloatingPanel(contentRect: frame)
@@ -382,6 +394,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             store: store, sessions: sessions, nav: nav, phrases: phrases,
             onGrantPermissions: { [weak self] in self?.handleGrantPermissions() }
         ))
+        // Don't let SwiftUI's preferred / intrinsic content size drive
+        // the NSPanel frame. The panel is user-resizable + size-persisted;
+        // a tab whose root view reports a different sizeThatFits (e.g.,
+        // the Loading-quota empty state) was causing the window to
+        // resize on every switch.
+        host.sizingOptions = []
         host.translatesAutoresizingMaskIntoConstraints = false
         blur.addSubview(host)
         NSLayoutConstraint.activate([
@@ -643,10 +661,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
     }
 
-    // Fire a banner when a tier crosses the user's configured threshold —
-    // once per period (reset when the tier's resets_at advances past the
-    // prior recorded reset, i.e. a new period started with a fresh budget).
-    // Master switch on PanelNav silences everything when toggled off.
+    // Fire a banner each time a tier crosses into a new 5% bucket at or
+    // above the user's configured threshold. With threshold=80, the user
+    // sees one alert at 80%, one at 85%, one at 90%, etc. — never more
+    // than once per bucket. Buckets reset when we detect a sharp drop in
+    // utilization (period rollover).
+    //
+    // Previous logic used the tier's `resets_at` to detect rollover, but
+    // the 5-hour window's reset is a rolling timestamp that advances on
+    // every poll, which caused spurious re-fires every few minutes.
+    private static let quotaBucketSize: Int = 5
+    private static let quotaResetDropThreshold: Double = 30   // pp
+
     private func evaluateQuotaThresholds(_ snapshot: QuotaSnapshot) {
         guard nav.quotaAlertsEnabled else { return }
         let threshold = Double(nav.quotaAlertThreshold)
@@ -658,18 +684,29 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             ("seven_day_sonnet", "Weekly (Sonnet)", snapshot.sevenDaySonnet),
         ]
 
+        let bucketSize = Self.quotaBucketSize
+
         for (name, label, tier) in tiers {
             guard let tier else { continue }
-            var state = quotaLastFired[name] ?? (resetsAt: tier.resetsAt, fired: false)
-            // Reset the fired flag if the period has rolled over.
-            if let prior = state.resetsAt, let now = tier.resetsAt, now > prior {
-                state = (resetsAt: now, fired: false)
+            var state = quotaLastFired[name] ?? (maxBucketFired: 0, peakUtil: 0)
+
+            // Heuristic period-rollover: a >30 pp drop from our running
+            // peak means a window rolled over (or the user is on a fresh
+            // billing cycle). Clear the bucket gate so future climbs
+            // alert again.
+            if state.peakUtil - tier.utilization > Self.quotaResetDropThreshold {
+                state = (maxBucketFired: 0, peakUtil: tier.utilization)
+            } else {
+                state.peakUtil = max(state.peakUtil, tier.utilization)
             }
-            if tier.utilization >= threshold, !state.fired {
+
+            // Current 5% bucket: floor utilization to the nearest 5.
+            let currentBucket = (Int(tier.utilization) / bucketSize) * bucketSize
+            if currentBucket >= Int(threshold), currentBucket > state.maxBucketFired {
                 postQuotaBanner(label: label,
                                 percent: Int(tier.utilization.rounded()),
                                 resetsAt: tier.resetsAt)
-                state.fired = true
+                state.maxBucketFired = currentBucket
             }
             quotaLastFired[name] = state
         }
@@ -1030,6 +1067,16 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             self.panel.orderOut(nil)
             self.nav.mode = .events
         }
+    }
+
+    // Fired when the user re-opens the app while it's already running —
+    // double-click from Finder, `open -a StackNudge`, Spotlight, etc.
+    // LSUIElement apps have no Dock icon, so this is the single entry
+    // point for "I clicked the app." Show the panel and return false so
+    // macOS knows we handled it and doesn't spawn a second process.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        showPanel()
+        return false
     }
 
     func applicationWillTerminate(_ notification: Notification) {
