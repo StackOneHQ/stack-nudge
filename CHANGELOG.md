@@ -4,6 +4,15 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.7.1](https://github.com/StackOneHQ/stack-nudge/compare/v1.7.0...v1.7.1) (2026-05-19)
+
+
+### Bug Fixes
+
+* **ci:** manual workflow_dispatch fallback for release.yml ([c978b63](https://github.com/StackOneHQ/stack-nudge/commit/c978b6381b4d9a583644c7bc05c73ed5e94b9e86))
+* **ci:** swap PAT for workflow_dispatch fallback ([950d4fe](https://github.com/StackOneHQ/stack-nudge/commit/950d4feed9e7f0bb8accefd9a85921b775f0fe5f))
+* **ci:** use PAT in release-please so tag push triggers release.yml ([2a8872d](https://github.com/StackOneHQ/stack-nudge/commit/2a8872d77ec4befe46cacfc76400057c12f7beff))
+
 ## [1.7.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.6.0...v1.7.0) (2026-05-19)
 
 
