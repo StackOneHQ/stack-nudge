@@ -16,8 +16,10 @@ jobs:
       # Watches conventional commits on main, opens (and updates) a Release PR
       # that bumps .release-please-manifest.json + regenerates CHANGELOG.md.
       # When the Release PR is merged, this action creates the git tag (vX.Y.Z)
-      # and the GitHub Release. The release.yml workflow then triggers on that
-      # tag to attach prebuilt asset bundles.
+      # and the GitHub Release. release.yml then attaches signed/notarized
+      # artifacts — either automatically when the next tag is created OR via
+      # its manual `workflow_dispatch` trigger as a fallback when the tag push
+      # didn't cascade (default GITHUB_TOKEN suppresses downstream triggers).
       - uses: googleapis/release-please-action@v4
         with:
           config-file: .release-please-config.json
