@@ -359,13 +359,20 @@ enum Bootstrap {
             // Gemini renames Claude's `Stop` to `AfterAgent` and routes
             // tool-permission prompts through `Notification` (with
             // `notification_type=ToolPermission` on stdin). Same
-            // matcher-group JSON shape otherwise. Note: Notification
-            // is observability-only — our hook can surface the banner
-            // but can't return an allow/deny decision the way Claude's
-            // PermissionRequest can.
+            // matcher-group JSON shape otherwise.
+            //
+            // CRITICAL DIFFERENCE FROM CLAUDE/CODEX: Gemini's `timeout`
+            // is measured in **milliseconds**, not seconds. Sending 30
+            // would kill the hook after 30 ms — before the shell even
+            // forks. Multiply by 1000 to match the writer's
+            // milliseconds-only convention for Gemini.
+            //
+            // Note: Notification is observability-only — our hook can
+            // surface the banner but can't return an allow/deny
+            // decision the way Claude's PermissionRequest can.
             try wireClaudeShapedHooks(at: path, agentArg: "gemini",
-                                      events: [("AfterAgent",   "stop",       30),
-                                               ("Notification", "permission", 30)])
+                                      events: [("AfterAgent",   "stop",       30_000),
+                                               ("Notification", "permission", 30_000)])
         }
     }
 
