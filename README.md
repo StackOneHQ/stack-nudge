@@ -2,6 +2,16 @@
   <img src="assets/logo_full.png" alt="stack-nudge" width="300" />
   <p><strong>Notifications for AI coding agents.</strong></p>
   <p>Get a banner + sound when your agent finishes a task or pauses for your approval — step away without missing a beat.</p>
+  <p>
+    <a href="https://github.com/StackOneHQ/stack-nudge/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/StackOneHQ/stack-nudge?display_name=tag&sort=semver"></a>
+    <a href="https://github.com/StackOneHQ/stack-nudge/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/StackOneHQ/stack-nudge/actions/workflows/ci.yml/badge.svg"></a>
+    <a href="LICENSE"><img alt="MIT licensed" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+    <img alt="macOS 13+" src="https://img.shields.io/badge/macOS-13%2B-black?logo=apple">
+  </p>
+  <p>
+    Maintained by <a href="https://www.stackone.com/">StackOne</a> ·
+    <a href="https://github.com/StackOneHQ">@StackOneHQ</a>
+  </p>
 </div>
 
 ---
@@ -22,16 +32,17 @@
 
 ### macOS
 
-Download the latest release from [GitHub Releases](https://github.com/StackOneHQ/stack-nudge/releases/latest):
+Download the latest release from [GitHub Releases](https://github.com/StackOneHQ/stack-nudge/releases/latest) — pick the `.tar.gz` matching your Mac's architecture (`arm64` for Apple Silicon, `x86_64` for Intel), expand, and drag `StackNudge.app` into `~/Applications/`.
+
+CLI shortcut (requires [`gh`](https://cli.github.com/)):
 
 ```bash
-# Pick the tarball matching your Mac's architecture:
-# arm64  → Apple Silicon (M1/M2/M3/M4)
-# x86_64 → Intel
-curl -fsSLO https://github.com/StackOneHQ/stack-nudge/releases/latest/download/stack-nudge-macos-arm64.tar.gz
-tar xzf stack-nudge-macos-arm64.tar.gz
-mv stack-nudge.app ~/Applications/
-open ~/Applications/stack-nudge.app
+ARCH=$(uname -m)
+gh release download --repo StackOneHQ/stack-nudge --pattern "stack-nudge-*-macos-${ARCH}.tar.gz*"
+shasum -a 256 -c stack-nudge-*-macos-${ARCH}.tar.gz.sha256
+tar xzf stack-nudge-*-macos-${ARCH}.tar.gz
+mv StackNudge.app ~/Applications/
+open ~/Applications/StackNudge.app
 ```
 
 On first launch, stack-nudge runs a one-screen wizard:
@@ -358,6 +369,15 @@ Swift compiled with `swiftc` directly. No Xcode, no SPM, no dependencies.
 
 Click-routing architecture (process exits after delivery, macOS re-launches on click) is adapted from [`terminal-notifier`](https://github.com/julienXX/terminal-notifier) by Eloy Durán and Julien Blanchard.
 
+## Terms of use
+
+By using stack-nudge or its source code, you agree to the following:
+
+- Use is governed by the [MIT License](LICENSE). The software is provided "as is", without warranty of any kind.
+- Participation in the project (issues, pull requests, discussions) is subject to the [Code of Conduct](CODE_OF_CONDUCT.md).
+- Suspected security vulnerabilities should be reported privately per [SECURITY.md](SECURITY.md), not via public issues.
+- The project is maintained by [StackOne](https://www.stackone.com/); contributions remain under the licence the contributor submits them under (MIT unless otherwise noted).
+
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE) for the full text. Copyright © 2026 StackOne Technologies Ltd. and contributors.
