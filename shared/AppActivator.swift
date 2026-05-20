@@ -20,7 +20,17 @@ struct AppActivator {
     static func activate(bundleID: String, windowTitle: String? = nil,
                          ipcHook: String? = nil, projectPath: String? = nil,
                          sendApproval: Bool = false, agent: String? = nil) {
-        let folder = windowTitle ?? projectPath.map { ($0 as NSString).lastPathComponent }
+        // For matching windows/tabs we want a LOOSE fragment that survives
+        // the user switching tabs between event time and click time:
+        //   - Tab titles in standalone terminals (Ghostty/iTerm/Terminal)
+        //     include the cwd basename plus other dynamic bits ("claude
+        //     ~/projA — Ghostty"). The exact captured windowTitle won't
+        //     match the current title if the user moved tabs.
+        //   - The project basename (eg "projA") is stable and almost
+        //     always present in the tab title format.
+        // Prefer the basename when we have a projectPath, fall back to
+        // the captured windowTitle otherwise.
+        let folder = projectPath.map { ($0 as NSString).lastPathComponent } ?? windowTitle
         let proc = processName[bundleID]
 
         // Cursor/VSCode: use the CLI to switch the internal active window, then bring it
@@ -75,6 +85,19 @@ struct AppActivator {
             return
         }
 
+        // Ghostty doesn't implement NSAccessibility on its Metal-rendered
+        // windows — `kAXWindowsAttribute` returns empty, so the AX walk
+        // below would never find anything. Ghostty 1.3.1+ ships a real
+        // AppleScript dictionary instead; use that to switch tabs by
+        // exact working-directory match. Falls through to standard
+        // activation if the scripting bridge doesn't respond (older
+        // Ghostty, or `tell application` permission denied).
+        if bundleID == "com.mitchellh.ghostty",
+           let path = projectPath, !path.isEmpty {
+            focusGhosttyTab(projectPath: path)
+            return
+        }
+
         // Fallback: activate then AXRaise with retries (works for native terminal apps).
         // Retry schedule from claude-notifications-go: 150ms → 250ms → 400ms.
         guard let app = NSRunningApplication
@@ -83,9 +106,21 @@ struct AppActivator {
 
         if let title = folder, !title.isEmpty {
             let pid = app.processIdentifier
+            // Two passes per retry tick:
+            //   1. raiseWindow: bring the OS-window containing the project
+            //      to front (no-op when the project's tab is in the same
+            //      window the user is already looking at).
+            //   2. focusTabContaining: walk that app's AX tree for a tab
+            //      element whose title contains the project name and
+            //      AXPress it. This is what actually switches tabs.
+            // Run #2 regardless of #1's outcome — when both tabs share the
+            // same OS-window, raiseWindow has nothing to do but the tab
+            // still needs selecting.
             for delay in [0.15, 0.25, 0.40] {
                 Thread.sleep(forTimeInterval: delay)
-                if raiseWindow(pid: pid, containingTitle: title) { break }
+                let raised = raiseWindow(pid: pid, containingTitle: title)
+                let tabbed = focusTabContaining(pid: pid, fragment: title)
+                if raised || tabbed { break }
             }
         }
 
@@ -206,6 +241,106 @@ struct AppActivator {
             }
         }
         return nil
+    }
+
+    // MARK: - Ghostty (AppleScript bridge)
+
+    // Ghostty exposes a scripting dictionary (windows → tabs → terminals)
+    // since 1.3.0; 1.3.1 added the activation-on-select fix so the .app
+    // actually comes to front. We can't use AX on Ghostty (it doesn't
+    // implement NSAccessibility on its Metal windows), so AppleScript is
+    // the supported external-control surface.
+    //
+    // Strategy: enumerate all tabs in all windows, find the one whose
+    // terminal.workingDirectory matches the event's projectPath exactly,
+    // and `select` it. Working directory is more reliable than title
+    // since titles include the running command + variable formatting.
+    private static func focusGhosttyTab(projectPath: String) {
+        let escaped = projectPath.replacingOccurrences(of: "\"", with: "\\\"")
+        // Two matching attempts in descending strictness:
+        //   1. Exact `is` after coercing both sides to text — Ghostty's
+        //      `working directory` returns a URL/alias type, which `is`
+        //      compares unequal to plain strings even when they print
+        //      identically. `as text` makes it a string-string compare.
+        //   2. `contains` either direction — handles Unicode-normalisation
+        //      drift (NFC vs NFD) and trailing-slash differences.
+        // First match wins. `tell w to select tab t` is what actually
+        // switches the tab; the outer `activate` brings Ghostty to front.
+        let script = """
+        tell application "Ghostty"
+          activate
+          set target to "\(escaped)" as text
+          repeat with w in windows
+            repeat with t in tabs of w
+              try
+                set wd to (working directory of terminal of t) as text
+                if wd is target then
+                  tell w to select tab t
+                  return "matched-exact"
+                end if
+                if wd contains target or target contains wd then
+                  tell w to select tab t
+                  return "matched-contains"
+                end if
+              end try
+            end repeat
+          end repeat
+          return "no-match"
+        end tell
+        """
+        var err: NSDictionary?
+        NSAppleScript(source: script)?.executeAndReturnError(&err)
+    }
+
+    // MARK: - AX tab switching (standalone terminal apps)
+
+    // For tabbed terminals where the OS-window is already frontmost but
+    // the event's source tab isn't the selected one. Walks the focused
+    // window's AX subtree (skipping the window node itself, since its
+    // title mirrors the currently-selected tab and would be a false
+    // match) for an element whose title or description contains the
+    // project-name fragment. AXPress on the match selects the tab —
+    // same mechanism as focusEditorTerminal uses for VS Code panes.
+    @discardableResult
+    private static func focusTabContaining(pid: pid_t, fragment: String) -> Bool {
+        let appElement = AXUIElementCreateApplication(pid)
+
+        // Try every window of the app, not just the focused one — the
+        // project's tab may live in a different OS-window the user has
+        // open but isn't currently looking at.
+        var windowsRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(appElement,
+                                            kAXWindowsAttribute as CFString,
+                                            &windowsRef) == .success,
+              let windows = windowsRef as? [AXUIElement] else { return false }
+
+        for win in windows {
+            // Walk window children directly (not the window itself) so we
+            // never match the window's own title — that mirrors the
+            // currently-selected tab and would be a false positive when
+            // the project we want is sitting in a different tab.
+            var children: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(win,
+                                                kAXChildrenAttribute as CFString,
+                                                &children) == .success,
+                  let kids = children as? [AXUIElement] else { continue }
+
+            for child in kids {
+                if let match = findElement(in: child, depth: 0, matching: { node in
+                    axStringContains(node, attribute: kAXTitleAttribute as CFString, fragment: fragment) ||
+                    axStringContains(node, attribute: kAXDescriptionAttribute as CFString, fragment: fragment)
+                }) {
+                    // Raise the containing window so the tab actually
+                    // becomes visible after AXPress.
+                    AXUIElementPerformAction(win, kAXRaiseAction as CFString)
+                    AXUIElementSetAttributeValue(appElement,
+                                                 kAXFrontmostAttribute as CFString,
+                                                 kCFBooleanTrue)
+                    return focus(match)
+                }
+            }
+        }
+        return false
     }
 
     // MARK: - AX window raise (native terminal apps / fallback)
