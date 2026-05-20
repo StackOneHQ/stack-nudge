@@ -419,6 +419,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // resets_at slides forward every poll so we can't trust it).
     private var quotaLastFired: [String: (maxBucketFired: Int, peakUtil: Double)] = [:]
 
+    // When a notification banner is clicked, macOS fires
+    // applicationShouldHandleReopen BEFORE userNotificationCenter(_:didReceive:).
+    // Our reopen handler shows the panel; didReceive then hides it as
+    // part of the banner-click flow — producing a visible flash. We
+    // defer the reopen-show and let didReceive cancel it by setting
+    // this deadline. See applicationShouldHandleReopen for the deferral
+    // logic and didReceive for the cancellation.
+    private var bannerActivationUntil: Date = .distantPast
+
     // UserDefaults keys for panel size + origin persistence. UserDefaults
     // lives in ~/Library/Preferences/com.stackonehq.stack-nudge.plist, so it
     // survives uninstall/reinstall cycles of ~/.stack-nudge/ and across
@@ -509,6 +518,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         setupNotificationCenter()
         store.onAppend = { [weak self] event in self?.postBannerIfNeeded(event) }
         nav.loadFromConfig()  // populate panelPinned + other live values up-front
+        // Scan agent configs for missing wires (post-update / post-install
+        // reconciliation). Surfaces a "Set up X" banner in Settings when
+        // any detected agent lacks our notify.sh hook.
+        nav.refreshUnwiredAgents()
 
         updateChecker = UpdateChecker(nav: nav)
         updateChecker?.start()
@@ -530,12 +543,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // wizard again.
         if !Bootstrap.isInstalled(), nav.mode != .postUpdate {
             nav.bootstrapAvailableAgents = Bootstrap.availableAgents()
-            // Exclude Gemini from the default-selected set — its row is
-            // info-only (hook wiring is manual), so pre-selecting it would
-            // mislead the user into thinking we'll wire something.
-            nav.bootstrapSelectedAgents  = Set(
-                nav.bootstrapAvailableAgents.filter { $0 != .gemini }
-            )
+            // Pre-select every detected agent — Claude, Cursor, Codex,
+            // and Gemini all wire real hooks. Earlier versions excluded
+            // Gemini because its row was info-only; that's no longer
+            // true (AfterAgent + Notification are wired now).
+            nav.bootstrapSelectedAgents  = Set(nav.bootstrapAvailableAgents)
             nav.bootstrapPhase           = .idle
             nav.mode                     = .bootstrap
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
@@ -983,6 +995,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                                 didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         defer { completionHandler() }
+        // Veto the deferred panel-show that applicationShouldHandleReopen
+        // queued: we know this activation came from a banner click, not
+        // a user re-opening the app.
+        bannerActivationUntil = Date().addingTimeInterval(0.5)
         guard let eventID = response.notification.request.content.userInfo["eventID"] as? String,
               let event = store.events.first(where: { $0.id.uuidString == eventID })
         else { return }
@@ -1156,12 +1172,23 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     }
 
     // Fired when the user re-opens the app while it's already running —
-    // double-click from Finder, `open -a StackNudge`, Spotlight, etc.
-    // LSUIElement apps have no Dock icon, so this is the single entry
-    // point for "I clicked the app." Show the panel and return false so
-    // macOS knows we handled it and doesn't spawn a second process.
+    // double-click from Finder, `open -a StackNudge`, Spotlight — AND
+    // (less obviously) as part of the system activation sequence that
+    // accompanies a notification-banner click. In the banner-click case
+    // this delegate fires BEFORE userNotificationCenter(_:didReceive:),
+    // so calling showPanel() here flashes the panel up just before
+    // didReceive's NSApp.hide() takes it back down.
+    //
+    // Defer the show so didReceive can veto. If a banner-click delegate
+    // arrives within the window, it bumps bannerActivationUntil and we
+    // skip. For a true app-icon reopen, no banner delegate fires and
+    // the panel appears after the brief delay.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        showPanel()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self else { return }
+            if Date() < self.bannerActivationUntil { return }
+            self.showPanel()
+        }
         return false
     }
 
