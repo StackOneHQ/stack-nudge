@@ -4,6 +4,21 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.9.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.8.0...v1.9.0) (2026-05-20)
+
+
+### Features
+
+* auto-wire Codex and Gemini CLI hooks; honest README support table ([96b94cb](https://github.com/StackOneHQ/stack-nudge/commit/96b94cb63effc9a8a7daef41b6d00614d4b1dce0))
+* surface unwired agents in Settings + one-click reconciliation ([cbbf5e9](https://github.com/StackOneHQ/stack-nudge/commit/cbbf5e9aa1f79828a533de2f2b1445f0c11313c1))
+
+
+### Bug Fixes
+
+* Codex + Gemini auto-wire, agent reconciliation banner, banner-flash fix ([362a340](https://github.com/StackOneHQ/stack-nudge/commit/362a3407d6b2b2c4880e751b4693c4ef35823f1c))
+* Gemini hook timeout is milliseconds, not seconds ([c143d89](https://github.com/StackOneHQ/stack-nudge/commit/c143d893e452b089ec19dd44a71b45bfc3442ccd))
+* kill the panel flash on banner click ([ae1f37b](https://github.com/StackOneHQ/stack-nudge/commit/ae1f37b8558f0fdae89a7d158796bd910d95733c))
+
 ## [1.8.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.7.2...v1.8.0) (2026-05-20)
 
 
