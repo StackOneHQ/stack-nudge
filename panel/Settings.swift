@@ -14,6 +14,17 @@ struct SettingsView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
+                        // Reconciliation banner — appears above all other
+                        // rows when one or more detected agents lack our
+                        // notify.sh hook. Not part of the keyboard index;
+                        // mouse-only at v1. After Set up is clicked, the
+                        // success state takes over the slot for a few
+                        // seconds before disappearing.
+                        if !nav.unwiredAgents.isEmpty {
+                            unwiredAgentsRow(nav.unwiredAgents)
+                        } else if !nav.recentlyWiredAgents.isEmpty {
+                            wiredConfirmationRow(nav.recentlyWiredAgents)
+                        }
                         // Index 0 when present, shifting everything else by
                         // +1. The offset is held on nav (updateRowOffset).
                         if let version = nav.updateAvailable {
@@ -101,7 +112,101 @@ struct SettingsView: View {
             if nav.voiceModelCached, nav.voicesAvailable.isEmpty {
                 nav.loadVoices()
             }
+            // Re-scan agent configs on every Settings open so the
+            // "unwired agent" banner reflects current disk state
+            // (covers: user just installed Codex; user manually edited
+            //  a hook file; old install lacks events added in a recent
+            //  StackNudge release).
+            nav.refreshUnwiredAgents()
         }
+    }
+
+    // Transient success confirmation that takes the reconciliation
+    // banner's slot for ~3 s after the user clicks Set up. Disappears
+    // by itself once `recentlyWiredAgents` clears.
+    @ViewBuilder
+    private func wiredConfirmationRow(_ agents: [BootstrapAgent]) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.body)
+                .foregroundStyle(.green)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(agents.count == 1
+                     ? "\(agents[0].displayName) is set up."
+                     : "\(agents.count) agents are set up.")
+                    .font(.subheadline.weight(.semibold))
+                Text("New banners will fire when the agent finishes a turn or waits for approval.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.green.opacity(0.12))
+        )
+        .transition(.opacity)
+    }
+
+    // Reconciliation banner. Shown above all other settings rows when one
+    // or more detected agents lack a notify.sh hook entry. Two click
+    // targets: "Set up" (wire every unwired agent) and "Not now" (dismiss
+    // for this/future launches until the agent's state changes again).
+    // Not part of the keyboard-indexed nav at v1 — mouse-only.
+    @ViewBuilder
+    private func unwiredAgentsRow(_ agents: [BootstrapAgent]) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "sparkle")
+                .font(.body)
+                .foregroundStyle(Color.accentColor)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(agents.count == 1
+                     ? "Wire up \(agents[0].displayName)?"
+                     : "Wire up \(agents.count) agents?")
+                    .font(.subheadline.weight(.semibold))
+                Text(agents.map(\.displayName).joined(separator: ", "))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Detected on this Mac without StackNudge hooks. Set up to start getting banners.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    Button {
+                        for agent in agents { nav.wireSingleAgent(agent) }
+                    } label: {
+                        Text("Set up")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(Color.accentColor)
+                            )
+                            .foregroundStyle(.white)
+                    }
+                    .buttonStyle(.plain)
+                    Button {
+                        for agent in agents { nav.dismissUnwiredAgent(agent) }
+                    } label: {
+                        Text("Not now")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.top, 2)
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.accentColor.opacity(0.12))
+        )
     }
 
     // Replaces the Voice + Speed rows when the Kokoro model hasn't been

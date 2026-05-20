@@ -114,6 +114,27 @@ final class PanelNav: ObservableObject {
     @Published var uninstallPhase: UninstallPhase = .confirm
     @Published var uninstallLog:   String = ""
 
+    // Reconciliation state. `unwiredAgents` is the live list of detected
+    // agents whose hook configs don't reference our notify.sh. Drives the
+    // "Set up X" banner at the top of Settings. Refreshed on app launch
+    // and every Settings.onAppear so post-update / post-agent-install
+    // scenarios surface naturally.
+    //
+    // `dismissedAgents` holds rawValue strings the user clicked away on;
+    // persisted to ~/.stack-nudge/dismissed-agents.json so the banner
+    // doesn't re-pester them between launches. An agent re-appears in
+    // the banner if it leaves and re-enters the unwired set — eg they
+    // wire it manually, then delete the entry; or upgrade lands new
+    // event types we should wire.
+    @Published var unwiredAgents:    [BootstrapAgent] = []
+    @Published var dismissedAgents:  Set<String>      = []
+    // Transient confirmation state. When the user clicks Set up on the
+    // reconciliation banner, `recentlyWiredAgents` holds the agents we
+    // just wired so the Settings view can flash a "✓ Wired up X" message
+    // in place of the now-empty unwired banner. Cleared automatically
+    // a few seconds later.
+    @Published var recentlyWiredAgents: [BootstrapAgent] = []
+
     var actions: SettingsActions?
     // Wired by PanelController so nav can re-register the global hotkey
     // without owning the Hotkey instance directly. Returns true if the
@@ -197,6 +218,76 @@ final class PanelNav: ObservableObject {
         // hand-edited config can't desync the cycle row's selection.
         let rawThreshold = Int(config["STACKNUDGE_QUOTA_THRESHOLD"] ?? "") ?? 80
         quotaAlertThreshold = Self.quotaThresholds.min(by: { abs($0 - rawThreshold) < abs($1 - rawThreshold) }) ?? 80
+    }
+
+    // MARK: - Agent reconciliation
+
+    // Re-scan the on-disk agent configs and surface anything our
+    // notify.sh isn't wired into yet. Dismissed agents stay hidden
+    // until either the file goes back to "wired" or the dismissal
+    // file is deleted.
+    func refreshUnwiredAgents() {
+        loadDismissedAgents()
+        let detected = Bootstrap.unwiredAgents()
+        let visible = detected.filter { !dismissedAgents.contains($0.rawValue) }
+        if visible != unwiredAgents { unwiredAgents = visible }
+    }
+
+    // Wire one agent in-place, then refresh the unwired list so the
+    // row disappears immediately on success. Records the agent in
+    // recentlyWiredAgents so the Settings view can show a transient
+    // "✓ Wired up X" confirmation; cleared after a few seconds.
+    func wireSingleAgent(_ agent: BootstrapAgent) {
+        do {
+            try Bootstrap.wireSingleAgent(agent)
+            recentlyWiredAgents.append(agent)
+            // Auto-clear so the confirmation doesn't linger forever.
+            // Re-dispatching is harmless: each new wire extends the
+            // visible window, then the latest scheduler clears the list.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+                self?.recentlyWiredAgents.removeAll { $0 == agent }
+            }
+        } catch {
+            FileHandle.standardError.write(Data(
+                "stack-nudge: wire \(agent.rawValue) failed: \(error)\n".utf8))
+        }
+        // Always refresh — even on error the file state may have partly
+        // changed and we want the UI to reflect reality.
+        refreshUnwiredAgents()
+    }
+
+    // Click "Not now" on the banner. Persist to ~/.stack-nudge/
+    // dismissed-agents.json so the user isn't pestered next launch.
+    // We re-show only if the agent leaves the unwired set (eg user
+    // manually adds a hook then deletes it) — see refreshUnwiredAgents.
+    func dismissUnwiredAgent(_ agent: BootstrapAgent) {
+        dismissedAgents.insert(agent.rawValue)
+        saveDismissedAgents()
+        refreshUnwiredAgents()
+    }
+
+    private static let dismissedAgentsPath =
+        "\(NSHomeDirectory())/.stack-nudge/dismissed-agents.json"
+
+    private func loadDismissedAgents() {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: Self.dismissedAgentsPath)),
+              let arr  = try? JSONSerialization.jsonObject(with: data) as? [String]
+        else { return }
+        dismissedAgents = Set(arr)
+    }
+
+    private func saveDismissedAgents() {
+        let arr = Array(dismissedAgents).sorted()
+        guard let data = try? JSONSerialization.data(withJSONObject: arr, options: [.prettyPrinted])
+        else { return }
+        let url = URL(fileURLWithPath: Self.dismissedAgentsPath)
+        // ~/.stack-nudge/ may not yet exist if reconciliation runs before
+        // the bootstrap wizard completes. Create the parent on demand.
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try? data.write(to: url, options: [.atomic])
     }
 
     func refreshVoiceModelCached() {

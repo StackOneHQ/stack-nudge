@@ -171,6 +171,57 @@ enum Bootstrap {
         }
     }
 
+    // MARK: Reconciliation
+
+    // Agents detected on disk whose hook config has no entry pointing at
+    // our notify.sh. Powers the Settings-tab "agent detected without hooks"
+    // banner: covers three scenarios in one mechanism —
+    //   1. User installs a NEW agent on their Mac after first-run wizard.
+    //   2. New StackNudge release adds support for an agent the user already
+    //      has installed (eg v1.8 lands Codex support; v1.7 user updates).
+    //   3. User manually deleted our hook entry then forgot.
+    //
+    // Cheap: one JSON parse per detected agent, all on the main thread.
+    // Called from app launch + every Settings tab open.
+    static func unwiredAgents() -> [BootstrapAgent] {
+        availableAgents().filter { !isAgentWired($0) }
+    }
+
+    // Looks at the agent's on-disk config for any hook command matching
+    // our notify.sh path. The same staleHookRegex used for uninstall does
+    // the right thing here — it matches both `tinynudge/notify.sh` and
+    // `stack-nudge/notify.sh`, which is what we want for "is *anything*
+    // of ours wired?"
+    static func isAgentWired(_ agent: BootstrapAgent) -> Bool {
+        let path = agent.hookConfigPath
+        guard let root = try? readJSONObject(at: path),
+              let hooks = root["hooks"] as? [String: Any] else { return false }
+        for (_, value) in hooks {
+            if let groups = value as? [[String: Any]] {
+                // Matcher-group shape (Claude / Codex / Gemini).
+                if groups.contains(where: { group in
+                    let inner = group["hooks"] as? [[String: Any]] ?? []
+                    return inner.contains { isStaleHook(command: ($0["command"] as? String) ?? "") }
+                }) { return true }
+                // Cursor's flat shape (entries directly under the event).
+                if groups.contains(where: { isStaleHook(command: ($0["command"] as? String) ?? "") }) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    // Wire a single agent — used by the reconciliation row's "Set up"
+    // action. Same per-agent dispatch as install(agents:) does in its
+    // loop, just exposed for one-at-a-time wiring without re-running
+    // the full bootstrap. Idempotent: calling on an already-wired agent
+    // adds another entry (existing entries are detected by the next
+    // unwiredAgents() refresh).
+    static func wireSingleAgent(_ agent: BootstrapAgent) throws {
+        try wireHooks(for: agent)
+    }
+
     // MARK: Install
 
     // Install stack-nudge: copy bundled resources to ~/.stack-nudge/,
