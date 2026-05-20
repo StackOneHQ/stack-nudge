@@ -499,12 +499,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // wizard again.
         if !Bootstrap.isInstalled(), nav.mode != .postUpdate {
             nav.bootstrapAvailableAgents = Bootstrap.availableAgents()
-            // Exclude Gemini from the default-selected set — its row is
-            // info-only (hook wiring is manual), so pre-selecting it would
-            // mislead the user into thinking we'll wire something.
-            nav.bootstrapSelectedAgents  = Set(
-                nav.bootstrapAvailableAgents.filter { $0 != .gemini }
-            )
+            // Pre-select every detected agent — Claude, Cursor, Codex,
+            // and Gemini all wire real hooks. Earlier versions excluded
+            // Gemini because its row was info-only; that's no longer
+            // true (AfterAgent + Notification are wired now).
+            nav.bootstrapSelectedAgents  = Set(nav.bootstrapAvailableAgents)
             nav.bootstrapPhase           = .idle
             nav.mode                     = .bootstrap
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in

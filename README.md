@@ -22,9 +22,11 @@
 |-------|--------|
 | Claude Code | ✅ |
 | Cursor | ✅ |
-| Gemini CLI | ✅ *(experimental)* |
-| Codex | ✅ *(experimental)* |
+| Codex | ✅ |
+| Gemini CLI | ✅ † |
 | Any hooks-capable agent | ✅ — point it at `notify.sh` |
+
+† Gemini's tool-permission hook is observability-only — the banner shows the prompt, but the actual Allow / Deny click has to happen in Gemini's terminal. Claude Code, Cursor, and Codex permission events can be approved from the panel directly.
 
 **Platforms:** macOS — full app with panel, click-to-focus banners, auto-update, quota tracking, voice. Linux (PulseAudio / ALSA / libnotify) and Windows (Git Bash / WSL) get audio + basic notifications via `notify.sh` only.
 
@@ -329,15 +331,19 @@ Same set of cleanups as the in-app path, useful when the .app isn't reachable or
 
 ## Manual setup
 
-Every supported agent just needs a hook that runs `notify.sh <agent-name> <event>`. Example for Codex (or any other hooks-capable agent):
+Claude Code, Cursor, Codex, and Gemini CLI are auto-wired by the first-launch wizard. For other hooks-capable agents (or to integrate from a custom script), all you need is to invoke `notify.sh <agent-label> <event>` from wherever your agent emits lifecycle events. `<event>` should be `stop` (agent finished a turn) or `permission` (waiting for approval); `<agent-label>` can be anything — it just controls the banner title.
+
+Example block in any agent's hooks config:
 
 ```json
 {
   "hooks": {
-    "stop": [
+    "Stop": [
       {
-        "type": "command",
-        "command": "$HOME/.stack-nudge/notify.sh codex stop"
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "$HOME/.stack-nudge/notify.sh my-agent stop", "timeout": 30 }
+        ]
       }
     ]
   }

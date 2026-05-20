@@ -17,6 +17,7 @@ import SwiftUI
 enum BootstrapAgent: String, CaseIterable, Identifiable, Equatable {
     case claude
     case cursor
+    case codex
     case gemini
 
     var id: String { rawValue }
@@ -25,6 +26,7 @@ enum BootstrapAgent: String, CaseIterable, Identifiable, Equatable {
         switch self {
         case .claude: return "Claude Code"
         case .cursor: return "Cursor"
+        case .codex:  return "Codex"
         case .gemini: return "Gemini CLI"
         }
     }
@@ -35,6 +37,7 @@ enum BootstrapAgent: String, CaseIterable, Identifiable, Equatable {
         switch self {
         case .claude: return "\(NSHomeDirectory())/.claude"
         case .cursor: return "\(NSHomeDirectory())/.cursor"
+        case .codex:  return "\(NSHomeDirectory())/.codex"
         case .gemini: return "\(NSHomeDirectory())/.gemini"
         }
     }
@@ -45,9 +48,14 @@ enum BootstrapAgent: String, CaseIterable, Identifiable, Equatable {
         switch self {
         case .claude: return "\(NSHomeDirectory())/.claude/settings.json"
         case .cursor: return "\(NSHomeDirectory())/.cursor/hooks.json"
-        // Gemini hook support is experimental; install.sh writes nothing
-        // for it today. We mirror that — Bootstrap.install skips Gemini
-        // hook wiring. Selecting it is a no-op aside from acknowledging.
+        // Codex's hooks file shares Claude Code's matcher-group JSON
+        // shape and event names (Stop + PermissionRequest). See
+        // https://developers.openai.com/codex/hooks.
+        case .codex:  return "\(NSHomeDirectory())/.codex/hooks.json"
+        // Gemini CLI uses ~/.gemini/settings.json (same path as Claude's
+        // settings.json analog), but its events are renamed: AfterAgent
+        // (turn end) and Notification (tool-permission alerts). See
+        // https://geminicli.com/docs/hooks/.
         case .gemini: return "\(NSHomeDirectory())/.gemini/settings.json"
         }
     }
@@ -333,39 +341,57 @@ enum Bootstrap {
         let path = agent.hookConfigPath
         switch agent {
         case .claude:
-            try wireClaudeHooks(at: path)
+            // Stop (30s) + PermissionRequest (600s); Claude's
+            // matcher-group JSON shape.
+            try wireClaudeShapedHooks(at: path, agentArg: "claude-code",
+                                      events: [("Stop",              "stop",       30),
+                                               ("PermissionRequest", "permission", 600)])
         case .cursor:
             try wireCursorHooks(at: path)
+        case .codex:
+            // Codex's hooks file is structurally identical to Claude's
+            // (matcher-groups), with the same event names. Only the
+            // file path and the agent-arg differ.
+            try wireClaudeShapedHooks(at: path, agentArg: "codex",
+                                      events: [("Stop",              "stop",       30),
+                                               ("PermissionRequest", "permission", 600)])
         case .gemini:
-            // install.sh just prints "experimental, see README" for
-            // Gemini today. Mirror that: no-op, but accept the agent
-            // in `agents` so the wizard checkbox does something
-            // (acknowledges the user's choice).
-            break
+            // Gemini renames Claude's `Stop` to `AfterAgent` and routes
+            // tool-permission prompts through `Notification` (with
+            // `notification_type=ToolPermission` on stdin). Same
+            // matcher-group JSON shape otherwise. Note: Notification
+            // is observability-only — our hook can surface the banner
+            // but can't return an allow/deny decision the way Claude's
+            // PermissionRequest can.
+            try wireClaudeShapedHooks(at: path, agentArg: "gemini",
+                                      events: [("AfterAgent",   "stop",       30),
+                                               ("Notification", "permission", 30)])
         }
     }
 
-    private static func wireClaudeHooks(at path: String) throws {
+    // Generic writer for the matcher-group JSON shape that Claude,
+    // Codex, and Gemini all use. Differs from agent to agent only in
+    // file path, agent-arg passed to notify.sh, and the set of event
+    // names. Cursor uses a flat-array shape and has its own writer.
+    private static func wireClaudeShapedHooks(
+        at path: String,
+        agentArg: String,
+        events: [(event: String, arg: String, timeout: Int)]
+    ) throws {
         var root = try readJSONObject(at: path)
         var hooks = root["hooks"] as? [String: Any] ?? [:]
 
-        // Two Claude events: Stop (turn ends, 30s timeout) and
-        // PermissionRequest (blocking on user approval, 600s).
-        let entries: [(event: String, arg: String, timeout: Int)] = [
-            ("Stop",              "stop",       30),
-            ("PermissionRequest", "permission", 600),
-        ]
-
-        for (event, arg, timeout) in entries {
+        for (event, arg, timeout) in events {
             var groups = hooks[event] as? [[String: Any]] ?? []
             groups = pruneStaleHookGroups(groups)
             let ourHook: [String: Any] = [
                 "type":    "command",
-                "command": "\(notifyPath) claude-code \(arg)",
+                "command": "\(notifyPath) \(agentArg) \(arg)",
                 "timeout": timeout,
             ]
             // Swift's [String: Any] doesn't preserve key order; the
-            // resulting JSON is still valid. Claude Code parses by key.
+            // resulting JSON is still valid. All three agents parse
+            // by key.
             groups.append([
                 "matcher": "",
                 "hooks":   [ourHook],
@@ -432,8 +458,11 @@ enum Bootstrap {
         var root = try readJSONObject(at: path)
         guard var hooks = root["hooks"] as? [String: Any] else { return }
 
-        // Claude shape: matcher-groups
-        for event in ["Stop", "PermissionRequest"] {
+        // Matcher-group shape — shared by Claude (Stop/PermissionRequest),
+        // Codex (same names), and Gemini (AfterAgent/Notification).
+        // Iterating all four event names is harmless: events not present
+        // are simply skipped.
+        for event in ["Stop", "PermissionRequest", "AfterAgent", "Notification"] {
             if let groups = hooks[event] as? [[String: Any]] {
                 let cleaned = pruneStaleHookGroups(groups)
                 if cleaned.isEmpty {
@@ -809,7 +838,7 @@ struct BootstrapView: View {
     @ViewBuilder
     private var agentList: some View {
         if nav.bootstrapAvailableAgents.isEmpty {
-            Text("No supported agents detected (~/.claude, ~/.cursor, ~/.gemini). Install one and restart StackNudge to wire it up.")
+            Text("No supported agents detected (~/.claude, ~/.cursor, ~/.codex, ~/.gemini). Install one and restart StackNudge to wire it up.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -829,47 +858,27 @@ struct BootstrapView: View {
 
     @ViewBuilder
     private func agentRow(_ agent: BootstrapAgent) -> some View {
-        if agent == .gemini {
-            // Gemini hook wiring isn't implemented — show the row as
-            // informational only so the user doesn't think they can toggle
-            // it on.
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "info.circle")
-                    .font(.callout)
-                    .foregroundStyle(.tertiary)
-                    .frame(width: 20, alignment: .center)
-                    .padding(.top, 2)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(agent.displayName).font(.subheadline.weight(.medium))
-                    Text("Detected, but hook wiring is manual. See README for setup.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
+        let isSelected = nav.bootstrapSelectedAgents.contains(agent)
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                .font(.callout)
+                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                .frame(width: 20, alignment: .center)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(agent.displayName).font(.subheadline.weight(.medium))
+                Text("Hooks will be added to \((agent.hookConfigPath as NSString).abbreviatingWithTildeInPath)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-        } else {
-            let isSelected = nav.bootstrapSelectedAgents.contains(agent)
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.callout)
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                    .frame(width: 20, alignment: .center)
-                    .padding(.top, 2)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(agent.displayName).font(.subheadline.weight(.medium))
-                    Text("Hooks will be added to \((agent.hookConfigPath as NSString).abbreviatingWithTildeInPath)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                if isSelected {
-                    nav.bootstrapSelectedAgents.remove(agent)
-                } else {
-                    nav.bootstrapSelectedAgents.insert(agent)
-                }
+            Spacer()
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if isSelected {
+                nav.bootstrapSelectedAgents.remove(agent)
+            } else {
+                nav.bootstrapSelectedAgents.insert(agent)
             }
         }
     }
