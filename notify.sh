@@ -389,6 +389,22 @@ notify_macos() {
     *)            bundle_id="com.apple.Terminal" ;;
   esac
 
+  # Ghostty same-project tab disambiguation (deferred to upstream):
+  # When multiple Ghostty tabs share the same cwd, the AppleScript in
+  # AppActivator.focusGhosttyTab lands on whichever cwd-matching tab
+  # comes first — which may not be the source tab. The right fix
+  # requires the hook to identify the Ghostty tab hosting this shell's
+  # PID. Ghostty 1.3.x exposes only id/name/working-directory/class on
+  # terminals — no pid, no tty — so there's no AppleScript-only way
+  # to map "this PID" → "this tab". An earlier attempt captured
+  # `id of terminal of selected tab of front window` at event time,
+  # but `selected tab` reflects the user's current focus, not the
+  # agent's tab, so it gave wrong results when the user had switched
+  # away before the hook fired.
+  # Ghostty PR #11922 adds `pid` to terminals (target: 1.4.0). When
+  # that ships we can match agent_pid directly — replace the cwd-only
+  # AppleScript with a pid match in AppActivator.
+
   # Map bundle ID → System Events process name for window-title capture
   local process_name
   case "$bundle_id" in
