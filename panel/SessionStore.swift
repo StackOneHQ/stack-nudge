@@ -32,10 +32,15 @@ final class SessionStore: ObservableObject {
     @Published private(set) var isScanning: Bool = false
     @Published private(set) var didFirstScan: Bool = false
 
+    private let persistence: SessionPersistence
     private var pollTimer: Timer?
     private let queue = DispatchQueue(label: "stack-nudge.sessions", qos: .utility)
     private static let agentBinaries: Set<String> = ["claude", "gemini", "codex"]
     private static let pollInterval: TimeInterval = 3.0
+
+    init(persistence: SessionPersistence = .shared) {
+        self.persistence = persistence
+    }
 
     func startPolling() {
         scan()
@@ -61,9 +66,15 @@ final class SessionStore: ObservableObject {
     }
 
     func rename(_ pid: Int, to name: String?) {
-        if let idx = sessions.firstIndex(where: { $0.pid == pid }) {
-            sessions[idx].customName = (name?.isEmpty ?? true) ? nil : name
-        }
+        guard let idx = sessions.firstIndex(where: { $0.pid == pid }) else { return }
+        let trimmed = name?.trimmingCharacters(in: .whitespaces)
+        let final: String? = (trimmed?.isEmpty ?? true) ? nil : trimmed
+        sessions[idx].customName = final
+        persistence.setCustomName(
+            agent: sessions[idx].agent,
+            projectPath: sessions[idx].projectPath,
+            final
+        )
     }
 
     func startRenaming(_ pid: Int) {
@@ -121,9 +132,18 @@ final class SessionStore: ObservableObject {
             }
         }
 
-        // Add genuinely new sessions.
+        // Add genuinely new sessions, seeding customName from persistence
+        // so a renamed (agent, projectPath) keeps its name across restarts
+        // and across process churn within a single launch.
         let knownPIDs = Set(next.map(\.pid))
-        for session in found where !knownPIDs.contains(session.pid) {
+        for var session in found where !knownPIDs.contains(session.pid) {
+            if let persisted = persistence.customName(
+                agent: session.agent,
+                projectPath: session.projectPath
+            ) {
+                session.customName = persisted
+                persistence.noteSeen(agent: session.agent, projectPath: session.projectPath)
+            }
             next.append(session)
         }
 

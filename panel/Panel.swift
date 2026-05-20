@@ -102,7 +102,7 @@ struct PanelContentView: View {
 
                 switch nav.mode {
                 case .events:   eventsBody
-                case .sessions: SessionsView(store: sessions)
+                case .sessions: SessionsView(store: sessions, events: store)
                 case .usage:    UsageView(nav: nav)
                 case .settings: SettingsView(nav: nav)
                 case .phrases:  PhrasesView(model: phrases) { nav.mode = .settings }
@@ -283,6 +283,11 @@ struct EventRow: View {
     let event: NudgeEvent
     let selected: Bool
 
+    // The disk-backed name store. Observed so a rename in the Sessions
+    // tab immediately re-renders any visible event for the same
+    // (agent, projectPath) — render-time lookup, not ingest-time snapshot.
+    @EnvironmentObject private var persistence: SessionPersistence
+
     private static let timeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
@@ -302,11 +307,11 @@ struct EventRow: View {
                         .font(.subheadline.weight(.medium))
                         .lineLimit(1)
                         .truncationMode(.tail)
-                    if let project = event.projectPath {
+                    if let label = sessionLabel {
                         Text("·")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
-                        Text((project as NSString).lastPathComponent)
+                        Text(label)
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
@@ -328,16 +333,42 @@ struct EventRow: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
+        .background(rowBackground)
+        .padding(.horizontal, 6)
+    }
+
+    // Composes the selection tint with a 3pt left-edge accent in the
+    // session's stable color — same treatment as the Sessions tab card,
+    // so the eye can connect a nudge to its session at a glance.
+    private var rowBackground: some View {
+        ZStack(alignment: .leading) {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(selected ? Color.accentColor.opacity(0.22) : Color.clear)
-        )
-        .padding(.horizontal, 6)
+            if let accent = SessionColor.color(
+                agent: event.agent, projectPath: event.projectPath
+            ) {
+                Rectangle()
+                    .fill(accent.opacity(0.85))
+                    .frame(width: 3)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private var isSnoozed: Bool {
         guard let until = event.snoozedUntil else { return false }
         return until > Date()
+    }
+
+    // Show the user-chosen session name when one is set, otherwise the
+    // project folder's basename. Nil → no chip at all (events with no
+    // projectPath stay as a clean title row).
+    private var sessionLabel: String? {
+        if let custom = persistence.customName(agent: event.agent, projectPath: event.projectPath) {
+            return custom
+        }
+        guard let project = event.projectPath else { return nil }
+        return (project as NSString).lastPathComponent
     }
 
     // For snoozed events show "snoozed Xm" in place of the relative
@@ -422,7 +453,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         let host = NSHostingView(rootView: PanelContentView(
             store: store, sessions: sessions, nav: nav, phrases: phrases,
             onGrantPermissions: { [weak self] in self?.handleGrantPermissions() }
-        ))
+        ).environmentObject(SessionPersistence.shared))
         // Don't let SwiftUI's preferred / intrinsic content size drive
         // the NSPanel frame. The panel is user-resizable + size-persisted;
         // a tab whose root view reports a different sizeThatFits (e.g.,
