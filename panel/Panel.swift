@@ -53,7 +53,7 @@ final class FloatingPanel: NSPanel {
         // still works (standard Mac borderless-but-resizable pattern).
         // contentMinSize keeps the layout from breaking; no max — let users
         // expand to whatever fits their workflow.
-        self.contentMinSize = NSSize(width: 340, height: 240)
+        self.contentMinSize = NSSize(width: 560, height: 260)
     }
 
     override var canBecomeKey: Bool { true }
@@ -212,17 +212,35 @@ struct PanelContentView: View {
     }
 
     private var eventList: some View {
-        ScrollView {
-            LazyVStack(spacing: 2) {
-                ForEach(store.events) { event in
-                    EventRow(event: event,
-                             selected: store.selectedID == event.id)
-                        .contentShape(Rectangle())
-                        .onTapGesture { store.selectedID = event.id }
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 2) {
+                    ForEach(store.events) { event in
+                        EventRow(event: event,
+                                 selected: store.selectedID == event.id)
+                            .id(event.id)
+                            .contentShape(Rectangle())
+                            .onTapGesture { store.selectedID = event.id }
+                    }
+                }
+                .padding(.top, 4)
+                .padding(.bottom, 8)
+                .background(ThinScrollers())
+            }
+            // Without an explicit max-height claim the ScrollView expands to
+            // fit its content, which pushes the last row past the panel's
+            // visible bottom — same shape as the prior Usage fix.
+            .frame(maxHeight: .infinity)
+            // Arrow-key selection changes the model but not the viewport,
+            // so the new selection can land off-screen. Mirror it back into
+            // view; .center keeps the row comfortably inside the strip
+            // rather than flush against the edge.
+            .onChange(of: store.selectedID) { newID in
+                guard let newID else { return }
+                withAnimation(.easeOut(duration: 0.15)) {
+                    proxy.scrollTo(newID, anchor: .center)
                 }
             }
-            .padding(.vertical, 4)
-            .background(ThinScrollers())
         }
     }
 
@@ -236,14 +254,21 @@ struct PanelContentView: View {
                     FooterDivider()
                 }
                 FooterHint(label: "Select",  keys: ["↑", "↓"])
-                if let selected = store.selectedEvent,
-                   selected.kind == .permission, selected.hasActionButton {
-                    FooterHint(label: "Snooze",  keys: ["S"])
-                }
+                // Snooze is always rendered so the footer never reflows when
+                // selection moves between event types — dimmed when the row
+                // isn't snoozable. The S key is wired to fire only for
+                // snoozable rows, so the dim state matches behavior.
+                FooterHint(label: "Snooze",  keys: ["S"])
+                    .opacity(snoozeEnabled ? 1.0 : 0.35)
                 FooterHint(label: "Dismiss", keys: ["⌫"])
                 FooterHint(label: "Hide",    keys: ["esc"])
             }
         }
+    }
+
+    private var snoozeEnabled: Bool {
+        guard let selected = store.selectedEvent else { return false }
+        return selected.kind == .permission && selected.hasActionButton
     }
 
     private var primaryActionLabel: String? {
@@ -275,6 +300,8 @@ struct EventRow: View {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(event.title)
                         .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     if let project = event.projectPath {
                         Text("·")
                             .font(.caption)
@@ -367,7 +394,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // app updates that swap the .app bundle.
     private static let panelSizeKey   = "PanelSize"
     private static let panelOriginKey = "PanelOrigin"
-    private static let panelDefaultSize = NSSize(width: 420, height: 280)
+    private static let panelDefaultSize = NSSize(width: 600, height: 320)
+    private static let panelMinWidth:  CGFloat = 560
+    private static let panelMinHeight: CGFloat = 260
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Pre-1.7 users had `stack-nudge.app` in ~/Applications/. If we're
@@ -1002,6 +1031,32 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         return true
     }
 
+    // MARK: - Usage tab keyboard scrolling
+
+    // SwiftUI's ScrollView doesn't expose a programmatic scroll API for
+    // arbitrary deltas, so walk the AppKit hierarchy to the underlying
+    // NSScrollView and nudge its clip view directly. Only one ScrollView
+    // is rendered at a time (mode-gated), so the first match is correct.
+    private func scrollUsageBy(_ dy: CGFloat) {
+        guard let scrollView = findScrollView(in: panel.contentView),
+              let doc = scrollView.documentView else { return }
+        let clip = scrollView.contentView
+        let maxY = max(0, doc.frame.height - clip.bounds.height)
+        var origin = clip.bounds.origin
+        origin.y = min(max(0, origin.y + dy), maxY)
+        clip.scroll(to: origin)
+        scrollView.reflectScrolledClipView(clip)
+    }
+
+    private func findScrollView(in view: NSView?) -> NSScrollView? {
+        guard let view else { return nil }
+        if let sv = view as? NSScrollView { return sv }
+        for sub in view.subviews {
+            if let found = findScrollView(in: sub) { return found }
+        }
+        return nil
+    }
+
     // MARK: - Config file watcher
 
     private var configWatcher: DispatchSourceFileSystemObject?
@@ -1351,16 +1406,23 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return true
         }
 
-        // Usage tab: only Esc — no selection / list semantics here, but we
-        // don't want arrow keys to leak through to the events store either.
+        // Usage tab: Esc hides, ↑/↓ nudge the ScrollView. No row-selection
+        // semantics here, so arrow keys drive scroll directly. Other keys
+        // are swallowed so they don't leak through to the events store.
         if nav.mode == .usage {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain else { return false }
-            if event.keyCode == KeyCode.escape {
+            switch event.keyCode {
+            case KeyCode.escape:
                 hidePanel()
-                return true
+            case KeyCode.upArrow:
+                scrollUsageBy(-40)
+            case KeyCode.downArrow:
+                scrollUsageBy(40)
+            default:
+                break
             }
-            return true  // swallow other keys so they don't navigate events
+            return true
         }
 
         // Events mode: filter out cmd/ctrl/opt-modified keys so app-level
@@ -1556,8 +1618,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
               let w = dict["width"] as? CGFloat,
               let h = dict["height"] as? CGFloat
         else { return panelDefaultSize }
-        // Floor at the panel's minimum to defend against pathological values.
-        return NSSize(width: max(w, 340), height: max(h, 240))
+        // Floor at the panel's minimum to defend against pathological values
+        // — and to bump returning users with a saved size below the (now
+        // larger) minimum up to a layout the footer hints actually fit in.
+        return NSSize(width: max(w, panelMinWidth), height: max(h, panelMinHeight))
     }
 
     static func loadSavedPanelOrigin() -> NSPoint? {
