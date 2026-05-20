@@ -4,6 +4,18 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.8.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.7.2...v1.8.0) (2026-05-20)
+
+
+### Features
+
+* switch Ghostty tabs on banner click via AppleScript bridge ([0cc97b9](https://github.com/StackOneHQ/stack-nudge/commit/0cc97b95046b60629dbce961504bcef5fbd9423c))
+
+
+### Bug Fixes
+
+* switch Ghostty tabs on banner click ([8df1405](https://github.com/StackOneHQ/stack-nudge/commit/8df1405b73803da33f76bb8eef122b6b65c5a3b4))
+
 ## [1.7.2](https://github.com/StackOneHQ/stack-nudge/compare/v1.7.1...v1.7.2) (2026-05-19)
 
 
