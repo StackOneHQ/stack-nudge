@@ -227,6 +227,7 @@ build_app "$APP" "stack-nudge" \
   panel/MenuBar.swift \
   panel/Permissions.swift \
   panel/Settings.swift \
+  panel/SessionPersistence.swift \
   panel/SessionStore.swift \
   panel/SessionUsage.swift \
   panel/Sessions.swift \
