@@ -1,5 +1,6 @@
 <div align="center">
-  <img src="assets/logo_full.png" alt="stack-nudge" width="300" />
+  <img src="assets/logo_full.png" alt="StackNudge" width="200" />
+  <h1>StackNudge</h1>
   <p><strong>Notifications for AI coding agents.</strong></p>
   <p>Get a banner + sound when your agent finishes a task or pauses for your approval — step away without missing a beat.</p>
   <p>
