@@ -93,7 +93,10 @@ struct PageFooter<Hints: View>: View {
 // SwiftUI doesn't expose scroller width directly. Drop a zero-sized helper
 // into the ScrollView's content via .background, walk up the view hierarchy
 // to the underlying NSScrollView, and shrink its scroller to `.mini` —
-// roughly half the default width.
+// roughly half the default width. Also force `.overlay` style so the
+// scrollbar floats over the content instead of claiming layout width and
+// shifting rows left when overflow first appears (which is what users with
+// "Show scroll bars: Always" in System Settings would otherwise see).
 struct ThinScrollers: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { NSView(frame: .zero) }
     func updateNSView(_ nsView: NSView, context: Context) {
@@ -101,6 +104,7 @@ struct ThinScrollers: NSViewRepresentable {
             var current: NSView? = nsView
             while let v = current {
                 if let scrollView = v as? NSScrollView {
+                    scrollView.scrollerStyle = .overlay
                     scrollView.verticalScroller?.controlSize = .mini
                     scrollView.horizontalScroller?.controlSize = .mini
                     return
