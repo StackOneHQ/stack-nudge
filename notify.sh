@@ -209,11 +209,13 @@ PANEL_SOCK="${HOME}/.stack-nudge/panel.sock"
 # Pretty-print the agent name for the notification title
 agent_label() {
   case "$1" in
-    claude-code) echo "Claude Code" ;;
-    cursor)      echo "Cursor" ;;
-    gemini)      echo "Gemini" ;;
-    codex)       echo "Codex" ;;
-    *)           echo "$1" ;;
+    claude-code)         echo "Claude Code" ;;
+    cursor)              echo "Cursor" ;;
+    gemini)              echo "Gemini" ;;
+    codex)               echo "Codex" ;;
+    agy|antigravity|antigravity-cli)
+                         echo "Antigravity" ;;
+    *)                   echo "$1" ;;
   esac
 }
 
@@ -252,6 +254,38 @@ ensure_app_running() {
   done
 }
 
+# Ask iTerm2 for the user-visible name of the session running on the
+# current tty (i.e. the tab/pane the agent lives in). Sets ITERM_TAB_NAME
+# to the empty string on any failure path — first-run TCC prompt, iTerm2
+# not running, osascript timeout, no match. We deliberately match by tty
+# rather than "current session" so a backgrounded iTerm2 still resolves.
+#
+# Cost: ~30-80ms per event on a warm osascript. Skipped entirely outside
+# iTerm.app so non-iTerm users pay nothing.
+detect_iterm_tab_name() {
+  ITERM_TAB_NAME=""
+  [[ "${TERM_PROGRAM:-}" != "iTerm.app" ]] && return
+  local tty_path
+  tty_path=$(tty 2>/dev/null) || return
+  [[ -z "$tty_path" || "$tty_path" == "not a tty" ]] && return
+
+  ITERM_TAB_NAME=$(osascript <<APPLESCRIPT 2>/dev/null || true
+tell application "iTerm2"
+  repeat with w in windows
+    repeat with t in tabs of w
+      repeat with s in sessions of t
+        if (tty of s) is equal to "$tty_path" then
+          return name of s
+        end if
+      end repeat
+    end repeat
+  end repeat
+  return ""
+end tell
+APPLESCRIPT
+  )
+}
+
 # Walk up the process tree from this hook's parent and detect the agent
 # binary, parent shell, and terminal/helper. Sets AGENT_PID, SHELL_PID,
 # TERMINAL_PID, TERMINAL_APP (each empty if not found).
@@ -265,7 +299,7 @@ walk_session_chain() {
     [[ -z "$comm" ]] && break
     local base="${comm##*/}"
     case "$base" in
-      claude|gemini|codex)
+      claude|gemini|codex|agy)
         [[ -z "$AGENT_PID" ]] && AGENT_PID="$pid"
         ;;
       bash|zsh|sh|fish|dash|ksh)
@@ -275,6 +309,7 @@ walk_session_chain() {
     case "$base" in
       "Code Helper"|"Code Helper (Plugin)"|"Code Helper (Renderer)"|Code|\
       "Cursor Helper"|"Cursor Helper (Plugin)"|"Cursor Helper (Renderer)"|Cursor|\
+      "Antigravity Helper"|"Antigravity Helper (Plugin)"|"Antigravity Helper (Renderer)"|Antigravity|\
       Zed|zed|\
       iTerm2|iTerm|Terminal|Warp|WarpTerminal|ghostty|Ghostty)
         TERMINAL_PID="$pid"; TERMINAL_APP="$base"; break ;;
@@ -293,6 +328,7 @@ post_to_panel() {
   [[ ! -S "$PANEL_SOCK" ]] && return
 
   walk_session_chain
+  detect_iterm_tab_name
 
   NUDGE_AGENT="$AGENT" \
   NUDGE_EVENT="$EVENT" \
@@ -314,6 +350,7 @@ post_to_panel() {
   NUDGE_TERMINAL_APP="${TERMINAL_APP:-}" \
   NUDGE_TERM_PROGRAM="${TERM_PROGRAM:-}" \
   NUDGE_SESSION_ID="${TERM_SESSION_ID:-${ITERM_SESSION_ID:-}}" \
+  NUDGE_ITERM_TAB_NAME="${ITERM_TAB_NAME:-}" \
   python3 - <<'PY' 2>/dev/null
 import json, os, socket, time
 
@@ -341,6 +378,7 @@ optional = {
     "terminal_app":  env.get("NUDGE_TERMINAL_APP"),
     "term_program":  env.get("NUDGE_TERM_PROGRAM"),
     "session_id":    env.get("NUDGE_SESSION_ID"),
+    "iterm_tab_name": env.get("NUDGE_ITERM_TAB_NAME"),
     "voice_message": env.get("NUDGE_VOICE_MESSAGE"),
     "sound_name":    env.get("NUDGE_SOUND"),
 }

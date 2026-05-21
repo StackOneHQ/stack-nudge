@@ -227,6 +227,12 @@ build_app "$APP" "stack-nudge" \
   panel/MenuBar.swift \
   panel/Permissions.swift \
   panel/Settings.swift \
+  panel/ProcessOutput.swift \
+  panel/TerminalIntegration.swift \
+  panel/ITerm2Integration.swift \
+  panel/TerminalAppIntegration.swift \
+  panel/VSCodeIntegration.swift \
+  panel/EnvVarTerminalIntegration.swift \
   panel/SessionPersistence.swift \
   panel/SessionStore.swift \
   panel/SessionUsage.swift \

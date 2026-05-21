@@ -100,8 +100,19 @@ struct SessionsView: View {
     }
 
     private func matches(event: NudgeEvent, session: Session) -> Bool {
-        Agent.canonical(event.agent) == Agent.canonical(session.agent)
-            && event.projectPath == session.projectPath
+        guard Agent.canonical(event.agent) == Agent.canonical(session.agent),
+              event.projectPath == session.projectPath else { return false }
+        // When both sides know which tab/window they belong to, demand
+        // they agree — that's how a permission nudge for tab A doesn't
+        // count toward tab B's nudge counter. Each terminal contributes
+        // its own identifier (iTerm: sessionID; VSCode: ipcHook), so
+        // we accept either as the event-side tabId.
+        let eventTab = (event.sessionID?.isEmpty == false ? event.sessionID : event.ipcHook)
+        if let sessionTab = session.tabId, let eventTab,
+           !sessionTab.isEmpty, !eventTab.isEmpty {
+            return sessionTab == eventTab
+        }
+        return true
     }
 }
 
@@ -158,7 +169,9 @@ private struct SessionRow: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(rowBackgroundColor)
             if let accent = SessionColor.color(
-                agent: session.agent, projectPath: session.projectPath
+                agent: session.agent,
+                projectPath: session.projectPath,
+                tabId: session.tabId
             ) {
                 Rectangle()
                     .fill(accent.opacity(isActive ? 0.85 : 0.45))
@@ -209,6 +222,16 @@ private struct SessionRow: View {
                 Text(term)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                Text("·")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            if let tab = session.tabName, !tab.isEmpty, tab != displayName {
+                Text(tab)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 Text("·")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)

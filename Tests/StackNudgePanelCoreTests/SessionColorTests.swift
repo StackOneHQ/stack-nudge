@@ -73,4 +73,37 @@ final class SessionColorTests: XCTestCase {
         // A zero-sized palette would crash the modulo. Belt + braces.
         XCTAssertFalse(SessionColor.palette.isEmpty)
     }
+
+    // MARK: - tabId mixing (Stage 2)
+
+    // Mixing tabId into the hash gives two iTerm tabs in the same cwd
+    // distinct accent colors. We can't *guarantee* non-equality (6-slot
+    // palette → ~17% collision), so we sample several tab ids and assert
+    // at least one diverges from the no-tabId baseline. A clean assert.
+    func test_color_tabId_canDifferFromNoTabId() {
+        let base = SessionColor.color(agent: "claude", projectPath: "/x")
+        let probes = ["tab-A", "tab-B", "tab-C", "tab-D", "tab-E", "tab-F", "tab-G", "tab-H"]
+        let anyDiffer = probes.contains { tabId in
+            SessionColor.color(agent: "claude", projectPath: "/x", tabId: tabId) != base
+        }
+        XCTAssertTrue(anyDiffer, "expected at least one tabId probe to land on a different palette slot")
+    }
+
+    // Stage-2 callers without a tabId must get the exact same color as
+    // the Stage-1 call signature returned — no surprise migration shuffle.
+    func test_color_nilTabId_matchesPreStage2Behaviour() {
+        let pre  = SessionColor.color(agent: "claude", projectPath: "/x")
+        let post = SessionColor.color(agent: "claude", projectPath: "/x", tabId: nil)
+        XCTAssertEqual(pre, post)
+        let postEmpty = SessionColor.color(agent: "claude", projectPath: "/x", tabId: "")
+        XCTAssertEqual(pre, postEmpty)
+    }
+
+    // Determinism with a tabId — same triple, same color.
+    func test_color_withTabId_isDeterministic() {
+        let a = SessionColor.color(agent: "claude", projectPath: "/x", tabId: "tab-A")
+        let b = SessionColor.color(agent: "claude", projectPath: "/x", tabId: "tab-A")
+        XCTAssertNotNil(a)
+        XCTAssertEqual(a, b)
+    }
 }

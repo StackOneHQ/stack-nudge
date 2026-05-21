@@ -38,6 +38,10 @@ struct NudgeEvent: Identifiable, Equatable {
     let terminalApp: String?
     let termProgram: String?
     let sessionID: String?
+    // User-visible iTerm2 tab/session name, captured at event time via
+    // an osascript query in notify.sh. Empty for non-iTerm terminals or
+    // when Automation permission hasn't been granted yet.
+    let itermTabName: String?
     // FIFO that the source notify.sh hook is blocking on. Writing
     // "allow" or "deny" to it lets stack-nudge return a PermissionRequest
     // decision to Claude Code without touching the terminal UI.
@@ -62,6 +66,7 @@ struct NudgeEvent: Identifiable, Equatable {
          agentPID: Int? = nil, shellPID: Int? = nil,
          terminalPID: Int? = nil, terminalApp: String? = nil,
          termProgram: String? = nil, sessionID: String? = nil,
+         itermTabName: String? = nil,
          fifoPath: String? = nil,
          voiceMessage: String? = nil,
          soundName: String? = nil,
@@ -85,6 +90,7 @@ struct NudgeEvent: Identifiable, Equatable {
         self.terminalApp = terminalApp
         self.termProgram = termProgram
         self.sessionID = sessionID
+        self.itermTabName = itermTabName
         self.fifoPath = fifoPath
         self.voiceMessage = voiceMessage
         self.soundName = soundName
@@ -103,6 +109,7 @@ struct NudgeEvent: Identifiable, Equatable {
             agentPID: agentPID, shellPID: shellPID,
             terminalPID: terminalPID, terminalApp: terminalApp,
             termProgram: termProgram, sessionID: sessionID,
+            itermTabName: itermTabName,
             fifoPath: fifoPath,
             voiceMessage: voiceMessage,
             soundName: soundName,

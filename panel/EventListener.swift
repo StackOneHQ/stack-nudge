@@ -99,6 +99,16 @@ final class EventListener {
                 continue
             }
             let event = dto.toNudgeEvent()
+            // Teach the VSCode integration about this event's window
+            // before we dispatch — the Sessions tab's next poll will
+            // pick up the new (ipcHook → window title) pairing.
+            if let hook = event.ipcHook, !hook.isEmpty {
+                VSCodeIntegration.shared.note(
+                    ipcHook: hook,
+                    windowTitle: event.windowTitle,
+                    projectPath: event.projectPath
+                )
+            }
             DispatchQueue.main.async { [weak self] in
                 self?.store.append(event)
             }
@@ -123,6 +133,7 @@ private struct NudgeEventDTO: Decodable {
     let terminal_app: String?
     let term_program: String?
     let session_id: String?
+    let iterm_tab_name: String?
     let fifo_path: String?
     let voice_message: String?
     let sound_name: String?
@@ -146,6 +157,7 @@ private struct NudgeEventDTO: Decodable {
             terminalApp: terminal_app,
             termProgram: term_program,
             sessionID: session_id,
+            itermTabName: iterm_tab_name,
             fifoPath: fifo_path,
             voiceMessage: voice_message,
             soundName: sound_name,
