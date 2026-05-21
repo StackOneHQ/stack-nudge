@@ -16,6 +16,11 @@
 </div>
 
 ---
+  <p align="center">
+    <img src="https://github.com/user-attachments/assets/c73cb65b-ff96-48bf-9371-3f1d3241c6cb" width="48%" alt="StackNudge banner" />
+    &nbsp;
+    <img src="https://github.com/user-attachments/assets/e4fecb5d-376e-44eb-a68a-220cb0b30507" width="48%" alt="StackNudge panel" />
+  </p>
 
 ## Supports
 
@@ -371,10 +376,6 @@ Source layout:
 - `notify.sh` — the shell entry-point CC/Cursor/Gemini hooks invoke; on macOS posts events to the running app via Unix-domain socket, on Linux/Windows handles audio + libnotify directly
 
 Swift compiled with `swiftc` directly. No Xcode, no SPM, no dependencies.
-
-## Credits
-
-Click-routing architecture (process exits after delivery, macOS re-launches on click) is adapted from [`terminal-notifier`](https://github.com/julienXX/terminal-notifier) by Eloy Durán and Julien Blanchard.
 
 ## Terms of use
 
