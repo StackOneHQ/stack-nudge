@@ -163,4 +163,64 @@ final class SessionPersistenceTests: XCTestCase {
         store.noteSeen(agent: "claude-code", projectPath: "/x")  // canonicalized too
         XCTAssertEqual(store.customName(agent: "claude", projectPath: "/x"), "Auth")
     }
+
+    // MARK: - tabId-aware lookups (Stage 2)
+
+    // The whole point of widening the join key: two tabs in the same
+    // (agent, projectPath) can carry independent names.
+    func test_setCustomName_withTabId_keepsTabsIndependent() {
+        let store = makeStore()
+        store.setCustomName(agent: "claude", projectPath: "/x", tabId: "tab-A", "Auth tests")
+        store.setCustomName(agent: "claude", projectPath: "/x", tabId: "tab-B", "Auth main")
+        XCTAssertEqual(store.customName(agent: "claude", projectPath: "/x", tabId: "tab-A"), "Auth tests")
+        XCTAssertEqual(store.customName(agent: "claude", projectPath: "/x", tabId: "tab-B"), "Auth main")
+    }
+
+    // A pre-Stage-2 rename (no tabId) must continue to apply to every
+    // tab in that project, until a more specific override is written.
+    func test_customName_fallsBackFromTabIdToGenericKey() {
+        let store = makeStore()
+        store.setCustomName(agent: "claude", projectPath: "/x", "Auth")  // generic
+        XCTAssertEqual(store.customName(agent: "claude", projectPath: "/x", tabId: "tab-A"), "Auth")
+        XCTAssertEqual(store.customName(agent: "claude", projectPath: "/x", tabId: "tab-B"), "Auth")
+    }
+
+    // A tab-scoped override beats the generic entry without erasing it.
+    func test_customName_tabSpecificOverridesGeneric() {
+        let store = makeStore()
+        store.setCustomName(agent: "claude", projectPath: "/x", "Auth")
+        store.setCustomName(agent: "claude", projectPath: "/x", tabId: "tab-A", "Auth tests")
+        XCTAssertEqual(store.customName(agent: "claude", projectPath: "/x", tabId: "tab-A"), "Auth tests")
+        // The generic entry is still there for tabs without an override.
+        XCTAssertEqual(store.customName(agent: "claude", projectPath: "/x", tabId: "tab-B"), "Auth")
+        XCTAssertEqual(store.customName(agent: "claude", projectPath: "/x"),                 "Auth")
+    }
+
+    // Clearing a tab-scoped override doesn't touch the generic fallback.
+    func test_clearingTabIdEntry_keepsGenericEntry() {
+        let store = makeStore()
+        store.setCustomName(agent: "claude", projectPath: "/x", "Auth")
+        store.setCustomName(agent: "claude", projectPath: "/x", tabId: "tab-A", "Auth tests")
+        store.setCustomName(agent: "claude", projectPath: "/x", tabId: "tab-A", nil)
+        XCTAssertEqual(store.customName(agent: "claude", projectPath: "/x", tabId: "tab-A"), "Auth")
+        XCTAssertEqual(store.customName(agent: "claude", projectPath: "/x"),                 "Auth")
+    }
+
+    // Backward-compat across restarts: a Stage-1-era file (only generic
+    // keys) must still resolve when a Stage-2 reader asks with tabId.
+    func test_genericEntryWrittenWithoutTabId_readableViaTabIdLookup() {
+        let first = makeStore()
+        first.setCustomName(agent: "claude", projectPath: "/x", "Auth")
+
+        let second = makeStore()
+        XCTAssertEqual(second.customName(agent: "claude", projectPath: "/x", tabId: "some-tab"), "Auth")
+    }
+
+    // tabId canonicalizes the agent on both sides, same as the generic
+    // path — claude-code from an event still finds a claude rename.
+    func test_customName_canonicalizesAgent_withTabId() {
+        let store = makeStore()
+        store.setCustomName(agent: "claude", projectPath: "/x", tabId: "tab-A", "Auth tests")
+        XCTAssertEqual(store.customName(agent: "claude-code", projectPath: "/x", tabId: "tab-A"), "Auth tests")
+    }
 }

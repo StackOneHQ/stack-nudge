@@ -31,6 +31,16 @@ final class AgentTests: XCTestCase {
         XCTAssertEqual(Agent.canonical("codex"), "codex")
     }
 
+    func test_canonical_antigravityMapsToAgy() {
+        // Antigravity ships the `agy` CLI; the hook may report
+        // "antigravity" or "antigravity-cli" depending on which
+        // integration fires it. All three should collapse to "agy"
+        // so renames + colors apply consistently.
+        XCTAssertEqual(Agent.canonical("antigravity"),     "agy")
+        XCTAssertEqual(Agent.canonical("antigravity-cli"), "agy")
+        XCTAssertEqual(Agent.canonical("agy"),             "agy")
+    }
+
     func test_canonical_unknownAgentPassesThrough() {
         XCTAssertEqual(Agent.canonical("some-future-agent"), "some-future-agent")
     }

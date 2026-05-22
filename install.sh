@@ -305,13 +305,97 @@ fi
 if [[ -d "$HOME/.gemini" ]]; then
   echo ""
   echo "Detected Gemini CLI (~/.gemini)"
-  echo "  Note: Gemini CLI hook support is experimental. See README for manual setup."
+  python3 - "$HOME/.gemini/settings.json" "$NOTIFY" "gemini" <<'PY'
+import json, os, re, sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+notify = sys.argv[2]
+agent = sys.argv[3]
+path.parent.mkdir(parents=True, exist_ok=True)
+if path.exists():
+    settings = json.loads(path.read_text() or "{}")
+else:
+    settings = {}
+
+STALE = re.compile(r"(?:^|/)\.?(?:tinynudge|stack-nudge)/notify\.sh(?:\s|$)")
+
+hooks = settings.setdefault("hooks", {})
+for event, arg, timeout in [("AfterAgent", "stop", 30000), ("Notification", "permission", 30000)]:
+    groups = hooks.setdefault(event, [])
+
+    cleaned = []
+    for g in groups:
+        inner = g.get("hooks", [])
+        kept = [h for h in inner if not STALE.search(h.get("command", "") or "")]
+        if not kept:
+            continue
+        if kept != inner:
+            g = {**g, "hooks": kept}
+        cleaned.append(g)
+    groups[:] = cleaned
+
+    cmd = f"{notify} {agent} {arg}"
+    groups.append({
+        "matcher": "",
+        "hooks": [{"type": "command", "command": cmd, "timeout": timeout}],
+    })
+
+path.write_text(json.dumps(settings, indent=2) + "\n")
+print(f"  Updated {path}")
+PY
+  installed_any=true
+fi
+
+# Antigravity CLI
+if [[ -d "$HOME/.gemini/antigravity-cli" ]]; then
+  echo ""
+  echo "Detected Antigravity CLI (~/.gemini/antigravity-cli)"
+  python3 - "$HOME/.gemini/antigravity-cli/settings.json" "$NOTIFY" "antigravity" <<'PY'
+import json, os, re, sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+notify = sys.argv[2]
+agent = sys.argv[3]
+path.parent.mkdir(parents=True, exist_ok=True)
+if path.exists():
+    settings = json.loads(path.read_text() or "{}")
+else:
+    settings = {}
+
+STALE = re.compile(r"(?:^|/)\.?(?:tinynudge|stack-nudge)/notify\.sh(?:\s|$)")
+
+hooks = settings.setdefault("hooks", {})
+for event, arg, timeout in [("AfterAgent", "stop", 30000), ("Notification", "permission", 30000)]:
+    groups = hooks.setdefault(event, [])
+
+    cleaned = []
+    for g in groups:
+        inner = g.get("hooks", [])
+        kept = [h for h in inner if not STALE.search(h.get("command", "") or "")]
+        if not kept:
+            continue
+        if kept != inner:
+            g = {**g, "hooks": kept}
+        cleaned.append(g)
+    groups[:] = cleaned
+
+    cmd = f"{notify} {agent} {arg}"
+    groups.append({
+        "matcher": "",
+        "hooks": [{"type": "command", "command": cmd, "timeout": timeout}],
+    })
+
+path.write_text(json.dumps(settings, indent=2) + "\n")
+print(f"  Updated {path}")
+PY
   installed_any=true
 fi
 
 if [[ "$installed_any" == "false" ]]; then
   echo ""
-  echo "No supported agents detected (Claude Code, Cursor, Gemini CLI)."
+  echo "No supported agents detected (Claude Code, Cursor, Gemini CLI, Antigravity CLI)."
   echo "Install one, then re-run this script."
   exit 0
 fi

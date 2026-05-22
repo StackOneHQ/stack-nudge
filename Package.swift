@@ -40,7 +40,6 @@ let package = Package(
                 "CODE_OF_CONDUCT.md",
                 "SECURITY.md",
                 "CHANGELOG.md",
-                "ui_improvements.md",
 
                 // Directories not part of the testable surface.
                 "build",

@@ -9,7 +9,7 @@ enum SessionStatus: Equatable {
 struct Session: Identifiable, Equatable {
     let id: Int           // pid — pids are reusable but stable for this process's lifetime
     let pid: Int
-    let agent: String     // "claude" | "gemini" | "codex"
+    let agent: String     // "claude" | "gemini" | "codex" | "agy"
     let projectPath: String?
     let projectName: String?
     let terminalPID: Int?
@@ -17,6 +17,13 @@ struct Session: Identifiable, Equatable {
     let elapsed: String?  // ps etime — display-only
     var customName: String?
     var status: SessionStatus
+    // iTerm2 (Stage 2) enrichment. tabId is the iTerm session's unique id
+    // — stable for the tab's lifetime, used to scope renames/colors to a
+    // specific tab. tabName is the user-visible label. Both nil for
+    // sessions not running inside iTerm2 (or when Automation is denied),
+    // which is exactly the pre-Stage-2 behaviour.
+    var tabId: String?
+    var tabName: String?
 }
 
 // Polls for live agent processes (claude / gemini / codex) every few seconds
@@ -35,7 +42,7 @@ final class SessionStore: ObservableObject {
     private let persistence: SessionPersistence
     private var pollTimer: Timer?
     private let queue = DispatchQueue(label: "stack-nudge.sessions", qos: .utility)
-    private static let agentBinaries: Set<String> = ["claude", "gemini", "codex"]
+    private static let agentBinaries: Set<String> = ["claude", "gemini", "codex", "agy"]
     private static let pollInterval: TimeInterval = 3.0
 
     init(persistence: SessionPersistence = .shared) {
@@ -70,9 +77,14 @@ final class SessionStore: ObservableObject {
         let trimmed = name?.trimmingCharacters(in: .whitespaces)
         let final: String? = (trimmed?.isEmpty ?? true) ? nil : trimmed
         sessions[idx].customName = final
+        // tabId-scoped write when we know which tab the user is renaming,
+        // so two tabs in the same cwd get independent names. Falls back
+        // to the (agent, projectPath) key when no iTerm enrichment is
+        // available — matches Stage 1 behaviour exactly.
         persistence.setCustomName(
             agent: sessions[idx].agent,
             projectPath: sessions[idx].projectPath,
+            tabId: sessions[idx].tabId,
             final
         )
     }
@@ -98,9 +110,15 @@ final class SessionStore: ObservableObject {
     private func scan() {
         isScanning = true
         queue.async { [weak self] in
-            let found = Self.discover()
+            // discover() shells out to ps/lsof; TerminalRegistry.enrich
+            // calls each terminal integration (iTerm2, VSCode, …) in
+            // turn — each batches its own subprocess work. The whole
+            // thing runs on the background poll queue so the main thread
+            // never sees a subprocess spawn.
+            let raw = Self.discover()
+            let enriched = TerminalRegistry.enrich(raw)
             DispatchQueue.main.async { [weak self] in
-                self?.merge(found)
+                self?.merge(enriched)
                 self?.isScanning = false
                 self?.didFirstScan = true
             }
@@ -114,10 +132,18 @@ final class SessionStore: ObservableObject {
 
         var next: [Session] = []
 
-        // Update / mark-finished existing sessions in place so customName persists.
+        // Update / mark-finished existing sessions in place so customName
+        // persists. We also re-apply the freshly-enriched tabId/tabName
+        // from the live snapshot — a tab rename or pane move should
+        // propagate without waiting for the session to restart.
         for var existing in sessions {
             if let live = foundByPID[existing.pid] {
-                existing = live.with(customName: existing.customName, status: .active)
+                existing = live.with(
+                    customName: existing.customName,
+                    status: .active,
+                    tabId: live.tabId,
+                    tabName: live.tabName
+                )
                 next.append(existing)
             } else {
                 switch existing.status {
@@ -133,16 +159,21 @@ final class SessionStore: ObservableObject {
         }
 
         // Add genuinely new sessions, seeding customName from persistence
-        // so a renamed (agent, projectPath) keeps its name across restarts
-        // and across process churn within a single launch.
+        // so a renamed (agent, projectPath[, tabId]) keeps its name across
+        // restarts and across process churn within a single launch.
         let knownPIDs = Set(next.map(\.pid))
         for var session in found where !knownPIDs.contains(session.pid) {
             if let persisted = persistence.customName(
                 agent: session.agent,
-                projectPath: session.projectPath
+                projectPath: session.projectPath,
+                tabId: session.tabId
             ) {
                 session.customName = persisted
-                persistence.noteSeen(agent: session.agent, projectPath: session.projectPath)
+                persistence.noteSeen(
+                    agent: session.agent,
+                    projectPath: session.projectPath,
+                    tabId: session.tabId
+                )
             }
             next.append(session)
         }
@@ -200,7 +231,9 @@ final class SessionStore: ObservableObject {
                 terminalApp: chain.terminalApp,
                 elapsed: etime,
                 customName: nil,
-                status: .active
+                status: .active,
+                tabId: nil,
+                tabName: nil
             ))
         }
         return found
@@ -214,6 +247,7 @@ final class SessionStore: ObservableObject {
         if baseName == "claude" { return "claude" }
         if baseName == "gemini" { return "gemini" }
         if baseName == "codex"  { return "codex"  }
+        if baseName == "agy"    { return "agy"    }
 
         // Node / Deno-hosted agents: inspect later tokens for known script paths.
         if baseName == "node" || baseName == "deno" || baseName == "bun" {
@@ -222,6 +256,9 @@ final class SessionStore: ObservableObject {
             }
             if args.range(of: #"\bcodex(-cli)?\b"#, options: .regularExpression) != nil {
                 return "codex"
+            }
+            if args.range(of: #"\b(agy|antigravity(-cli)?)\b"#, options: .regularExpression) != nil {
+                return "agy"
             }
         }
         return nil
@@ -245,6 +282,7 @@ final class SessionStore: ObservableObject {
     private static let terminalApps: Set<String> = [
         "Code Helper", "Code Helper (Plugin)", "Code Helper (Renderer)", "Code",
         "Cursor Helper", "Cursor Helper (Plugin)", "Cursor Helper (Renderer)", "Cursor",
+        "Antigravity Helper", "Antigravity Helper (Plugin)", "Antigravity Helper (Renderer)", "Antigravity",
         "iTerm2", "iTerm", "Terminal", "Warp", "WarpTerminal", "ghostty", "Ghostty",
     ]
 
@@ -269,21 +307,17 @@ final class SessionStore: ObservableObject {
     }
 
     private static func runProcess(_ path: String, _ args: [String]) -> String {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: path)
-        task.arguments = args
-        let outPipe = Pipe()
-        task.standardOutput = outPipe
-        task.standardError = Pipe()
-        do { try task.run() } catch { return "" }
-        let data = outPipe.fileHandleForReading.readDataToEndOfFile()
-        task.waitUntilExit()
-        return String(data: data, encoding: .utf8) ?? ""
+        // Thin wrapper around the shared helper so all subprocess
+        // plumbing lives in one place — keeps stderr-swallow + failure
+        // semantics consistent across SessionStore and the terminal
+        // integrations.
+        ProcessOutput.read(path, args)
     }
 }
 
 private extension Session {
-    func with(customName: String?, status: SessionStatus) -> Session {
+    func with(customName: String?, status: SessionStatus,
+              tabId: String? = nil, tabName: String? = nil) -> Session {
         Session(
             id: id,
             pid: pid,
@@ -294,7 +328,9 @@ private extension Session {
             terminalApp: terminalApp,
             elapsed: elapsed,
             customName: customName,
-            status: status
+            status: status,
+            tabId: tabId ?? self.tabId,
+            tabName: tabName ?? self.tabName
         )
     }
 }

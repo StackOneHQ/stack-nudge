@@ -19,6 +19,7 @@ enum BootstrapAgent: String, CaseIterable, Identifiable, Equatable {
     case cursor
     case codex
     case gemini
+    case antigravity
 
     var id: String { rawValue }
 
@@ -28,6 +29,7 @@ enum BootstrapAgent: String, CaseIterable, Identifiable, Equatable {
         case .cursor: return "Cursor"
         case .codex:  return "Codex"
         case .gemini: return "Gemini CLI"
+        case .antigravity: return "Antigravity CLI"
         }
     }
 
@@ -39,6 +41,7 @@ enum BootstrapAgent: String, CaseIterable, Identifiable, Equatable {
         case .cursor: return "\(NSHomeDirectory())/.cursor"
         case .codex:  return "\(NSHomeDirectory())/.codex"
         case .gemini: return "\(NSHomeDirectory())/.gemini"
+        case .antigravity: return "\(NSHomeDirectory())/.gemini/antigravity-cli"
         }
     }
 
@@ -57,6 +60,9 @@ enum BootstrapAgent: String, CaseIterable, Identifiable, Equatable {
         // (turn end) and Notification (tool-permission alerts). See
         // https://geminicli.com/docs/hooks/.
         case .gemini: return "\(NSHomeDirectory())/.gemini/settings.json"
+        // Antigravity CLI uses ~/.gemini/antigravity-cli/settings.json (same
+        // structure as Gemini).
+        case .antigravity: return "\(NSHomeDirectory())/.gemini/antigravity-cli/settings.json"
         }
     }
 }
@@ -422,6 +428,11 @@ enum Bootstrap {
             // surface the banner but can't return an allow/deny
             // decision the way Claude's PermissionRequest can.
             try wireClaudeShapedHooks(at: path, agentArg: "gemini",
+                                      events: [("AfterAgent",   "stop",       30_000),
+                                               ("Notification", "permission", 30_000)])
+        case .antigravity:
+            // Antigravity CLI uses the same hook events and millisecond timeout conventions as Gemini.
+            try wireClaudeShapedHooks(at: path, agentArg: "antigravity",
                                       events: [("AfterAgent",   "stop",       30_000),
                                                ("Notification", "permission", 30_000)])
         }
@@ -896,7 +907,7 @@ struct BootstrapView: View {
     @ViewBuilder
     private var agentList: some View {
         if nav.bootstrapAvailableAgents.isEmpty {
-            Text("No supported agents detected (~/.claude, ~/.cursor, ~/.codex, ~/.gemini). Install one and restart StackNudge to wire it up.")
+            Text("No supported agents detected (~/.claude, ~/.cursor, ~/.codex, ~/.gemini, ~/.gemini/antigravity-cli). Install one and restart StackNudge to wire it up.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

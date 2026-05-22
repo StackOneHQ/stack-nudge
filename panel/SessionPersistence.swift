@@ -10,8 +10,9 @@ import SwiftUI
 enum Agent {
     static func canonical(_ raw: String) -> String {
         switch raw {
-        case "claude-code", "cursor": return "claude"
-        default:                      return raw
+        case "claude-code", "cursor":              return "claude"
+        case "antigravity", "antigravity-cli":     return "agy"
+        default:                                   return raw
         }
     }
 }
@@ -59,21 +60,36 @@ final class SessionPersistence: ObservableObject {
 
     // MARK: - Lookup
 
-    func customName(agent: String, projectPath: String?) -> String? {
+    // Resolves a custom name for (agent, projectPath[, tabId]). Lookup
+    // first tries the most specific key (with tabId), then falls back to
+    // the (agent, projectPath) form — so renames written before Stage 2
+    // (no tabId) still apply to every tab in that project, and a
+    // tab-scoped rename overrides the generic one when present.
+    func customName(agent: String, projectPath: String?, tabId: String? = nil) -> String? {
         guard let projectPath else { return nil }
-        let key = Self.key(agent: Agent.canonical(agent), projectPath: projectPath)
-        let trimmed = entries[key]?.customName
+        let canon = Agent.canonical(agent)
+        if let tabId, !tabId.isEmpty {
+            if let trimmed = entries[Self.key(agent: canon, projectPath: projectPath, tabId: tabId)]?.customName,
+               !trimmed.isEmpty {
+                return trimmed
+            }
+        }
+        let trimmed = entries[Self.key(agent: canon, projectPath: projectPath, tabId: nil)]?.customName
         guard let trimmed, !trimmed.isEmpty else { return nil }
         return trimmed
     }
 
     // MARK: - Mutation
 
-    // Sets (or clears, when `name` is nil/empty) the custom name for a
-    // session keyed by (agent, projectPath). Persists immediately.
-    func setCustomName(agent: String, projectPath: String?, _ name: String?) {
+    // Sets (or clears, when `name` is nil/empty) the custom name keyed
+    // by (agent, projectPath[, tabId]). When tabId is provided we write
+    // the per-tab key — that lets two tabs in the same cwd carry
+    // different names without disturbing each other. Clearing removes
+    // only the most specific entry; a parent (agent, projectPath) entry
+    // (if any) keeps working as the fallback.
+    func setCustomName(agent: String, projectPath: String?, tabId: String? = nil, _ name: String?) {
         guard let projectPath else { return }
-        let key = Self.key(agent: Agent.canonical(agent), projectPath: projectPath)
+        let key = Self.key(agent: Agent.canonical(agent), projectPath: projectPath, tabId: tabId)
         let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if trimmed.isEmpty {
             guard entries.removeValue(forKey: key) != nil else { return }
@@ -89,20 +105,37 @@ final class SessionPersistence: ObservableObject {
     // Bump lastSeenAt for an existing entry, but only on the first sight
     // per launch — that way the file is rewritten once per active named
     // session per app run, not every poll tick. No-op for sessions we
-    // don't have an entry for; we don't track unrenamed sessions.
-    func noteSeen(agent: String, projectPath: String?) {
+    // don't have an entry for; we don't track unrenamed sessions. We
+    // bump the most specific key that exists so per-tab entries get
+    // their own freshness signal independently of any parent entry.
+    func noteSeen(agent: String, projectPath: String?, tabId: String? = nil) {
         guard let projectPath else { return }
-        let key = Self.key(agent: Agent.canonical(agent), projectPath: projectPath)
-        guard !seenThisLaunch.contains(key), entries[key] != nil else { return }
-        seenThisLaunch.insert(key)
-        entries[key]?.lastSeenAt = Date().timeIntervalSince1970
-        save()
+        let canon = Agent.canonical(agent)
+        let candidates: [String] = {
+            if let tabId, !tabId.isEmpty {
+                return [
+                    Self.key(agent: canon, projectPath: projectPath, tabId: tabId),
+                    Self.key(agent: canon, projectPath: projectPath, tabId: nil),
+                ]
+            }
+            return [Self.key(agent: canon, projectPath: projectPath, tabId: nil)]
+        }()
+        for key in candidates {
+            guard !seenThisLaunch.contains(key), entries[key] != nil else { continue }
+            seenThisLaunch.insert(key)
+            entries[key]?.lastSeenAt = Date().timeIntervalSince1970
+            save()
+            return
+        }
     }
 
     // MARK: - I/O
 
-    private static func key(agent: String, projectPath: String) -> String {
-        "\(agent)::\(projectPath)"
+    private static func key(agent: String, projectPath: String, tabId: String?) -> String {
+        if let tabId, !tabId.isEmpty {
+            return "\(agent)::\(projectPath)::\(tabId)"
+        }
+        return "\(agent)::\(projectPath)"
     }
 
     private func load() {
@@ -149,9 +182,16 @@ enum SessionColor {
         .blue, .teal, .mint, .indigo, .purple, .pink,
     ]
 
-    static func color(agent: String, projectPath: String?) -> Color? {
+    static func color(agent: String, projectPath: String?, tabId: String? = nil) -> Color? {
         guard let projectPath, !projectPath.isEmpty else { return nil }
-        let key = "\(Agent.canonical(agent))::\(projectPath)"
+        var key = "\(Agent.canonical(agent))::\(projectPath)"
+        if let tabId, !tabId.isEmpty {
+            // Mixing tabId into the hash gives two iTerm tabs in the same
+            // cwd distinct accent colors. Sessions without a tabId still
+            // hash to the same key they did pre-Stage-2 — no migration
+            // shuffle for existing users.
+            key += "::\(tabId)"
+        }
         let idx = Int(fnv1a(key) % UInt32(palette.count))
         return palette[idx]
     }

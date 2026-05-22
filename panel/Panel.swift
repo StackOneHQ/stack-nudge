@@ -307,6 +307,15 @@ struct EventRow: View {
                         .font(.subheadline.weight(.medium))
                         .lineLimit(1)
                         .truncationMode(.tail)
+                    if let term = terminalLabel {
+                        Text("·")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                        Text(term)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
                     if let label = sessionLabel {
                         Text("·")
                             .font(.caption)
@@ -316,6 +325,16 @@ struct EventRow: View {
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
                             .truncationMode(.middle)
+                    }
+                    if let tab = secondaryTabLabel {
+                        Text("·")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                        Text(tab)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                     }
                     Spacer(minLength: 8)
                     Text(rightTimestamp)
@@ -345,7 +364,9 @@ struct EventRow: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(selected ? Color.accentColor.opacity(0.22) : Color.clear)
             if let accent = SessionColor.color(
-                agent: event.agent, projectPath: event.projectPath
+                agent: event.agent,
+                projectPath: event.projectPath,
+                tabId: tabIdentifier
             ) {
                 Rectangle()
                     .fill(accent.opacity(0.85))
@@ -361,14 +382,64 @@ struct EventRow: View {
     }
 
     // Show the user-chosen session name when one is set, otherwise the
-    // project folder's basename. Nil → no chip at all (events with no
-    // projectPath stay as a clean title row).
+    // project folder's basename. Lookup is keyed by (agent, projectPath,
+    // tabId) — iTerm contributes its session id, VSCode/Cursor
+    // contribute the IPC hook path. Falls back to (agent, projectPath)
+    // transparently for events without a tab-scoped id and for
+    // pre-Stage-2 persistence entries.
     private var sessionLabel: String? {
-        if let custom = persistence.customName(agent: event.agent, projectPath: event.projectPath) {
+        if let custom = persistence.customName(
+            agent: event.agent,
+            projectPath: event.projectPath,
+            tabId: tabIdentifier
+        ) {
             return custom
         }
         guard let project = event.projectPath else { return nil }
         return (project as NSString).lastPathComponent
+    }
+
+    // First non-empty of [iTerm session id, VSCode IPC hook]. Each
+    // terminal contributes whatever it has; the lookup layer doesn't
+    // care which one fired as long as it's stable per tab/window.
+    private var tabIdentifier: String? {
+        if let sid = event.sessionID, !sid.isEmpty { return sid }
+        if let hook = event.ipcHook, !hook.isEmpty { return hook }
+        return nil
+    }
+
+    // iTerm2 tab/session label shown next to the session chip, but only
+    // when it adds information — suppress it if it'd just echo the
+    // session label we already showed.
+    private var secondaryTabLabel: String? {
+        guard let raw = event.itermTabName?.trimmingCharacters(in: .whitespaces),
+              !raw.isEmpty,
+              raw != sessionLabel else { return nil }
+        return raw
+    }
+
+    // Where the event came from. Normalises the helper-process names
+    // we capture in the wire payload to short, human-readable labels —
+    // "Code Helper (Renderer)" reads as terminal-developer noise; "Code"
+    // reads as "this came from VSCode". Returns nil when we don't know
+    // the terminal, so the chip silently vanishes for those events.
+    private var terminalLabel: String? {
+        guard let raw = event.terminalApp?.trimmingCharacters(in: .whitespaces),
+              !raw.isEmpty else { return nil }
+        switch raw {
+        case "Code", "Code Helper", "Code Helper (Plugin)", "Code Helper (Renderer)":
+            return "VSCode"
+        case "Cursor", "Cursor Helper", "Cursor Helper (Plugin)", "Cursor Helper (Renderer)":
+            return "Cursor"
+        case "Antigravity", "Antigravity Helper", "Antigravity Helper (Plugin)", "Antigravity Helper (Renderer)":
+            return "Antigravity"
+        case "WarpTerminal":             return "Warp"
+        case "iTerm", "iTerm2":          return "iTerm2"
+        case "ghostty", "Ghostty":       return "Ghostty"
+        case "Terminal":                 return "Terminal"
+        case "Zed", "zed":               return "Zed"
+        default:                         return raw
+        }
     }
 
     // For snoozed events show "snoozed Xm" in place of the relative
