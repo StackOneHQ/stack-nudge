@@ -100,6 +100,9 @@ final class PanelNav: ObservableObject {
     // probe failed (e.g. user denied keychain access, 401, 429).
     @Published var quota:            QuotaSnapshot?
     @Published var quotaLastUpdated: Date?
+    // True while a probe is in-flight. Set by PanelController around the
+    // fetch call so the UI can swap the footer status to "Syncing…".
+    @Published var quotaSyncing:     Bool = false
     // Threshold-crossing notifications. quotaAlertsEnabled is the master
     // switch; quotaAlertThreshold is the single percent value used across
     // all tiers — banner fires once per period when any tier reaches it.

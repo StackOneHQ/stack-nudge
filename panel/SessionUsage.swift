@@ -229,6 +229,9 @@ struct UsageView: View {
 
             PageFooter {
                 FooterHint(label: footerStatusLabel, keys: [])
+                if nav.quotaTrackingEnabled {
+                    FooterHint(label: "Sync now", keys: ["r"])
+                }
                 FooterHint(label: "Hide", keys: ["esc"])
             }
         }
@@ -319,7 +322,9 @@ struct UsageView: View {
     }
 
     private var footerStatusLabel: String {
-        guard let updated = nav.quotaLastUpdated else { return "Loading…" }
+        if !nav.quotaTrackingEnabled { return "Tracking off" }
+        if nav.quotaSyncing { return "Syncing…" }
+        guard let updated = nav.quotaLastUpdated else { return "Never synced" }
         return "Updated \(Self.relative(.abbreviated, updated))"
     }
 

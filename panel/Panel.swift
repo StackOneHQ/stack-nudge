@@ -815,13 +815,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     private func runQuotaProbe() {
         guard quotaTrackingEnabled else { return }
+        nav.quotaSyncing = true
         quotaProbe.fetch { [weak self] snapshot in
-            guard let self, let snapshot else { return }
+            guard let self else { return }
+            self.nav.quotaSyncing = false
+            guard let snapshot else { return }
             self.nav.quota = snapshot
             self.nav.quotaLastUpdated = Date()
             self.evaluateQuotaThresholds(snapshot)
         }
     }
+
+    // Public hook for the Usage tab's "Sync now" keystroke.
+    func syncQuotaNow() { runQuotaProbe() }
 
     // Fire a banner each time a tier crosses into a new 5% bucket at or
     // above the user's configured threshold. With threshold=80, the user
@@ -1567,6 +1573,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 scrollUsageBy(-40)
             case KeyCode.downArrow:
                 scrollUsageBy(40)
+            case KeyCode.rKey:
+                syncQuotaNow()
             default:
                 break
             }
