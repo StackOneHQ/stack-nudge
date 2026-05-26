@@ -59,6 +59,7 @@ final class PanelNav: ObservableObject {
     @Published var voiceEnabled:    Bool = false
     @Published var muteWhenFocused: Bool = true
     @Published var panelPinned:     Bool = true
+    @Published var launchAtLogin:   Bool = true
     @Published var soundStop:       String = "Glass"
     @Published var soundPermission: String = "Ping"
     @Published var voice:           String = "af_aoede"
@@ -175,7 +176,7 @@ final class PanelNav: ObservableObject {
     // when the offset is 1.
     var updateRowOffset: Int { updateAvailable != nil ? 1 : 0 }
 
-    var rowCount: Int { 17 + updateRowOffset }
+    var rowCount: Int { 18 + updateRowOffset }
 
     // Row layout (kept in one place so the controller, view, and indexing
     // logic all agree on what each row index means). When updateAvailable
@@ -186,18 +187,19 @@ final class PanelNav: ObservableObject {
     //   2  Voice notifications   toggle
     //   3  Mute when focused     toggle
     //   4  Pin panel             toggle
-    //   5  Sound enabled         toggle      (gates rows 6 + 7)
-    //   6  Agent done sound      cycle
-    //   7  Permission sound      cycle
-    //   8  Voice                 cycle       (or "Download model" action)
-    //   9  Speed                 cycle
-    //  10  Quota alerts          toggle
-    //  11  Alert threshold       cycle
-    //  12  Edit phrases…         action
-    //  13  Check permissions…    action
-    //  14  Open config file…     action
-    //  15  Uninstall stack-nudge action
-    //  16  Quit panel            action
+    //   5  Launch at login       toggle
+    //   6  Sound enabled         toggle      (gates rows 7 + 8)
+    //   7  Agent done sound      cycle
+    //   8  Permission sound      cycle
+    //   9  Voice                 cycle       (or "Download model" action)
+    //  10  Speed                 cycle
+    //  11  Quota alerts          toggle
+    //  12  Alert threshold       cycle
+    //  13  Edit phrases…         action
+    //  14  Check permissions…    action
+    //  15  Open config file…     action
+    //  16  Uninstall stack-nudge action
+    //  17  Quit panel            action
 
     // MARK: - Disk I/O
 
@@ -209,6 +211,12 @@ final class PanelNav: ObservableObject {
         voiceEnabled    = ConfigFile.bool(config, "STACKNUDGE_VOICE",     default: false)
         muteWhenFocused = ConfigFile.bool(config, "STACKNUDGE_MUTE_WHEN_FOCUSED", default: true)
         panelPinned     = ConfigFile.bool(config, "STACKNUDGE_PANEL_PIN", default: true)
+        // Source of truth for the toggle is the plist's presence on disk
+        // (Bootstrap.isLaunchAtLoginEnabled) — the config key is just a
+        // mirror used for parity with the other toggles. If the two ever
+        // disagree (e.g. plist removed manually), trust the disk and
+        // re-sync the config the next time the user touches the toggle.
+        launchAtLogin   = Bootstrap.isLaunchAtLoginEnabled()
         soundStop       = config["STACKNUDGE_SOUND_STOP"]       ?? "Glass"
         soundPermission = config["STACKNUDGE_SOUND_PERMISSION"] ?? "Ping"
         voice           = config["STACKNUDGE_VOICE_NAME"]       ?? "af_aoede"
@@ -401,8 +409,8 @@ final class PanelNav: ObservableObject {
         }
         switch selectedSettingIndex - updateRowOffset {
         case 0: startRecordingHotkey()
-        case 8 where !voiceModelCached:
-            // Pre-download state: index 8 is the "Download voice model"
+        case 9 where !voiceModelCached:
+            // Pre-download state: index 9 is the "Download voice model"
             // action, not a cycle. Enter triggers (or cancels) the
             // download.
             if voiceModelDownloading {
@@ -410,11 +418,11 @@ final class PanelNav: ObservableObject {
             } else {
                 startVoiceModelDownload()
             }
-        case 12: actions?.editPhrases()
-        case 13: actions?.checkPermissions()
-        case 14: actions?.openConfig()
-        case 15: actions?.beginUninstall()
-        case 16: actions?.quit()
+        case 13: actions?.editPhrases()
+        case 14: actions?.checkPermissions()
+        case 15: actions?.openConfig()
+        case 16: actions?.beginUninstall()
+        case 17: actions?.quit()
         default: applyCycle(forward: true)
         }
     }
@@ -446,13 +454,25 @@ final class PanelNav: ObservableObject {
             panelPinned.toggle()
             ConfigFile.write(key: "STACKNUDGE_PANEL_PIN", value: panelPinned ? "true" : "false")
         case 5:
+            // Optimistic UI flip; revert if launchctl fails so the toggle
+            // never reports a state that disagrees with the plist on disk.
+            let target = !launchAtLogin
+            launchAtLogin = target
+            do {
+                try Bootstrap.setLaunchAtLogin(target)
+            } catch {
+                launchAtLogin = !target
+                FileHandle.standardError.write(Data(
+                    "stack-nudge: setLaunchAtLogin(\(target)) failed: \(error)\n".utf8))
+            }
+        case 6:
             soundEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_SOUND", value: soundEnabled ? "true" : "false")
-        case 6:
-            soundStop = step(soundStop, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_STOP", preview: true)
         case 7:
-            soundPermission = step(soundPermission, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_PERMISSION", preview: true)
+            soundStop = step(soundStop, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_STOP", preview: true)
         case 8:
+            soundPermission = step(soundPermission, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_PERMISSION", preview: true)
+        case 9:
             // Pre-download: the row is an action, not a cycle. Treat
             // left/right arrow as a trigger so a user discovering the
             // row keyboard-only can still start the download.
@@ -464,15 +484,15 @@ final class PanelNav: ObservableObject {
             voice = step(voice, in: voicesAvailable, forward: forward, key: "STACKNUDGE_VOICE_NAME", preview: false)
             let phrase = Self.voicePreviewPhrases.randomElement() ?? "Hello."
             Speaker.speak(phrase, voice: voice, speed: String(format: "%.2f", voiceSpeed))
-        case 9:
+        case 10:
             let next = forward ? voiceSpeed + Self.speedStep : voiceSpeed - Self.speedStep
             voiceSpeed = max(Self.speedMin, min(Self.speedMax, (next * 100).rounded() / 100))
             ConfigFile.write(key: "STACKNUDGE_VOICE_SPEED", value: String(format: "%.2f", voiceSpeed))
-        case 10:
+        case 11:
             quotaAlertsEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_QUOTA_ALERTS",
                              value: quotaAlertsEnabled ? "true" : "false")
-        case 11:
+        case 12:
             // Cycle through the static thresholds list. Index wraps in both
             // directions so the user can dial in either way.
             let list = Self.quotaThresholds
