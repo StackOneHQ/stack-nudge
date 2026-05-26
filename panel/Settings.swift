@@ -47,22 +47,22 @@ struct SettingsView: View {
 
                         section("Toggles") {
                             row(1 + off, label: "Banner notifications", kind: .toggle, value: nav.bannerEnabled   ? "On" : "Off")
-                            row(2 + off, label: "Voice notifications",  kind: .toggle, value: nav.voiceEnabled    ? "On" : "Off")
-                            row(3 + off, label: "Mute when focused",    kind: .toggle, value: nav.muteWhenFocused ? "On" : "Off")
-                            row(4 + off, label: "Pin panel",            kind: .toggle, value: nav.panelPinned     ? "On" : "Off")
-                            row(5 + off, label: "Launch at login",      kind: .toggle, value: nav.launchAtLogin   ? "On" : "Off")
+                            row(2 + off, label: "Mute when focused",    kind: .toggle, value: nav.muteWhenFocused ? "On" : "Off")
+                            row(3 + off, label: "Pin panel",            kind: .toggle, value: nav.panelPinned     ? "On" : "Off")
+                            row(4 + off, label: "Launch at login",      kind: .toggle, value: nav.launchAtLogin   ? "On" : "Off")
                         }
 
                         section("Sounds") {
-                            row(6 + off, label: "Sound enabled", kind: .toggle, value: nav.soundEnabled ? "On" : "Off")
-                            row(7 + off, label: "Agent done",    kind: .cycle,  value: nav.soundStop,       enabled: nav.soundEnabled)
-                            row(8 + off, label: "Permission",    kind: .cycle,  value: nav.soundPermission, enabled: nav.soundEnabled)
+                            row(5 + off, label: "Sound enabled", kind: .toggle, value: nav.soundEnabled ? "On" : "Off")
+                            row(6 + off, label: "Agent done",    kind: .cycle,  value: nav.soundStop,       enabled: nav.soundEnabled)
+                            row(7 + off, label: "Permission",    kind: .cycle,  value: nav.soundPermission, enabled: nav.soundEnabled)
                         }
 
                         section("Voice") {
+                            row(8 + off, label: "Voice notifications", kind: .toggle, value: nav.voiceEnabled ? "On" : "Off")
                             if nav.voiceModelCached {
-                                row(9 + off,  label: "Voice", kind: .cycle, value: voiceLabel)
-                                row(10 + off, label: "Speed", kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed))
+                                row(9 + off,  label: "Voice", kind: .cycle, value: voiceLabel,                                  enabled: nav.voiceEnabled)
+                                row(10 + off, label: "Speed", kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed),     enabled: nav.voiceEnabled)
                             } else {
                                 voiceModelDownloadRow(index: 9 + off)
                             }
