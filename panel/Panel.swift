@@ -103,7 +103,7 @@ struct PanelContentView: View {
 
                 switch nav.mode {
                 case .events:   eventsBody
-                case .sessions: SessionsView(store: sessions, events: store)
+                case .sessions: SessionsView(store: sessions, events: store, nav: nav)
                 case .usage:    UsageView(nav: nav)
                 case .settings: SettingsView(nav: nav)
                 case .phrases:  PhrasesView(model: phrases) { nav.mode = .settings }
@@ -600,7 +600,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
         startConfigWatcher()
         setupNotificationCenter()
-        store.onAppend = { [weak self] event in self?.postBannerIfNeeded(event) }
+        store.onAppend = { [weak self] event in
+            self?.postBannerIfNeeded(event)
+            self?.refreshTranscriptStats(for: event)
+        }
         nav.loadFromConfig()  // populate panelPinned + other live values up-front
         // Scan agent configs for missing wires (post-update / post-install
         // reconciliation). Surfaces a "Set up X" banner in Settings when
@@ -986,6 +989,22 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // If STACKNUDGE_ACTIVATE_IMMEDIATELY is set, focus the source editor
     // right away without waiting for the user to click; we skip cues
     // entirely in that flow since the editor jump is the signal.
+    // Re-read the Claude Code transcript referenced by an incoming
+    // event and publish updated context-window stats to nav. Runs
+    // off-main since transcripts can be a few MB; the final assignment
+    // hops back to main so SwiftUI re-renders cleanly.
+    private func refreshTranscriptStats(for event: NudgeEvent) {
+        guard let sessionID = event.claudeSessionID,
+              let path = event.transcriptPath, !path.isEmpty
+        else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let stats = TranscriptReader.read(path: path) else { return }
+            DispatchQueue.main.async {
+                self?.nav.claudeSessionStats[sessionID] = stats
+            }
+        }
+    }
+
     private func postBannerIfNeeded(_ event: NudgeEvent) {
         let config = PanelConfig.load()
 

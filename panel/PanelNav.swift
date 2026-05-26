@@ -112,6 +112,12 @@ final class PanelNav: ObservableObject {
     // True while a probe is in-flight. Set by PanelController around the
     // fetch call so the UI can swap the footer status to "Syncing…".
     @Published var quotaSyncing:     Bool = false
+    // Per-Claude-session context-window stats. Keyed by Claude's
+    // session_id UUID (NudgeEvent.claudeSessionID), populated by
+    // PanelController whenever an event arrives with a transcript_path.
+    // Sessions.swift renders entries from this map alongside matched
+    // sessions in the Sessions tab.
+    @Published var claudeSessionStats: [String: TranscriptStats] = [:]
     // Transient feedback for the "Check for updates…" action row.
     // Set by PanelController around UpdateChecker.check(); cleared
     // back to .idle a few seconds after a terminal result so the

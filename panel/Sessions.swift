@@ -5,6 +5,7 @@ struct SessionsView: View {
 
     @ObservedObject var store: SessionStore
     @ObservedObject var events: EventStore
+    @ObservedObject var nav: PanelNav
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -48,6 +49,7 @@ struct SessionsView: View {
                             renameBuffer: $store.renameBuffer,
                             activeNudgeCount: nudgeCount(for: session),
                             lastNudgeAt: lastNudgeAt(for: session),
+                            transcriptStats: transcriptStats(for: session),
                             onCommit: { store.commitRename() },
                             onCancel: { store.cancelRename() }
                         )
@@ -99,6 +101,19 @@ struct SessionsView: View {
             .max()
     }
 
+    // Find the most recent NudgeEvent matching this session that carries a
+    // claudeSessionID, then look up its TranscriptStats in nav. Returns nil
+    // when the session has no Claude Code event yet (e.g. a Gemini-only
+    // session, or a Claude session that hasn't fired a hook this run).
+    private func transcriptStats(for session: Session) -> TranscriptStats? {
+        guard let id = events.events
+            .filter({ matches(event: $0, session: session) })
+            .compactMap(\.claudeSessionID)
+            .last
+        else { return nil }
+        return nav.claudeSessionStats[id]
+    }
+
     private func matches(event: NudgeEvent, session: Session) -> Bool {
         guard Agent.canonical(event.agent) == Agent.canonical(session.agent),
               event.projectPath == session.projectPath else { return false }
@@ -124,6 +139,7 @@ private struct SessionRow: View {
     @Binding var renameBuffer: String
     let activeNudgeCount: Int
     let lastNudgeAt: Date?
+    let transcriptStats: TranscriptStats?
     let onCommit: () -> Void
     let onCancel: () -> Void
 
@@ -148,6 +164,9 @@ private struct SessionRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 titleRow
                 metaRow
+                if let stats = transcriptStats {
+                    contextRow(stats)
+                }
                 if showNudgeRow {
                     nudgeRow
                 }
@@ -242,6 +261,38 @@ private struct SessionRow: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
+    }
+
+    // Context-window usage row. Shows absolute tokens always; appends a
+    // percentage only when the model's context limit is in ModelLimits.
+    // The icon is intentionally muted — this is informational, not an
+    // alert (alerts come later, in Phase 2).
+    private func contextRow(_ stats: TranscriptStats) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "gauge.with.dots.needle.50percent")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            Text(contextLabel(stats))
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.top, 1)
+    }
+
+    private func contextLabel(_ stats: TranscriptStats) -> String {
+        let tokens = Self.formatTokens(stats.tokens)
+        if let limit = ModelLimits.limit(for: stats.model) {
+            let pct = Int((Double(stats.tokens) / Double(limit) * 100).rounded())
+            return "\(tokens) · \(pct)%"
+        }
+        return tokens
+    }
+
+    private static func formatTokens(_ n: Int) -> String {
+        if n >= 1_000 {
+            return String(format: "%.0fK tokens", Double(n) / 1_000.0)
+        }
+        return "\(n) tokens"
     }
 
     private var nudgeRow: some View {

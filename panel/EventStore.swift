@@ -58,6 +58,12 @@ struct NudgeEvent: Identifiable, Equatable {
     // the legacy install.sh `welcome` event, fired while the user is
     // staring at the install terminal.
     let bypassMute: Bool
+    // Claude Code's session UUID (distinct from `sessionID` which is the
+    // iTerm/terminal session id) and the JSONL transcript path. Used to
+    // compute per-session context-window usage. Populated only for Claude
+    // Code hook events; nil for other agents.
+    let claudeSessionID: String?
+    let transcriptPath: String?
 
     init(agent: String, kind: NudgeKind, title: String, message: String,
          projectPath: String? = nil, bundleID: String? = nil,
@@ -71,6 +77,8 @@ struct NudgeEvent: Identifiable, Equatable {
          voiceMessage: String? = nil,
          soundName: String? = nil,
          bypassMute: Bool = false,
+         claudeSessionID: String? = nil,
+         transcriptPath: String? = nil,
          snoozedUntil: Date? = nil,
          id: UUID = UUID()) {
         self.id = id
@@ -95,6 +103,8 @@ struct NudgeEvent: Identifiable, Equatable {
         self.voiceMessage = voiceMessage
         self.soundName = soundName
         self.bypassMute = bypassMute
+        self.claudeSessionID = claudeSessionID
+        self.transcriptPath = transcriptPath
         self.snoozedUntil = snoozedUntil
     }
 
@@ -114,6 +124,8 @@ struct NudgeEvent: Identifiable, Equatable {
             voiceMessage: voiceMessage,
             soundName: soundName,
             bypassMute: bypassMute,
+            claudeSessionID: claudeSessionID,
+            transcriptPath: transcriptPath,
             snoozedUntil: snoozedUntil,
             id: id  // preserve identity across snooze cycles
         )

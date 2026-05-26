@@ -138,6 +138,11 @@ private struct NudgeEventDTO: Decodable {
     let voice_message: String?
     let sound_name: String?
     let bypass_mute: Bool?
+    // Claude Code's session UUID (distinct from session_id, which is the
+    // terminal/iTerm session id) and the path to its JSONL transcript.
+    // Populated only for Claude Code hook events; nil for other agents.
+    let claude_session_id: String?
+    let transcript_path: String?
 
     func toNudgeEvent() -> NudgeEvent {
         NudgeEvent(
@@ -161,7 +166,9 @@ private struct NudgeEventDTO: Decodable {
             fifoPath: fifo_path,
             voiceMessage: voice_message,
             soundName: sound_name,
-            bypassMute: bypass_mute ?? false
+            bypassMute: bypass_mute ?? false,
+            claudeSessionID: claude_session_id,
+            transcriptPath: transcript_path
         )
     }
 }
