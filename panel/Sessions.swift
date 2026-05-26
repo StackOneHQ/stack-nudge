@@ -5,6 +5,7 @@ struct SessionsView: View {
 
     @ObservedObject var store: SessionStore
     @ObservedObject var events: EventStore
+    @ObservedObject var nav: PanelNav
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -48,6 +49,7 @@ struct SessionsView: View {
                             renameBuffer: $store.renameBuffer,
                             activeNudgeCount: nudgeCount(for: session),
                             lastNudgeAt: lastNudgeAt(for: session),
+                            transcriptStats: transcriptStats(for: session),
                             onCommit: { store.commitRename() },
                             onCancel: { store.cancelRename() }
                         )
@@ -99,14 +101,45 @@ struct SessionsView: View {
             .max()
     }
 
+    // Find the most recent NudgeEvent matching this session that carries a
+    // claudeSessionID, then look up its TranscriptStats in nav. Returns nil
+    // when the session has no Claude Code event yet (e.g. a Gemini-only
+    // session, or a Claude session that hasn't fired a hook this run).
+    private func transcriptStats(for session: Session) -> TranscriptStats? {
+        // Primary: direct lookup via the sidecar-supplied sessionId.
+        // This populates immediately on panel open — no hook required.
+        if let id = session.claudeSessionID,
+           let stats = nav.claudeSessionStats[id] {
+            return stats
+        }
+        // Fallback for sessions whose sidecar isn't readable (e.g. pre-2.1
+        // Claude Code): infer from the most recent matching event that
+        // carried a claudeSessionID. events array is newest-first.
+        guard let id = events.events
+            .filter({ matches(event: $0, session: session) })
+            .compactMap(\.claudeSessionID)
+            .first
+        else { return nil }
+        return nav.claudeSessionStats[id]
+    }
+
     private func matches(event: NudgeEvent, session: Session) -> Bool {
-        guard Agent.canonical(event.agent) == Agent.canonical(session.agent),
-              event.projectPath == session.projectPath else { return false }
-        // When both sides know which tab/window they belong to, demand
-        // they agree — that's how a permission nudge for tab A doesn't
-        // count toward tab B's nudge counter. Each terminal contributes
-        // its own identifier (iTerm: sessionID; VSCode: ipcHook), so
-        // we accept either as the event-side tabId.
+        guard Agent.canonical(event.agent) == Agent.canonical(session.agent) else {
+            return false
+        }
+        // Strongest disambiguator: notify.sh's walk_session_chain captures
+        // the agent process PID; SessionStore.pid is the same number. Trust
+        // it over projectPath because the event's project path (= shell
+        // $PWD when notify.sh ran) can disagree with the session's project
+        // path (= lsof cwd of the claude process). Zed sessions exhibit
+        // this — claude cwd stays at the workspace root while the user's
+        // shell can cd into a subdirectory.
+        if let eventPID = event.agentPID, eventPID > 0 {
+            return eventPID == session.pid
+        }
+        // Without a PID, fall back to projectPath + terminal-tab
+        // disambiguator. Same path required; tabId narrows when both have it.
+        guard event.projectPath == session.projectPath else { return false }
         let eventTab = (event.sessionID?.isEmpty == false ? event.sessionID : event.ipcHook)
         if let sessionTab = session.tabId, let eventTab,
            !sessionTab.isEmpty, !eventTab.isEmpty {
@@ -124,6 +157,7 @@ private struct SessionRow: View {
     @Binding var renameBuffer: String
     let activeNudgeCount: Int
     let lastNudgeAt: Date?
+    let transcriptStats: TranscriptStats?
     let onCommit: () -> Void
     let onCancel: () -> Void
 
@@ -148,6 +182,9 @@ private struct SessionRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 titleRow
                 metaRow
+                if let stats = transcriptStats {
+                    contextRow(stats)
+                }
                 if showNudgeRow {
                     nudgeRow
                 }
@@ -244,6 +281,54 @@ private struct SessionRow: View {
         }
     }
 
+    // Context-window usage row. Shows absolute tokens always; appends a
+    // percentage only when the model's context limit is in ModelLimits.
+    // The icon is intentionally muted — this is informational, not an
+    // alert (alerts come later, in Phase 2).
+    private func contextRow(_ stats: TranscriptStats) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "gauge.with.dots.needle.50percent")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            Text(contextLabel(stats))
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.top, 1)
+    }
+
+    private func contextLabel(_ stats: TranscriptStats) -> String {
+        // Absolute tokens only. We dropped the %-of-limit display in
+        // Phase 1 after discovering that the 4.x family's context window
+        // varies (Opus/Sonnet on 1M context; Haiku on 200K; Sonnet 1M is
+        // opt-in beta), and there's no reliable way to disambiguate from
+        // the model ID. Showing the model name keeps the row honest.
+        let tokens = Self.formatTokens(stats.tokens)
+        if let model = stats.model {
+            return "\(tokens) · \(Self.shortModel(model))"
+        }
+        return tokens
+    }
+
+    // Strip the date suffix Anthropic appends to model IDs
+    // (e.g. "claude-opus-4-7-20250606" → "opus-4-7") and the
+    // redundant "claude-" prefix.
+    private static func shortModel(_ id: String) -> String {
+        var s = id.hasPrefix("claude-") ? String(id.dropFirst("claude-".count)) : id
+        if let dash = s.range(of: "-2", options: .backwards),
+           s[dash.lowerBound...].dropFirst().allSatisfy(\.isNumber) {
+            s = String(s[..<dash.lowerBound])
+        }
+        return s
+    }
+
+    private static func formatTokens(_ n: Int) -> String {
+        if n >= 1_000 {
+            return String(format: "%.0fK tokens", Double(n) / 1_000.0)
+        }
+        return "\(n) tokens"
+    }
+
     private var nudgeRow: some View {
         HStack(spacing: 6) {
             Image(systemName: "bell.fill")
@@ -279,6 +364,13 @@ private struct SessionRow: View {
 
     private var displayName: String {
         if let custom = session.customName, !custom.isEmpty { return custom }
+        // Prefer a user-set Claude session name when it's not the default
+        // ("main-agent" is what Claude Code assigns by default; treat it
+        // as not meaningful and fall through to project name).
+        if let claudeName = session.claudeName,
+           !claudeName.isEmpty, claudeName != "main-agent" {
+            return claudeName
+        }
         return session.projectName ?? "(no project)"
     }
 
@@ -298,8 +390,19 @@ private struct SessionRow: View {
 
     private var glyphColor: Color {
         switch session.status {
-        case .active:   return .green
         case .finished: return .secondary
+        case .active:
+            // For claude sessions we get a live busy/idle signal from the
+            // ~/.claude/sessions/<pid>.json sidecar; reflect it in the dot
+            // so a glance at the panel tells the user which agents are
+            // working vs. waiting. Other agents / unknown status default
+            // to the existing green.
+            switch session.claudeStatus {
+            case "busy": return .yellow
+            case "idle": return .green
+            case nil:    return .green
+            default:     return .green
+            }
         }
     }
 
@@ -309,8 +412,16 @@ private struct SessionRow: View {
     private var statusLabel: String {
         switch session.status {
         case .active:
+            // Lead with claude's live status (busy / idle). Append "last
+            // activity Nm ago" from the sidecar's updatedAt when available
+            // — more useful than process elapsed time, which only tells
+            // you how long ago the process was spawned.
+            let head = session.claudeStatus ?? "active"
+            if let updated = session.claudeUpdatedAt {
+                return "\(head) · \(Self.timeFormatter.localizedString(for: updated, relativeTo: Date()))"
+            }
             let elapsed = session.elapsed?.trimmingCharacters(in: .whitespaces) ?? ""
-            return elapsed.isEmpty ? "active" : "active · \(elapsed)"
+            return elapsed.isEmpty ? head : "\(head) · \(elapsed)"
         case .finished(let at):
             return "ended " + Self.timeFormatter.localizedString(for: at, relativeTo: Date())
         }

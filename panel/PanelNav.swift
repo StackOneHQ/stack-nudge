@@ -112,6 +112,12 @@ final class PanelNav: ObservableObject {
     // True while a probe is in-flight. Set by PanelController around the
     // fetch call so the UI can swap the footer status to "Syncing…".
     @Published var quotaSyncing:     Bool = false
+    // Per-Claude-session context-window stats. Keyed by Claude's
+    // session_id UUID (NudgeEvent.claudeSessionID), populated by
+    // PanelController whenever an event arrives with a transcript_path.
+    // Sessions.swift renders entries from this map alongside matched
+    // sessions in the Sessions tab.
+    @Published var claudeSessionStats: [String: TranscriptStats] = [:]
     // Transient feedback for the "Check for updates…" action row.
     // Set by PanelController around UpdateChecker.check(); cleared
     // back to .idle a few seconds after a terminal result so the
@@ -129,6 +135,13 @@ final class PanelNav: ObservableObject {
     // useful for a usage gauge that updates server-side every minute.
     @Published var quotaPollMinutes:     Int  = 5
     static let quotaPollMinuteOptions: [Int] = [1, 2, 5, 10, 15, 30]
+    // Threshold for per-Claude-session context-window alerts, in thousands
+    // of tokens. 0 = off (no banner ever). When a session's tokens cross
+    // this value, PanelController fires a one-shot banner; dedup re-arms
+    // when the session's tokens drop by ≥20K (compact signal). Absolute
+    // tokens (not %) because Claude 4.x context windows vary by model.
+    @Published var contextAlertThresholdK: Int = 0
+    static let contextAlertThresholdOptions: [Int] = [0, 100, 150, 175, 200, 300, 500, 750]
     // First-launch bootstrap wizard state. Populated by PanelController
     // on launch when Bootstrap.isInstalled() returns false; drives
     // BootstrapView (mode = .bootstrap).
@@ -201,7 +214,7 @@ final class PanelNav: ObservableObject {
     // when the offset is 1.
     var updateRowOffset: Int { updateAvailable != nil ? 1 : 0 }
 
-    var rowCount: Int { 22 + updateRowOffset }
+    var rowCount: Int { 23 + updateRowOffset }
 
     // Row layout (kept in one place so the controller, view, and indexing
     // logic all agree on what each row index means). When updateAvailable
@@ -222,13 +235,14 @@ final class PanelNav: ObservableObject {
     //  12  Quota alerts          toggle
     //  13  Alert threshold       cycle
     //  14  Poll frequency        cycle
-    //  15  Edit phrases…         action
-    //  16  Check permissions…    action
-    //  17  Open config file…     action
-    //  18  View release notes…   action
-    //  19  Check for updates…    action
-    //  20  Uninstall stack-nudge action
-    //  21  Quit panel            action
+    //  15  Context alert at      cycle       (per-session token thresholds)
+    //  16  Edit phrases…         action
+    //  17  Check permissions…    action
+    //  18  Open config file…     action
+    //  19  View release notes…   action
+    //  20  Check for updates…    action
+    //  21  Uninstall stack-nudge action
+    //  22  Quit panel            action
 
     // MARK: - Disk I/O
 
@@ -259,6 +273,8 @@ final class PanelNav: ObservableObject {
         // Same coercion for poll interval — snap to nearest valid option.
         let rawPoll = Int(config["STACKNUDGE_USAGE_POLL_MIN"] ?? "") ?? 5
         quotaPollMinutes = Self.quotaPollMinuteOptions.min(by: { abs($0 - rawPoll) < abs($1 - rawPoll) }) ?? 5
+        let rawCtx = Int(config["STACKNUDGE_CONTEXT_ALERT_THRESHOLD"] ?? "") ?? 0
+        contextAlertThresholdK = Self.contextAlertThresholdOptions.min(by: { abs($0 - rawCtx) < abs($1 - rawCtx) }) ?? 0
     }
 
     // MARK: - Agent reconciliation
@@ -451,13 +467,13 @@ final class PanelNav: ObservableObject {
             } else {
                 startVoiceModelDownload()
             }
-        case 15: actions?.editPhrases()
-        case 16: actions?.checkPermissions()
-        case 17: actions?.openConfig()
-        case 18: actions?.openReleaseNotes()
-        case 19: actions?.checkForUpdates()
-        case 20: actions?.beginUninstall()
-        case 21: actions?.quit()
+        case 16: actions?.editPhrases()
+        case 17: actions?.checkPermissions()
+        case 18: actions?.openConfig()
+        case 19: actions?.openReleaseNotes()
+        case 20: actions?.checkForUpdates()
+        case 21: actions?.beginUninstall()
+        case 22: actions?.quit()
         default: applyCycle(forward: true)
         }
     }
@@ -560,6 +576,13 @@ final class PanelNav: ObservableObject {
             quotaPollMinutes = list[next]
             ConfigFile.write(key: "STACKNUDGE_USAGE_POLL_MIN",
                              value: String(quotaPollMinutes))
+        case 15:
+            let list = Self.contextAlertThresholdOptions
+            let idx = list.firstIndex(of: contextAlertThresholdK) ?? 0
+            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+            contextAlertThresholdK = list[next]
+            ConfigFile.write(key: "STACKNUDGE_CONTEXT_ALERT_THRESHOLD",
+                             value: String(contextAlertThresholdK))
         default:
             break
         }

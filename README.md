@@ -157,6 +157,14 @@ When you press `⏎` on a permission event in a VS Code / Cursor terminal pane, 
 
 Live list of running agent processes (`claude`, `gemini`, `codex` — including node-hosted variants like `gemini-cli`). Polls every 3 seconds while visible. Sessions that exit linger for 30s with `ended Ns ago`.
 
+For Claude Code sessions specifically, stack-nudge reads `~/.claude/sessions/<pid>.json` (Claude Code's per-process sidecar) to surface live data without waiting for a hook event:
+
+- **Live status dot** — yellow for `busy` (turn in flight), green for `idle` (waiting for input).
+- **Session name** from the sidecar when set to anything other than the default `main-agent` (falls back to the project name otherwise).
+- **Context-window usage** — `293K tokens · opus-4-7` beneath the project path, updated on each Claude turn.
+
+Rows are ordered busy-first, then by most-recent activity. Status label reads `busy · 2 min ago` / `idle · 1 hr ago`.
+
 | Key | Action |
 |-----|--------|
 | `↑ ↓` | Move selection |
@@ -178,18 +186,28 @@ Bars are color-coded: green below 50%, yellow 50–80%, red 80%+. Reset times sh
 
 Data is fetched from the same endpoint Claude Code's own statusline uses (`/api/oauth/usage`), reading your OAuth token from the macOS Keychain. **The first time stack-nudge polls you'll see a keychain dialog — click "Always Allow"** to grant access (one-time, per release).
 
-Polls every 60 seconds while the panel is visible, or every 5 minutes (`STACKNUDGE_USAGE_POLL_MIN`) in the background.
+Polls every 60 seconds while the panel is visible, or every 5 minutes by default in the background (configurable via Settings → Usage → "Poll frequency"; underlying key `STACKNUDGE_USAGE_POLL_MIN`). On the Usage tab: `r` triggers a manual sync, `p` pauses/resumes the poller.
 
 #### Threshold-crossing notifications
 
-When any tier reaches your configured threshold, stack-nudge fires a banner — *"Weekly quota at 85% — resets May 17"* — once per period per tier, so you get a heads-up before hitting the cap. Configure in Settings → Usage:
+When any quota tier reaches your configured threshold, stack-nudge fires a banner — *"Weekly quota at 85% — resets May 17"* — once per period per tier, so you get a heads-up before hitting the cap. Configure in Settings → Usage:
 
-- **Quota alerts** — master switch (default on)
+- **Quota tracking** — master switch for the whole feature (default on; off disables polling entirely)
+- **Quota alerts** — banner toggle (default on)
 - **Alert threshold** — 50% / 70% / 80% / 90% / 95% (default 80%)
+- **Poll frequency** — 1 / 2 / 5 / 10 / 15 / 30 min (default 5)
+
+#### Per-session context alerts
+
+Independent of quota: stack-nudge can also fire a banner when an individual Claude Code session's context window fills past a threshold you pick. The banner names the session — *"Context filling up — classifier-evolution-2 — at 175K tokens (opus-4-7). Consider /compact."* — so you know exactly which one to act on.
+
+- **Context alert at** — `Off` / 100K / 150K / 175K / 200K / 300K / 500K / 750K (default Off)
+- Absolute tokens, not a percent — Claude 4.x context windows vary (Opus/Sonnet 1M, Haiku 200K, opt-in betas), and there's no reliable way to infer the limit from the model ID alone.
+- One banner per session per threshold; the dedup re-arms whenever the session's token count drops by ≥20K (the characteristic shape of a `/compact` or `/clear`), so refilling after a compact alerts you again.
 
 #### Settings tab
 
-Reachable from the tab strip or `Cmd+4`. Keyboard-driven rows for hotkey, banner/voice toggles, sound picks (with preview-on-cycle), voice picker (with preview-on-cycle using a random conversational phrase), speed, quota alert config, and shortcuts to the permissions checker, config file, phrase editor, and quit.
+Reachable from the tab strip or `Cmd+4`. Keyboard-driven rows for hotkey, behavior toggles (banner, mute when focused, pin panel, launch at login), sound picks (with preview-on-cycle), voice notifications + picker + speed (with preview-on-cycle using a random conversational phrase), usage config (quota tracking + alerts + threshold + poll frequency + context alert threshold), and action rows (edit phrases, check permissions, open config file, view release notes, check for updates, uninstall, quit).
 
 | Key | Action |
 |-----|--------|

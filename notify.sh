@@ -351,6 +351,8 @@ post_to_panel() {
   NUDGE_TERM_PROGRAM="${TERM_PROGRAM:-}" \
   NUDGE_SESSION_ID="${TERM_SESSION_ID:-${ITERM_SESSION_ID:-}}" \
   NUDGE_ITERM_TAB_NAME="${ITERM_TAB_NAME:-}" \
+  NUDGE_CLAUDE_SESSION_ID="$(command -v jq &>/dev/null && [[ -n "$HOOK_JSON" ]] && printf '%s' "$HOOK_JSON" | jq -r '.session_id // empty' 2>/dev/null || true)" \
+  NUDGE_TRANSCRIPT_PATH="$(command -v jq &>/dev/null && [[ -n "$HOOK_JSON" ]] && printf '%s' "$HOOK_JSON" | jq -r '.transcript_path // empty' 2>/dev/null || true)" \
   python3 - <<'PY' 2>/dev/null
 import json, os, socket, time
 
@@ -379,6 +381,8 @@ optional = {
     "term_program":  env.get("NUDGE_TERM_PROGRAM"),
     "session_id":    env.get("NUDGE_SESSION_ID"),
     "iterm_tab_name": env.get("NUDGE_ITERM_TAB_NAME"),
+    "claude_session_id": env.get("NUDGE_CLAUDE_SESSION_ID"),
+    "transcript_path":   env.get("NUDGE_TRANSCRIPT_PATH"),
     "voice_message": env.get("NUDGE_VOICE_MESSAGE"),
     "sound_name":    env.get("NUDGE_SOUND"),
 }

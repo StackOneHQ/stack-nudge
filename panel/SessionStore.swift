@@ -24,6 +24,25 @@ struct Session: Identifiable, Equatable {
     // which is exactly the pre-Stage-2 behaviour.
     var tabId: String?
     var tabName: String?
+    // Read from ~/.claude/sessions/<pid>.json (one file per running claude
+    // process). Gives us authoritative session identity + state without
+    // needing a hook event to fire first. All optional — missing for
+    // non-claude agents, or if the sidecar doesn't exist yet for a freshly
+    // spawned process.
+    var claudeSessionID: String?
+    var claudeName: String?           // "main-agent" (default) or user-set
+    var claudeStatus: String?         // "busy" | "idle" | other
+    var claudeUpdatedAt: Date?        // last-activity timestamp from sidecar
+}
+
+// Decoded shape of ~/.claude/sessions/<pid>.json. Only the fields we
+// actually use; Claude Code emits more. updatedAt is milliseconds since
+// the Unix epoch; SessionStore converts to Date at discovery time.
+private struct ClaudeSessionSidecar: Decodable {
+    let sessionId: String?
+    let name: String?
+    let status: String?
+    let updatedAt: Double?
 }
 
 // Polls for live agent processes (claude / gemini / codex) every few seconds
@@ -178,11 +197,24 @@ final class SessionStore: ObservableObject {
             next.append(session)
         }
 
-        // Sort: active first, then most-recently-finished, then by agent/pid.
+        // Sort: active first, busy above non-busy within active, then by
+        // most-recent claudeUpdatedAt (or process pid as tiebreaker so
+        // ordering stays stable when sidecar timestamps are absent).
+        // Distant past for sessions with no updatedAt sinks them below
+        // any timestamped session.
+        let distantPast = Date.distantPast
         next.sort { lhs, rhs in
             let lActive = lhs.status == .active
             let rActive = rhs.status == .active
             if lActive != rActive { return lActive && !rActive }
+
+            let lBusy = lhs.claudeStatus == "busy"
+            let rBusy = rhs.claudeStatus == "busy"
+            if lBusy != rBusy { return lBusy && !rBusy }
+
+            let lAt = lhs.claudeUpdatedAt ?? distantPast
+            let rAt = rhs.claudeUpdatedAt ?? distantPast
+            if lAt != rAt { return lAt > rAt }
             return lhs.pid < rhs.pid
         }
 
@@ -220,6 +252,7 @@ final class SessionStore: ObservableObject {
 
             let cwd = readCWD(pid: pid)
             let chain = walkParentChain(from: pid)
+            let sidecar = (agent == "claude") ? readClaudeSidecar(pid: pid) : nil
 
             found.append(Session(
                 id: pid,
@@ -233,7 +266,11 @@ final class SessionStore: ObservableObject {
                 customName: nil,
                 status: .active,
                 tabId: nil,
-                tabName: nil
+                tabName: nil,
+                claudeSessionID: sidecar?.sessionId,
+                claudeName:      sidecar?.name,
+                claudeStatus:    sidecar?.status,
+                claudeUpdatedAt: sidecar?.updatedAt.map { Date(timeIntervalSince1970: $0 / 1000) }
             ))
         }
         return found
@@ -262,6 +299,18 @@ final class SessionStore: ObservableObject {
             }
         }
         return nil
+    }
+
+    // Per-PID sidecar emitted by Claude Code (interactive runs) with the
+    // session UUID, user-facing name, and live busy/idle status. Reading
+    // this lets us bind a Session to its transcript immediately without
+    // waiting for a hook event to fire.
+    private static func readClaudeSidecar(pid: Int) -> ClaudeSessionSidecar? {
+        let path = "\(NSHomeDirectory())/.claude/sessions/\(pid).json"
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(ClaudeSessionSidecar.self, from: data)
     }
 
     private static func readCWD(pid: Int) -> String? {
@@ -330,7 +379,15 @@ private extension Session {
             customName: customName,
             status: status,
             tabId: tabId ?? self.tabId,
-            tabName: tabName ?? self.tabName
+            tabName: tabName ?? self.tabName,
+            // Preserve the live sidecar values from the freshly-discovered
+            // snapshot — these change turn-to-turn (status especially), so
+            // we want the merge to surface the latest, not the stale value
+            // from the previous poll.
+            claudeSessionID: self.claudeSessionID,
+            claudeName:      self.claudeName,
+            claudeStatus:    self.claudeStatus,
+            claudeUpdatedAt: self.claudeUpdatedAt
         )
     }
 }
