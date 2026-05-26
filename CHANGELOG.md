@@ -4,6 +4,23 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.11.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.10.0...v1.11.0) (2026-05-26)
+
+
+### Features
+
+* **settings:** "Check for updates…" action + lower default interval to 2h ([39fe656](https://github.com/StackOneHQ/stack-nudge/commit/39fe6565037790fcfd3f7923aaa8ef8456d3483d))
+* **settings:** dim gated rows when their controlling toggle is off ([8c19f08](https://github.com/StackOneHQ/stack-nudge/commit/8c19f08336b34beb1c0574241f9d021e92378f3d))
+* **settings:** move "Voice notifications" into the Voice section ([7a3cb2a](https://github.com/StackOneHQ/stack-nudge/commit/7a3cb2a6cfbd4fe0ee3ae29e932376c9aa995a2e))
+* **settings:** transient feedback on "Check for updates" action ([4b4fdbc](https://github.com/StackOneHQ/stack-nudge/commit/4b4fdbc883647689575e12256156c09dbf2ebae1))
+
+
+### Bug Fixes
+
+* Settings polish: check-for-updates, faster update interval, gated-row dimming, voice section reshuffle ([63f2b26](https://github.com/StackOneHQ/stack-nudge/commit/63f2b26e2f6c6999ec7d593f522062144e51a7aa))
+* **settings:** always surface check-for-updates result in the row ([ad66a5d](https://github.com/StackOneHQ/stack-nudge/commit/ad66a5ddc541e1005cd085596a883729e357b97d))
+* **settings:** render value text on action rows ([1a10085](https://github.com/StackOneHQ/stack-nudge/commit/1a10085314897962567583e24c42267658e39d95))
+
 ## [1.10.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.9.1...v1.10.0) (2026-05-26)
 
 
