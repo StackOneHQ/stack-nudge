@@ -4,6 +4,23 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.10.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.9.1...v1.10.0) (2026-05-26)
+
+
+### Features
+
+* Post-launch polish: launch-at-login toggle + OAuth token caching ([2975466](https://github.com/StackOneHQ/stack-nudge/commit/2975466f20297d92373e8fa1d69dfd7045138663))
+* **settings:** add "Launch at login" toggle (on by default) ([4419c70](https://github.com/StackOneHQ/stack-nudge/commit/4419c7097a0534668864e2ed557fa1492b0982a9))
+* **settings:** quota tracking toggle, poll frequency cycle, release notes action ([d2c89a8](https://github.com/StackOneHQ/stack-nudge/commit/d2c89a8e226001e7880a0a37340b71eb1166a1b9))
+* **usage:** explicit empty state when quota tracking is disabled ([479c24a](https://github.com/StackOneHQ/stack-nudge/commit/479c24adeb0a3eb1a08ddf1575728f16f4ff26ac))
+* **usage:** pause/resume keystroke for quota tracking ([c7e251a](https://github.com/StackOneHQ/stack-nudge/commit/c7e251a41f2b2df68d9ff281ead9c912eafe540d))
+* **usage:** sync-now keystroke + richer footer status ([a57bcec](https://github.com/StackOneHQ/stack-nudge/commit/a57bcec63976e3f95b946a02f08c431c58b3af1a))
+
+
+### Bug Fixes
+
+* **usage:** cache OAuth token in memory to reduce keychain prompts ([d2db552](https://github.com/StackOneHQ/stack-nudge/commit/d2db5523c9e70a793da5033772bdc81cb7aa9762))
+
 ## [1.9.1](https://github.com/StackOneHQ/stack-nudge/compare/v1.9.0...v1.9.1) (2026-05-22)
 
 
