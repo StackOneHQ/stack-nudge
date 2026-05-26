@@ -574,6 +574,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self?.phrases.selectedRow = nil
                 self?.nav.mode = .phrases
             },
+            openReleaseNotes: {
+                // Versioned tag URL when we know the bundle version,
+                // otherwise the releases index. Tag URL falls through
+                // to /releases on 404, so a typo'd version still lands
+                // the user somewhere useful.
+                let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+                let url = version.flatMap {
+                    URL(string: "https://github.com/StackOneHQ/stack-nudge/releases/tag/v\($0)")
+                } ?? URL(string: "https://github.com/StackOneHQ/stack-nudge/releases")!
+                NSWorkspace.shared.open(url)
+            },
             beginUpdate:      { [weak self] in self?.beginUpdateFlow() },
             runUpdate:        { [weak self] in self?.updater?.run() },
             beginUninstall:   { [weak self] in self?.beginUninstallFlow() },
@@ -781,6 +792,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         return max(60, mins * 60)  // floor at 60s to avoid hammering the endpoint
     }
 
+    private var quotaTrackingEnabled: Bool {
+        ConfigFile.bool(ConfigFile.read(), "STACKNUDGE_QUOTA_TRACKING", default: true)
+    }
+
     private func startQuotaPolling() {
         runQuotaProbe()
         scheduleNextQuotaPoll()
@@ -788,6 +803,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     private func scheduleNextQuotaPoll() {
         quotaTimer?.invalidate()
+        // Schedule unconditionally so a re-enable from Settings picks up
+        // again on the next tick without needing an explicit start call.
+        // The probe itself bails when tracking is off.
         let interval = panel.isVisible ? Self.quotaPollVisibleInterval : quotaPollHiddenInterval
         quotaTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
             self?.runQuotaProbe()
@@ -796,6 +814,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     }
 
     private func runQuotaProbe() {
+        guard quotaTrackingEnabled else { return }
         quotaProbe.fetch { [weak self] snapshot in
             guard let self, let snapshot else { return }
             self.nav.quota = snapshot

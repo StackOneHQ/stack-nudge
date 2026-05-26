@@ -69,16 +69,19 @@ struct SettingsView: View {
                         }
 
                         section("Usage") {
-                            row(11 + off, label: "Quota alerts",    kind: .toggle, value: nav.quotaAlertsEnabled ? "On" : "Off")
-                            row(12 + off, label: "Alert threshold", kind: .cycle,  value: "\(nav.quotaAlertThreshold)%")
+                            row(11 + off, label: "Quota tracking",  kind: .toggle, value: nav.quotaTrackingEnabled ? "On" : "Off")
+                            row(12 + off, label: "Quota alerts",    kind: .toggle, value: nav.quotaAlertsEnabled    ? "On" : "Off")
+                            row(13 + off, label: "Alert threshold", kind: .cycle,  value: "\(nav.quotaAlertThreshold)%")
+                            row(14 + off, label: "Poll frequency",  kind: .cycle,  value: "\(nav.quotaPollMinutes) min")
                         }
 
                         section("Actions") {
-                            row(13 + off, label: "Edit phrases…",         kind: .action, value: "")
-                            row(14 + off, label: "Check permissions…",    kind: .action, value: "")
-                            row(15 + off, label: "Open config file…",     kind: .action, value: "")
-                            row(16 + off, label: "Uninstall StackNudge…", kind: .action, value: "")
-                            row(17 + off, label: "Quit panel",            kind: .action, value: "")
+                            row(15 + off, label: "Edit phrases…",         kind: .action, value: "")
+                            row(16 + off, label: "Check permissions…",    kind: .action, value: "")
+                            row(17 + off, label: "Open config file…",     kind: .action, value: "")
+                            row(18 + off, label: "View release notes…",   kind: .action, value: "")
+                            row(19 + off, label: "Uninstall StackNudge…", kind: .action, value: "")
+                            row(20 + off, label: "Quit panel",            kind: .action, value: "")
                         }
 
                         aboutFooter

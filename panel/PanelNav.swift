@@ -34,6 +34,7 @@ struct SettingsActions {
     let checkPermissions: () -> Void
     let openConfig:       () -> Void
     let editPhrases:      () -> Void
+    let openReleaseNotes: () -> Void
     let beginUpdate:      () -> Void
     let runUpdate:        () -> Void
     let beginUninstall:   () -> Void
@@ -102,8 +103,15 @@ final class PanelNav: ObservableObject {
     // Threshold-crossing notifications. quotaAlertsEnabled is the master
     // switch; quotaAlertThreshold is the single percent value used across
     // all tiers — banner fires once per period when any tier reaches it.
-    @Published var quotaAlertsEnabled:  Bool = true
-    @Published var quotaAlertThreshold: Int  = 80
+    @Published var quotaTrackingEnabled: Bool = true
+    @Published var quotaAlertsEnabled:   Bool = true
+    @Published var quotaAlertThreshold:  Int  = 80
+    // Background poll interval in minutes when the panel is hidden.
+    // Visible-panel polling is fixed at 60s (see Panel.swift). Cycle
+    // values intentionally constrained — finer granularity isn't
+    // useful for a usage gauge that updates server-side every minute.
+    @Published var quotaPollMinutes:     Int  = 5
+    static let quotaPollMinuteOptions: [Int] = [1, 2, 5, 10, 15, 30]
     // First-launch bootstrap wizard state. Populated by PanelController
     // on launch when Bootstrap.isInstalled() returns false; drives
     // BootstrapView (mode = .bootstrap).
@@ -176,7 +184,7 @@ final class PanelNav: ObservableObject {
     // when the offset is 1.
     var updateRowOffset: Int { updateAvailable != nil ? 1 : 0 }
 
-    var rowCount: Int { 18 + updateRowOffset }
+    var rowCount: Int { 21 + updateRowOffset }
 
     // Row layout (kept in one place so the controller, view, and indexing
     // logic all agree on what each row index means). When updateAvailable
@@ -193,13 +201,16 @@ final class PanelNav: ObservableObject {
     //   8  Permission sound      cycle
     //   9  Voice                 cycle       (or "Download model" action)
     //  10  Speed                 cycle
-    //  11  Quota alerts          toggle
-    //  12  Alert threshold       cycle
-    //  13  Edit phrases…         action
-    //  14  Check permissions…    action
-    //  15  Open config file…     action
-    //  16  Uninstall stack-nudge action
-    //  17  Quit panel            action
+    //  11  Quota tracking        toggle      (master; gates rows 12-14)
+    //  12  Quota alerts          toggle
+    //  13  Alert threshold       cycle
+    //  14  Poll frequency        cycle
+    //  15  Edit phrases…         action
+    //  16  Check permissions…    action
+    //  17  Open config file…     action
+    //  18  View release notes…   action
+    //  19  Uninstall stack-nudge action
+    //  20  Quit panel            action
 
     // MARK: - Disk I/O
 
@@ -221,11 +232,15 @@ final class PanelNav: ObservableObject {
         soundPermission = config["STACKNUDGE_SOUND_PERMISSION"] ?? "Ping"
         voice           = config["STACKNUDGE_VOICE_NAME"]       ?? "af_aoede"
         voiceSpeed      = Double(config["STACKNUDGE_VOICE_SPEED"] ?? "") ?? 1.1
-        quotaAlertsEnabled  = ConfigFile.bool(config, "STACKNUDGE_QUOTA_ALERTS", default: true)
+        quotaTrackingEnabled = ConfigFile.bool(config, "STACKNUDGE_QUOTA_TRACKING", default: true)
+        quotaAlertsEnabled   = ConfigFile.bool(config, "STACKNUDGE_QUOTA_ALERTS",   default: true)
         // Coerce out-of-list values to the nearest valid threshold so a
         // hand-edited config can't desync the cycle row's selection.
         let rawThreshold = Int(config["STACKNUDGE_QUOTA_THRESHOLD"] ?? "") ?? 80
         quotaAlertThreshold = Self.quotaThresholds.min(by: { abs($0 - rawThreshold) < abs($1 - rawThreshold) }) ?? 80
+        // Same coercion for poll interval — snap to nearest valid option.
+        let rawPoll = Int(config["STACKNUDGE_USAGE_POLL_MIN"] ?? "") ?? 5
+        quotaPollMinutes = Self.quotaPollMinuteOptions.min(by: { abs($0 - rawPoll) < abs($1 - rawPoll) }) ?? 5
     }
 
     // MARK: - Agent reconciliation
@@ -418,11 +433,12 @@ final class PanelNav: ObservableObject {
             } else {
                 startVoiceModelDownload()
             }
-        case 13: actions?.editPhrases()
-        case 14: actions?.checkPermissions()
-        case 15: actions?.openConfig()
-        case 16: actions?.beginUninstall()
-        case 17: actions?.quit()
+        case 15: actions?.editPhrases()
+        case 16: actions?.checkPermissions()
+        case 17: actions?.openConfig()
+        case 18: actions?.openReleaseNotes()
+        case 19: actions?.beginUninstall()
+        case 20: actions?.quit()
         default: applyCycle(forward: true)
         }
     }
@@ -489,10 +505,14 @@ final class PanelNav: ObservableObject {
             voiceSpeed = max(Self.speedMin, min(Self.speedMax, (next * 100).rounded() / 100))
             ConfigFile.write(key: "STACKNUDGE_VOICE_SPEED", value: String(format: "%.2f", voiceSpeed))
         case 11:
+            quotaTrackingEnabled.toggle()
+            ConfigFile.write(key: "STACKNUDGE_QUOTA_TRACKING",
+                             value: quotaTrackingEnabled ? "true" : "false")
+        case 12:
             quotaAlertsEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_QUOTA_ALERTS",
                              value: quotaAlertsEnabled ? "true" : "false")
-        case 12:
+        case 13:
             // Cycle through the static thresholds list. Index wraps in both
             // directions so the user can dial in either way.
             let list = Self.quotaThresholds
@@ -501,6 +521,13 @@ final class PanelNav: ObservableObject {
             quotaAlertThreshold = list[next]
             ConfigFile.write(key: "STACKNUDGE_QUOTA_THRESHOLD",
                              value: String(quotaAlertThreshold))
+        case 14:
+            let list = Self.quotaPollMinuteOptions
+            let idx = list.firstIndex(of: quotaPollMinutes) ?? 2
+            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+            quotaPollMinutes = list[next]
+            ConfigFile.write(key: "STACKNUDGE_USAGE_POLL_MIN",
+                             value: String(quotaPollMinutes))
         default:
             break
         }
