@@ -838,23 +838,30 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // auto-clears back to .idle after a few seconds.
     private func runUserUpdateCheck() {
         nav.updateCheckStatus = .checking
+        // Minimum visible duration for the "Checking…" flash. Without
+        // it, a sub-second network call would swap status faster than
+        // the user can perceive, leaving the click feeling silent.
+        let started = Date()
+        let minChecking: TimeInterval = 0.6
         updateChecker?.check { [weak self] result in
             guard let self else { return }
-            switch result {
-            case .updateAvailable:
-                self.nav.updateCheckStatus = .idle
-            case .upToDate:
-                self.nav.updateCheckStatus = .upToDate
-            case .failed:
-                self.nav.updateCheckStatus = .failed
-            }
-            // Auto-clear so the row label returns to neutral on the
-            // next time the user opens Settings. 3s is long enough to
-            // notice, short enough not to mislead a later glance.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            let elapsed = Date().timeIntervalSince(started)
+            let delay = max(0, minChecking - elapsed)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self else { return }
-                if self.nav.updateCheckStatus != .checking {
-                    self.nav.updateCheckStatus = .idle
+                switch result {
+                case .updateAvailable: self.nav.updateCheckStatus = .updateAvailable
+                case .upToDate:        self.nav.updateCheckStatus = .upToDate
+                case .failed:          self.nav.updateCheckStatus = .failed
+                }
+                // Auto-clear so the row label returns to neutral on the
+                // next visit. 3s is long enough to notice, short enough
+                // not to mislead a later glance.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                    guard let self else { return }
+                    if self.nav.updateCheckStatus != .checking {
+                        self.nav.updateCheckStatus = .idle
+                    }
                 }
             }
         }

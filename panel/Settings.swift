@@ -289,6 +289,7 @@ struct SettingsView: View {
         case .idle:             return ""
         case .checking:         return "Checking…"
         case .upToDate:         return "Up to date"
+        case .updateAvailable:  return "Update available"
         case .failed:           return "Failed"
         }
     }

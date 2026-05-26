@@ -34,6 +34,7 @@ enum UpdateCheckStatus: Equatable {
     case idle
     case checking
     case upToDate
+    case updateAvailable
     case failed
 }
 
