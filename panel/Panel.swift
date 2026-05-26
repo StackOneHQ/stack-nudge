@@ -586,6 +586,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 } ?? URL(string: "https://github.com/StackOneHQ/stack-nudge/releases")!
                 NSWorkspace.shared.open(url)
             },
+            checkForUpdates:  { [weak self] in self?.updateChecker?.check() },
             beginUpdate:      { [weak self] in self?.beginUpdateFlow() },
             runUpdate:        { [weak self] in self?.updater?.run() },
             beginUninstall:   { [weak self] in self?.beginUninstallFlow() },

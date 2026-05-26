@@ -80,8 +80,9 @@ struct SettingsView: View {
                             row(16 + off, label: "Check permissions…",    kind: .action, value: "")
                             row(17 + off, label: "Open config file…",     kind: .action, value: "")
                             row(18 + off, label: "View release notes…",   kind: .action, value: "")
-                            row(19 + off, label: "Uninstall StackNudge…", kind: .action, value: "")
-                            row(20 + off, label: "Quit panel",            kind: .action, value: "")
+                            row(19 + off, label: "Check for updates…",    kind: .action, value: "")
+                            row(20 + off, label: "Uninstall StackNudge…", kind: .action, value: "")
+                            row(21 + off, label: "Quit panel",            kind: .action, value: "")
                         }
 
                         aboutFooter

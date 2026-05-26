@@ -33,7 +33,7 @@ final class UpdateChecker {
     private var timer: Timer?
     private let session: URLSession
 
-    init(nav: PanelNav, interval: TimeInterval = 6 * 60 * 60) {
+    init(nav: PanelNav, interval: TimeInterval = 2 * 60 * 60) {
         self.nav = nav
         self.interval = interval
         let config = URLSessionConfiguration.ephemeral

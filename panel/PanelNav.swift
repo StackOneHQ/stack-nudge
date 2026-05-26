@@ -35,6 +35,7 @@ struct SettingsActions {
     let openConfig:       () -> Void
     let editPhrases:      () -> Void
     let openReleaseNotes: () -> Void
+    let checkForUpdates:  () -> Void
     let beginUpdate:      () -> Void
     let runUpdate:        () -> Void
     let beginUninstall:   () -> Void
@@ -187,7 +188,7 @@ final class PanelNav: ObservableObject {
     // when the offset is 1.
     var updateRowOffset: Int { updateAvailable != nil ? 1 : 0 }
 
-    var rowCount: Int { 21 + updateRowOffset }
+    var rowCount: Int { 22 + updateRowOffset }
 
     // Row layout (kept in one place so the controller, view, and indexing
     // logic all agree on what each row index means). When updateAvailable
@@ -212,8 +213,9 @@ final class PanelNav: ObservableObject {
     //  16  Check permissions…    action
     //  17  Open config file…     action
     //  18  View release notes…   action
-    //  19  Uninstall stack-nudge action
-    //  20  Quit panel            action
+    //  19  Check for updates…    action
+    //  20  Uninstall stack-nudge action
+    //  21  Quit panel            action
 
     // MARK: - Disk I/O
 
@@ -440,8 +442,9 @@ final class PanelNav: ObservableObject {
         case 16: actions?.checkPermissions()
         case 17: actions?.openConfig()
         case 18: actions?.openReleaseNotes()
-        case 19: actions?.beginUninstall()
-        case 20: actions?.quit()
+        case 19: actions?.checkForUpdates()
+        case 20: actions?.beginUninstall()
+        case 21: actions?.quit()
         default: applyCycle(forward: true)
         }
     }
