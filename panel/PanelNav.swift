@@ -508,6 +508,13 @@ final class PanelNav: ObservableObject {
             quotaTrackingEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_QUOTA_TRACKING",
                              value: quotaTrackingEnabled ? "true" : "false")
+            // Drop the cached snapshot so the Usage tab doesn't sit on
+            // stale data while tracking is off — and so re-enabling shows
+            // the "Loading…" state rather than data from before the pause.
+            if !quotaTrackingEnabled {
+                quota = nil
+                quotaLastUpdated = nil
+            }
         case 12:
             quotaAlertsEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_QUOTA_ALERTS",

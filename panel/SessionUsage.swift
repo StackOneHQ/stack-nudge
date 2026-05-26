@@ -194,7 +194,9 @@ struct UsageView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let snapshot = nav.quota, !isAllNil(snapshot) {
+            if !nav.quotaTrackingEnabled {
+                trackingDisabledState
+            } else if let snapshot = nav.quota, !isAllNil(snapshot) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
                         if let tier = snapshot.fiveHour {
@@ -279,6 +281,25 @@ struct UsageView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             Text("Requires Claude Code login. First read may prompt the system keychain.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 280)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.vertical, 24)
+    }
+
+    private var trackingDisabledState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "pause.circle")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+            Text("Quota tracking is off")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Text("Enable in Settings → Usage → Quota tracking to see your Claude usage here.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
