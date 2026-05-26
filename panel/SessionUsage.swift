@@ -41,6 +41,19 @@ final class QuotaProbe {
 
     private let session: URLSession
 
+    // In-memory cache of the OAuth token. Touched only from the main queue
+    // (fetch is invoked from PanelController's main-thread timer, and the
+    // 401-retry path hops back to main before clearing).
+    //
+    // Why cache: Claude Code rotates this keychain item periodically and
+    // each rotation wipes the trusted-app ACL we got from "Always Allow",
+    // so the next SecItemCopyMatching re-fires the password prompt. Most
+    // rotations happen well before the old token actually expires, so by
+    // holding the token in memory and only re-reading the keychain when
+    // the API rejects it (HTTP 401), we skip the prompts tied to rotations
+    // that didn't invalidate the token we already have.
+    private var cachedToken: String?
+
     init() {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.timeoutIntervalForRequest  = 10
@@ -50,21 +63,45 @@ final class QuotaProbe {
 
     // One-shot probe. Calls completion on the main queue.
     func fetch(completion: @escaping (QuotaSnapshot?) -> Void) {
-        guard let token = readAccessToken() else {
+        fetch(retried: false, completion: completion)
+    }
+
+    private func fetch(retried: Bool, completion: @escaping (QuotaSnapshot?) -> Void) {
+        let token: String
+        if let cached = cachedToken {
+            token = cached
+        } else if let fresh = readAccessToken() {
+            cachedToken = fresh
+            token = fresh
+        } else {
             completion(nil)
             return
         }
+
         var request = URLRequest(url: Self.endpoint)
         request.setValue("Bearer \(token)",       forHTTPHeaderField: "Authorization")
         request.setValue("oauth-2025-04-20",      forHTTPHeaderField: "anthropic-beta")
         request.setValue("application/json",      forHTTPHeaderField: "Content-Type")
         request.setValue("stack-nudge",           forHTTPHeaderField: "User-Agent")
 
-        session.dataTask(with: request) { data, response, _ in
+        session.dataTask(with: request) { [weak self] data, response, _ in
             let http = response as? HTTPURLResponse
-            guard let data, http?.statusCode == 200,
+            let code = http?.statusCode
+
+            // 401 = the token we used is no longer valid (Claude Code rotated
+            // and the old token has actually expired, not just been replaced).
+            // Drop the cache and re-read the keychain exactly once.
+            if code == 401, !retried {
+                DispatchQueue.main.async {
+                    self?.cachedToken = nil
+                    self?.fetch(retried: true, completion: completion)
+                }
+                return
+            }
+
+            guard let data, code == 200,
                   let snapshot = Self.parse(data) else {
-                if let code = http?.statusCode, code != 200 {
+                if let code, code != 200 {
                     FileHandle.standardError.write(Data(
                         "stack-nudge: /api/oauth/usage returned \(code)\n".utf8))
                 }
@@ -79,8 +116,10 @@ final class QuotaProbe {
 
     // Read the Claude Code credentials JSON blob from the macOS Keychain and
     // extract `claudeAiOauth.accessToken`. macOS prompts the user the first
-    // time stack-nudge tries to read this entry — once approved (and once
-    // we're Developer-ID-signed), subsequent reads are silent.
+    // time stack-nudge reads this entry; subsequent reads are silent until
+    // Claude Code rotates the item, which wipes the ACL and re-fires the
+    // prompt. Callers cache the returned token and only re-invoke this on
+    // an API 401 to keep prompt frequency to a minimum.
     private func readAccessToken() -> String? {
         let query: [String: Any] = [
             kSecClass as String:            kSecClassGenericPassword,
