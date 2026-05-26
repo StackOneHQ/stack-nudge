@@ -232,6 +232,7 @@ struct UsageView: View {
                 if nav.quotaTrackingEnabled {
                     FooterHint(label: "Sync now", keys: ["r"])
                 }
+                FooterHint(label: nav.quotaTrackingEnabled ? "Pause" : "Resume", keys: ["p"])
                 FooterHint(label: "Hide", keys: ["esc"])
             }
         }

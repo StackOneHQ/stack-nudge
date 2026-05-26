@@ -27,6 +27,7 @@ private enum KeyCode {
     static let three:     UInt16 = 20
     static let four:      UInt16 = 21
     static let nKey:      UInt16 = 45
+    static let pKey:      UInt16 = 35
 }
 
 // Floating, non-activating panel. Shown via global hotkey; receives key
@@ -1575,6 +1576,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 scrollUsageBy(40)
             case KeyCode.rKey:
                 syncQuotaNow()
+            case KeyCode.pKey:
+                nav.toggleQuotaTracking()
+                // Immediate probe on resume so the user sees fresh data
+                // right after the keystroke — otherwise they'd wait for
+                // the next scheduled tick (up to the configured poll
+                // interval, which could be 30 min).
+                if nav.quotaTrackingEnabled { syncQuotaNow() }
             default:
                 break
             }

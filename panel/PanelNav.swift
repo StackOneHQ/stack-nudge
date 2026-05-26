@@ -449,6 +449,21 @@ final class PanelNav: ObservableObject {
     func cycleForward()  { applyCycle(forward: true) }
     func cycleBackward() { applyCycle(forward: false) }
 
+    // Shared by Settings row 11 and the Usage tab's 'p' keystroke. On
+    // pause, drop the cached snapshot so the Usage tab doesn't sit on
+    // stale data; on resume, the caller is responsible for kicking off
+    // an immediate probe (so the user sees fresh data right after the
+    // shortcut, not after the next scheduled tick).
+    func toggleQuotaTracking() {
+        quotaTrackingEnabled.toggle()
+        ConfigFile.write(key: "STACKNUDGE_QUOTA_TRACKING",
+                         value: quotaTrackingEnabled ? "true" : "false")
+        if !quotaTrackingEnabled {
+            quota = nil
+            quotaLastUpdated = nil
+        }
+    }
+
     private func applyCycle(forward: Bool) {
         // Update row (when present at index 0) treats left/right arrows the
         // same as Enter — there's nothing to cycle, so just begin update.
@@ -508,16 +523,7 @@ final class PanelNav: ObservableObject {
             voiceSpeed = max(Self.speedMin, min(Self.speedMax, (next * 100).rounded() / 100))
             ConfigFile.write(key: "STACKNUDGE_VOICE_SPEED", value: String(format: "%.2f", voiceSpeed))
         case 11:
-            quotaTrackingEnabled.toggle()
-            ConfigFile.write(key: "STACKNUDGE_QUOTA_TRACKING",
-                             value: quotaTrackingEnabled ? "true" : "false")
-            // Drop the cached snapshot so the Usage tab doesn't sit on
-            // stale data while tracking is off — and so re-enabling shows
-            // the "Loading…" state rather than data from before the pause.
-            if !quotaTrackingEnabled {
-                quota = nil
-                quotaLastUpdated = nil
-            }
+            toggleQuotaTracking()
         case 12:
             quotaAlertsEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_QUOTA_ALERTS",
