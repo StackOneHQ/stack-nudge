@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import UserNotifications
 
@@ -480,6 +481,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private var updater: Updater?
     private let quotaProbe = QuotaProbe()
     private var quotaTimer: Timer?
+    // Subscriptions to other ObservableObjects we react to from PanelController.
+    // Currently: SessionStore.sessions → refresh transcript stats proactively
+    // so threshold alerts fire even when no hook has arrived yet.
+    private var cancellables = Set<AnyCancellable>()
     // Tracks whether the banner has already fired this period per tier so
     // we don't refire on every poll. Reset when the tier's resets_at
     // advances (a new period started, fresh budget).
@@ -615,6 +620,16 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         updater = Updater(nav: nav)
 
         startQuotaPolling()
+
+        // Whenever SessionStore re-polls (~every 3s while polling, on
+        // panel-becomes-visible otherwise), refresh transcript stats for
+        // any claude session we now know the UUID for. This is what makes
+        // stats populate without waiting for a hook — and what lets
+        // threshold alerts fire for sessions the user isn't watching.
+        sessions.$sessions
+            .removeDuplicates()
+            .sink { [weak self] _ in self?.refreshAllClaudeStats() }
+            .store(in: &cancellables)
 
         // If a previous panel instance was pkilled mid-update by install.sh,
         // it left a status file behind. Read it now and surface a brief toast
@@ -993,6 +1008,36 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // event and publish updated context-window stats to nav. Runs
     // off-main since transcripts can be a few MB; the final assignment
     // hops back to main so SwiftUI re-renders cleanly.
+    // Refresh transcript stats for every known claude session whose
+    // sidecar gave us a sessionId. Triggered on SessionStore updates so
+    // stats stay current with the 3s poll cadence even when the user
+    // isn't generating events.
+    private func refreshAllClaudeStats() {
+        for session in sessions.sessions
+            where session.agent == "claude" && session.status == .active
+        {
+            guard let id = session.claudeSessionID,
+                  let project = session.projectPath
+            else { continue }
+            let path = Self.transcriptPath(projectPath: project, sessionID: id)
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let stats = TranscriptReader.read(path: path) else { return }
+                DispatchQueue.main.async {
+                    self?.nav.claudeSessionStats[id] = stats
+                    self?.evaluateContextThreshold(sessionID: id, stats: stats)
+                }
+            }
+        }
+    }
+
+    // Claude Code stores transcripts at:
+    //   ~/.claude/projects/<slug>/<session-uuid>.jsonl
+    // where the slug is the absolute project path with '/' replaced by '-'.
+    private static func transcriptPath(projectPath: String, sessionID: String) -> String {
+        let slug = projectPath.replacingOccurrences(of: "/", with: "-")
+        return "\(NSHomeDirectory())/.claude/projects/\(slug)/\(sessionID).jsonl"
+    }
+
     private func refreshTranscriptStats(for event: NudgeEvent) {
         guard let sessionID = event.claudeSessionID,
               let path = event.transcriptPath, !path.isEmpty
@@ -1001,8 +1046,71 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             guard let stats = TranscriptReader.read(path: path) else { return }
             DispatchQueue.main.async {
                 self?.nav.claudeSessionStats[sessionID] = stats
+                self?.evaluateContextThreshold(sessionID: sessionID, stats: stats)
             }
         }
+    }
+
+    // Per-session state for context-threshold dedup. Lives on the
+    // controller (not nav) because it's pure bookkeeping for the
+    // alert pipeline, not anything the UI observes.
+    private var contextAlertLastTokens: [String: Int] = [:]
+    private var contextAlertFired: Set<String> = []
+    private static let contextCompactDropThreshold = 20_000
+
+    // Decide whether to fire a context-fill banner for this session.
+    // Rules:
+    //   - Off (threshold = 0) → never fire.
+    //   - First time crossing threshold → fire, mark as fired.
+    //   - Already fired → skip until re-armed.
+    //   - Re-arm: any single-reading drop of ≥20K tokens (compact /
+    //     /clear signal); next crossing fires again.
+    private func evaluateContextThreshold(sessionID: String, stats: TranscriptStats) {
+        let thresholdK = nav.contextAlertThresholdK
+        guard thresholdK > 0 else { return }
+        let threshold = thresholdK * 1_000
+        let current = stats.tokens
+
+        if let last = contextAlertLastTokens[sessionID],
+           last - current >= Self.contextCompactDropThreshold {
+            contextAlertFired.remove(sessionID)
+        }
+        contextAlertLastTokens[sessionID] = current
+
+        guard current >= threshold, !contextAlertFired.contains(sessionID) else { return }
+        contextAlertFired.insert(sessionID)
+        postContextBanner(tokens: current, model: stats.model,
+                          sessionLabel: labelForClaudeSession(id: sessionID))
+    }
+
+    // Find a user-recognisable label for the session crossing the threshold.
+    // Cascade mirrors what the Sessions row shows: customName → meaningful
+    // claudeName → project name. Falls back to "a session" if we know
+    // nothing (alert still useful, just less specific).
+    private func labelForClaudeSession(id: String) -> String {
+        guard let session = sessions.sessions.first(where: { $0.claudeSessionID == id })
+        else { return "a session" }
+        if let custom = session.customName, !custom.isEmpty { return custom }
+        if let name = session.claudeName,
+           !name.isEmpty, name != "main-agent" {
+            return name
+        }
+        return session.projectName ?? "a session"
+    }
+
+    private func postContextBanner(tokens: Int, model: String?, sessionLabel: String) {
+        let tokensFmt = "\(Int((Double(tokens) / 1_000).rounded()))K"
+        let content = UNMutableNotificationContent()
+        content.title = "Context filling up — \(sessionLabel)"
+        if let model {
+            content.body = "At \(tokensFmt) tokens (\(model)). Consider /compact."
+        } else {
+            content.body = "At \(tokensFmt) tokens. Consider /compact."
+        }
+        content.categoryIdentifier = "STOP"
+        let req = UNNotificationRequest(identifier: UUID().uuidString,
+                                        content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
     }
 
     private func postBannerIfNeeded(_ event: NudgeEvent) {

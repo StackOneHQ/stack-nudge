@@ -106,8 +106,15 @@ struct SessionsView: View {
     // when the session has no Claude Code event yet (e.g. a Gemini-only
     // session, or a Claude session that hasn't fired a hook this run).
     private func transcriptStats(for session: Session) -> TranscriptStats? {
-        // events array is newest-first (EventStore.append inserts at 0),
-        // so .first gives the most recent matching event.
+        // Primary: direct lookup via the sidecar-supplied sessionId.
+        // This populates immediately on panel open — no hook required.
+        if let id = session.claudeSessionID,
+           let stats = nav.claudeSessionStats[id] {
+            return stats
+        }
+        // Fallback for sessions whose sidecar isn't readable (e.g. pre-2.1
+        // Claude Code): infer from the most recent matching event that
+        // carried a claudeSessionID. events array is newest-first.
         guard let id = events.events
             .filter({ matches(event: $0, session: session) })
             .compactMap(\.claudeSessionID)
@@ -357,6 +364,13 @@ private struct SessionRow: View {
 
     private var displayName: String {
         if let custom = session.customName, !custom.isEmpty { return custom }
+        // Prefer a user-set Claude session name when it's not the default
+        // ("main-agent" is what Claude Code assigns by default; treat it
+        // as not meaningful and fall through to project name).
+        if let claudeName = session.claudeName,
+           !claudeName.isEmpty, claudeName != "main-agent" {
+            return claudeName
+        }
         return session.projectName ?? "(no project)"
     }
 
@@ -376,8 +390,19 @@ private struct SessionRow: View {
 
     private var glyphColor: Color {
         switch session.status {
-        case .active:   return .green
         case .finished: return .secondary
+        case .active:
+            // For claude sessions we get a live busy/idle signal from the
+            // ~/.claude/sessions/<pid>.json sidecar; reflect it in the dot
+            // so a glance at the panel tells the user which agents are
+            // working vs. waiting. Other agents / unknown status default
+            // to the existing green.
+            switch session.claudeStatus {
+            case "busy": return .yellow
+            case "idle": return .green
+            case nil:    return .green
+            default:     return .green
+            }
         }
     }
 
@@ -388,7 +413,10 @@ private struct SessionRow: View {
         switch session.status {
         case .active:
             let elapsed = session.elapsed?.trimmingCharacters(in: .whitespaces) ?? ""
-            return elapsed.isEmpty ? "active" : "active · \(elapsed)"
+            // Lead with claude's live status when we have one — it's far
+            // more useful than the process elapsed time alone.
+            let head = session.claudeStatus ?? "active"
+            return elapsed.isEmpty ? head : "\(head) · \(elapsed)"
         case .finished(let at):
             return "ended " + Self.timeFormatter.localizedString(for: at, relativeTo: Date())
         }
