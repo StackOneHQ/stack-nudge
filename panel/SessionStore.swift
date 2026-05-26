@@ -32,14 +32,17 @@ struct Session: Identifiable, Equatable {
     var claudeSessionID: String?
     var claudeName: String?           // "main-agent" (default) or user-set
     var claudeStatus: String?         // "busy" | "idle" | other
+    var claudeUpdatedAt: Date?        // last-activity timestamp from sidecar
 }
 
 // Decoded shape of ~/.claude/sessions/<pid>.json. Only the fields we
-// actually use; Claude Code emits more.
+// actually use; Claude Code emits more. updatedAt is milliseconds since
+// the Unix epoch; SessionStore converts to Date at discovery time.
 private struct ClaudeSessionSidecar: Decodable {
     let sessionId: String?
     let name: String?
     let status: String?
+    let updatedAt: Double?
 }
 
 // Polls for live agent processes (claude / gemini / codex) every few seconds
@@ -194,11 +197,24 @@ final class SessionStore: ObservableObject {
             next.append(session)
         }
 
-        // Sort: active first, then most-recently-finished, then by agent/pid.
+        // Sort: active first, busy above non-busy within active, then by
+        // most-recent claudeUpdatedAt (or process pid as tiebreaker so
+        // ordering stays stable when sidecar timestamps are absent).
+        // Distant past for sessions with no updatedAt sinks them below
+        // any timestamped session.
+        let distantPast = Date.distantPast
         next.sort { lhs, rhs in
             let lActive = lhs.status == .active
             let rActive = rhs.status == .active
             if lActive != rActive { return lActive && !rActive }
+
+            let lBusy = lhs.claudeStatus == "busy"
+            let rBusy = rhs.claudeStatus == "busy"
+            if lBusy != rBusy { return lBusy && !rBusy }
+
+            let lAt = lhs.claudeUpdatedAt ?? distantPast
+            let rAt = rhs.claudeUpdatedAt ?? distantPast
+            if lAt != rAt { return lAt > rAt }
             return lhs.pid < rhs.pid
         }
 
@@ -253,7 +269,8 @@ final class SessionStore: ObservableObject {
                 tabName: nil,
                 claudeSessionID: sidecar?.sessionId,
                 claudeName:      sidecar?.name,
-                claudeStatus:    sidecar?.status
+                claudeStatus:    sidecar?.status,
+                claudeUpdatedAt: sidecar?.updatedAt.map { Date(timeIntervalSince1970: $0 / 1000) }
             ))
         }
         return found
@@ -369,7 +386,8 @@ private extension Session {
             // from the previous poll.
             claudeSessionID: self.claudeSessionID,
             claudeName:      self.claudeName,
-            claudeStatus:    self.claudeStatus
+            claudeStatus:    self.claudeStatus,
+            claudeUpdatedAt: self.claudeUpdatedAt
         )
     }
 }

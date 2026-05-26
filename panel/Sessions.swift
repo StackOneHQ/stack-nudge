@@ -412,10 +412,15 @@ private struct SessionRow: View {
     private var statusLabel: String {
         switch session.status {
         case .active:
-            let elapsed = session.elapsed?.trimmingCharacters(in: .whitespaces) ?? ""
-            // Lead with claude's live status when we have one — it's far
-            // more useful than the process elapsed time alone.
+            // Lead with claude's live status (busy / idle). Append "last
+            // activity Nm ago" from the sidecar's updatedAt when available
+            // — more useful than process elapsed time, which only tells
+            // you how long ago the process was spawned.
             let head = session.claudeStatus ?? "active"
+            if let updated = session.claudeUpdatedAt {
+                return "\(head) · \(Self.timeFormatter.localizedString(for: updated, relativeTo: Date()))"
+            }
+            let elapsed = session.elapsed?.trimmingCharacters(in: .whitespaces) ?? ""
             return elapsed.isEmpty ? head : "\(head) · \(elapsed)"
         case .finished(let at):
             return "ended " + Self.timeFormatter.localizedString(for: at, relativeTo: Date())
