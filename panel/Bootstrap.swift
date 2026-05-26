@@ -677,6 +677,37 @@ enum Bootstrap {
 
     // MARK: - Launchctl
 
+    // Toggle the panel LaunchAgent's "launch at login" behavior.
+    // Enable: ensure the plist is on disk and loaded into launchd (RunAtLoad
+    // makes the next login start the panel automatically). Disable: unload
+    // and delete the plist — without it, launchd has no record of the agent
+    // and skips it at login. The currently-running panel process is left
+    // alone in both cases; this only affects the next login.
+    //
+    // The daemon plist (com.stackonehq.stack-nudge-daemon) is intentionally
+    // untouched — voice playback is an independent concern and its loaded
+    // state shouldn't change when the user toggles the panel's auto-launch.
+    static func setLaunchAtLogin(_ enabled: Bool) throws {
+        let plistPath = "\(launchAgentsDir)/\(appLabel).plist"
+        if enabled {
+            if !FileManager.default.fileExists(atPath: plistPath) {
+                try writePanelPlist()
+            }
+            try loadLaunchdAgent(label: appLabel)
+        } else {
+            _ = try? runLaunchctl(["unload", plistPath])
+            try? FileManager.default.removeItem(atPath: plistPath)
+        }
+    }
+
+    // Whether the panel LaunchAgent plist currently exists on disk —
+    // the source of truth for the "Launch at login" toggle. Loaded state
+    // (launchctl list) drifts: launchd will report the agent as loaded
+    // for the rest of the session even after the plist is deleted.
+    static func isLaunchAtLoginEnabled() -> Bool {
+        FileManager.default.fileExists(atPath: "\(launchAgentsDir)/\(appLabel).plist")
+    }
+
     private static func loadLaunchdAgent(label: String) throws {
         let plist = "\(launchAgentsDir)/\(label).plist"
         // Unload first (no-op if not loaded) to handle the re-install case

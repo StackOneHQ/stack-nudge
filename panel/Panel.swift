@@ -27,6 +27,7 @@ private enum KeyCode {
     static let three:     UInt16 = 20
     static let four:      UInt16 = 21
     static let nKey:      UInt16 = 45
+    static let pKey:      UInt16 = 35
 }
 
 // Floating, non-activating panel. Shown via global hotkey; receives key
@@ -574,6 +575,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self?.phrases.selectedRow = nil
                 self?.nav.mode = .phrases
             },
+            openReleaseNotes: {
+                // Versioned tag URL when we know the bundle version,
+                // otherwise the releases index. Tag URL falls through
+                // to /releases on 404, so a typo'd version still lands
+                // the user somewhere useful.
+                let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+                let url = version.flatMap {
+                    URL(string: "https://github.com/StackOneHQ/stack-nudge/releases/tag/v\($0)")
+                } ?? URL(string: "https://github.com/StackOneHQ/stack-nudge/releases")!
+                NSWorkspace.shared.open(url)
+            },
             beginUpdate:      { [weak self] in self?.beginUpdateFlow() },
             runUpdate:        { [weak self] in self?.updater?.run() },
             beginUninstall:   { [weak self] in self?.beginUninstallFlow() },
@@ -781,6 +793,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         return max(60, mins * 60)  // floor at 60s to avoid hammering the endpoint
     }
 
+    private var quotaTrackingEnabled: Bool {
+        ConfigFile.bool(ConfigFile.read(), "STACKNUDGE_QUOTA_TRACKING", default: true)
+    }
+
     private func startQuotaPolling() {
         runQuotaProbe()
         scheduleNextQuotaPoll()
@@ -788,6 +804,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     private func scheduleNextQuotaPoll() {
         quotaTimer?.invalidate()
+        // Schedule unconditionally so a re-enable from Settings picks up
+        // again on the next tick without needing an explicit start call.
+        // The probe itself bails when tracking is off.
         let interval = panel.isVisible ? Self.quotaPollVisibleInterval : quotaPollHiddenInterval
         quotaTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
             self?.runQuotaProbe()
@@ -796,13 +815,20 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     }
 
     private func runQuotaProbe() {
+        guard quotaTrackingEnabled else { return }
+        nav.quotaSyncing = true
         quotaProbe.fetch { [weak self] snapshot in
-            guard let self, let snapshot else { return }
+            guard let self else { return }
+            self.nav.quotaSyncing = false
+            guard let snapshot else { return }
             self.nav.quota = snapshot
             self.nav.quotaLastUpdated = Date()
             self.evaluateQuotaThresholds(snapshot)
         }
     }
+
+    // Public hook for the Usage tab's "Sync now" keystroke.
+    func syncQuotaNow() { runQuotaProbe() }
 
     // Fire a banner each time a tier crosses into a new 5% bucket at or
     // above the user's configured threshold. With threshold=80, the user
@@ -1548,6 +1574,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 scrollUsageBy(-40)
             case KeyCode.downArrow:
                 scrollUsageBy(40)
+            case KeyCode.rKey:
+                syncQuotaNow()
+            case KeyCode.pKey:
+                nav.toggleQuotaTracking()
+                // Immediate probe on resume so the user sees fresh data
+                // right after the keystroke — otherwise they'd wait for
+                // the next scheduled tick (up to the configured poll
+                // interval, which could be 30 min).
+                if nav.quotaTrackingEnabled { syncQuotaNow() }
             default:
                 break
             }

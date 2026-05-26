@@ -41,6 +41,19 @@ final class QuotaProbe {
 
     private let session: URLSession
 
+    // In-memory cache of the OAuth token. Touched only from the main queue
+    // (fetch is invoked from PanelController's main-thread timer, and the
+    // 401-retry path hops back to main before clearing).
+    //
+    // Why cache: Claude Code rotates this keychain item periodically and
+    // each rotation wipes the trusted-app ACL we got from "Always Allow",
+    // so the next SecItemCopyMatching re-fires the password prompt. Most
+    // rotations happen well before the old token actually expires, so by
+    // holding the token in memory and only re-reading the keychain when
+    // the API rejects it (HTTP 401), we skip the prompts tied to rotations
+    // that didn't invalidate the token we already have.
+    private var cachedToken: String?
+
     init() {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.timeoutIntervalForRequest  = 10
@@ -50,21 +63,45 @@ final class QuotaProbe {
 
     // One-shot probe. Calls completion on the main queue.
     func fetch(completion: @escaping (QuotaSnapshot?) -> Void) {
-        guard let token = readAccessToken() else {
+        fetch(retried: false, completion: completion)
+    }
+
+    private func fetch(retried: Bool, completion: @escaping (QuotaSnapshot?) -> Void) {
+        let token: String
+        if let cached = cachedToken {
+            token = cached
+        } else if let fresh = readAccessToken() {
+            cachedToken = fresh
+            token = fresh
+        } else {
             completion(nil)
             return
         }
+
         var request = URLRequest(url: Self.endpoint)
         request.setValue("Bearer \(token)",       forHTTPHeaderField: "Authorization")
         request.setValue("oauth-2025-04-20",      forHTTPHeaderField: "anthropic-beta")
         request.setValue("application/json",      forHTTPHeaderField: "Content-Type")
         request.setValue("stack-nudge",           forHTTPHeaderField: "User-Agent")
 
-        session.dataTask(with: request) { data, response, _ in
+        session.dataTask(with: request) { [weak self] data, response, _ in
             let http = response as? HTTPURLResponse
-            guard let data, http?.statusCode == 200,
+            let code = http?.statusCode
+
+            // 401 = the token we used is no longer valid (Claude Code rotated
+            // and the old token has actually expired, not just been replaced).
+            // Drop the cache and re-read the keychain exactly once.
+            if code == 401, !retried {
+                DispatchQueue.main.async {
+                    self?.cachedToken = nil
+                    self?.fetch(retried: true, completion: completion)
+                }
+                return
+            }
+
+            guard let data, code == 200,
                   let snapshot = Self.parse(data) else {
-                if let code = http?.statusCode, code != 200 {
+                if let code, code != 200 {
                     FileHandle.standardError.write(Data(
                         "stack-nudge: /api/oauth/usage returned \(code)\n".utf8))
                 }
@@ -79,8 +116,10 @@ final class QuotaProbe {
 
     // Read the Claude Code credentials JSON blob from the macOS Keychain and
     // extract `claudeAiOauth.accessToken`. macOS prompts the user the first
-    // time stack-nudge tries to read this entry — once approved (and once
-    // we're Developer-ID-signed), subsequent reads are silent.
+    // time stack-nudge reads this entry; subsequent reads are silent until
+    // Claude Code rotates the item, which wipes the ACL and re-fires the
+    // prompt. Callers cache the returned token and only re-invoke this on
+    // an API 401 to keep prompt frequency to a minimum.
     private func readAccessToken() -> String? {
         let query: [String: Any] = [
             kSecClass as String:            kSecClassGenericPassword,
@@ -155,7 +194,9 @@ struct UsageView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let snapshot = nav.quota, !isAllNil(snapshot) {
+            if !nav.quotaTrackingEnabled {
+                trackingDisabledState
+            } else if let snapshot = nav.quota, !isAllNil(snapshot) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
                         if let tier = snapshot.fiveHour {
@@ -188,6 +229,10 @@ struct UsageView: View {
 
             PageFooter {
                 FooterHint(label: footerStatusLabel, keys: [])
+                if nav.quotaTrackingEnabled {
+                    FooterHint(label: "Sync now", keys: ["r"])
+                }
+                FooterHint(label: nav.quotaTrackingEnabled ? "Pause" : "Resume", keys: ["p"])
                 FooterHint(label: "Hide", keys: ["esc"])
             }
         }
@@ -250,6 +295,25 @@ struct UsageView: View {
         .padding(.vertical, 24)
     }
 
+    private var trackingDisabledState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "pause.circle")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+            Text("Quota tracking is off")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Text("Enable in Settings → Usage → Quota tracking to see your Claude usage here.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 280)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.vertical, 24)
+    }
+
     // Green < 50 < yellow < 80 < red. Matches ClaudeBar's color thresholds
     // so users coming from there see familiar colors.
     private func barColor(_ utilization: Double) -> Color {
@@ -259,7 +323,9 @@ struct UsageView: View {
     }
 
     private var footerStatusLabel: String {
-        guard let updated = nav.quotaLastUpdated else { return "Loading…" }
+        if !nav.quotaTrackingEnabled { return "Tracking off" }
+        if nav.quotaSyncing { return "Syncing…" }
+        guard let updated = nav.quotaLastUpdated else { return "Never synced" }
         return "Updated \(Self.relative(.abbreviated, updated))"
     }
 

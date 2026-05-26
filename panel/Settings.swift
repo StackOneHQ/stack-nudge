@@ -50,34 +50,38 @@ struct SettingsView: View {
                             row(2 + off, label: "Voice notifications",  kind: .toggle, value: nav.voiceEnabled    ? "On" : "Off")
                             row(3 + off, label: "Mute when focused",    kind: .toggle, value: nav.muteWhenFocused ? "On" : "Off")
                             row(4 + off, label: "Pin panel",            kind: .toggle, value: nav.panelPinned     ? "On" : "Off")
+                            row(5 + off, label: "Launch at login",      kind: .toggle, value: nav.launchAtLogin   ? "On" : "Off")
                         }
 
                         section("Sounds") {
-                            row(5 + off, label: "Sound enabled", kind: .toggle, value: nav.soundEnabled ? "On" : "Off")
-                            row(6 + off, label: "Agent done",    kind: .cycle,  value: nav.soundStop)
-                            row(7 + off, label: "Permission",    kind: .cycle,  value: nav.soundPermission)
+                            row(6 + off, label: "Sound enabled", kind: .toggle, value: nav.soundEnabled ? "On" : "Off")
+                            row(7 + off, label: "Agent done",    kind: .cycle,  value: nav.soundStop)
+                            row(8 + off, label: "Permission",    kind: .cycle,  value: nav.soundPermission)
                         }
 
                         section("Voice") {
                             if nav.voiceModelCached {
-                                row(8 + off, label: "Voice",  kind: .cycle, value: voiceLabel)
-                                row(9 + off, label: "Speed",  kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed))
+                                row(9 + off,  label: "Voice", kind: .cycle, value: voiceLabel)
+                                row(10 + off, label: "Speed", kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed))
                             } else {
-                                voiceModelDownloadRow(index: 8 + off)
+                                voiceModelDownloadRow(index: 9 + off)
                             }
                         }
 
                         section("Usage") {
-                            row(10 + off, label: "Quota alerts",    kind: .toggle, value: nav.quotaAlertsEnabled ? "On" : "Off")
-                            row(11 + off, label: "Alert threshold", kind: .cycle,  value: "\(nav.quotaAlertThreshold)%")
+                            row(11 + off, label: "Quota tracking",  kind: .toggle, value: nav.quotaTrackingEnabled ? "On" : "Off")
+                            row(12 + off, label: "Quota alerts",    kind: .toggle, value: nav.quotaAlertsEnabled    ? "On" : "Off")
+                            row(13 + off, label: "Alert threshold", kind: .cycle,  value: "\(nav.quotaAlertThreshold)%")
+                            row(14 + off, label: "Poll frequency",  kind: .cycle,  value: "\(nav.quotaPollMinutes) min")
                         }
 
                         section("Actions") {
-                            row(12 + off, label: "Edit phrases…",         kind: .action, value: "")
-                            row(13 + off, label: "Check permissions…",    kind: .action, value: "")
-                            row(14 + off, label: "Open config file…",     kind: .action, value: "")
-                            row(15 + off, label: "Uninstall StackNudge…", kind: .action, value: "")
-                            row(16 + off, label: "Quit panel",            kind: .action, value: "")
+                            row(15 + off, label: "Edit phrases…",         kind: .action, value: "")
+                            row(16 + off, label: "Check permissions…",    kind: .action, value: "")
+                            row(17 + off, label: "Open config file…",     kind: .action, value: "")
+                            row(18 + off, label: "View release notes…",   kind: .action, value: "")
+                            row(19 + off, label: "Uninstall StackNudge…", kind: .action, value: "")
+                            row(20 + off, label: "Quit panel",            kind: .action, value: "")
                         }
 
                         aboutFooter

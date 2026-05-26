@@ -34,6 +34,7 @@ struct SettingsActions {
     let checkPermissions: () -> Void
     let openConfig:       () -> Void
     let editPhrases:      () -> Void
+    let openReleaseNotes: () -> Void
     let beginUpdate:      () -> Void
     let runUpdate:        () -> Void
     let beginUninstall:   () -> Void
@@ -59,6 +60,7 @@ final class PanelNav: ObservableObject {
     @Published var voiceEnabled:    Bool = false
     @Published var muteWhenFocused: Bool = true
     @Published var panelPinned:     Bool = true
+    @Published var launchAtLogin:   Bool = true
     @Published var soundStop:       String = "Glass"
     @Published var soundPermission: String = "Ping"
     @Published var voice:           String = "af_aoede"
@@ -98,11 +100,21 @@ final class PanelNav: ObservableObject {
     // probe failed (e.g. user denied keychain access, 401, 429).
     @Published var quota:            QuotaSnapshot?
     @Published var quotaLastUpdated: Date?
+    // True while a probe is in-flight. Set by PanelController around the
+    // fetch call so the UI can swap the footer status to "Syncing…".
+    @Published var quotaSyncing:     Bool = false
     // Threshold-crossing notifications. quotaAlertsEnabled is the master
     // switch; quotaAlertThreshold is the single percent value used across
     // all tiers — banner fires once per period when any tier reaches it.
-    @Published var quotaAlertsEnabled:  Bool = true
-    @Published var quotaAlertThreshold: Int  = 80
+    @Published var quotaTrackingEnabled: Bool = true
+    @Published var quotaAlertsEnabled:   Bool = true
+    @Published var quotaAlertThreshold:  Int  = 80
+    // Background poll interval in minutes when the panel is hidden.
+    // Visible-panel polling is fixed at 60s (see Panel.swift). Cycle
+    // values intentionally constrained — finer granularity isn't
+    // useful for a usage gauge that updates server-side every minute.
+    @Published var quotaPollMinutes:     Int  = 5
+    static let quotaPollMinuteOptions: [Int] = [1, 2, 5, 10, 15, 30]
     // First-launch bootstrap wizard state. Populated by PanelController
     // on launch when Bootstrap.isInstalled() returns false; drives
     // BootstrapView (mode = .bootstrap).
@@ -175,7 +187,7 @@ final class PanelNav: ObservableObject {
     // when the offset is 1.
     var updateRowOffset: Int { updateAvailable != nil ? 1 : 0 }
 
-    var rowCount: Int { 17 + updateRowOffset }
+    var rowCount: Int { 21 + updateRowOffset }
 
     // Row layout (kept in one place so the controller, view, and indexing
     // logic all agree on what each row index means). When updateAvailable
@@ -186,18 +198,22 @@ final class PanelNav: ObservableObject {
     //   2  Voice notifications   toggle
     //   3  Mute when focused     toggle
     //   4  Pin panel             toggle
-    //   5  Sound enabled         toggle      (gates rows 6 + 7)
-    //   6  Agent done sound      cycle
-    //   7  Permission sound      cycle
-    //   8  Voice                 cycle       (or "Download model" action)
-    //   9  Speed                 cycle
-    //  10  Quota alerts          toggle
-    //  11  Alert threshold       cycle
-    //  12  Edit phrases…         action
-    //  13  Check permissions…    action
-    //  14  Open config file…     action
-    //  15  Uninstall stack-nudge action
-    //  16  Quit panel            action
+    //   5  Launch at login       toggle
+    //   6  Sound enabled         toggle      (gates rows 7 + 8)
+    //   7  Agent done sound      cycle
+    //   8  Permission sound      cycle
+    //   9  Voice                 cycle       (or "Download model" action)
+    //  10  Speed                 cycle
+    //  11  Quota tracking        toggle      (master; gates rows 12-14)
+    //  12  Quota alerts          toggle
+    //  13  Alert threshold       cycle
+    //  14  Poll frequency        cycle
+    //  15  Edit phrases…         action
+    //  16  Check permissions…    action
+    //  17  Open config file…     action
+    //  18  View release notes…   action
+    //  19  Uninstall stack-nudge action
+    //  20  Quit panel            action
 
     // MARK: - Disk I/O
 
@@ -209,15 +225,25 @@ final class PanelNav: ObservableObject {
         voiceEnabled    = ConfigFile.bool(config, "STACKNUDGE_VOICE",     default: false)
         muteWhenFocused = ConfigFile.bool(config, "STACKNUDGE_MUTE_WHEN_FOCUSED", default: true)
         panelPinned     = ConfigFile.bool(config, "STACKNUDGE_PANEL_PIN", default: true)
+        // Source of truth for the toggle is the plist's presence on disk
+        // (Bootstrap.isLaunchAtLoginEnabled) — the config key is just a
+        // mirror used for parity with the other toggles. If the two ever
+        // disagree (e.g. plist removed manually), trust the disk and
+        // re-sync the config the next time the user touches the toggle.
+        launchAtLogin   = Bootstrap.isLaunchAtLoginEnabled()
         soundStop       = config["STACKNUDGE_SOUND_STOP"]       ?? "Glass"
         soundPermission = config["STACKNUDGE_SOUND_PERMISSION"] ?? "Ping"
         voice           = config["STACKNUDGE_VOICE_NAME"]       ?? "af_aoede"
         voiceSpeed      = Double(config["STACKNUDGE_VOICE_SPEED"] ?? "") ?? 1.1
-        quotaAlertsEnabled  = ConfigFile.bool(config, "STACKNUDGE_QUOTA_ALERTS", default: true)
+        quotaTrackingEnabled = ConfigFile.bool(config, "STACKNUDGE_QUOTA_TRACKING", default: true)
+        quotaAlertsEnabled   = ConfigFile.bool(config, "STACKNUDGE_QUOTA_ALERTS",   default: true)
         // Coerce out-of-list values to the nearest valid threshold so a
         // hand-edited config can't desync the cycle row's selection.
         let rawThreshold = Int(config["STACKNUDGE_QUOTA_THRESHOLD"] ?? "") ?? 80
         quotaAlertThreshold = Self.quotaThresholds.min(by: { abs($0 - rawThreshold) < abs($1 - rawThreshold) }) ?? 80
+        // Same coercion for poll interval — snap to nearest valid option.
+        let rawPoll = Int(config["STACKNUDGE_USAGE_POLL_MIN"] ?? "") ?? 5
+        quotaPollMinutes = Self.quotaPollMinuteOptions.min(by: { abs($0 - rawPoll) < abs($1 - rawPoll) }) ?? 5
     }
 
     // MARK: - Agent reconciliation
@@ -401,8 +427,8 @@ final class PanelNav: ObservableObject {
         }
         switch selectedSettingIndex - updateRowOffset {
         case 0: startRecordingHotkey()
-        case 8 where !voiceModelCached:
-            // Pre-download state: index 8 is the "Download voice model"
+        case 9 where !voiceModelCached:
+            // Pre-download state: index 9 is the "Download voice model"
             // action, not a cycle. Enter triggers (or cancels) the
             // download.
             if voiceModelDownloading {
@@ -410,17 +436,33 @@ final class PanelNav: ObservableObject {
             } else {
                 startVoiceModelDownload()
             }
-        case 12: actions?.editPhrases()
-        case 13: actions?.checkPermissions()
-        case 14: actions?.openConfig()
-        case 15: actions?.beginUninstall()
-        case 16: actions?.quit()
+        case 15: actions?.editPhrases()
+        case 16: actions?.checkPermissions()
+        case 17: actions?.openConfig()
+        case 18: actions?.openReleaseNotes()
+        case 19: actions?.beginUninstall()
+        case 20: actions?.quit()
         default: applyCycle(forward: true)
         }
     }
 
     func cycleForward()  { applyCycle(forward: true) }
     func cycleBackward() { applyCycle(forward: false) }
+
+    // Shared by Settings row 11 and the Usage tab's 'p' keystroke. On
+    // pause, drop the cached snapshot so the Usage tab doesn't sit on
+    // stale data; on resume, the caller is responsible for kicking off
+    // an immediate probe (so the user sees fresh data right after the
+    // shortcut, not after the next scheduled tick).
+    func toggleQuotaTracking() {
+        quotaTrackingEnabled.toggle()
+        ConfigFile.write(key: "STACKNUDGE_QUOTA_TRACKING",
+                         value: quotaTrackingEnabled ? "true" : "false")
+        if !quotaTrackingEnabled {
+            quota = nil
+            quotaLastUpdated = nil
+        }
+    }
 
     private func applyCycle(forward: Bool) {
         // Update row (when present at index 0) treats left/right arrows the
@@ -446,13 +488,25 @@ final class PanelNav: ObservableObject {
             panelPinned.toggle()
             ConfigFile.write(key: "STACKNUDGE_PANEL_PIN", value: panelPinned ? "true" : "false")
         case 5:
+            // Optimistic UI flip; revert if launchctl fails so the toggle
+            // never reports a state that disagrees with the plist on disk.
+            let target = !launchAtLogin
+            launchAtLogin = target
+            do {
+                try Bootstrap.setLaunchAtLogin(target)
+            } catch {
+                launchAtLogin = !target
+                FileHandle.standardError.write(Data(
+                    "stack-nudge: setLaunchAtLogin(\(target)) failed: \(error)\n".utf8))
+            }
+        case 6:
             soundEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_SOUND", value: soundEnabled ? "true" : "false")
-        case 6:
-            soundStop = step(soundStop, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_STOP", preview: true)
         case 7:
-            soundPermission = step(soundPermission, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_PERMISSION", preview: true)
+            soundStop = step(soundStop, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_STOP", preview: true)
         case 8:
+            soundPermission = step(soundPermission, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_PERMISSION", preview: true)
+        case 9:
             // Pre-download: the row is an action, not a cycle. Treat
             // left/right arrow as a trigger so a user discovering the
             // row keyboard-only can still start the download.
@@ -464,15 +518,17 @@ final class PanelNav: ObservableObject {
             voice = step(voice, in: voicesAvailable, forward: forward, key: "STACKNUDGE_VOICE_NAME", preview: false)
             let phrase = Self.voicePreviewPhrases.randomElement() ?? "Hello."
             Speaker.speak(phrase, voice: voice, speed: String(format: "%.2f", voiceSpeed))
-        case 9:
+        case 10:
             let next = forward ? voiceSpeed + Self.speedStep : voiceSpeed - Self.speedStep
             voiceSpeed = max(Self.speedMin, min(Self.speedMax, (next * 100).rounded() / 100))
             ConfigFile.write(key: "STACKNUDGE_VOICE_SPEED", value: String(format: "%.2f", voiceSpeed))
-        case 10:
+        case 11:
+            toggleQuotaTracking()
+        case 12:
             quotaAlertsEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_QUOTA_ALERTS",
                              value: quotaAlertsEnabled ? "true" : "false")
-        case 11:
+        case 13:
             // Cycle through the static thresholds list. Index wraps in both
             // directions so the user can dial in either way.
             let list = Self.quotaThresholds
@@ -481,6 +537,13 @@ final class PanelNav: ObservableObject {
             quotaAlertThreshold = list[next]
             ConfigFile.write(key: "STACKNUDGE_QUOTA_THRESHOLD",
                              value: String(quotaAlertThreshold))
+        case 14:
+            let list = Self.quotaPollMinuteOptions
+            let idx = list.firstIndex(of: quotaPollMinutes) ?? 2
+            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+            quotaPollMinutes = list[next]
+            ConfigFile.write(key: "STACKNUDGE_USAGE_POLL_MIN",
+                             value: String(quotaPollMinutes))
         default:
             break
         }
