@@ -4,6 +4,21 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.12.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.11.0...v1.12.0) (2026-05-26)
+
+
+### Features
+
+* **sessions:** display per-session context-window usage from Claude Code transcripts ([24145bc](https://github.com/StackOneHQ/stack-nudge/commit/24145bc570ad6fb959514ae2b422757979a2a6ad))
+* **sessions:** live names, busy/idle status, proactive context alerts ([ed2e0e8](https://github.com/StackOneHQ/stack-nudge/commit/ed2e0e8dbde6c44ae6f9ba755cd6d5050d7a04c1))
+* **sessions:** per-session context tracking + live names, busy/idle, context alerts ([6a397b3](https://github.com/StackOneHQ/stack-nudge/commit/6a397b3b2c8cdfee5bd3544044f8b237b3621e78))
+* **sessions:** sort by activity (busy first, then last-active desc) ([fbf7b6d](https://github.com/StackOneHQ/stack-nudge/commit/fbf7b6ddd70d5a926a24f4478d98f954926c652c))
+
+
+### Bug Fixes
+
+* **sessions:** tokens-only display + PID-based event→session matching ([662be77](https://github.com/StackOneHQ/stack-nudge/commit/662be77d3558c2629bfd98b66cb5e7c47cd6a16a))
+
 ## [1.11.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.10.0...v1.11.0) (2026-05-26)
 
 
