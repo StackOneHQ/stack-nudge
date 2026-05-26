@@ -55,8 +55,8 @@ struct SettingsView: View {
 
                         section("Sounds") {
                             row(6 + off, label: "Sound enabled", kind: .toggle, value: nav.soundEnabled ? "On" : "Off")
-                            row(7 + off, label: "Agent done",    kind: .cycle,  value: nav.soundStop)
-                            row(8 + off, label: "Permission",    kind: .cycle,  value: nav.soundPermission)
+                            row(7 + off, label: "Agent done",    kind: .cycle,  value: nav.soundStop,       enabled: nav.soundEnabled)
+                            row(8 + off, label: "Permission",    kind: .cycle,  value: nav.soundPermission, enabled: nav.soundEnabled)
                         }
 
                         section("Voice") {
@@ -70,9 +70,9 @@ struct SettingsView: View {
 
                         section("Usage") {
                             row(11 + off, label: "Quota tracking",  kind: .toggle, value: nav.quotaTrackingEnabled ? "On" : "Off")
-                            row(12 + off, label: "Quota alerts",    kind: .toggle, value: nav.quotaAlertsEnabled    ? "On" : "Off")
-                            row(13 + off, label: "Alert threshold", kind: .cycle,  value: "\(nav.quotaAlertThreshold)%")
-                            row(14 + off, label: "Poll frequency",  kind: .cycle,  value: "\(nav.quotaPollMinutes) min")
+                            row(12 + off, label: "Quota alerts",    kind: .toggle, value: nav.quotaAlertsEnabled    ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
+                            row(13 + off, label: "Alert threshold", kind: .cycle,  value: "\(nav.quotaAlertThreshold)%",            enabled: nav.quotaTrackingEnabled && nav.quotaAlertsEnabled)
+                            row(14 + off, label: "Poll frequency",  kind: .cycle,  value: "\(nav.quotaPollMinutes) min",            enabled: nav.quotaTrackingEnabled)
                         }
 
                         section("Actions") {
@@ -370,13 +370,19 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private func row(_ index: Int, label: String, kind: SettingsKind, value: String) -> some View {
+    private func row(_ index: Int, label: String, kind: SettingsKind, value: String, enabled: Bool = true) -> some View {
         SettingsRowView(
             label: label,
             value: value,
             kind: kind,
             selected: nav.selectedSettingIndex == index
         )
+        // Visual-only dimming when a row is gated by another setting
+        // (Sound section's deps when Sound is off; Usage deps when
+        // Quota tracking is off). Keyboard navigation still lands on
+        // these rows so muscle memory isn't disrupted — the user just
+        // sees that the row is currently inert.
+        .opacity(enabled ? 1.0 : 0.4)
         .id(index)
         .onTapGesture {
             nav.selectedSettingIndex = index
