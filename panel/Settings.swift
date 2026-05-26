@@ -425,9 +425,17 @@ private struct SettingsRowView: View {
                 .font(.subheadline.monospaced())
                 .foregroundStyle(selected ? Color.primary : .secondary)
         case .action:
-            Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+            HStack(spacing: 8) {
+                if !value.isEmpty {
+                    Text(value)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .transition(.opacity)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
         }
     }
 }
