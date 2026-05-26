@@ -80,7 +80,7 @@ struct SettingsView: View {
                             row(16 + off, label: "Check permissions…",    kind: .action, value: "")
                             row(17 + off, label: "Open config file…",     kind: .action, value: "")
                             row(18 + off, label: "View release notes…",   kind: .action, value: "")
-                            row(19 + off, label: "Check for updates…",    kind: .action, value: "")
+                            row(19 + off, label: "Check for updates…",    kind: .action, value: checkForUpdatesStatus)
                             row(20 + off, label: "Uninstall StackNudge…", kind: .action, value: "")
                             row(21 + off, label: "Quit panel",            kind: .action, value: "")
                         }
@@ -282,6 +282,15 @@ struct SettingsView: View {
         if nav.voicesLoading { return "Loading…" }
         if nav.voicesAvailable.isEmpty { return "Voices unavailable" }
         return nav.voice
+    }
+
+    private var checkForUpdatesStatus: String {
+        switch nav.updateCheckStatus {
+        case .idle:             return ""
+        case .checking:         return "Checking…"
+        case .upToDate:         return "Up to date"
+        case .failed:           return "Failed"
+        }
     }
 
     // Conditional top-of-list row. Pinned at index 0 when an update is

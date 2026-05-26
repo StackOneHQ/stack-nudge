@@ -30,6 +30,13 @@ enum PanelMode {
 // Action callbacks the controller wires into nav so settings rows like
 // "Check permissions" / "Open config" / "Quit" can fire effects without the
 // SwiftUI view needing to know about windows or app-level state.
+enum UpdateCheckStatus: Equatable {
+    case idle
+    case checking
+    case upToDate
+    case failed
+}
+
 struct SettingsActions {
     let checkPermissions: () -> Void
     let openConfig:       () -> Void
@@ -104,6 +111,11 @@ final class PanelNav: ObservableObject {
     // True while a probe is in-flight. Set by PanelController around the
     // fetch call so the UI can swap the footer status to "Syncing…".
     @Published var quotaSyncing:     Bool = false
+    // Transient feedback for the "Check for updates…" action row.
+    // Set by PanelController around UpdateChecker.check(); cleared
+    // back to .idle a few seconds after a terminal result so the
+    // row reads "Check for updates…" again on subsequent visits.
+    @Published var updateCheckStatus: UpdateCheckStatus = .idle
     // Threshold-crossing notifications. quotaAlertsEnabled is the master
     // switch; quotaAlertThreshold is the single percent value used across
     // all tiers — banner fires once per period when any tier reaches it.
