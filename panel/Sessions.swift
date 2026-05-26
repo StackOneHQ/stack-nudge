@@ -106,22 +106,33 @@ struct SessionsView: View {
     // when the session has no Claude Code event yet (e.g. a Gemini-only
     // session, or a Claude session that hasn't fired a hook this run).
     private func transcriptStats(for session: Session) -> TranscriptStats? {
+        // events array is newest-first (EventStore.append inserts at 0),
+        // so .first gives the most recent matching event.
         guard let id = events.events
             .filter({ matches(event: $0, session: session) })
             .compactMap(\.claudeSessionID)
-            .last
+            .first
         else { return nil }
         return nav.claudeSessionStats[id]
     }
 
     private func matches(event: NudgeEvent, session: Session) -> Bool {
-        guard Agent.canonical(event.agent) == Agent.canonical(session.agent),
-              event.projectPath == session.projectPath else { return false }
-        // When both sides know which tab/window they belong to, demand
-        // they agree — that's how a permission nudge for tab A doesn't
-        // count toward tab B's nudge counter. Each terminal contributes
-        // its own identifier (iTerm: sessionID; VSCode: ipcHook), so
-        // we accept either as the event-side tabId.
+        guard Agent.canonical(event.agent) == Agent.canonical(session.agent) else {
+            return false
+        }
+        // Strongest disambiguator: notify.sh's walk_session_chain captures
+        // the agent process PID; SessionStore.pid is the same number. Trust
+        // it over projectPath because the event's project path (= shell
+        // $PWD when notify.sh ran) can disagree with the session's project
+        // path (= lsof cwd of the claude process). Zed sessions exhibit
+        // this — claude cwd stays at the workspace root while the user's
+        // shell can cd into a subdirectory.
+        if let eventPID = event.agentPID, eventPID > 0 {
+            return eventPID == session.pid
+        }
+        // Without a PID, fall back to projectPath + terminal-tab
+        // disambiguator. Same path required; tabId narrows when both have it.
+        guard event.projectPath == session.projectPath else { return false }
         let eventTab = (event.sessionID?.isEmpty == false ? event.sessionID : event.ipcHook)
         if let sessionTab = session.tabId, let eventTab,
            !sessionTab.isEmpty, !eventTab.isEmpty {
@@ -280,12 +291,28 @@ private struct SessionRow: View {
     }
 
     private func contextLabel(_ stats: TranscriptStats) -> String {
+        // Absolute tokens only. We dropped the %-of-limit display in
+        // Phase 1 after discovering that the 4.x family's context window
+        // varies (Opus/Sonnet on 1M context; Haiku on 200K; Sonnet 1M is
+        // opt-in beta), and there's no reliable way to disambiguate from
+        // the model ID. Showing the model name keeps the row honest.
         let tokens = Self.formatTokens(stats.tokens)
-        if let limit = ModelLimits.limit(for: stats.model) {
-            let pct = Int((Double(stats.tokens) / Double(limit) * 100).rounded())
-            return "\(tokens) · \(pct)%"
+        if let model = stats.model {
+            return "\(tokens) · \(Self.shortModel(model))"
         }
         return tokens
+    }
+
+    // Strip the date suffix Anthropic appends to model IDs
+    // (e.g. "claude-opus-4-7-20250606" → "opus-4-7") and the
+    // redundant "claude-" prefix.
+    private static func shortModel(_ id: String) -> String {
+        var s = id.hasPrefix("claude-") ? String(id.dropFirst("claude-".count)) : id
+        if let dash = s.range(of: "-2", options: .backwards),
+           s[dash.lowerBound...].dropFirst().allSatisfy(\.isNumber) {
+            s = String(s[..<dash.lowerBound])
+        }
+        return s
     }
 
     private static func formatTokens(_ n: Int) -> String {
