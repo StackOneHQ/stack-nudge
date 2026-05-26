@@ -33,7 +33,7 @@ final class UpdateChecker {
     private var timer: Timer?
     private let session: URLSession
 
-    init(nav: PanelNav, interval: TimeInterval = 6 * 60 * 60) {
+    init(nav: PanelNav, interval: TimeInterval = 2 * 60 * 60) {
         self.nav = nav
         self.interval = interval
         let config = URLSessionConfiguration.ephemeral
@@ -54,20 +54,31 @@ final class UpdateChecker {
         timer = nil
     }
 
-    // Public so a "Check for updates now" action can force a refresh; ignored
-    // result — the publish-to-nav side effect is what matters.
-    func check() {
-        guard let current = Self.currentVersion() else { return }
+    // Result of a one-shot check — surfaced to the user-triggered
+    // "Check for updates…" action so the Settings row can flash
+    // status feedback. Background polls ignore it.
+    enum CheckResult { case upToDate, updateAvailable(String), failed }
+
+    // Public so a "Check for updates now" action can force a refresh.
+    // completion fires on the main thread when supplied; background
+    // polls call with no completion and rely on the nav side effect.
+    func check(completion: ((CheckResult) -> Void)? = nil) {
+        guard let current = Self.currentVersion() else {
+            DispatchQueue.main.async { completion?(.failed) }
+            return
+        }
         fetchReleaseJSON(url: Self.latestReleaseURL, ghAPIPath: Self.latestGHPath) { [weak self] json in
-            guard let self,
-                  let tag = json?["tag_name"] as? String
-            else { return }
+            guard let tag = json?["tag_name"] as? String else {
+                DispatchQueue.main.async { completion?(.failed) }
+                return
+            }
             let latest = Self.stripV(tag)
             let newer = Self.isNewer(latest, than: current)
             let body = json?["body"] as? String
             DispatchQueue.main.async {
-                self.nav?.updateAvailable = newer ? latest : nil
-                self.nav?.updateReleaseNotes = newer ? body : nil
+                self?.nav?.updateAvailable = newer ? latest : nil
+                self?.nav?.updateReleaseNotes = newer ? body : nil
+                completion?(newer ? .updateAvailable(latest) : .upToDate)
             }
         }
     }

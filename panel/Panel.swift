@@ -586,6 +586,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 } ?? URL(string: "https://github.com/StackOneHQ/stack-nudge/releases")!
                 NSWorkspace.shared.open(url)
             },
+            checkForUpdates:  { [weak self] in self?.runUserUpdateCheck() },
             beginUpdate:      { [weak self] in self?.beginUpdateFlow() },
             runUpdate:        { [weak self] in self?.updater?.run() },
             beginUninstall:   { [weak self] in self?.beginUninstallFlow() },
@@ -829,6 +830,42 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     // Public hook for the Usage tab's "Sync now" keystroke.
     func syncQuotaNow() { runQuotaProbe() }
+
+    // User-triggered update check with transient row feedback. Sets
+    // .checking immediately, swaps to .upToDate / .failed on response
+    // (the .updateAvailable path doesn't need transient feedback — the
+    // pinned "Update to vX.Y.Z" row at the top is its own signal), and
+    // auto-clears back to .idle after a few seconds.
+    private func runUserUpdateCheck() {
+        nav.updateCheckStatus = .checking
+        // Minimum visible duration for the "Checking…" flash. Without
+        // it, a sub-second network call would swap status faster than
+        // the user can perceive, leaving the click feeling silent.
+        let started = Date()
+        let minChecking: TimeInterval = 0.6
+        updateChecker?.check { [weak self] result in
+            guard let self else { return }
+            let elapsed = Date().timeIntervalSince(started)
+            let delay = max(0, minChecking - elapsed)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self else { return }
+                switch result {
+                case .updateAvailable: self.nav.updateCheckStatus = .updateAvailable
+                case .upToDate:        self.nav.updateCheckStatus = .upToDate
+                case .failed:          self.nav.updateCheckStatus = .failed
+                }
+                // Auto-clear so the row label returns to neutral on the
+                // next visit. 3s is long enough to notice, short enough
+                // not to mislead a later glance.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                    guard let self else { return }
+                    if self.nav.updateCheckStatus != .checking {
+                        self.nav.updateCheckStatus = .idle
+                    }
+                }
+            }
+        }
+    }
 
     // Fire a banner each time a tier crosses into a new 5% bucket at or
     // above the user's configured threshold. With threshold=80, the user

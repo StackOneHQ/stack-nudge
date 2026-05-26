@@ -47,22 +47,22 @@ struct SettingsView: View {
 
                         section("Toggles") {
                             row(1 + off, label: "Banner notifications", kind: .toggle, value: nav.bannerEnabled   ? "On" : "Off")
-                            row(2 + off, label: "Voice notifications",  kind: .toggle, value: nav.voiceEnabled    ? "On" : "Off")
-                            row(3 + off, label: "Mute when focused",    kind: .toggle, value: nav.muteWhenFocused ? "On" : "Off")
-                            row(4 + off, label: "Pin panel",            kind: .toggle, value: nav.panelPinned     ? "On" : "Off")
-                            row(5 + off, label: "Launch at login",      kind: .toggle, value: nav.launchAtLogin   ? "On" : "Off")
+                            row(2 + off, label: "Mute when focused",    kind: .toggle, value: nav.muteWhenFocused ? "On" : "Off")
+                            row(3 + off, label: "Pin panel",            kind: .toggle, value: nav.panelPinned     ? "On" : "Off")
+                            row(4 + off, label: "Launch at login",      kind: .toggle, value: nav.launchAtLogin   ? "On" : "Off")
                         }
 
                         section("Sounds") {
-                            row(6 + off, label: "Sound enabled", kind: .toggle, value: nav.soundEnabled ? "On" : "Off")
-                            row(7 + off, label: "Agent done",    kind: .cycle,  value: nav.soundStop)
-                            row(8 + off, label: "Permission",    kind: .cycle,  value: nav.soundPermission)
+                            row(5 + off, label: "Sound enabled", kind: .toggle, value: nav.soundEnabled ? "On" : "Off")
+                            row(6 + off, label: "Agent done",    kind: .cycle,  value: nav.soundStop,       enabled: nav.soundEnabled)
+                            row(7 + off, label: "Permission",    kind: .cycle,  value: nav.soundPermission, enabled: nav.soundEnabled)
                         }
 
                         section("Voice") {
+                            row(8 + off, label: "Voice notifications", kind: .toggle, value: nav.voiceEnabled ? "On" : "Off")
                             if nav.voiceModelCached {
-                                row(9 + off,  label: "Voice", kind: .cycle, value: voiceLabel)
-                                row(10 + off, label: "Speed", kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed))
+                                row(9 + off,  label: "Voice", kind: .cycle, value: voiceLabel,                                  enabled: nav.voiceEnabled)
+                                row(10 + off, label: "Speed", kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed),     enabled: nav.voiceEnabled)
                             } else {
                                 voiceModelDownloadRow(index: 9 + off)
                             }
@@ -70,9 +70,9 @@ struct SettingsView: View {
 
                         section("Usage") {
                             row(11 + off, label: "Quota tracking",  kind: .toggle, value: nav.quotaTrackingEnabled ? "On" : "Off")
-                            row(12 + off, label: "Quota alerts",    kind: .toggle, value: nav.quotaAlertsEnabled    ? "On" : "Off")
-                            row(13 + off, label: "Alert threshold", kind: .cycle,  value: "\(nav.quotaAlertThreshold)%")
-                            row(14 + off, label: "Poll frequency",  kind: .cycle,  value: "\(nav.quotaPollMinutes) min")
+                            row(12 + off, label: "Quota alerts",    kind: .toggle, value: nav.quotaAlertsEnabled    ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
+                            row(13 + off, label: "Alert threshold", kind: .cycle,  value: "\(nav.quotaAlertThreshold)%",            enabled: nav.quotaTrackingEnabled && nav.quotaAlertsEnabled)
+                            row(14 + off, label: "Poll frequency",  kind: .cycle,  value: "\(nav.quotaPollMinutes) min",            enabled: nav.quotaTrackingEnabled)
                         }
 
                         section("Actions") {
@@ -80,8 +80,9 @@ struct SettingsView: View {
                             row(16 + off, label: "Check permissions…",    kind: .action, value: "")
                             row(17 + off, label: "Open config file…",     kind: .action, value: "")
                             row(18 + off, label: "View release notes…",   kind: .action, value: "")
-                            row(19 + off, label: "Uninstall StackNudge…", kind: .action, value: "")
-                            row(20 + off, label: "Quit panel",            kind: .action, value: "")
+                            row(19 + off, label: "Check for updates…",    kind: .action, value: checkForUpdatesStatus)
+                            row(20 + off, label: "Uninstall StackNudge…", kind: .action, value: "")
+                            row(21 + off, label: "Quit panel",            kind: .action, value: "")
                         }
 
                         aboutFooter
@@ -283,6 +284,16 @@ struct SettingsView: View {
         return nav.voice
     }
 
+    private var checkForUpdatesStatus: String {
+        switch nav.updateCheckStatus {
+        case .idle:             return ""
+        case .checking:         return "Checking…"
+        case .upToDate:         return "Up to date"
+        case .updateAvailable:  return "Update available"
+        case .failed:           return "Failed"
+        }
+    }
+
     // Conditional top-of-list row. Pinned at index 0 when an update is
     // available — visually distinct (accent fill always-on) so the user's
     // eye lands on it first. Acts on click or Enter; opens the GitHub
@@ -359,13 +370,19 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private func row(_ index: Int, label: String, kind: SettingsKind, value: String) -> some View {
+    private func row(_ index: Int, label: String, kind: SettingsKind, value: String, enabled: Bool = true) -> some View {
         SettingsRowView(
             label: label,
             value: value,
             kind: kind,
             selected: nav.selectedSettingIndex == index
         )
+        // Visual-only dimming when a row is gated by another setting
+        // (Sound section's deps when Sound is off; Usage deps when
+        // Quota tracking is off). Keyboard navigation still lands on
+        // these rows so muscle memory isn't disrupted — the user just
+        // sees that the row is currently inert.
+        .opacity(enabled ? 1.0 : 0.4)
         .id(index)
         .onTapGesture {
             nav.selectedSettingIndex = index
@@ -414,9 +431,17 @@ private struct SettingsRowView: View {
                 .font(.subheadline.monospaced())
                 .foregroundStyle(selected ? Color.primary : .secondary)
         case .action:
-            Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+            HStack(spacing: 8) {
+                if !value.isEmpty {
+                    Text(value)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .transition(.opacity)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
         }
     }
 }

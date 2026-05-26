@@ -30,11 +30,20 @@ enum PanelMode {
 // Action callbacks the controller wires into nav so settings rows like
 // "Check permissions" / "Open config" / "Quit" can fire effects without the
 // SwiftUI view needing to know about windows or app-level state.
+enum UpdateCheckStatus: Equatable {
+    case idle
+    case checking
+    case upToDate
+    case updateAvailable
+    case failed
+}
+
 struct SettingsActions {
     let checkPermissions: () -> Void
     let openConfig:       () -> Void
     let editPhrases:      () -> Void
     let openReleaseNotes: () -> Void
+    let checkForUpdates:  () -> Void
     let beginUpdate:      () -> Void
     let runUpdate:        () -> Void
     let beginUninstall:   () -> Void
@@ -103,6 +112,11 @@ final class PanelNav: ObservableObject {
     // True while a probe is in-flight. Set by PanelController around the
     // fetch call so the UI can swap the footer status to "Syncing…".
     @Published var quotaSyncing:     Bool = false
+    // Transient feedback for the "Check for updates…" action row.
+    // Set by PanelController around UpdateChecker.check(); cleared
+    // back to .idle a few seconds after a terminal result so the
+    // row reads "Check for updates…" again on subsequent visits.
+    @Published var updateCheckStatus: UpdateCheckStatus = .idle
     // Threshold-crossing notifications. quotaAlertsEnabled is the master
     // switch; quotaAlertThreshold is the single percent value used across
     // all tiers — banner fires once per period when any tier reaches it.
@@ -187,7 +201,7 @@ final class PanelNav: ObservableObject {
     // when the offset is 1.
     var updateRowOffset: Int { updateAvailable != nil ? 1 : 0 }
 
-    var rowCount: Int { 21 + updateRowOffset }
+    var rowCount: Int { 22 + updateRowOffset }
 
     // Row layout (kept in one place so the controller, view, and indexing
     // logic all agree on what each row index means). When updateAvailable
@@ -195,13 +209,13 @@ final class PanelNav: ObservableObject {
     // shifts down by one — use `index - updateRowOffset` when matching:
     //   0  Hotkey                hotkey-record
     //   1  Banner notifications  toggle
-    //   2  Voice notifications   toggle
-    //   3  Mute when focused     toggle
-    //   4  Pin panel             toggle
-    //   5  Launch at login       toggle
-    //   6  Sound enabled         toggle      (gates rows 7 + 8)
-    //   7  Agent done sound      cycle
-    //   8  Permission sound      cycle
+    //   2  Mute when focused     toggle
+    //   3  Pin panel             toggle
+    //   4  Launch at login       toggle
+    //   5  Sound enabled         toggle      (gates rows 6 + 7)
+    //   6  Agent done sound      cycle
+    //   7  Permission sound      cycle
+    //   8  Voice notifications   toggle      (gates rows 9 + 10)
     //   9  Voice                 cycle       (or "Download model" action)
     //  10  Speed                 cycle
     //  11  Quota tracking        toggle      (master; gates rows 12-14)
@@ -212,8 +226,9 @@ final class PanelNav: ObservableObject {
     //  16  Check permissions…    action
     //  17  Open config file…     action
     //  18  View release notes…   action
-    //  19  Uninstall stack-nudge action
-    //  20  Quit panel            action
+    //  19  Check for updates…    action
+    //  20  Uninstall stack-nudge action
+    //  21  Quit panel            action
 
     // MARK: - Disk I/O
 
@@ -440,8 +455,9 @@ final class PanelNav: ObservableObject {
         case 16: actions?.checkPermissions()
         case 17: actions?.openConfig()
         case 18: actions?.openReleaseNotes()
-        case 19: actions?.beginUninstall()
-        case 20: actions?.quit()
+        case 19: actions?.checkForUpdates()
+        case 20: actions?.beginUninstall()
+        case 21: actions?.quit()
         default: applyCycle(forward: true)
         }
     }
@@ -479,15 +495,12 @@ final class PanelNav: ObservableObject {
             bannerEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_BANNER", value: bannerEnabled ? "true" : "false")
         case 2:
-            voiceEnabled.toggle()
-            ConfigFile.write(key: "STACKNUDGE_VOICE", value: voiceEnabled ? "true" : "false")
-        case 3:
             muteWhenFocused.toggle()
             ConfigFile.write(key: "STACKNUDGE_MUTE_WHEN_FOCUSED", value: muteWhenFocused ? "true" : "false")
-        case 4:
+        case 3:
             panelPinned.toggle()
             ConfigFile.write(key: "STACKNUDGE_PANEL_PIN", value: panelPinned ? "true" : "false")
-        case 5:
+        case 4:
             // Optimistic UI flip; revert if launchctl fails so the toggle
             // never reports a state that disagrees with the plist on disk.
             let target = !launchAtLogin
@@ -499,13 +512,16 @@ final class PanelNav: ObservableObject {
                 FileHandle.standardError.write(Data(
                     "stack-nudge: setLaunchAtLogin(\(target)) failed: \(error)\n".utf8))
             }
-        case 6:
+        case 5:
             soundEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_SOUND", value: soundEnabled ? "true" : "false")
-        case 7:
+        case 6:
             soundStop = step(soundStop, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_STOP", preview: true)
-        case 8:
+        case 7:
             soundPermission = step(soundPermission, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_PERMISSION", preview: true)
+        case 8:
+            voiceEnabled.toggle()
+            ConfigFile.write(key: "STACKNUDGE_VOICE", value: voiceEnabled ? "true" : "false")
         case 9:
             // Pre-download: the row is an action, not a cycle. Treat
             // left/right arrow as a trigger so a user discovering the
