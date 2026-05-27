@@ -143,6 +143,19 @@ final class EventStore: ObservableObject {
     var onAppend: ((NudgeEvent) -> Void)?
 
     func append(_ event: NudgeEvent) {
+        // Claude Code occasionally fires the same hook twice in rapid
+        // succession (observed on Stop). Drop the second event when an
+        // identical one landed within the dedup window.
+        let dedupWindow: TimeInterval = 2
+        if events.contains(where: { existing in
+            event.timestamp.timeIntervalSince(existing.timestamp) < dedupWindow
+                && existing.agent == event.agent
+                && existing.kind == event.kind
+                && existing.message == event.message
+                && existing.claudeSessionID == event.claudeSessionID
+        }) {
+            return
+        }
         events.insert(event, at: 0)
         if events.count > maxEvents {
             events = Array(events.prefix(maxEvents))
