@@ -67,9 +67,7 @@ enum Permissions {
             let options = [key: kCFBooleanTrue!] as CFDictionary
             _ = AXIsProcessTrustedWithOptions(options)
         case .automation:
-            let target = NSAppleEventDescriptor(bundleIdentifier: "com.apple.systemevents")
-            _ = AEDeterminePermissionToAutomateTarget(
-                target.aeDesc, typeWildCard, typeWildCard, true)
+            triggerAutomationPrompt()
         case .notifications:
             promptNotifications()
         }
@@ -85,8 +83,16 @@ enum Permissions {
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
             task.arguments = ["reset", service, bundleID]
+            let err = Pipe()
+            task.standardError = err
             try? task.run()
             task.waitUntilExit()
+            if task.terminationStatus != 0 {
+                let msg = String(data: err.fileHandleForReading.readDataToEndOfFile(),
+                                 encoding: .utf8) ?? ""
+                FileHandle.standardError.write(Data(
+                    "stack-nudge: tccutil reset \(service) failed (\(task.terminationStatus)): \(msg)\n".utf8))
+            }
         }
 
         switch pane {
@@ -95,11 +101,24 @@ enum Permissions {
             let options = [key: kCFBooleanTrue!] as CFDictionary
             _ = AXIsProcessTrustedWithOptions(options)
         case .automation:
-            let target = NSAppleEventDescriptor(bundleIdentifier: "com.apple.systemevents")
-            _ = AEDeterminePermissionToAutomateTarget(
-                target.aeDesc, typeWildCard, typeWildCard, true)
+            triggerAutomationPrompt()
         case .notifications:
             promptNotifications()
+        }
+    }
+
+    // Force the TCC Automation prompt for System Events by actually sending
+    // an AppleEvent — AEDeterminePermissionToAutomateTarget often returns
+    // the cached decision without dispatching the dialog, so we send a
+    // harmless command instead. macOS shows the prompt the first time an
+    // app sends events to a new target, regardless of prior denial state
+    // (after a tccutil reset clears the decision).
+    private static func triggerAutomationPrompt() {
+        let source = "tell application \"System Events\" to count processes"
+        guard let script = NSAppleScript(source: source) else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            var error: NSDictionary?
+            _ = script.executeAndReturnError(&error)
         }
     }
 }
