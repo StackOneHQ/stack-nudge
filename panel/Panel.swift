@@ -1219,9 +1219,30 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // for the initial fire and by the snooze timer for re-fires. Request
     // identifier is a fresh UUID each time (macOS replaces by identifier);
     // event.id stays in userInfo so click handlers can find the source.
+    // Banner title with session label appended when we can resolve one.
+    // Default project name is suppressed (already implied by the title);
+    // only meaningful custom/claudeName labels are shown.
+    private func bannerTitle(for event: NudgeEvent) -> String {
+        guard let id = event.claudeSessionID else { return event.title }
+        guard let session = sessions.sessions.first(where: { $0.claudeSessionID == id })
+        else { return event.title }
+        let custom = session.customName?.trimmingCharacters(in: .whitespaces)
+        let claude = session.claudeName?.trimmingCharacters(in: .whitespaces)
+        let label: String?
+        if let custom, !custom.isEmpty {
+            label = custom
+        } else if let claude, !claude.isEmpty, claude != "main-agent" {
+            label = claude
+        } else {
+            label = nil
+        }
+        guard let label else { return event.title }
+        return "\(event.title) — \(label)"
+    }
+
     private func postBanner(for event: NudgeEvent) {
         let content = UNMutableNotificationContent()
-        content.title = event.title
+        content.title = bannerTitle(for: event)
         content.body  = event.message
         content.categoryIdentifier = event.kind == .permission ? "PERMISSION" : "STOP"
         content.userInfo = ["eventID": event.id.uuidString]
@@ -1806,7 +1827,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func actOnSelected(approve: Bool) {
         guard let event = store.selectedEvent else { return }
         store.remove(id: event.id)
-        hidePanel()
+        // Stay on the panel if there are more events to act on; otherwise
+        // close so the system frontmost reverts naturally and the approval
+        // keystroke lands in the target app's key window (see comment above
+        // about why hiding must precede the keystroke dispatch).
+        if store.events.isEmpty { hidePanel() }
 
         let sendApproval = approve && event.hasActionButton
 
