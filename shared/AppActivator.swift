@@ -73,6 +73,21 @@ struct AppActivator {
                 tell application "System Events" to set frontmost of process "\(procName)" to true
             """)?.executeAndReturnError(&err2)
 
+            // Step 2.5: AX-raise the specific window. --reuse-window routes
+            // the open request to the right window's IPC server (when
+            // ipcHook is set), but the CLI doesn't raise that window —
+            // the app's most-recently-focused window pops to front
+            // instead. The captured windowTitle has the open filename and
+            // is window-specific, so AX-matching it pins activation to
+            // the correct window.
+            if let title = windowTitle, !title.isEmpty,
+               let runningApp = NSRunningApplication
+                   .runningApplications(withBundleIdentifier: bundleID).first {
+                Thread.sleep(forTimeInterval: 0.15)
+                _ = raiseWindow(pid: runningApp.processIdentifier,
+                                containingTitle: title)
+            }
+
             // Step 3: focus the agent's terminal pane via AX before sending Enter,
             // so the keystroke lands in the right pane instead of whatever was
             // last focused in VS Code. After AX press of the tab, dwell briefly
@@ -328,7 +343,11 @@ struct AppActivator {
     // any open session (closed since the event fired).
     @discardableResult
     private static func focusIterm2Session(sessionID: String) -> Bool {
-        let escaped = sessionID.replacingOccurrences(of: "\"", with: "\\\"")
+        // ITERM_SESSION_ID is "w0t0p0:UUID" (window-tab-pane prefix + UUID).
+        // iTerm2's AppleScript exposes the UUID as `id of session`, so strip
+        // the prefix when present.
+        let uuid = sessionID.split(separator: ":").last.map(String.init) ?? sessionID
+        let escaped = uuid.replacingOccurrences(of: "\"", with: "\\\"")
         let script = """
         tell application "iTerm2"
           activate
