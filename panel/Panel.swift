@@ -505,6 +505,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // logic and didReceive for the cancellation.
     private var bannerActivationUntil: Date = .distantPast
 
+    // Last time onAppend fired. macOS can deliver applicationShouldHandleReopen
+    // as a side effect of posting a banner (notably under Ghostty), not just
+    // when the user clicks one — so the bannerActivationUntil veto, which
+    // only sets in didReceive, doesn't catch this case. Suppress the deferred
+    // showPanel for ~2s after any event arrival so a banner post never
+    // pops the panel uninvited.
+    private var lastEventArrivalAt: Date = .distantPast
+
     // UserDefaults keys for panel size + origin persistence. UserDefaults
     // lives in ~/Library/Preferences/com.stackonehq.stack-nudge.plist, so it
     // survives uninstall/reinstall cycles of ~/.stack-nudge/ and across
@@ -606,6 +614,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         startConfigWatcher()
         setupNotificationCenter()
         store.onAppend = { [weak self] event in
+            self?.lastEventArrivalAt = Date()
             self?.postBannerIfNeeded(event)
             self?.refreshTranscriptStats(for: event)
         }
@@ -1122,6 +1131,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                                       windowTitle: event.windowTitle,
                                       ipcHook: event.ipcHook,
                                       projectPath: event.projectPath,
+                                      sessionID: event.sessionID,
                                       sendApproval: false,
                                       agent: event.agent)
             }
@@ -1326,6 +1336,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                                   windowTitle: event.windowTitle,
                                   ipcHook: event.ipcHook,
                                   projectPath: event.projectPath,
+                                  sessionID: event.sessionID,
                                   sendApproval: approve,
                                   agent: event.agent)
         }
@@ -1469,6 +1480,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             guard let self else { return }
             if Date() < self.bannerActivationUntil { return }
+            // Suppress if a banner just posted — macOS sometimes routes a
+            // reopen through us as a side effect of the notification arriving,
+            // and the user did not actually ask for the panel.
+            if Date().timeIntervalSince(self.lastEventArrivalAt) < 2 { return }
             self.showPanel()
         }
         return false
@@ -1851,6 +1866,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 windowTitle: event.windowTitle,
                 ipcHook: event.ipcHook,
                 projectPath: event.projectPath,
+                sessionID: event.sessionID,
                 sendApproval: sendApproval,
                 agent: event.agent
             )

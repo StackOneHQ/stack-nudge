@@ -19,6 +19,7 @@ struct AppActivator {
 
     static func activate(bundleID: String, windowTitle: String? = nil,
                          ipcHook: String? = nil, projectPath: String? = nil,
+                         sessionID: String? = nil,
                          sendApproval: Bool = false, agent: String? = nil) {
         // For matching windows/tabs we want a LOOSE fragment that survives
         // the user switching tabs between event time and click time:
@@ -109,6 +110,18 @@ struct AppActivator {
         if bundleID == "com.mitchellh.ghostty",
            let path = projectPath, !path.isEmpty {
             focusGhosttyTab(projectPath: path)
+            return
+        }
+
+        // iTerm2: each tab/pane has a unique session id (captured as
+        // ITERM_SESSION_ID by notify.sh). Walking via AppleScript and
+        // selecting that exact session disambiguates between multiple
+        // tabs in the same project folder, which title-fragment matching
+        // can't resolve. Falls through to the AX-based path if the
+        // session id is missing or the scripting bridge errors.
+        if bundleID == "com.googlecode.iterm2",
+           let sid = sessionID, !sid.isEmpty,
+           focusIterm2Session(sessionID: sid) {
             return
         }
 
@@ -304,6 +317,43 @@ struct AppActivator {
         """
         var err: NSDictionary?
         NSAppleScript(source: script)?.executeAndReturnError(&err)
+    }
+
+    // MARK: - iTerm2 (AppleScript bridge)
+
+    // iTerm2 sets ITERM_SESSION_ID on every shell. Walk windows -> tabs ->
+    // sessions to find the session whose id matches and select it. The
+    // returned bool tells the caller whether to fall through to the AX
+    // path: false means scripting bridge errored or the id didn't match
+    // any open session (closed since the event fired).
+    @discardableResult
+    private static func focusIterm2Session(sessionID: String) -> Bool {
+        let escaped = sessionID.replacingOccurrences(of: "\"", with: "\\\"")
+        let script = """
+        tell application "iTerm2"
+          activate
+          set target to "\(escaped)"
+          repeat with w in windows
+            repeat with t in tabs of w
+              repeat with s in sessions of t
+                try
+                  if (id of s as text) is target then
+                    tell w to select
+                    tell t to select
+                    tell s to select
+                    return "matched"
+                  end if
+                end try
+              end repeat
+            end repeat
+          end repeat
+          return "no-match"
+        end tell
+        """
+        var err: NSDictionary?
+        let result = NSAppleScript(source: script)?.executeAndReturnError(&err)
+        guard err == nil else { return false }
+        return result?.stringValue == "matched"
     }
 
     // MARK: - AX tab switching (standalone terminal apps)
