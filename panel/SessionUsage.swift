@@ -112,15 +112,32 @@ final class QuotaProbe {
         }.resume()
     }
 
-    // MARK: - Keychain
+    // MARK: - Token sources
 
-    // Read the Claude Code credentials JSON blob from the macOS Keychain and
-    // extract `claudeAiOauth.accessToken`. macOS prompts the user the first
-    // time stack-nudge reads this entry; subsequent reads are silent until
-    // Claude Code rotates the item, which wipes the ACL and re-fires the
-    // prompt. Callers cache the returned token and only re-invoke this on
-    // an API 401 to keep prompt frequency to a minimum.
+    // Prefer ~/.claude/.credentials.json when present. Claude Code itself
+    // reads this file before falling back to the Keychain, and users who
+    // want to avoid the periodic Keychain prompt (caused by Claude rotating
+    // the Keychain item ~every 8h, wiping the ACL grant — anthropics/claude-code#22144,
+    // closed as not planned) can opt in by writing the file at mode 0600.
     private func readAccessToken() -> String? {
+        if let token = readCredentialsFile() { return token }
+        return readKeychainToken()
+    }
+
+    private func readCredentialsFile() -> String? {
+        let path = "\(NSHomeDirectory())/.claude/.credentials.json"
+        guard FileManager.default.fileExists(atPath: path),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let blob = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let oauth = blob["claudeAiOauth"] as? [String: Any],
+              let token = oauth["accessToken"] as? String,
+              !token.isEmpty else {
+            return nil
+        }
+        return token
+    }
+
+    private func readKeychainToken() -> String? {
         let query: [String: Any] = [
             kSecClass as String:            kSecClassGenericPassword,
             kSecAttrService as String:      Self.keychainService,
