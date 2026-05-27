@@ -44,12 +44,26 @@ struct AppActivator {
             let trusted = AXIsProcessTrusted()
             let pressEnter = sendApproval && trusted
 
+            // When ipcHook is set (captured from VSCODE_IPC_HOOK_CLI at hook
+            // time), prefix the CLI invocation with it so the command talks
+            // to that specific window's IPC server. Without this, --reuse-window
+            // picks the most-recently-focused matching window — which is the
+            // wrong one when the user has multiple editor windows open for
+            // the same project.
+            let envPrefix: String
+            if let hook = ipcHook, !hook.isEmpty {
+                let escapedHook = hook.replacingOccurrences(of: "'", with: "'\\''")
+                envPrefix = "VSCODE_IPC_HOOK_CLI='\(escapedHook)' "
+            } else {
+                envPrefix = ""
+            }
+
             // Step 1: activate app + switch window via CLI (no Automation needed)
             var err: NSDictionary?
             NSAppleScript(source: """
                 tell application "\(procName)" to activate
                 delay 0.4
-                do shell script "'\(escapedCLI)' --reuse-window '\(escapedPath)'"
+                do shell script "\(envPrefix)'\(escapedCLI)' --reuse-window '\(escapedPath)'"
             """)?.executeAndReturnError(&err)
 
             // Step 2: set frontmost (requires Automation for System Events)
