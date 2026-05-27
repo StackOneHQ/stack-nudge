@@ -505,6 +505,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // logic and didReceive for the cancellation.
     private var bannerActivationUntil: Date = .distantPast
 
+    // Last time onAppend fired. macOS can deliver applicationShouldHandleReopen
+    // as a side effect of posting a banner (notably under Ghostty), not just
+    // when the user clicks one — so the bannerActivationUntil veto, which
+    // only sets in didReceive, doesn't catch this case. Suppress the deferred
+    // showPanel for ~2s after any event arrival so a banner post never
+    // pops the panel uninvited.
+    private var lastEventArrivalAt: Date = .distantPast
+
     // UserDefaults keys for panel size + origin persistence. UserDefaults
     // lives in ~/Library/Preferences/com.stackonehq.stack-nudge.plist, so it
     // survives uninstall/reinstall cycles of ~/.stack-nudge/ and across
@@ -606,6 +614,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         startConfigWatcher()
         setupNotificationCenter()
         store.onAppend = { [weak self] event in
+            self?.lastEventArrivalAt = Date()
             self?.postBannerIfNeeded(event)
             self?.refreshTranscriptStats(for: event)
         }
@@ -1122,6 +1131,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                                       windowTitle: event.windowTitle,
                                       ipcHook: event.ipcHook,
                                       projectPath: event.projectPath,
+                                      sessionID: event.sessionID,
                                       sendApproval: false,
                                       agent: event.agent)
             }
@@ -1219,9 +1229,30 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // for the initial fire and by the snooze timer for re-fires. Request
     // identifier is a fresh UUID each time (macOS replaces by identifier);
     // event.id stays in userInfo so click handlers can find the source.
+    // Banner title with session label appended when we can resolve one.
+    // Default project name is suppressed (already implied by the title);
+    // only meaningful custom/claudeName labels are shown.
+    private func bannerTitle(for event: NudgeEvent) -> String {
+        guard let id = event.claudeSessionID else { return event.title }
+        guard let session = sessions.sessions.first(where: { $0.claudeSessionID == id })
+        else { return event.title }
+        let custom = session.customName?.trimmingCharacters(in: .whitespaces)
+        let claude = session.claudeName?.trimmingCharacters(in: .whitespaces)
+        let label: String?
+        if let custom, !custom.isEmpty {
+            label = custom
+        } else if let claude, !claude.isEmpty, claude != "main-agent" {
+            label = claude
+        } else {
+            label = nil
+        }
+        guard let label else { return event.title }
+        return "\(event.title) — \(label)"
+    }
+
     private func postBanner(for event: NudgeEvent) {
         let content = UNMutableNotificationContent()
-        content.title = event.title
+        content.title = bannerTitle(for: event)
         content.body  = event.message
         content.categoryIdentifier = event.kind == .permission ? "PERMISSION" : "STOP"
         content.userInfo = ["eventID": event.id.uuidString]
@@ -1305,6 +1336,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                                   windowTitle: event.windowTitle,
                                   ipcHook: event.ipcHook,
                                   projectPath: event.projectPath,
+                                  sessionID: event.sessionID,
                                   sendApproval: approve,
                                   agent: event.agent)
         }
@@ -1448,6 +1480,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             guard let self else { return }
             if Date() < self.bannerActivationUntil { return }
+            // Suppress if a banner just posted — macOS sometimes routes a
+            // reopen through us as a side effect of the notification arriving,
+            // and the user did not actually ask for the panel.
+            if Date().timeIntervalSince(self.lastEventArrivalAt) < 2 { return }
             self.showPanel()
         }
         return false
@@ -1806,7 +1842,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func actOnSelected(approve: Bool) {
         guard let event = store.selectedEvent else { return }
         store.remove(id: event.id)
-        hidePanel()
+        // Stay on the panel if there are more events to act on; otherwise
+        // close so the system frontmost reverts naturally and the approval
+        // keystroke lands in the target app's key window (see comment above
+        // about why hiding must precede the keystroke dispatch).
+        if store.events.isEmpty { hidePanel() }
 
         let sendApproval = approve && event.hasActionButton
 
@@ -1826,6 +1866,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 windowTitle: event.windowTitle,
                 ipcHook: event.ipcHook,
                 projectPath: event.projectPath,
+                sessionID: event.sessionID,
                 sendApproval: sendApproval,
                 agent: event.agent
             )

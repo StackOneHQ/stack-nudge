@@ -19,6 +19,7 @@ struct AppActivator {
 
     static func activate(bundleID: String, windowTitle: String? = nil,
                          ipcHook: String? = nil, projectPath: String? = nil,
+                         sessionID: String? = nil,
                          sendApproval: Bool = false, agent: String? = nil) {
         // For matching windows/tabs we want a LOOSE fragment that survives
         // the user switching tabs between event time and click time:
@@ -44,12 +45,26 @@ struct AppActivator {
             let trusted = AXIsProcessTrusted()
             let pressEnter = sendApproval && trusted
 
+            // When ipcHook is set (captured from VSCODE_IPC_HOOK_CLI at hook
+            // time), prefix the CLI invocation with it so the command talks
+            // to that specific window's IPC server. Without this, --reuse-window
+            // picks the most-recently-focused matching window — which is the
+            // wrong one when the user has multiple editor windows open for
+            // the same project.
+            let envPrefix: String
+            if let hook = ipcHook, !hook.isEmpty {
+                let escapedHook = hook.replacingOccurrences(of: "'", with: "'\\''")
+                envPrefix = "VSCODE_IPC_HOOK_CLI='\(escapedHook)' "
+            } else {
+                envPrefix = ""
+            }
+
             // Step 1: activate app + switch window via CLI (no Automation needed)
             var err: NSDictionary?
             NSAppleScript(source: """
                 tell application "\(procName)" to activate
                 delay 0.4
-                do shell script "'\(escapedCLI)' --reuse-window '\(escapedPath)'"
+                do shell script "\(envPrefix)'\(escapedCLI)' --reuse-window '\(escapedPath)'"
             """)?.executeAndReturnError(&err)
 
             // Step 2: set frontmost (requires Automation for System Events)
@@ -57,6 +72,21 @@ struct AppActivator {
             NSAppleScript(source: """
                 tell application "System Events" to set frontmost of process "\(procName)" to true
             """)?.executeAndReturnError(&err2)
+
+            // Step 2.5: AX-raise the specific window. --reuse-window routes
+            // the open request to the right window's IPC server (when
+            // ipcHook is set), but the CLI doesn't raise that window —
+            // the app's most-recently-focused window pops to front
+            // instead. The captured windowTitle has the open filename and
+            // is window-specific, so AX-matching it pins activation to
+            // the correct window.
+            if let title = windowTitle, !title.isEmpty,
+               let runningApp = NSRunningApplication
+                   .runningApplications(withBundleIdentifier: bundleID).first {
+                Thread.sleep(forTimeInterval: 0.15)
+                _ = raiseWindow(pid: runningApp.processIdentifier,
+                                containingTitle: title)
+            }
 
             // Step 3: focus the agent's terminal pane via AX before sending Enter,
             // so the keystroke lands in the right pane instead of whatever was
@@ -95,6 +125,18 @@ struct AppActivator {
         if bundleID == "com.mitchellh.ghostty",
            let path = projectPath, !path.isEmpty {
             focusGhosttyTab(projectPath: path)
+            return
+        }
+
+        // iTerm2: each tab/pane has a unique session id (captured as
+        // ITERM_SESSION_ID by notify.sh). Walking via AppleScript and
+        // selecting that exact session disambiguates between multiple
+        // tabs in the same project folder, which title-fragment matching
+        // can't resolve. Falls through to the AX-based path if the
+        // session id is missing or the scripting bridge errors.
+        if bundleID == "com.googlecode.iterm2",
+           let sid = sessionID, !sid.isEmpty,
+           focusIterm2Session(sessionID: sid) {
             return
         }
 
@@ -290,6 +332,47 @@ struct AppActivator {
         """
         var err: NSDictionary?
         NSAppleScript(source: script)?.executeAndReturnError(&err)
+    }
+
+    // MARK: - iTerm2 (AppleScript bridge)
+
+    // iTerm2 sets ITERM_SESSION_ID on every shell. Walk windows -> tabs ->
+    // sessions to find the session whose id matches and select it. The
+    // returned bool tells the caller whether to fall through to the AX
+    // path: false means scripting bridge errored or the id didn't match
+    // any open session (closed since the event fired).
+    @discardableResult
+    private static func focusIterm2Session(sessionID: String) -> Bool {
+        // ITERM_SESSION_ID is "w0t0p0:UUID" (window-tab-pane prefix + UUID).
+        // iTerm2's AppleScript exposes the UUID as `id of session`, so strip
+        // the prefix when present.
+        let uuid = sessionID.split(separator: ":").last.map(String.init) ?? sessionID
+        let escaped = uuid.replacingOccurrences(of: "\"", with: "\\\"")
+        let script = """
+        tell application "iTerm2"
+          activate
+          set target to "\(escaped)"
+          repeat with w in windows
+            repeat with t in tabs of w
+              repeat with s in sessions of t
+                try
+                  if (id of s as text) is target then
+                    tell w to select
+                    tell t to select
+                    tell s to select
+                    return "matched"
+                  end if
+                end try
+              end repeat
+            end repeat
+          end repeat
+          return "no-match"
+        end tell
+        """
+        var err: NSDictionary?
+        let result = NSAppleScript(source: script)?.executeAndReturnError(&err)
+        guard err == nil else { return false }
+        return result?.stringValue == "matched"
     }
 
     // MARK: - AX tab switching (standalone terminal apps)
