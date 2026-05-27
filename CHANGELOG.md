@@ -4,6 +4,20 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.12.1](https://github.com/StackOneHQ/stack-nudge/compare/v1.12.0...v1.12.1) (2026-05-27)
+
+
+### Bug Fixes
+
+* **activator:** correct iTerm2 session-id match + AX-raise specific Cursor window ([d1e5226](https://github.com/StackOneHQ/stack-nudge/commit/d1e5226de503ee47123a7660ee306b8424ef7c33))
+* **activator:** route Cursor/VSCode CLI through captured IPC socket ([688641a](https://github.com/StackOneHQ/stack-nudge/commit/688641ade090a0f53cea2145f3cfb27233d90ec5))
+* **activator:** route iTerm2 click-to-focus via ITERM_SESSION_ID ([ad34ae4](https://github.com/StackOneHQ/stack-nudge/commit/ad34ae4cdde6ff7d8c8613e8daeaa2d853186f05))
+* **events:** dedupe hooks fired twice within 2s ([9a3d846](https://github.com/StackOneHQ/stack-nudge/commit/9a3d84628aa9c84aee4e61f14488ba046b9efc4a))
+* **panel:** banner title includes session name; approve keeps panel open when more events remain ([fcb763f](https://github.com/StackOneHQ/stack-nudge/commit/fcb763f3e79c2f488cde1cffdeee3782f96cb394))
+* **permissions:** use real AppleEvent to trigger Automation prompt ([33914d8](https://github.com/StackOneHQ/stack-nudge/commit/33914d882a423e540bd9c254bfdcf4217d6d6709))
+* quota keychain prompts, permission reset, banner quality, multi-window activation ([e335ee6](https://github.com/StackOneHQ/stack-nudge/commit/e335ee6eeae7f71ff1583fcf84f00d251bbe49db))
+* **quota:** prefer ~/.claude/.credentials.json over keychain when present ([32df863](https://github.com/StackOneHQ/stack-nudge/commit/32df863a65d307ee8cc6b9db00da9cadea141832))
+
 ## [1.12.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.11.0...v1.12.0) (2026-05-26)
 
 
