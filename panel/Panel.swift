@@ -821,7 +821,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     // MARK: - Compact widget layout
 
-    private static let compactWidgetSize = NSSize(width: 320, height: 46)
+    private static let compactWidgetSize = NSSize(width: 320, height: 56)
     private static let compactWidgetInset: CGFloat = 14
 
     // Apply window size + origin appropriate to the current compact-mode
@@ -833,6 +833,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             // everything, follow the user across spaces. Transparent
             // window background so the SwiftUI Capsule shows through.
             let size = Self.compactWidgetSize
+            // Lower the minimum content size below the widget dimensions
+            // so AppKit doesn't enforce the original 560x260 floor after
+            // a system event like screen reconfiguration or lock/unlock.
+            panel.contentMinSize = size
             var frame = panel.frame
             frame.size = size
             frame.origin = compactCornerOrigin(for: size)
@@ -855,6 +859,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             var frame = panel.frame
             frame.size = size
             panel.setFrame(frame, display: true, animate: false)
+            // Restore the original layout-protecting minimum so SwiftUI's
+            // full panel content (Settings, Sessions, etc.) has room.
+            panel.contentMinSize = NSSize(width: 560, height: 260)
             panel.level = .floating
             panel.collectionBehavior = []
             panel.hasShadow = true

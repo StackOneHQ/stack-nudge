@@ -65,16 +65,24 @@ struct CompactView: View {
 
     private var gaugeCluster: some View {
         HStack(spacing: 6) {
-            QuotaGauge(
-                fivePct:  nav.quota?.fiveHour?.utilization ?? 0,
-                sevenPct: nav.quota?.sevenDay?.utilization ?? 0,
-                hasFive:  nav.quota?.fiveHour != nil,
-                hasSeven: nav.quota?.sevenDay != nil,
-                polling:  nav.quotaSyncing,
-                anyBusy:  anyBusy,
-                paused:   nav.compactDragging
-            )
-            .frame(width: 32, height: 32)
+            ZStack {
+                if !nav.compactDragging {
+                    Circle()
+                        .fill(urgencyColor.opacity(0.18))
+                        .frame(width: 44, height: 44)
+                        .blur(radius: 8)
+                }
+                QuotaGauge(
+                    fivePct:  nav.quota?.fiveHour?.utilization ?? 0,
+                    sevenPct: nav.quota?.sevenDay?.utilization ?? 0,
+                    hasFive:  nav.quota?.fiveHour != nil,
+                    hasSeven: nav.quota?.sevenDay != nil,
+                    polling:  nav.quotaSyncing,
+                    anyBusy:  anyBusy,
+                    paused:   nav.compactDragging
+                )
+                .frame(width: 42, height: 42)
+            }
 
             if let reset = nav.quota?.fiveHour?.resetsAt {
                 Text(Self.shortDuration(until: reset))
@@ -90,7 +98,7 @@ struct CompactView: View {
     private var headline: some View {
         HStack(spacing: 6) {
             BotMascot(state: botState, paused: nav.compactDragging)
-                .frame(width: 18, height: 16)
+                .frame(width: 26, height: 24)
             headlineText
         }
     }
@@ -121,10 +129,19 @@ struct CompactView: View {
                 Text("·")
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
-                Text(Self.relative.localizedString(for: recent.timestamp, relativeTo: Date()))
-                    .font(.system(size: 10).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                // Adaptive: pending count when the queue has built up,
+                // otherwise show age of the latest event so the user can
+                // gauge whether it's fresh.
+                if store.events.count > 1 {
+                    Text("\(store.events.count) pending")
+                        .font(.system(size: 10, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(Self.relative.localizedString(for: recent.timestamp, relativeTo: Date()))
+                        .font(.system(size: 10).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
         } else if let active = mostRecentActive {
             Text(displayName(active))
@@ -333,10 +350,10 @@ private struct QuotaGauge: View {
     let anyBusy: Bool
     let paused: Bool
 
-    private static let cyan = Color(red: 0.4, green: 0.85, blue: 1.0)
-    private static let outerLineWidth: CGFloat = 2.8
-    private static let innerLineWidth: CGFloat = 2.8
-    private static let ringGap: CGFloat = 4.0
+    private static let cyan = Color(red: 0.30, green: 0.92, blue: 1.0)
+    private static let outerLineWidth: CGFloat = 4.0
+    private static let innerLineWidth: CGFloat = 4.0
+    private static let ringGap: CGFloat = 5.0
 
     var body: some View {
         if paused {
@@ -410,14 +427,14 @@ private struct QuotaGauge: View {
     private func innerGlow(at date: Date) -> some View {
         let t = date.timeIntervalSinceReferenceDate
         let pulse = anyBusy ? (sin(t * 2.4) + 1) / 2 : 0
-        let intensity = 0.08 + 0.35 * pulse
+        let intensity = 0.22 + 0.45 * pulse
         return Circle()
             .fill(
                 RadialGradient(
                     gradient: Gradient(colors: [Self.cyan.opacity(intensity), .clear]),
                     center: .center,
                     startRadius: 0,
-                    endRadius: 14
+                    endRadius: 22
                 )
             )
             .padding(Self.outerLineWidth + Self.ringGap + 2)
@@ -425,7 +442,7 @@ private struct QuotaGauge: View {
 
     private var centerReadout: some View {
         Text(hasFive ? "\(Int(fivePct.rounded()))" : "—")
-            .font(.system(size: 9, weight: .bold).monospacedDigit())
+            .font(.system(size: 14, weight: .semibold).monospacedDigit())
             .foregroundStyle(.primary)
     }
 
@@ -487,14 +504,14 @@ private struct BotMascot: View {
     private var staticAntenna: some View {
         VStack(spacing: 0) {
             Circle().fill(antennaColor.opacity(0.9))
-                .frame(width: 2.5, height: 2.5)
-            Rectangle().fill(Self.outline).frame(width: 0.8, height: 2)
+                .frame(width: 3.5, height: 3.5)
+            Rectangle().fill(Self.outline).frame(width: 1, height: 3)
         }
-        .offset(y: -6)
+        .offset(y: -8.5)
     }
 
     private var staticEyes: some View {
-        HStack(spacing: 3) {
+        HStack(spacing: 4.5) {
             eyeShape
             eyeShape
         }
@@ -502,14 +519,14 @@ private struct BotMascot: View {
     }
 
     private var head: some View {
-        RoundedRectangle(cornerRadius: 3, style: .continuous)
-            .stroke(Self.outline, lineWidth: 1)
+        RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .stroke(Self.outline, lineWidth: 1.2)
             .background(
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
                     .fill(headFill)
             )
-            .frame(width: 14, height: 10)
-            .offset(y: 1.5)
+            .frame(width: 20, height: 15)
+            .offset(y: 2)
     }
 
     private var headFill: Color {
@@ -526,12 +543,12 @@ private struct BotMascot: View {
         return VStack(spacing: 0) {
             Circle()
                 .fill(antennaColor.opacity(0.6 + 0.4 * blink))
-                .frame(width: 2.5, height: 2.5)
+                .frame(width: 3.5, height: 3.5)
             Rectangle()
                 .fill(Self.outline)
-                .frame(width: 0.8, height: 2)
+                .frame(width: 1, height: 3)
         }
-        .offset(y: -6)
+        .offset(y: -8.5)
     }
 
     private var antennaColor: Color {
@@ -549,7 +566,7 @@ private struct BotMascot: View {
         let blinking = state != .alert && cycle < 0.15
         let scaleY: CGFloat = blinking ? 0.15 : 1.0
 
-        return HStack(spacing: 3) {
+        return HStack(spacing: 4.5) {
             eyeShape
             eyeShape
         }
@@ -565,29 +582,29 @@ private struct BotMascot: View {
             // Focused: narrow horizontal slits
             Capsule()
                 .fill(Self.cyan)
-                .frame(width: 3, height: 1.2)
+                .frame(width: 4.5, height: 1.8)
         case .alert:
             // Surprised: bigger round eyes
             Circle()
                 .fill(Color.orange)
-                .frame(width: 3, height: 3)
+                .frame(width: 4.5, height: 4.5)
         case .happy:
             // Smiling closed-arc eyes (carets)
             Path { p in
-                p.move(to: CGPoint(x: 0, y: 1.5))
-                p.addQuadCurve(to: CGPoint(x: 3, y: 1.5),
-                               control: CGPoint(x: 1.5, y: -0.5))
+                p.move(to: CGPoint(x: 0, y: 2.2))
+                p.addQuadCurve(to: CGPoint(x: 4.5, y: 2.2),
+                               control: CGPoint(x: 2.25, y: -0.6))
             }
-            .stroke(Color.green, style: StrokeStyle(lineWidth: 0.9, lineCap: .round))
-            .frame(width: 3, height: 2)
+            .stroke(Color.green, style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
+            .frame(width: 4.5, height: 3)
         case .watching:
             Circle()
                 .fill(Self.cyan)
-                .frame(width: 2.2, height: 2.2)
+                .frame(width: 3.3, height: 3.3)
         case .idle:
             Circle()
                 .fill(Self.outline)
-                .frame(width: 1.8, height: 1.8)
+                .frame(width: 2.7, height: 2.7)
         }
     }
 
@@ -597,22 +614,22 @@ private struct BotMascot: View {
         case .happy:
             Path { p in
                 p.move(to: CGPoint(x: 0, y: 0))
-                p.addQuadCurve(to: CGPoint(x: 4, y: 0),
-                               control: CGPoint(x: 2, y: 1.6))
+                p.addQuadCurve(to: CGPoint(x: 6, y: 0),
+                               control: CGPoint(x: 3, y: 2.4))
             }
-            .stroke(Color.green, style: StrokeStyle(lineWidth: 0.9, lineCap: .round))
-            .frame(width: 4, height: 1.6)
-            .offset(y: 4)
+            .stroke(Color.green, style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
+            .frame(width: 6, height: 2.4)
+            .offset(y: 6)
         case .alert:
             Circle()
                 .fill(Color.orange.opacity(0.7))
-                .frame(width: 1.5, height: 1.5)
-                .offset(y: 4)
+                .frame(width: 2.3, height: 2.3)
+                .offset(y: 6)
         case .busy:
             Rectangle()
                 .fill(Self.cyan.opacity(0.5))
-                .frame(width: 3, height: 0.8)
-                .offset(y: 4)
+                .frame(width: 4.5, height: 1.2)
+                .offset(y: 6)
         default:
             EmptyView()
         }
