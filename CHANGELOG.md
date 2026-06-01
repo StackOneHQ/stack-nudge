@@ -4,6 +4,21 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.13.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.12.1...v1.13.0) (2026-06-01)
+
+
+### Features
+
+* compact pill widget with mascots, ring gauge, drag-snap ([55af219](https://github.com/StackOneHQ/stack-nudge/commit/55af219702cc9c382c11824a50f8cd3c58413fb2))
+* **compact:** bigger gauge + mascot, pending-count headline, contentMinSize fix ([670b60a](https://github.com/StackOneHQ/stack-nudge/commit/670b60a79cebf74d5ae187b9db738ab4d963fcba))
+* **compact:** mascot picker, always-on widget, M expands from pill, fix overflow ([24e0323](https://github.com/StackOneHQ/stack-nudge/commit/24e03231db5a147a030cec1510a5f296f296bc53))
+* **compact:** pinned widget mode with bot mascot, ring gauge, drag-snap ([fc909bb](https://github.com/StackOneHQ/stack-nudge/commit/fc909bb0dabfd3d8fe3861c95ef06048279db94c))
+
+
+### Performance Improvements
+
+* **compact:** pause decorative animations during drag ([9220d1e](https://github.com/StackOneHQ/stack-nudge/commit/9220d1eb7b05297747c9508a4e89bc60c00b9191))
+
 ## [1.12.1](https://github.com/StackOneHQ/stack-nudge/compare/v1.12.0...v1.12.1) (2026-05-27)
 
 
