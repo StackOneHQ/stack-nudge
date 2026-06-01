@@ -29,6 +29,7 @@ private enum KeyCode {
     static let four:      UInt16 = 21
     static let nKey:      UInt16 = 45
     static let pKey:      UInt16 = 35
+    static let mKey:      UInt16 = 46
 }
 
 // Floating, non-activating panel. Shown via global hotkey; receives key
@@ -80,7 +81,24 @@ struct PanelContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if nav.mode == .bootstrap {
+            if nav.compactMode, !nav.compactExpanded,
+               nav.mode != .bootstrap, nav.mode != .postUpdate {
+                // Glance-only widget. Expand button → transient full panel;
+                // double-click on the pill → exit compact mode entirely.
+                // Callbacks are wired from PanelController so the window
+                // resize happens synchronously before SwiftUI re-renders
+                // the full panel content into the still-compact frame.
+                CompactView(
+                    store: store,
+                    sessions: sessions,
+                    nav: nav,
+                    // Both the expand button and double-click exit compact
+                    // mode persistently — that's what the user wants: a
+                    // one-way "ok I want the full panel from now on."
+                    onExpand: { nav.actions?.exitCompactMode() },
+                    onExitCompact: { nav.actions?.exitCompactMode() }
+                )
+            } else if nav.mode == .bootstrap {
                 // Full-screen first-launch experience: install + onboarding
                 // + Grant Permissions, all in one cohesive flow.
                 BootstrapView(
@@ -249,7 +267,8 @@ struct PanelContentView: View {
     private var footer: some View {
         PageFooter {
             if store.events.isEmpty {
-                FooterHint(label: "Hide", keys: ["esc"])
+                FooterHint(label: "Compact", keys: ["M"])
+                FooterHint(label: "Hide",    keys: ["Esc"])
             } else {
                 if let primary = primaryActionLabel {
                     FooterHint(label: primary, keys: ["⏎"], primary: true)
@@ -263,7 +282,8 @@ struct PanelContentView: View {
                 FooterHint(label: "Snooze",  keys: ["S"])
                     .opacity(snoozeEnabled ? 1.0 : 0.35)
                 FooterHint(label: "Dismiss", keys: ["⌫"])
-                FooterHint(label: "Hide",    keys: ["esc"])
+                FooterHint(label: "Compact", keys: ["M"])
+                FooterHint(label: "Hide",    keys: ["Esc"])
             }
         }
     }
@@ -605,7 +625,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             beginUninstall:   { [weak self] in self?.beginUninstallFlow() },
             runUninstall:     { [weak self] in self?.runUninstall() },
             runBootstrap:     { [weak self] in self?.runBootstrap() },
-            quit:             { NSApp.terminate(nil) }
+            quit:             { NSApp.terminate(nil) },
+            expandFromCompact: { [weak self] in self?.expandFromCompact() },
+            exitCompactMode:   { [weak self] in self?.exitCompactMode() }
         )
         nav.setHotkey = { [weak self] spec in
             self?.registerHotkey(spec: spec) ?? false
@@ -639,6 +661,25 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             .removeDuplicates()
             .sink { [weak self] _ in self?.refreshAllClaudeStats() }
             .store(in: &cancellables)
+
+        // Re-apply window layout whenever compact-mode state flips. Covers
+        // both the persistent toggle (Settings → "Compact widget") and the
+        // transient expanded flag (widget click → expand).
+        nav.$compactMode
+            .removeDuplicates()
+            .dropFirst()  // initial value applied via applyCompactLayout on launch
+            .sink { [weak self] _ in self?.applyCompactLayout() }
+            .store(in: &cancellables)
+        nav.$compactExpanded
+            .removeDuplicates()
+            .sink { [weak self] _ in self?.applyCompactLayout() }
+            .store(in: &cancellables)
+        nav.$compactCorner
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] _ in self?.applyCompactLayout() }
+            .store(in: &cancellables)
+        applyCompactLayout()
 
         // If a previous panel instance was pkilled mid-update by install.sh,
         // it left a status file behind. Read it now and surface a brief toast
@@ -677,6 +718,33 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             name: NSWindow.didResignKeyNotification,
             object: panel
         )
+
+        // Compact-mode drag handling: explicit mouse-up signal beats the
+        // ambiguous time-based debounce. mouseDown resets the "moved"
+        // flag; didMoveNotification sets it; mouseUp consults it to
+        // decide whether to snap. A plain click without movement doesn't
+        // trigger a snap.
+        compactMouseEventMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .leftMouseUp]
+        ) { [weak self] event in
+            guard let self,
+                  event.window === self.panel,
+                  self.nav.compactMode, !self.nav.compactExpanded
+            else { return event }
+            switch event.type {
+            case .leftMouseDown:
+                self.compactMovedSinceMouseDown = false
+                self.nav.compactDragging = true
+            case .leftMouseUp:
+                self.nav.compactDragging = false
+                if self.compactMovedSinceMouseDown {
+                    self.compactMovedSinceMouseDown = false
+                    self.snapCompactToNearestCorner()
+                }
+            default: break
+            }
+            return event
+        }
     }
 
     // Triggered from the welcome screen's "Grant permissions" button. Opens
@@ -735,8 +803,177 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     }
 
     @objc private func panelDidResignKey(_ notification: Notification) {
+        // Compact mode: don't hide on focus loss — the widget is meant to
+        // stay visible. Collapse back from "expanded" if the user clicked
+        // away while in the full-panel render. Apply layout synchronously
+        // so the panel actually shrinks before SwiftUI re-evaluates body
+        // (otherwise the new CompactView renders at the still-large size).
+        if nav.compactMode {
+            if nav.compactExpanded {
+                nav.compactExpanded = false
+                applyCompactLayout()
+            }
+            return
+        }
         guard !nav.panelPinned, panel.isVisible else { return }
         hidePanel()
+    }
+
+    // MARK: - Compact widget layout
+
+    private static let compactWidgetSize = NSSize(width: 320, height: 56)
+    private static let compactWidgetInset: CGFloat = 14
+
+    // Apply window size + origin appropriate to the current compact-mode
+    // state. Called whenever nav.compactMode or nav.compactExpanded changes
+    // and once at launch to handle config-restored state.
+    private func applyCompactLayout() {
+        if nav.compactMode, !nav.compactExpanded {
+            // Widget: shrink + pin to the chosen corner, float above
+            // everything, follow the user across spaces. Transparent
+            // window background so the SwiftUI Capsule shows through.
+            let size = Self.compactWidgetSize
+            // Lower the minimum content size below the widget dimensions
+            // so AppKit doesn't enforce the original 560x260 floor after
+            // a system event like screen reconfiguration or lock/unlock.
+            panel.contentMinSize = size
+            var frame = panel.frame
+            frame.size = size
+            frame.origin = compactCornerOrigin(for: size)
+            ignoringProgrammaticMove = true
+            panel.setFrame(frame, display: true, animate: false)
+            ignoringProgrammaticMove = false
+            panel.level = .statusBar
+            panel.collectionBehavior = [.canJoinAllSpaces, .stationary,
+                                        .fullScreenAuxiliary, .ignoresCycle]
+            panel.hasShadow = false  // SwiftUI Capsule provides its own
+            panel.isMovableByWindowBackground = true  // drag to reposition
+            panel.orderFront(nil)
+        } else {
+            // Full panel: restore saved size + saved origin. Keep
+            // backgroundColor/isOpaque at the original transparent
+            // settings — the NSVisualEffectView contentView provides
+            // the visual; overriding the window's opacity here would
+            // break the blur.
+            let size = Self.loadSavedPanelSize()
+            var frame = panel.frame
+            frame.size = size
+            panel.setFrame(frame, display: true, animate: false)
+            // Restore the original layout-protecting minimum so SwiftUI's
+            // full panel content (Settings, Sessions, etc.) has room.
+            panel.contentMinSize = NSSize(width: 560, height: 260)
+            panel.level = .floating
+            panel.collectionBehavior = []
+            panel.hasShadow = true
+            panel.isMovableByWindowBackground = false
+            positionPanel()
+            if nav.compactExpanded {
+                NSApp.activate(ignoringOtherApps: true)
+                panel.makeKeyAndOrderFront(nil)
+            }
+        }
+    }
+
+    // Called from the widget's expand button. Sets the expanded flag,
+    // applies layout synchronously (so the panel is resized before SwiftUI
+    // re-renders the full content into the still-compact frame), then
+    // brings the window forward.
+    private func expandFromCompact() {
+        nav.compactExpanded = true
+        applyCompactLayout()
+    }
+
+    // Compact mode is always on, so what used to be "exit compact"
+    // (double-click, expand button) now means "expand to full panel
+    // temporarily." Calling expandFromCompact lets the existing wiring
+    // and Settings actions keep working without renaming.
+    private func exitCompactMode() {
+        expandFromCompact()
+    }
+
+    // Called from the "M" keystroke in Events/Sessions/Usage tabs to
+    // collapse back to the pill.
+    private func enterCompactMode() {
+        if nav.compactExpanded {
+            nav.compactExpanded = false
+            applyCompactLayout()
+        }
+    }
+
+    // Debounced snap: each move during a drag bumps the deadline forward.
+    // After the user releases (no further moves for ~280ms), pick the
+    // nearest corner of the active screen, persist it, and animate the
+    // panel home.
+    // Set TRUE around each programmatic setFrame so the resulting
+    // didMoveNotification (which fires synchronously when the frame
+    // changes) doesn't get treated as a user drag.
+    private var ignoringProgrammaticMove = false
+    // Tracks whether the panel actually moved since the user pressed
+    // the mouse button. The .leftMouseUp monitor consumes this to
+    // decide whether a snap is warranted (a plain click shouldn't snap).
+    private var compactMovedSinceMouseDown = false
+    private var compactMouseEventMonitor: Any?
+
+    private func snapCompactToNearestCorner() {
+        guard nav.compactMode, !nav.compactExpanded else { return }
+        let visible = activeScreen().visibleFrame
+        let size = panel.frame.size
+        let center = NSPoint(x: panel.frame.midX, y: panel.frame.midY)
+        let corner: CompactCorner
+        switch (center.x < visible.midX, center.y < visible.midY) {
+        case (true,  false): corner = .topLeft
+        case (false, false): corner = .topRight
+        case (true,  true):  corner = .bottomLeft
+        case (false, true):  corner = .bottomRight
+        }
+        // Animate from the released position to the target corner FIRST.
+        // Persist the corner only after the animation finishes — otherwise
+        // updating nav.compactCorner mid-animation fires the Combine sink,
+        // applyCompactLayout instant-snaps the panel to the new corner,
+        // and the subsequent animator setFrame has nothing to tween.
+        let target = cornerOrigin(for: size, corner: corner)
+        // animator().setFrame updates panel.frame synchronously (the
+        // animation is purely visual via Core Animation). Wrap that one
+        // synchronous call so its didMove doesn't schedule another snap.
+        ignoringProgrammaticMove = true
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.28
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().setFrame(NSRect(origin: target, size: size),
+                                      display: true)
+        }
+        ignoringProgrammaticMove = false
+        // Commit the corner. Combine sink fires applyCompactLayout, which
+        // also goes through ignoringProgrammaticMove via its own
+        // wrapped setFrame, so no extra snap is scheduled.
+        if nav.compactCorner != corner {
+            nav.compactCorner = corner
+            ConfigFile.write(key: "STACKNUDGE_COMPACT_CORNER",
+                             value: corner.rawValue)
+        }
+    }
+
+    private func compactCornerOrigin(for size: NSSize) -> NSPoint {
+        cornerOrigin(for: size, corner: nav.compactCorner)
+    }
+
+    private func cornerOrigin(for size: NSSize, corner: CompactCorner) -> NSPoint {
+        let visible = activeScreen().visibleFrame
+        let inset = Self.compactWidgetInset
+        switch corner {
+        case .topLeft:
+            return NSPoint(x: visible.minX + inset,
+                           y: visible.maxY - size.height - inset)
+        case .topRight:
+            return NSPoint(x: visible.maxX - size.width - inset,
+                           y: visible.maxY - size.height - inset)
+        case .bottomLeft:
+            return NSPoint(x: visible.minX + inset,
+                           y: visible.minY + inset)
+        case .bottomRight:
+            return NSPoint(x: visible.maxX - size.width - inset,
+                           y: visible.minY + inset)
+        }
     }
 
     // MARK: - Bootstrap (first-launch install)
@@ -1506,6 +1743,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         let blockingMods: NSEvent.ModifierFlags = [.control, .option]
         let cmdOnly = mods.intersection([.command, .control, .option, .shift]) == .command
 
+        // From the pill (compact-not-expanded), M expands to full panel.
+        // Mirrors the M-to-collapse shortcut shown in the full panel's
+        // footer. The pill must be key for this to land, so a single
+        // click anywhere on the pill arms it.
+        if nav.compactMode, !nav.compactExpanded,
+           event.keyCode == KeyCode.mKey,
+           mods.intersection([.command, .control, .option, .shift]).isEmpty {
+            expandFromCompact()
+            return true
+        }
+
         // While recording a hotkey, capture the next combo. Arrow keys / Tab
         // bail out gracefully — otherwise users who entered record mode by
         // mistake would be stuck on row 0 with all their keypresses swallowed.
@@ -1696,6 +1944,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 guard mods.intersection([.command, .control, .option]).isEmpty else { return false }
                 let pid = sessions.selectedPID ?? sessions.sessions.first?.pid
                 if let pid { sessions.startRenaming(pid) }
+            case KeyCode.mKey where plain:
+                enterCompactMode()
             default:
                 return false
             }
@@ -1783,6 +2033,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 // the next scheduled tick (up to the configured poll
                 // interval, which could be 30 min).
                 if nav.quotaTrackingEnabled { syncQuotaNow() }
+            case KeyCode.mKey:
+                enterCompactMode()
             default:
                 break
             }
@@ -1818,6 +2070,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             actOnSelected(approve: false)
         case KeyCode.rKey, KeyCode.delete, KeyCode.forwardDelete:
             dismissSelected()
+        case KeyCode.mKey:
+            enterCompactMode()
         default:
             return false
         }
@@ -1936,7 +2190,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     // Toggle behaves on focus, not visibility: hotkey while panel is key hides it;
     // hotkey while the panel is hidden OR visible-but-defocused brings it forward.
+    // In compact mode, hotkey toggles the expand state instead of show/hide so
+    // the pill is always visible — that's the whole point of compact mode.
     private func toggle() {
+        if nav.compactMode {
+            if nav.compactExpanded {
+                nav.compactExpanded = false
+                applyCompactLayout()
+            } else {
+                expandFromCompact()
+            }
+            return
+        }
         if panel.isKeyWindow {
             hidePanel()
         } else {
@@ -1945,6 +2210,16 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     }
 
     func showPanel() {
+        // In compact mode, "show" means "expand" — bringing back the full
+        // panel rather than just raising the pill (which is already visible).
+        if nav.compactMode {
+            if !nav.compactExpanded { expandFromCompact() }
+            else {
+                NSApp.activate(ignoringOtherApps: true)
+                panel.makeKeyAndOrderFront(nil)
+            }
+            return
+        }
         positionPanel()  // re-resolve in case the user moved to a different display
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
@@ -1953,6 +2228,16 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // NSApp.hide hides all our windows AND deactivates the app, so the system
     // frontmost reverts to whatever was active before the panel was summoned.
     private func hidePanel() {
+        // Compact mode: "hide" means "collapse back to the pill," never
+        // make the user lose their widget entirely. Esc / hotkey / focus
+        // loss all funnel through here.
+        if nav.compactMode {
+            if nav.compactExpanded {
+                nav.compactExpanded = false
+                applyCompactLayout()
+            }
+            return
+        }
         panel.orderOut(nil)
         NSApp.hide(nil)
     }
@@ -2010,7 +2295,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             object: panel,
             queue: .main
         ) { [weak self] _ in
-            guard let panel = self?.panel else { return }
+            guard let self, let panel = self.panel as NSWindow? else { return }
+            // Don't persist the compact-widget frame as the user's panel
+            // size — they'd lose their full-panel size every time they
+            // switched modes.
+            if self.nav.compactMode, !self.nav.compactExpanded { return }
             UserDefaults.standard.set(
                 ["width": panel.frame.width, "height": panel.frame.height],
                 forKey: Self.panelSizeKey
@@ -2021,7 +2310,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             object: panel,
             queue: .main
         ) { [weak self] _ in
-            guard let panel = self?.panel else { return }
+            guard let self, let panel = self.panel as NSWindow? else { return }
+            // Compact widget: don't persist the moved origin (the corner
+            // is the source of truth). The actual snap fires from the
+            // mouse-up event monitor. Here we just record that movement
+            // happened during the current mouse-down so the monitor
+            // knows whether to snap.
+            if self.ignoringProgrammaticMove { return }
+            if self.nav.compactMode, !self.nav.compactExpanded {
+                self.compactMovedSinceMouseDown = true
+                return
+            }
             UserDefaults.standard.set(
                 ["x": panel.frame.origin.x, "y": panel.frame.origin.y],
                 forKey: Self.panelOriginKey

@@ -52,38 +52,43 @@ struct SettingsView: View {
                             row(4 + off, label: "Launch at login",      kind: .toggle, value: nav.launchAtLogin   ? "On" : "Off")
                         }
 
+                        section("Widget") {
+                            row(5 + off, label: "Widget corner", kind: .cycle, value: nav.compactCorner.label)
+                            row(6 + off, label: "Mascot",        kind: .cycle, value: nav.mascot.label)
+                        }
+
                         section("Sounds") {
-                            row(5 + off, label: "Sound enabled", kind: .toggle, value: nav.soundEnabled ? "On" : "Off")
-                            row(6 + off, label: "Agent done",    kind: .cycle,  value: nav.soundStop,       enabled: nav.soundEnabled)
-                            row(7 + off, label: "Permission",    kind: .cycle,  value: nav.soundPermission, enabled: nav.soundEnabled)
+                            row(7 + off, label: "Sound enabled", kind: .toggle, value: nav.soundEnabled ? "On" : "Off")
+                            row(8 + off, label: "Agent done",    kind: .cycle,  value: nav.soundStop,       enabled: nav.soundEnabled)
+                            row(9 + off, label: "Permission",    kind: .cycle,  value: nav.soundPermission, enabled: nav.soundEnabled)
                         }
 
                         section("Voice") {
-                            row(8 + off, label: "Voice notifications", kind: .toggle, value: nav.voiceEnabled ? "On" : "Off")
+                            row(10 + off, label: "Voice notifications", kind: .toggle, value: nav.voiceEnabled ? "On" : "Off")
                             if nav.voiceModelCached {
-                                row(9 + off,  label: "Voice", kind: .cycle, value: voiceLabel,                                  enabled: nav.voiceEnabled)
-                                row(10 + off, label: "Speed", kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed),     enabled: nav.voiceEnabled)
+                                row(11 + off, label: "Voice", kind: .cycle, value: voiceLabel,                                  enabled: nav.voiceEnabled)
+                                row(12 + off, label: "Speed", kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed),     enabled: nav.voiceEnabled)
                             } else {
-                                voiceModelDownloadRow(index: 9 + off)
+                                voiceModelDownloadRow(index: 11 + off)
                             }
                         }
 
                         section("Usage") {
-                            row(11 + off, label: "Quota tracking",  kind: .toggle, value: nav.quotaTrackingEnabled ? "On" : "Off")
-                            row(12 + off, label: "Quota alerts",    kind: .toggle, value: nav.quotaAlertsEnabled    ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
-                            row(13 + off, label: "Alert threshold", kind: .cycle,  value: "\(nav.quotaAlertThreshold)%",            enabled: nav.quotaTrackingEnabled && nav.quotaAlertsEnabled)
-                            row(14 + off, label: "Poll frequency",  kind: .cycle,  value: "\(nav.quotaPollMinutes) min",            enabled: nav.quotaTrackingEnabled)
-                            row(15 + off, label: "Context alert at", kind: .cycle, value: contextAlertLabel)
+                            row(13 + off, label: "Quota tracking",  kind: .toggle, value: nav.quotaTrackingEnabled ? "On" : "Off")
+                            row(14 + off, label: "Quota alerts",    kind: .toggle, value: nav.quotaAlertsEnabled    ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
+                            row(15 + off, label: "Alert threshold", kind: .cycle,  value: "\(nav.quotaAlertThreshold)%",            enabled: nav.quotaTrackingEnabled && nav.quotaAlertsEnabled)
+                            row(16 + off, label: "Poll frequency",  kind: .cycle,  value: "\(nav.quotaPollMinutes) min",            enabled: nav.quotaTrackingEnabled)
+                            row(17 + off, label: "Context alert at", kind: .cycle, value: contextAlertLabel)
                         }
 
                         section("Actions") {
-                            row(16 + off, label: "Edit phrases…",         kind: .action, value: "")
-                            row(17 + off, label: "Check permissions…",    kind: .action, value: "")
-                            row(18 + off, label: "Open config file…",     kind: .action, value: "")
-                            row(19 + off, label: "View release notes…",   kind: .action, value: "")
-                            row(20 + off, label: "Check for updates…",    kind: .action, value: checkForUpdatesStatus)
-                            row(21 + off, label: "Uninstall StackNudge…", kind: .action, value: "")
-                            row(22 + off, label: "Quit panel",            kind: .action, value: "")
+                            row(18 + off, label: "Edit phrases…",         kind: .action, value: "")
+                            row(19 + off, label: "Check permissions…",    kind: .action, value: "")
+                            row(20 + off, label: "Open config file…",     kind: .action, value: "")
+                            row(21 + off, label: "View release notes…",   kind: .action, value: "")
+                            row(22 + off, label: "Check for updates…",    kind: .action, value: checkForUpdatesStatus)
+                            row(23 + off, label: "Uninstall StackNudge…", kind: .action, value: "")
+                            row(24 + off, label: "Quit panel",            kind: .action, value: "")
                         }
 
                         aboutFooter
@@ -102,12 +107,12 @@ struct SettingsView: View {
             PageFooter {
                 if nav.recordingHotkey {
                     FooterHint(label: "Press a combo with ⌘ / ⇧ / ⌥ / ⌃", keys: [], primary: true)
-                    FooterHint(label: "Cancel", keys: ["esc"])
+                    FooterHint(label: "Cancel", keys: ["Esc"])
                 } else {
                     FooterHint(label: "Move",  keys: ["↑", "↓"])
                     FooterHint(label: "Cycle", keys: ["←", "→"])
                     FooterHint(label: "Act",   keys: ["⏎"])
-                    FooterHint(label: "Back",  keys: ["esc"])
+                    FooterHint(label: "Back",  keys: ["Esc"])
                 }
             }
         }

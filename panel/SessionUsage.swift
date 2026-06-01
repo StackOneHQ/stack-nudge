@@ -247,10 +247,11 @@ struct UsageView: View {
             PageFooter {
                 FooterHint(label: footerStatusLabel, keys: [])
                 if nav.quotaTrackingEnabled {
-                    FooterHint(label: "Sync now", keys: ["r"])
+                    FooterHint(label: "Sync now", keys: ["R"])
                 }
-                FooterHint(label: nav.quotaTrackingEnabled ? "Pause" : "Resume", keys: ["p"])
-                FooterHint(label: "Hide", keys: ["esc"])
+                FooterHint(label: nav.quotaTrackingEnabled ? "Pause" : "Resume", keys: ["P"])
+                FooterHint(label: "Compact", keys: ["M"])
+                FooterHint(label: "Hide",    keys: ["Esc"])
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

@@ -237,6 +237,7 @@ build_app "$APP" "stack-nudge" \
   panel/SessionStore.swift \
   panel/SessionUsage.swift \
   panel/Sessions.swift \
+  panel/CompactView.swift \
   panel/TranscriptStats.swift \
   panel/ModelLimits.swift \
   panel/Phrases.swift \

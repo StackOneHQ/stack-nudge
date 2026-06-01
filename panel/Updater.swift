@@ -589,7 +589,7 @@ struct UpdateConfirmView: View {
             PageFooter {
                 FooterHint(label: "Update now", keys: ["⏎"], primary: true)
                 FooterDivider()
-                FooterHint(label: "Cancel", keys: ["esc"])
+                FooterHint(label: "Cancel", keys: ["Esc"])
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -838,7 +838,7 @@ struct UpdatingView: View {
 
             PageFooter {
                 if nav.updaterPhase == .failed {
-                    FooterHint(label: "Close", keys: ["esc"])
+                    FooterHint(label: "Close", keys: ["Esc"])
                 } else {
                     FooterHint(label: "Don't quit stack-nudge during update", keys: [])
                 }
