@@ -71,7 +71,8 @@ struct CompactView: View {
                 hasFive:  nav.quota?.fiveHour != nil,
                 hasSeven: nav.quota?.sevenDay != nil,
                 polling:  nav.quotaSyncing,
-                anyBusy:  anyBusy
+                anyBusy:  anyBusy,
+                paused:   nav.compactDragging
             )
             .frame(width: 32, height: 32)
 
@@ -88,7 +89,7 @@ struct CompactView: View {
     @ViewBuilder
     private var headline: some View {
         HStack(spacing: 6) {
-            BotMascot(state: botState)
+            BotMascot(state: botState, paused: nav.compactDragging)
                 .frame(width: 18, height: 16)
             headlineText
         }
@@ -187,7 +188,27 @@ struct CompactView: View {
 
     // MARK: - Background + outer glow
 
+    @ViewBuilder
     private var pillBackground: some View {
+        if nav.compactDragging {
+            // Static render while dragging — frees the main thread for
+            // AppKit's drag handler so the pill keeps up with the cursor.
+            staticPillBackground
+        } else {
+            animatedPillBackground
+        }
+    }
+
+    private var staticPillBackground: some View {
+        let color = urgencyColor
+        return ZStack {
+            Capsule().fill(.regularMaterial)
+            Capsule().strokeBorder(color.opacity(0.55), lineWidth: 0.8)
+        }
+        .shadow(color: .black.opacity(0.30), radius: 6, y: 2)
+    }
+
+    private var animatedPillBackground: some View {
         TimelineView(.animation(minimumInterval: 0.05)) { tl in
             let pulse = pulseAmount(at: tl.date)
             let color = urgencyColor
@@ -310,6 +331,7 @@ private struct QuotaGauge: View {
     let hasSeven: Bool
     let polling: Bool
     let anyBusy: Bool
+    let paused: Bool
 
     private static let cyan = Color(red: 0.4, green: 0.85, blue: 1.0)
     private static let outerLineWidth: CGFloat = 2.8
@@ -317,18 +339,29 @@ private struct QuotaGauge: View {
     private static let ringGap: CGFloat = 4.0
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 0.05)) { tl in
+        if paused {
+            // Static render — no TimelineView re-ticks during drag.
             ZStack {
                 outerTrack
                 innerTrack
                 if hasSeven { outerFill }
                 if hasFive  { innerFill }
-                innerGlow(at: tl.date)
                 centerReadout
-                if polling { spinnerDot(at: tl.date) }
             }
-            .animation(.easeOut(duration: 0.45), value: fivePct)
-            .animation(.easeOut(duration: 0.45), value: sevenPct)
+        } else {
+            TimelineView(.animation(minimumInterval: 0.05)) { tl in
+                ZStack {
+                    outerTrack
+                    innerTrack
+                    if hasSeven { outerFill }
+                    if hasFive  { innerFill }
+                    innerGlow(at: tl.date)
+                    centerReadout
+                    if polling { spinnerDot(at: tl.date) }
+                }
+                .animation(.easeOut(duration: 0.45), value: fivePct)
+                .animation(.easeOut(duration: 0.45), value: sevenPct)
+            }
         }
     }
 
@@ -422,21 +455,50 @@ enum BotState {
 private struct BotMascot: View {
 
     let state: BotState
+    let paused: Bool
 
     private static let cyan = Color(red: 0.4, green: 0.85, blue: 1.0)
     private static let outline = Color.secondary.opacity(0.7)
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 0.05)) { tl in
-            let t = tl.date.timeIntervalSinceReferenceDate
+        if paused {
+            // Static: no blink, no antenna pulse, no TimelineView ticks.
             ZStack {
                 head
-                antenna(at: t)
-                eyes(at: t)
+                staticAntenna
+                staticEyes
                 mouth
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            TimelineView(.animation(minimumInterval: 0.05)) { tl in
+                let t = tl.date.timeIntervalSinceReferenceDate
+                ZStack {
+                    head
+                    antenna(at: t)
+                    eyes(at: t)
+                    mouth
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
+    }
+
+    private var staticAntenna: some View {
+        VStack(spacing: 0) {
+            Circle().fill(antennaColor.opacity(0.9))
+                .frame(width: 2.5, height: 2.5)
+            Rectangle().fill(Self.outline).frame(width: 0.8, height: 2)
+        }
+        .offset(y: -6)
+    }
+
+    private var staticEyes: some View {
+        HStack(spacing: 3) {
+            eyeShape
+            eyeShape
+        }
+        .offset(y: 0.5)
     }
 
     private var head: some View {

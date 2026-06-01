@@ -734,7 +734,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             switch event.type {
             case .leftMouseDown:
                 self.compactMovedSinceMouseDown = false
+                self.nav.compactDragging = true
             case .leftMouseUp:
+                self.nav.compactDragging = false
                 if self.compactMovedSinceMouseDown {
                     self.compactMovedSinceMouseDown = false
                     self.snapCompactToNearestCorner()

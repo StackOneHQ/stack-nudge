@@ -170,6 +170,11 @@ final class PanelNav: ObservableObject {
     // at full size; resignKey resets this. Not persisted — purely a
     // session-local "the user wants details right now" flag.
     @Published var compactExpanded: Bool = false
+    // Transient: true between mouseDown and mouseUp while dragging the
+    // pill. CompactView reads this to skip its decorative TimelineView
+    // animations so the main thread can keep up with AppKit's drag
+    // handler. Reset by the controller's mouse-event monitor.
+    @Published var compactDragging: Bool = false
     // First-launch bootstrap wizard state. Populated by PanelController
     // on launch when Bootstrap.isInstalled() returns false; drives
     // BootstrapView (mode = .bootstrap).
