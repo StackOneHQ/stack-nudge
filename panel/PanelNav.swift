@@ -54,6 +54,22 @@ enum CompactCorner: String, CaseIterable {
     }
 }
 
+enum MascotKind: String, CaseIterable {
+    case robot
+    case cat
+    case eye
+    case ghost
+
+    var label: String {
+        switch self {
+        case .robot: return "Robot"
+        case .cat:   return "Cat"
+        case .eye:   return "Sentinel"
+        case .ghost: return "Ghost"
+        }
+    }
+}
+
 struct SettingsActions {
     let checkPermissions: () -> Void
     let openConfig:       () -> Void
@@ -164,8 +180,12 @@ final class PanelNav: ObservableObject {
     static let contextAlertThresholdOptions: [Int] = [0, 100, 150, 175, 200, 300, 500, 750]
     // Compact widget mode. Shrinks the panel to a glance-only widget pinned
     // to a screen corner; clicking it expands back to the full panel.
-    @Published var compactMode:   Bool = false
+    // Compact mode is always-on now. The compactMode field is kept (and
+    // forced to true in loadFromConfig) to avoid threading the rest of
+    // the controller's compact-aware code; just don't expose a toggle.
+    @Published var compactMode:   Bool = true
     @Published var compactCorner: CompactCorner = .topRight
+    @Published var mascot:        MascotKind = .robot
     // Transient: true when the widget was clicked → render full panel
     // at full size; resignKey resets this. Not persisted — purely a
     // session-local "the user wants details right now" flag.
@@ -258,8 +278,8 @@ final class PanelNav: ObservableObject {
     //   2  Mute when focused     toggle
     //   3  Pin panel             toggle
     //   4  Launch at login       toggle
-    //   5  Compact widget        toggle      (gates row 6)
-    //   6  Widget corner         cycle
+    //   5  Widget corner         cycle
+    //   6  Mascot                cycle
     //   7  Sound enabled         toggle      (gates rows 8 + 9)
     //   8  Agent done sound      cycle
     //   9  Permission sound      cycle
@@ -310,9 +330,10 @@ final class PanelNav: ObservableObject {
         quotaPollMinutes = Self.quotaPollMinuteOptions.min(by: { abs($0 - rawPoll) < abs($1 - rawPoll) }) ?? 5
         let rawCtx = Int(config["STACKNUDGE_CONTEXT_ALERT_THRESHOLD"] ?? "") ?? 0
         contextAlertThresholdK = Self.contextAlertThresholdOptions.min(by: { abs($0 - rawCtx) < abs($1 - rawCtx) }) ?? 0
-        compactMode   = ConfigFile.bool(config, "STACKNUDGE_COMPACT_MODE", default: false)
+        compactMode   = true  // always-on; toggle removed from Settings
         compactCorner = CompactCorner(rawValue: config["STACKNUDGE_COMPACT_CORNER"] ?? "")
             ?? .topRight
+        mascot        = MascotKind(rawValue: config["STACKNUDGE_MASCOT"] ?? "") ?? .robot
     }
 
     // MARK: - Agent reconciliation
@@ -567,16 +588,18 @@ final class PanelNav: ObservableObject {
                     "stack-nudge: setLaunchAtLogin(\(target)) failed: \(error)\n".utf8))
             }
         case 5:
-            compactMode.toggle()
-            ConfigFile.write(key: "STACKNUDGE_COMPACT_MODE",
-                             value: compactMode ? "true" : "false")
-        case 6:
             let list = CompactCorner.allCases
             let idx = list.firstIndex(of: compactCorner) ?? 0
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
             compactCorner = list[next]
             ConfigFile.write(key: "STACKNUDGE_COMPACT_CORNER",
                              value: compactCorner.rawValue)
+        case 6:
+            let list = MascotKind.allCases
+            let idx = list.firstIndex(of: mascot) ?? 0
+            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+            mascot = list[next]
+            ConfigFile.write(key: "STACKNUDGE_MASCOT", value: mascot.rawValue)
         case 7:
             soundEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_SOUND", value: soundEnabled ? "true" : "false")

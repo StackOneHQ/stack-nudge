@@ -75,14 +75,14 @@ struct SessionsView: View {
         PageFooter {
             if store.renamingPID != nil {
                 FooterHint(label: "Save",   keys: ["⏎"])
-                FooterHint(label: "Cancel", keys: ["esc"])
+                FooterHint(label: "Cancel", keys: ["Esc"])
             } else {
                 FooterHint(label: "Select",  keys: ["↑", "↓"])
                 FooterHint(label: "Focus",   keys: ["⏎"])
-                FooterHint(label: "Rename",  keys: ["n"])
+                FooterHint(label: "Rename",  keys: ["N"])
                 FooterHint(label: "Kill",    keys: ["⌫"])
                 FooterHint(label: "Compact", keys: ["M"])
-                FooterHint(label: "Back",    keys: ["esc"])
+                FooterHint(label: "Back",    keys: ["Esc"])
             }
         }
     }

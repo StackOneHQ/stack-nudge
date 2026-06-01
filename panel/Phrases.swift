@@ -492,7 +492,7 @@ struct PhrasesView: View {
             FooterHint(label: "Add",    keys: ["⏎"], primary: true)
             FooterHint(label: "Toggle", keys: ["␣"])
             FooterHint(label: "Remove", keys: ["⌫"])
-            FooterHint(label: "Back",   keys: ["esc"])
+            FooterHint(label: "Back",   keys: ["Esc"])
         }
     }
 

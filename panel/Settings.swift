@@ -53,8 +53,8 @@ struct SettingsView: View {
                         }
 
                         section("Widget") {
-                            row(5 + off, label: "Compact widget", kind: .toggle, value: nav.compactMode ? "On" : "Off")
-                            row(6 + off, label: "Widget corner",  kind: .cycle,  value: nav.compactCorner.label, enabled: nav.compactMode)
+                            row(5 + off, label: "Widget corner", kind: .cycle, value: nav.compactCorner.label)
+                            row(6 + off, label: "Mascot",        kind: .cycle, value: nav.mascot.label)
                         }
 
                         section("Sounds") {
@@ -107,12 +107,12 @@ struct SettingsView: View {
             PageFooter {
                 if nav.recordingHotkey {
                     FooterHint(label: "Press a combo with ⌘ / ⇧ / ⌥ / ⌃", keys: [], primary: true)
-                    FooterHint(label: "Cancel", keys: ["esc"])
+                    FooterHint(label: "Cancel", keys: ["Esc"])
                 } else {
                     FooterHint(label: "Move",  keys: ["↑", "↓"])
                     FooterHint(label: "Cycle", keys: ["←", "→"])
                     FooterHint(label: "Act",   keys: ["⏎"])
-                    FooterHint(label: "Back",  keys: ["esc"])
+                    FooterHint(label: "Back",  keys: ["Esc"])
                 }
             }
         }

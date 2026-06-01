@@ -268,7 +268,7 @@ struct PanelContentView: View {
         PageFooter {
             if store.events.isEmpty {
                 FooterHint(label: "Compact", keys: ["M"])
-                FooterHint(label: "Hide",    keys: ["esc"])
+                FooterHint(label: "Hide",    keys: ["Esc"])
             } else {
                 if let primary = primaryActionLabel {
                     FooterHint(label: primary, keys: ["⏎"], primary: true)
@@ -283,7 +283,7 @@ struct PanelContentView: View {
                     .opacity(snoozeEnabled ? 1.0 : 0.35)
                 FooterHint(label: "Dismiss", keys: ["⌫"])
                 FooterHint(label: "Compact", keys: ["M"])
-                FooterHint(label: "Hide",    keys: ["esc"])
+                FooterHint(label: "Hide",    keys: ["Esc"])
             }
         }
     }
@@ -883,21 +883,21 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         applyCompactLayout()
     }
 
-    // Called from the widget's double-click. Persists the off state and
-    // applies layout synchronously.
+    // Compact mode is always on, so what used to be "exit compact"
+    // (double-click, expand button) now means "expand to full panel
+    // temporarily." Calling expandFromCompact lets the existing wiring
+    // and Settings actions keep working without renaming.
     private func exitCompactMode() {
-        nav.compactMode = false
-        ConfigFile.write(key: "STACKNUDGE_COMPACT_MODE", value: "false")
-        applyCompactLayout()
+        expandFromCompact()
     }
 
-    // Inverse of exitCompactMode — used by the "M" keystroke from the
-    // first three tabs to quickly drop into widget mode. Persists.
+    // Called from the "M" keystroke in Events/Sessions/Usage tabs to
+    // collapse back to the pill.
     private func enterCompactMode() {
-        nav.compactMode = true
-        nav.compactExpanded = false
-        ConfigFile.write(key: "STACKNUDGE_COMPACT_MODE", value: "true")
-        applyCompactLayout()
+        if nav.compactExpanded {
+            nav.compactExpanded = false
+            applyCompactLayout()
+        }
     }
 
     // Debounced snap: each move during a drag bumps the deadline forward.
@@ -1742,6 +1742,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         let mods = event.modifierFlags
         let blockingMods: NSEvent.ModifierFlags = [.control, .option]
         let cmdOnly = mods.intersection([.command, .control, .option, .shift]) == .command
+
+        // From the pill (compact-not-expanded), M expands to full panel.
+        // Mirrors the M-to-collapse shortcut shown in the full panel's
+        // footer. The pill must be key for this to land, so a single
+        // click anywhere on the pill arms it.
+        if nav.compactMode, !nav.compactExpanded,
+           event.keyCode == KeyCode.mKey,
+           mods.intersection([.command, .control, .option, .shift]).isEmpty {
+            expandFromCompact()
+            return true
+        }
 
         // While recording a hotkey, capture the next combo. Arrow keys / Tab
         // bail out gracefully — otherwise users who entered record mode by

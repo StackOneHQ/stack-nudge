@@ -97,7 +97,7 @@ struct CompactView: View {
     @ViewBuilder
     private var headline: some View {
         HStack(spacing: 6) {
-            BotMascot(state: botState, paused: nav.compactDragging)
+            BotMascot(state: botState, kind: nav.mascot, paused: nav.compactDragging)
                 .frame(width: 26, height: 24)
             headlineText
         }
@@ -133,9 +133,11 @@ struct CompactView: View {
                 // otherwise show age of the latest event so the user can
                 // gauge whether it's fresh.
                 if store.events.count > 1 {
-                    Text("\(store.events.count) pending")
-                        .font(.system(size: 10, weight: .medium).monospacedDigit())
+                    Text("×\(store.events.count)")
+                        .font(.system(size: 10, weight: .semibold).monospacedDigit())
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize()
                 } else {
                     Text(Self.relative.localizedString(for: recent.timestamp, relativeTo: Date()))
                         .font(.system(size: 10).monospacedDigit())
@@ -465,11 +467,25 @@ enum BotState {
     case happy     // recent stop event
 }
 
-// Tiny vector mascot with expression states. A rounded-square head, two
-// eyes whose shape varies by state, an antenna with a blinking dot, and
-// a subtle blink cycle on idle/watching. Rendered with SwiftUI primitives
-// — no asset dependency, scales cleanly with the pill.
+// Dispatcher: picks the user-chosen mascot kind. Each mascot owns its
+// own SwiftUI rendering and expression-state mapping.
 private struct BotMascot: View {
+
+    let state: BotState
+    let kind: MascotKind
+    let paused: Bool
+
+    var body: some View {
+        switch kind {
+        case .robot: RobotMascot(state: state, paused: paused)
+        case .cat:   CatMascot(state: state, paused: paused)
+        case .eye:   EyeMascot(state: state, paused: paused)
+        case .ghost: GhostMascot(state: state, paused: paused)
+        }
+    }
+}
+
+private struct RobotMascot: View {
 
     let state: BotState
     let paused: Bool
@@ -632,6 +648,393 @@ private struct BotMascot: View {
                 .offset(y: 6)
         default:
             EmptyView()
+        }
+    }
+}
+
+// Triangle-eared cat with vertical-slit eyes when busy, big round when
+// alert, smiling closed-arcs when happy. Whiskers as static decoration.
+private struct CatMascot: View {
+
+    let state: BotState
+    let paused: Bool
+
+    private static let cyan = Color(red: 0.4, green: 0.85, blue: 1.0)
+    private static let outline = Color.secondary.opacity(0.7)
+
+    var body: some View {
+        if paused {
+            ZStack { head; staticEyes; mouth; whiskers }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            TimelineView(.animation(minimumInterval: 0.05)) { tl in
+                let t = tl.date.timeIntervalSinceReferenceDate
+                ZStack { head; eyes(at: t); mouth; whiskers }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    private var head: some View {
+        ZStack {
+            // Face + ears combined as a single path so the ears feel
+            // attached to the head, not floating above.
+            CatHeadShape()
+                .fill(headFill)
+                .overlay(CatHeadShape().stroke(Self.outline, lineWidth: 1.2))
+                .frame(width: 20, height: 18)
+                .offset(y: 1)
+            // Inner ear hints (small triangles inside each ear)
+            Triangle()
+                .fill(Self.outline.opacity(0.4))
+                .frame(width: 2, height: 2.2)
+                .offset(x: -5.5, y: -5.5)
+            Triangle()
+                .fill(Self.outline.opacity(0.4))
+                .frame(width: 2, height: 2.2)
+                .offset(x: 5.5, y: -5.5)
+            // Nose (tiny triangle)
+            Triangle()
+                .rotation(.degrees(180))
+                .fill(Self.outline)
+                .frame(width: 2, height: 1.5)
+                .offset(y: 3)
+        }
+    }
+
+    private var headFill: Color {
+        switch state {
+        case .alert: return .orange.opacity(0.18)
+        case .happy: return .green.opacity(0.18)
+        case .busy:  return Self.cyan.opacity(0.20)
+        default:     return Color.secondary.opacity(0.12)
+        }
+    }
+
+    private func eyes(at t: TimeInterval) -> some View {
+        let cycle = t.truncatingRemainder(dividingBy: 3.5)
+        let blinking = state != .alert && cycle < 0.15
+        let scaleY: CGFloat = blinking ? 0.15 : 1.0
+        return HStack(spacing: 5) { eyeShape; eyeShape }
+            .scaleEffect(x: 1, y: scaleY)
+            .animation(.easeInOut(duration: 0.08), value: blinking)
+            .offset(y: -0.5)
+    }
+
+    private var staticEyes: some View {
+        HStack(spacing: 5) { eyeShape; eyeShape }.offset(y: -0.5)
+    }
+
+    @ViewBuilder
+    private var eyeShape: some View {
+        switch state {
+        case .busy:
+            Capsule().fill(Self.cyan).frame(width: 1.4, height: 4.5)  // slit
+        case .alert:
+            Circle().fill(Color.orange).frame(width: 4.5, height: 4.5)
+        case .happy:
+            Path { p in
+                p.move(to: CGPoint(x: 0, y: 2.2))
+                p.addQuadCurve(to: CGPoint(x: 4.5, y: 2.2),
+                               control: CGPoint(x: 2.25, y: -0.6))
+            }
+            .stroke(Color.green, style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
+            .frame(width: 4.5, height: 3)
+        case .watching:
+            Circle().fill(Self.cyan).frame(width: 3.0, height: 3.0)
+        case .idle:
+            Circle().fill(Self.outline).frame(width: 2.4, height: 2.4)
+        }
+    }
+
+    @ViewBuilder
+    private var mouth: some View {
+        switch state {
+        case .happy:
+            Path { p in
+                p.move(to: CGPoint(x: 0, y: 0))
+                p.addQuadCurve(to: CGPoint(x: 5, y: 0),
+                               control: CGPoint(x: 2.5, y: 2))
+            }
+            .stroke(Color.green, style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
+            .frame(width: 5, height: 2)
+            .offset(y: 6)
+        default:
+            // Tiny "w" mouth: two arcs
+            Path { p in
+                p.move(to: CGPoint(x: 0, y: 0))
+                p.addQuadCurve(to: CGPoint(x: 2, y: 0), control: CGPoint(x: 1, y: 1.5))
+                p.addQuadCurve(to: CGPoint(x: 4, y: 0), control: CGPoint(x: 3, y: 1.5))
+            }
+            .stroke(Self.outline, style: StrokeStyle(lineWidth: 0.9, lineCap: .round))
+            .frame(width: 4, height: 1.5)
+            .offset(y: 5)
+        }
+    }
+
+    private var whiskers: some View {
+        HStack(spacing: 14) {
+            VStack(spacing: 1.5) {
+                Rectangle().fill(Self.outline).frame(width: 3.5, height: 0.5)
+                Rectangle().fill(Self.outline).frame(width: 3.5, height: 0.5)
+            }
+            VStack(spacing: 1.5) {
+                Rectangle().fill(Self.outline).frame(width: 3.5, height: 0.5)
+                Rectangle().fill(Self.outline).frame(width: 3.5, height: 0.5)
+            }
+        }
+        .opacity(0.45)
+        .offset(y: 4.5)
+    }
+}
+
+private struct Triangle: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path { p in
+            p.move(to: CGPoint(x: rect.midX, y: rect.minY))
+            p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+            p.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+            p.closeSubpath()
+        }
+    }
+}
+
+// Rounded face with two pointy ears that meet the face curve cleanly —
+// drawn as one path so fill + stroke read as a single silhouette.
+private struct CatHeadShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path { p in
+            let w = rect.width
+            let h = rect.height
+            let faceTop = rect.minY + h * 0.30
+            let earBaseInnerLeft  = CGPoint(x: rect.minX + w * 0.30, y: faceTop - 1)
+            let earBaseOuterLeft  = CGPoint(x: rect.minX + w * 0.10, y: faceTop + 2)
+            let earTipLeft        = CGPoint(x: rect.minX + w * 0.05, y: rect.minY)
+            let earBaseInnerRight = CGPoint(x: rect.minX + w * 0.70, y: faceTop - 1)
+            let earBaseOuterRight = CGPoint(x: rect.minX + w * 0.90, y: faceTop + 2)
+            let earTipRight       = CGPoint(x: rect.minX + w * 0.95, y: rect.minY)
+            // Start at left ear inner-base, go up to tip, down to outer-base.
+            p.move(to: earBaseInnerLeft)
+            p.addLine(to: earTipLeft)
+            p.addLine(to: earBaseOuterLeft)
+            // Curve along the left/bottom of the face to the right ear.
+            p.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.midY + h * 0.15),
+                           control: CGPoint(x: rect.minX, y: faceTop + 4))
+            p.addQuadCurve(to: CGPoint(x: rect.midX, y: rect.maxY),
+                           control: CGPoint(x: rect.minX, y: rect.maxY))
+            p.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.midY + h * 0.15),
+                           control: CGPoint(x: rect.maxX, y: rect.maxY))
+            p.addQuadCurve(to: earBaseOuterRight,
+                           control: CGPoint(x: rect.maxX, y: faceTop + 4))
+            // Right ear
+            p.addLine(to: earTipRight)
+            p.addLine(to: earBaseInnerRight)
+            // Curve between the two ear inner-bases (top of head dip).
+            p.addQuadCurve(to: earBaseInnerLeft,
+                           control: CGPoint(x: rect.midX, y: faceTop + 2))
+            p.closeSubpath()
+        }
+    }
+}
+
+// Sentinel-style single eye: outer lens ring, inner pupil that moves
+// horizontally when watching, contracts when busy, dilates red on alert.
+private struct EyeMascot: View {
+
+    let state: BotState
+    let paused: Bool
+
+    private static let cyan = Color(red: 0.4, green: 0.85, blue: 1.0)
+    private static let outline = Color.secondary.opacity(0.7)
+
+    var body: some View {
+        if paused {
+            ZStack { lens; staticPupil }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            TimelineView(.animation(minimumInterval: 0.05)) { tl in
+                let t = tl.date.timeIntervalSinceReferenceDate
+                ZStack { lens; pupil(at: t) }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    private var lens: some View {
+        ZStack {
+            Circle()
+                .stroke(Self.outline, lineWidth: 1.2)
+                .background(Circle().fill(lensFill))
+                .frame(width: 22, height: 22)
+            // Inner ring
+            Circle()
+                .stroke(Self.outline.opacity(0.5), lineWidth: 0.8)
+                .frame(width: 16, height: 16)
+        }
+        .offset(y: 1)
+    }
+
+    private var lensFill: Color {
+        switch state {
+        case .alert: return .red.opacity(0.18)
+        case .happy: return .green.opacity(0.14)
+        case .busy:  return Self.cyan.opacity(0.16)
+        default:     return Color.secondary.opacity(0.10)
+        }
+    }
+
+    private func pupil(at t: TimeInterval) -> some View {
+        let scan = state == .watching ? sin(t * 1.5) * 3 : 0
+        return Circle()
+            .fill(pupilColor)
+            .frame(width: pupilSize, height: pupilSize)
+            .offset(x: scan, y: 1)
+    }
+
+    private var staticPupil: some View {
+        Circle().fill(pupilColor).frame(width: pupilSize, height: pupilSize).offset(y: 1)
+    }
+
+    private var pupilSize: CGFloat {
+        switch state {
+        case .busy:  return 4.5
+        case .alert: return 7.5
+        case .happy: return 5.5
+        default:     return 5.5
+        }
+    }
+
+    private var pupilColor: Color {
+        switch state {
+        case .alert: return .red
+        case .happy: return .green
+        case .busy:  return Self.cyan
+        default:     return Self.outline
+        }
+    }
+}
+
+// Floaty ghost: rounded top with wavy bottom, two eye dots. Gentle bob.
+private struct GhostMascot: View {
+
+    let state: BotState
+    let paused: Bool
+
+    private static let cyan = Color(red: 0.4, green: 0.85, blue: 1.0)
+    private static let outline = Color.secondary.opacity(0.7)
+
+    var body: some View {
+        if paused {
+            ZStack { body_; staticEyes; mouth }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            TimelineView(.animation(minimumInterval: 0.05)) { tl in
+                let t = tl.date.timeIntervalSinceReferenceDate
+                let bob = sin(t * 1.3) * 1.0
+                ZStack { body_; eyes(at: t); mouth }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .offset(y: bob)
+            }
+        }
+    }
+
+    private var body_: some View {
+        GhostShape()
+            .stroke(Self.outline, lineWidth: 1.2)
+            .background(GhostShape().fill(headFill))
+            .frame(width: 18, height: 22)
+    }
+
+    private var headFill: Color {
+        switch state {
+        case .alert: return .orange.opacity(0.18)
+        case .happy: return .green.opacity(0.18)
+        case .busy:  return Self.cyan.opacity(0.20)
+        default:     return Color.secondary.opacity(0.12)
+        }
+    }
+
+    private func eyes(at t: TimeInterval) -> some View {
+        let cycle = t.truncatingRemainder(dividingBy: 3.0)
+        let blinking = state != .alert && cycle < 0.15
+        let scaleY: CGFloat = blinking ? 0.15 : 1.0
+        return HStack(spacing: 4) { eyeShape; eyeShape }
+            .scaleEffect(x: 1, y: scaleY)
+            .animation(.easeInOut(duration: 0.08), value: blinking)
+            .offset(y: -2)
+    }
+
+    private var staticEyes: some View {
+        HStack(spacing: 4) { eyeShape; eyeShape }.offset(y: -2)
+    }
+
+    @ViewBuilder
+    private var eyeShape: some View {
+        switch state {
+        case .busy:
+            Capsule().fill(Self.cyan).frame(width: 4, height: 1.6)
+        case .alert:
+            Circle().fill(Color.orange).frame(width: 4, height: 4)
+        case .happy:
+            Path { p in
+                p.move(to: CGPoint(x: 0, y: 2))
+                p.addQuadCurve(to: CGPoint(x: 4, y: 2),
+                               control: CGPoint(x: 2, y: -0.4))
+            }
+            .stroke(Color.green, style: StrokeStyle(lineWidth: 1.1, lineCap: .round))
+            .frame(width: 4, height: 2.5)
+        case .watching:
+            Circle().fill(Self.cyan).frame(width: 3, height: 3)
+        case .idle:
+            Circle().fill(Self.outline).frame(width: 2.4, height: 2.4)
+        }
+    }
+
+    @ViewBuilder
+    private var mouth: some View {
+        switch state {
+        case .happy:
+            Path { p in
+                p.move(to: CGPoint(x: 0, y: 0))
+                p.addQuadCurve(to: CGPoint(x: 4, y: 0), control: CGPoint(x: 2, y: 2))
+            }
+            .stroke(Color.green, style: StrokeStyle(lineWidth: 1.1, lineCap: .round))
+            .frame(width: 4, height: 2)
+            .offset(y: 4)
+        case .alert:
+            Capsule().fill(Color.orange.opacity(0.8))
+                .frame(width: 2.4, height: 3.5)
+                .offset(y: 4)
+        default:
+            EmptyView()
+        }
+    }
+}
+
+// Rounded top + three wavy humps on the bottom edge.
+private struct GhostShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path { p in
+            let r = rect.width / 2
+            // Rounded top: semicircle on top
+            p.addArc(center: CGPoint(x: rect.midX, y: rect.minY + r),
+                     radius: r,
+                     startAngle: .degrees(180),
+                     endAngle: .degrees(360),
+                     clockwise: false)
+            // Down the right side
+            p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - 3))
+            // Three humps along the bottom (right -> left)
+            let humpW = rect.width / 3
+            for i in (0..<3).reversed() {
+                let x0 = rect.minX + CGFloat(i) * humpW
+                let xMid = x0 + humpW / 2
+                p.addQuadCurve(
+                    to: CGPoint(x: x0, y: rect.maxY - 3),
+                    control: CGPoint(x: xMid, y: rect.maxY + 3))
+            }
+            p.addLine(to: CGPoint(x: rect.minX, y: rect.minY + r))
+            p.closeSubpath()
         }
     }
 }
