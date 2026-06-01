@@ -250,7 +250,8 @@ struct UsageView: View {
                     FooterHint(label: "Sync now", keys: ["r"])
                 }
                 FooterHint(label: nav.quotaTrackingEnabled ? "Pause" : "Resume", keys: ["p"])
-                FooterHint(label: "Hide", keys: ["esc"])
+                FooterHint(label: "Compact", keys: ["M"])
+                FooterHint(label: "Hide",    keys: ["esc"])
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

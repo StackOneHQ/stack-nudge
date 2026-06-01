@@ -1,0 +1,558 @@
+import SwiftUI
+
+// Pill-shaped glance widget. Layout left→right:
+//   [gauge]  [7d%, reset-in]  |  [headline: project · tokens · status]
+//   [active count badge]  [expand]
+//
+// Gauge = full-circle 5h-quota meter with angular gradient stroke
+// (green→red), pulsing inner glow when any session is busy, center
+// digital % readout, and a sweeping spinner dot when actively polling.
+// Glass background with soft cyan border glow.
+struct CompactView: View {
+
+    @ObservedObject var store: EventStore
+    @ObservedObject var sessions: SessionStore
+    @ObservedObject var nav: PanelNav
+
+    let onExpand: () -> Void
+    let onExitCompact: () -> Void
+
+    @State private var rippleScale: CGFloat = 0.3
+    @State private var rippleOpacity: Double = 0
+
+    private static let glowColor = Color(red: 0.4, green: 0.85, blue: 1.0)
+    private static let recentEventWindow: TimeInterval = 5 * 60
+
+    var body: some View {
+        HStack(spacing: 10) {
+            gaugeCluster
+            separator
+            headline
+            Spacer(minLength: 4)
+            sessionBadge
+            expandButton
+        }
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(pillBackground)
+        .overlay(ripple)
+        .contentShape(Capsule())
+        .onTapGesture(count: 2) { onExitCompact() }
+        .onChange(of: store.events.first?.id) { _ in triggerRipple() }
+    }
+
+    // Soft outward wave on event arrival. Capsule scales from 0.3 → 1.15
+    // and fades from 0.45 → 0 over ~600ms, drawn under the pill content
+    // so it reads as "the pill pulsed" rather than a separate overlay.
+    private var ripple: some View {
+        Capsule()
+            .stroke(urgencyColor, lineWidth: 1.5)
+            .scaleEffect(rippleScale)
+            .opacity(rippleOpacity)
+            .allowsHitTesting(false)
+    }
+
+    private func triggerRipple() {
+        rippleScale = 0.6
+        rippleOpacity = 0.55
+        withAnimation(.easeOut(duration: 0.7)) {
+            rippleScale = 1.18
+            rippleOpacity = 0
+        }
+    }
+
+    // MARK: - Gauge cluster (5h gauge + 7d + reset countdown)
+
+    private var gaugeCluster: some View {
+        HStack(spacing: 6) {
+            QuotaGauge(
+                fivePct:  nav.quota?.fiveHour?.utilization ?? 0,
+                sevenPct: nav.quota?.sevenDay?.utilization ?? 0,
+                hasFive:  nav.quota?.fiveHour != nil,
+                hasSeven: nav.quota?.sevenDay != nil,
+                polling:  nav.quotaSyncing,
+                anyBusy:  anyBusy
+            )
+            .frame(width: 32, height: 32)
+
+            if let reset = nav.quota?.fiveHour?.resetsAt {
+                Text(Self.shortDuration(until: reset))
+                    .font(.system(size: 9).monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    // MARK: - Headline
+
+    @ViewBuilder
+    private var headline: some View {
+        HStack(spacing: 6) {
+            BotMascot(state: botState)
+                .frame(width: 18, height: 16)
+            headlineText
+        }
+    }
+
+    @ViewBuilder
+    private var headlineText: some View {
+        if let busy = busiestSession {
+            HStack(spacing: 4) {
+                Text(displayName(busy))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                if let stats = transcriptStats(for: busy) {
+                    Text("·")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                    Text(Self.formatTokens(stats.tokens))
+                        .font(.system(size: 10, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } else if let recent = recentEvent {
+            HStack(spacing: 4) {
+                Text(recent.title)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text("·")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                Text(Self.relative.localizedString(for: recent.timestamp, relativeTo: Date()))
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        } else if let active = mostRecentActive {
+            Text(displayName(active))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+        } else {
+            Text("watching")
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    private var botState: BotState {
+        if let _ = recentEvent {
+            // Most recent event drives expression briefly
+            switch store.events.first?.kind {
+            case .permission: return .alert
+            case .stop:       return .happy
+            default:          return .alert
+            }
+        }
+        if busiestSession != nil { return .busy }
+        if mostRecentActive != nil { return .watching }
+        return .idle
+    }
+
+    // MARK: - Right side
+
+    @ViewBuilder
+    private var sessionBadge: some View {
+        let activeCount = sessions.sessions.filter { $0.status == .active }.count
+        if activeCount > 0 {
+            HStack(spacing: 3) {
+                Circle()
+                    .fill(anyBusy ? Color.yellow : Color.green)
+                    .frame(width: 6, height: 6)
+                Text("\(activeCount)")
+                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(.primary)
+            }
+        }
+    }
+
+    private var expandButton: some View {
+        Button(action: onExpand) {
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var separator: some View {
+        Rectangle()
+            .fill(Color.secondary.opacity(0.22))
+            .frame(width: 1, height: 22)
+    }
+
+    // MARK: - Background + outer glow
+
+    private var pillBackground: some View {
+        TimelineView(.animation(minimumInterval: 0.05)) { tl in
+            let pulse = pulseAmount(at: tl.date)
+            let color = urgencyColor
+            ZStack {
+                Capsule().fill(.regularMaterial)
+                Capsule()
+                    .strokeBorder(color.opacity(0.45 + 0.3 * pulse), lineWidth: 0.8)
+                Capsule()
+                    .stroke(color.opacity(0.20 + 0.25 * pulse), lineWidth: 3)
+                    .blur(radius: 4)
+            }
+            .shadow(color: .black.opacity(0.30), radius: 10, y: 3)
+            .animation(.easeInOut(duration: 0.6), value: color)
+        }
+    }
+
+    // Border color tracks 5h quota urgency: cyan under 75%, amber 75–90%,
+    // red 90%+. Pulse rate climbs with severity so red-state pill is
+    // visibly more urgent than amber.
+    private var urgencyColor: Color {
+        let pct = nav.quota?.fiveHour?.utilization ?? 0
+        if pct >= 90 { return .red }
+        if pct >= 75 { return .orange }
+        return Self.glowColor
+    }
+
+    private func pulseAmount(at date: Date) -> Double {
+        let pct = nav.quota?.fiveHour?.utilization ?? 0
+        let busyPulse = anyBusy
+        guard busyPulse || pct >= 75 else { return 0 }
+        let speed: Double = pct >= 90 ? 4.5 : pct >= 75 ? 3.2 : 2.4
+        let t = date.timeIntervalSinceReferenceDate
+        return (sin(t * speed) + 1) / 2
+    }
+
+    // MARK: - Data helpers
+
+    private var anyBusy: Bool {
+        sessions.sessions.contains { $0.claudeStatus == "busy" }
+    }
+
+    private var recentEvent: NudgeEvent? {
+        guard let e = store.events.first,
+              Date().timeIntervalSince(e.timestamp) < Self.recentEventWindow
+        else { return nil }
+        return e
+    }
+
+    private var busiestSession: Session? {
+        sessions.sessions.first { $0.status == .active && $0.claudeStatus == "busy" }
+    }
+
+    private var mostRecentActive: Session? {
+        sessions.sessions.first { $0.status == .active }
+    }
+
+    private func transcriptStats(for s: Session) -> TranscriptStats? {
+        guard let id = s.claudeSessionID else { return nil }
+        return nav.claudeSessionStats[id]
+    }
+
+    private func displayName(_ s: Session) -> String {
+        if let custom = s.customName, !custom.isEmpty { return custom }
+        if let name = s.claudeName, !name.isEmpty, name != "main-agent" { return name }
+        return s.projectName ?? "session"
+    }
+
+    private func glyph(for e: NudgeEvent) -> String {
+        switch e.kind {
+        case .permission: return "questionmark.circle.fill"
+        case .stop:       return "checkmark.circle.fill"
+        case .other:      return "bell.fill"
+        }
+    }
+
+    fileprivate static func gaugeColor(pct: Double) -> Color {
+        if pct >= 90 { return .red }
+        if pct >= 75 { return .orange }
+        if pct >= 50 { return .yellow }
+        return Color(red: 0.4, green: 0.85, blue: 1.0)
+    }
+
+    private static let relative: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f
+    }()
+
+    private static func formatTokens(_ n: Int) -> String {
+        if n >= 1_000_000 {
+            return String(format: "%.1fM", Double(n) / 1_000_000)
+        }
+        if n >= 1_000 {
+            return "\(Int((Double(n) / 1_000).rounded()))K"
+        }
+        return "\(n)"
+    }
+
+    private static func shortDuration(until date: Date) -> String {
+        let s = max(0, Int(date.timeIntervalSinceNow))
+        if s >= 3600 {
+            let h = s / 3600
+            let m = (s % 3600) / 60
+            return m > 0 ? "\(h)h\(m)m" : "\(h)h"
+        }
+        return "\(max(1, s / 60))m"
+    }
+}
+
+// Concentric quota gauge: outer ring = 7d utilization, inner ring = 5h.
+// Each fills clockwise from 12 o'clock with its own angular gradient
+// (cyan → yellow → orange → red). Inner glow pulses on busy sessions.
+// A spinner dot orbits the outer ring when actively polling. Center
+// shows the 5h % since that's the more immediate concern.
+private struct QuotaGauge: View {
+
+    let fivePct: Double
+    let sevenPct: Double
+    let hasFive: Bool
+    let hasSeven: Bool
+    let polling: Bool
+    let anyBusy: Bool
+
+    private static let cyan = Color(red: 0.4, green: 0.85, blue: 1.0)
+    private static let outerLineWidth: CGFloat = 2.8
+    private static let innerLineWidth: CGFloat = 2.8
+    private static let ringGap: CGFloat = 4.0
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 0.05)) { tl in
+            ZStack {
+                outerTrack
+                innerTrack
+                if hasSeven { outerFill }
+                if hasFive  { innerFill }
+                innerGlow(at: tl.date)
+                centerReadout
+                if polling { spinnerDot(at: tl.date) }
+            }
+            .animation(.easeOut(duration: 0.45), value: fivePct)
+            .animation(.easeOut(duration: 0.45), value: sevenPct)
+        }
+    }
+
+    private var outerTrack: some View {
+        Circle()
+            .stroke(Color.secondary.opacity(0.16), lineWidth: Self.outerLineWidth)
+            .padding(Self.outerLineWidth / 2)
+    }
+
+    private var innerTrack: some View {
+        Circle()
+            .stroke(Color.secondary.opacity(0.14), lineWidth: Self.innerLineWidth)
+            .padding(Self.outerLineWidth + Self.ringGap)
+    }
+
+    private var outerFill: some View {
+        Circle()
+            .trim(from: 0, to: max(0, min(1, sevenPct / 100)))
+            .stroke(gradient, style: StrokeStyle(lineWidth: Self.outerLineWidth, lineCap: .round))
+            .rotationEffect(.degrees(-90))
+            .padding(Self.outerLineWidth / 2)
+    }
+
+    private var innerFill: some View {
+        Circle()
+            .trim(from: 0, to: max(0, min(1, fivePct / 100)))
+            .stroke(gradient, style: StrokeStyle(lineWidth: Self.innerLineWidth, lineCap: .round))
+            .rotationEffect(.degrees(-90))
+            .padding(Self.outerLineWidth + Self.ringGap)
+    }
+
+    private var gradient: AngularGradient {
+        AngularGradient(
+            gradient: Gradient(stops: [
+                .init(color: Self.cyan,  location: 0.0),
+                .init(color: .yellow,    location: 0.55),
+                .init(color: .orange,    location: 0.80),
+                .init(color: .red,       location: 1.0),
+            ]),
+            center: .center,
+            startAngle: .degrees(-90),
+            endAngle: .degrees(270)
+        )
+    }
+
+    private func innerGlow(at date: Date) -> some View {
+        let t = date.timeIntervalSinceReferenceDate
+        let pulse = anyBusy ? (sin(t * 2.4) + 1) / 2 : 0
+        let intensity = 0.08 + 0.35 * pulse
+        return Circle()
+            .fill(
+                RadialGradient(
+                    gradient: Gradient(colors: [Self.cyan.opacity(intensity), .clear]),
+                    center: .center,
+                    startRadius: 0,
+                    endRadius: 14
+                )
+            )
+            .padding(Self.outerLineWidth + Self.ringGap + 2)
+    }
+
+    private var centerReadout: some View {
+        Text(hasFive ? "\(Int(fivePct.rounded()))" : "—")
+            .font(.system(size: 9, weight: .bold).monospacedDigit())
+            .foregroundStyle(.primary)
+    }
+
+    private func spinnerDot(at date: Date) -> some View {
+        let t = date.timeIntervalSinceReferenceDate
+        let angle = (t * 180).truncatingRemainder(dividingBy: 360)
+        return Circle()
+            .fill(Self.cyan)
+            .frame(width: 3, height: 3)
+            .offset(y: -15)
+            .rotationEffect(.degrees(angle))
+    }
+}
+
+enum BotState {
+    case idle      // no sessions, no recent events
+    case watching  // sessions exist but nothing happening
+    case busy      // a session is busy
+    case alert     // recent permission event
+    case happy     // recent stop event
+}
+
+// Tiny vector mascot with expression states. A rounded-square head, two
+// eyes whose shape varies by state, an antenna with a blinking dot, and
+// a subtle blink cycle on idle/watching. Rendered with SwiftUI primitives
+// — no asset dependency, scales cleanly with the pill.
+private struct BotMascot: View {
+
+    let state: BotState
+
+    private static let cyan = Color(red: 0.4, green: 0.85, blue: 1.0)
+    private static let outline = Color.secondary.opacity(0.7)
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 0.05)) { tl in
+            let t = tl.date.timeIntervalSinceReferenceDate
+            ZStack {
+                head
+                antenna(at: t)
+                eyes(at: t)
+                mouth
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var head: some View {
+        RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .stroke(Self.outline, lineWidth: 1)
+            .background(
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(headFill)
+            )
+            .frame(width: 14, height: 10)
+            .offset(y: 1.5)
+    }
+
+    private var headFill: Color {
+        switch state {
+        case .alert: return .orange.opacity(0.15)
+        case .happy: return .green.opacity(0.15)
+        case .busy:  return Self.cyan.opacity(0.18)
+        default:     return Color.secondary.opacity(0.10)
+        }
+    }
+
+    private func antenna(at t: TimeInterval) -> some View {
+        let blink = (sin(t * 2.2) + 1) / 2
+        return VStack(spacing: 0) {
+            Circle()
+                .fill(antennaColor.opacity(0.6 + 0.4 * blink))
+                .frame(width: 2.5, height: 2.5)
+            Rectangle()
+                .fill(Self.outline)
+                .frame(width: 0.8, height: 2)
+        }
+        .offset(y: -6)
+    }
+
+    private var antennaColor: Color {
+        switch state {
+        case .alert: return .orange
+        case .happy: return .green
+        case .busy:  return Self.cyan
+        default:     return Self.outline
+        }
+    }
+
+    private func eyes(at t: TimeInterval) -> some View {
+        // Blink: scale the eyes vertically toward 0 every ~3.2s for ~150ms.
+        let cycle = t.truncatingRemainder(dividingBy: 3.2)
+        let blinking = state != .alert && cycle < 0.15
+        let scaleY: CGFloat = blinking ? 0.15 : 1.0
+
+        return HStack(spacing: 3) {
+            eyeShape
+            eyeShape
+        }
+        .scaleEffect(x: 1, y: scaleY)
+        .animation(.easeInOut(duration: 0.08), value: blinking)
+        .offset(y: 0.5)
+    }
+
+    @ViewBuilder
+    private var eyeShape: some View {
+        switch state {
+        case .busy:
+            // Focused: narrow horizontal slits
+            Capsule()
+                .fill(Self.cyan)
+                .frame(width: 3, height: 1.2)
+        case .alert:
+            // Surprised: bigger round eyes
+            Circle()
+                .fill(Color.orange)
+                .frame(width: 3, height: 3)
+        case .happy:
+            // Smiling closed-arc eyes (carets)
+            Path { p in
+                p.move(to: CGPoint(x: 0, y: 1.5))
+                p.addQuadCurve(to: CGPoint(x: 3, y: 1.5),
+                               control: CGPoint(x: 1.5, y: -0.5))
+            }
+            .stroke(Color.green, style: StrokeStyle(lineWidth: 0.9, lineCap: .round))
+            .frame(width: 3, height: 2)
+        case .watching:
+            Circle()
+                .fill(Self.cyan)
+                .frame(width: 2.2, height: 2.2)
+        case .idle:
+            Circle()
+                .fill(Self.outline)
+                .frame(width: 1.8, height: 1.8)
+        }
+    }
+
+    @ViewBuilder
+    private var mouth: some View {
+        switch state {
+        case .happy:
+            Path { p in
+                p.move(to: CGPoint(x: 0, y: 0))
+                p.addQuadCurve(to: CGPoint(x: 4, y: 0),
+                               control: CGPoint(x: 2, y: 1.6))
+            }
+            .stroke(Color.green, style: StrokeStyle(lineWidth: 0.9, lineCap: .round))
+            .frame(width: 4, height: 1.6)
+            .offset(y: 4)
+        case .alert:
+            Circle()
+                .fill(Color.orange.opacity(0.7))
+                .frame(width: 1.5, height: 1.5)
+                .offset(y: 4)
+        case .busy:
+            Rectangle()
+                .fill(Self.cyan.opacity(0.5))
+                .frame(width: 3, height: 0.8)
+                .offset(y: 4)
+        default:
+            EmptyView()
+        }
+    }
+}

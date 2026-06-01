@@ -77,11 +77,12 @@ struct SessionsView: View {
                 FooterHint(label: "Save",   keys: ["⏎"])
                 FooterHint(label: "Cancel", keys: ["esc"])
             } else {
-                FooterHint(label: "Select", keys: ["↑", "↓"])
-                FooterHint(label: "Focus",  keys: ["⏎"])
-                FooterHint(label: "Rename", keys: ["n"])
-                FooterHint(label: "Kill",   keys: ["⌫"])
-                FooterHint(label: "Back",   keys: ["esc"])
+                FooterHint(label: "Select",  keys: ["↑", "↓"])
+                FooterHint(label: "Focus",   keys: ["⏎"])
+                FooterHint(label: "Rename",  keys: ["n"])
+                FooterHint(label: "Kill",    keys: ["⌫"])
+                FooterHint(label: "Compact", keys: ["M"])
+                FooterHint(label: "Back",    keys: ["esc"])
             }
         }
     }

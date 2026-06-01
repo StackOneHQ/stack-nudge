@@ -38,6 +38,22 @@ enum UpdateCheckStatus: Equatable {
     case failed
 }
 
+enum CompactCorner: String, CaseIterable {
+    case topLeft = "tl"
+    case topRight = "tr"
+    case bottomLeft = "bl"
+    case bottomRight = "br"
+
+    var label: String {
+        switch self {
+        case .topLeft:     return "Top left"
+        case .topRight:    return "Top right"
+        case .bottomLeft:  return "Bottom left"
+        case .bottomRight: return "Bottom right"
+        }
+    }
+}
+
 struct SettingsActions {
     let checkPermissions: () -> Void
     let openConfig:       () -> Void
@@ -50,6 +66,10 @@ struct SettingsActions {
     let runUninstall:     () -> Void
     let runBootstrap:     () -> Void
     let quit:             () -> Void
+    // Compact widget callbacks — wired by PanelController so the window
+    // resize happens synchronously before SwiftUI re-renders.
+    let expandFromCompact: () -> Void
+    let exitCompactMode:   () -> Void
 }
 
 // Owns the panel's navigation state plus the live values the Settings page
@@ -142,6 +162,14 @@ final class PanelNav: ObservableObject {
     // tokens (not %) because Claude 4.x context windows vary by model.
     @Published var contextAlertThresholdK: Int = 0
     static let contextAlertThresholdOptions: [Int] = [0, 100, 150, 175, 200, 300, 500, 750]
+    // Compact widget mode. Shrinks the panel to a glance-only widget pinned
+    // to a screen corner; clicking it expands back to the full panel.
+    @Published var compactMode:   Bool = false
+    @Published var compactCorner: CompactCorner = .topRight
+    // Transient: true when the widget was clicked → render full panel
+    // at full size; resignKey resets this. Not persisted — purely a
+    // session-local "the user wants details right now" flag.
+    @Published var compactExpanded: Bool = false
     // First-launch bootstrap wizard state. Populated by PanelController
     // on launch when Bootstrap.isInstalled() returns false; drives
     // BootstrapView (mode = .bootstrap).
@@ -214,7 +242,7 @@ final class PanelNav: ObservableObject {
     // when the offset is 1.
     var updateRowOffset: Int { updateAvailable != nil ? 1 : 0 }
 
-    var rowCount: Int { 23 + updateRowOffset }
+    var rowCount: Int { 25 + updateRowOffset }
 
     // Row layout (kept in one place so the controller, view, and indexing
     // logic all agree on what each row index means). When updateAvailable
@@ -225,24 +253,26 @@ final class PanelNav: ObservableObject {
     //   2  Mute when focused     toggle
     //   3  Pin panel             toggle
     //   4  Launch at login       toggle
-    //   5  Sound enabled         toggle      (gates rows 6 + 7)
-    //   6  Agent done sound      cycle
-    //   7  Permission sound      cycle
-    //   8  Voice notifications   toggle      (gates rows 9 + 10)
-    //   9  Voice                 cycle       (or "Download model" action)
-    //  10  Speed                 cycle
-    //  11  Quota tracking        toggle      (master; gates rows 12-14)
-    //  12  Quota alerts          toggle
-    //  13  Alert threshold       cycle
-    //  14  Poll frequency        cycle
-    //  15  Context alert at      cycle       (per-session token thresholds)
-    //  16  Edit phrases…         action
-    //  17  Check permissions…    action
-    //  18  Open config file…     action
-    //  19  View release notes…   action
-    //  20  Check for updates…    action
-    //  21  Uninstall stack-nudge action
-    //  22  Quit panel            action
+    //   5  Compact widget        toggle      (gates row 6)
+    //   6  Widget corner         cycle
+    //   7  Sound enabled         toggle      (gates rows 8 + 9)
+    //   8  Agent done sound      cycle
+    //   9  Permission sound      cycle
+    //  10  Voice notifications   toggle      (gates rows 11 + 12)
+    //  11  Voice                 cycle       (or "Download model" action)
+    //  12  Speed                 cycle
+    //  13  Quota tracking        toggle      (master; gates rows 14-16)
+    //  14  Quota alerts          toggle
+    //  15  Alert threshold       cycle
+    //  16  Poll frequency        cycle
+    //  17  Context alert at      cycle       (per-session token thresholds)
+    //  18  Edit phrases…         action
+    //  19  Check permissions…    action
+    //  20  Open config file…     action
+    //  21  View release notes…   action
+    //  22  Check for updates…    action
+    //  23  Uninstall stack-nudge action
+    //  24  Quit panel            action
 
     // MARK: - Disk I/O
 
@@ -275,6 +305,9 @@ final class PanelNav: ObservableObject {
         quotaPollMinutes = Self.quotaPollMinuteOptions.min(by: { abs($0 - rawPoll) < abs($1 - rawPoll) }) ?? 5
         let rawCtx = Int(config["STACKNUDGE_CONTEXT_ALERT_THRESHOLD"] ?? "") ?? 0
         contextAlertThresholdK = Self.contextAlertThresholdOptions.min(by: { abs($0 - rawCtx) < abs($1 - rawCtx) }) ?? 0
+        compactMode   = ConfigFile.bool(config, "STACKNUDGE_COMPACT_MODE", default: false)
+        compactCorner = CompactCorner(rawValue: config["STACKNUDGE_COMPACT_CORNER"] ?? "")
+            ?? .topRight
     }
 
     // MARK: - Agent reconciliation
@@ -458,8 +491,8 @@ final class PanelNav: ObservableObject {
         }
         switch selectedSettingIndex - updateRowOffset {
         case 0: startRecordingHotkey()
-        case 9 where !voiceModelCached:
-            // Pre-download state: index 9 is the "Download voice model"
+        case 11 where !voiceModelCached:
+            // Pre-download state: index 11 is the "Download voice model"
             // action, not a cycle. Enter triggers (or cancels) the
             // download.
             if voiceModelDownloading {
@@ -467,13 +500,13 @@ final class PanelNav: ObservableObject {
             } else {
                 startVoiceModelDownload()
             }
-        case 16: actions?.editPhrases()
-        case 17: actions?.checkPermissions()
-        case 18: actions?.openConfig()
-        case 19: actions?.openReleaseNotes()
-        case 20: actions?.checkForUpdates()
-        case 21: actions?.beginUninstall()
-        case 22: actions?.quit()
+        case 18: actions?.editPhrases()
+        case 19: actions?.checkPermissions()
+        case 20: actions?.openConfig()
+        case 21: actions?.openReleaseNotes()
+        case 22: actions?.checkForUpdates()
+        case 23: actions?.beginUninstall()
+        case 24: actions?.quit()
         default: applyCycle(forward: true)
         }
     }
@@ -529,16 +562,27 @@ final class PanelNav: ObservableObject {
                     "stack-nudge: setLaunchAtLogin(\(target)) failed: \(error)\n".utf8))
             }
         case 5:
+            compactMode.toggle()
+            ConfigFile.write(key: "STACKNUDGE_COMPACT_MODE",
+                             value: compactMode ? "true" : "false")
+        case 6:
+            let list = CompactCorner.allCases
+            let idx = list.firstIndex(of: compactCorner) ?? 0
+            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+            compactCorner = list[next]
+            ConfigFile.write(key: "STACKNUDGE_COMPACT_CORNER",
+                             value: compactCorner.rawValue)
+        case 7:
             soundEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_SOUND", value: soundEnabled ? "true" : "false")
-        case 6:
-            soundStop = step(soundStop, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_STOP", preview: true)
-        case 7:
-            soundPermission = step(soundPermission, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_PERMISSION", preview: true)
         case 8:
+            soundStop = step(soundStop, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_STOP", preview: true)
+        case 9:
+            soundPermission = step(soundPermission, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_PERMISSION", preview: true)
+        case 10:
             voiceEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_VOICE", value: voiceEnabled ? "true" : "false")
-        case 9:
+        case 11:
             // Pre-download: the row is an action, not a cycle. Treat
             // left/right arrow as a trigger so a user discovering the
             // row keyboard-only can still start the download.
@@ -550,17 +594,17 @@ final class PanelNav: ObservableObject {
             voice = step(voice, in: voicesAvailable, forward: forward, key: "STACKNUDGE_VOICE_NAME", preview: false)
             let phrase = Self.voicePreviewPhrases.randomElement() ?? "Hello."
             Speaker.speak(phrase, voice: voice, speed: String(format: "%.2f", voiceSpeed))
-        case 10:
+        case 12:
             let next = forward ? voiceSpeed + Self.speedStep : voiceSpeed - Self.speedStep
             voiceSpeed = max(Self.speedMin, min(Self.speedMax, (next * 100).rounded() / 100))
             ConfigFile.write(key: "STACKNUDGE_VOICE_SPEED", value: String(format: "%.2f", voiceSpeed))
-        case 11:
+        case 13:
             toggleQuotaTracking()
-        case 12:
+        case 14:
             quotaAlertsEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_QUOTA_ALERTS",
                              value: quotaAlertsEnabled ? "true" : "false")
-        case 13:
+        case 15:
             // Cycle through the static thresholds list. Index wraps in both
             // directions so the user can dial in either way.
             let list = Self.quotaThresholds
@@ -569,14 +613,14 @@ final class PanelNav: ObservableObject {
             quotaAlertThreshold = list[next]
             ConfigFile.write(key: "STACKNUDGE_QUOTA_THRESHOLD",
                              value: String(quotaAlertThreshold))
-        case 14:
+        case 16:
             let list = Self.quotaPollMinuteOptions
             let idx = list.firstIndex(of: quotaPollMinutes) ?? 2
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
             quotaPollMinutes = list[next]
             ConfigFile.write(key: "STACKNUDGE_USAGE_POLL_MIN",
                              value: String(quotaPollMinutes))
-        case 15:
+        case 17:
             let list = Self.contextAlertThresholdOptions
             let idx = list.firstIndex(of: contextAlertThresholdK) ?? 0
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
