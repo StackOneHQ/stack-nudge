@@ -4,6 +4,21 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.14.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.13.0...v1.14.0) (2026-06-02)
+
+
+### Features
+
+* **compact:** more mascot hover reactions ([f4a8712](https://github.com/StackOneHQ/stack-nudge/commit/f4a871208face993c770e1f04aa9c0b3993bb8b6))
+* **compact:** Settings → Widget → Pill opacity (40/60/80/100%) ([4cdf47b](https://github.com/StackOneHQ/stack-nudge/commit/4cdf47bb3f0e8b1554d825f148c864381a890f75))
+
+
+### Bug Fixes
+
+* **compact:** banner-veto, pill opacity, mascot reactions, post-update expand ([f7c0262](https://github.com/StackOneHQ/stack-nudge/commit/f7c02624479313927404e955524535e9044b8fb6))
+* **compact:** banner-window veto, quota toggle, mascot hover, menu hotkey ([fb1bad6](https://github.com/StackOneHQ/stack-nudge/commit/fb1bad641c4ff6053b5a9b1c823ede0d71f08331))
+* **compact:** blur corner radius, draggable full panel, expand on post-update ([264d79a](https://github.com/StackOneHQ/stack-nudge/commit/264d79ac08e75a3b52fab07c75bc6192a17e03d2))
+
 ## [1.13.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.12.1...v1.13.0) (2026-06-01)
 
 
