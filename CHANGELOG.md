@@ -4,6 +4,20 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.14.1](https://github.com/StackOneHQ/stack-nudge/compare/v1.14.0...v1.14.1) (2026-06-02)
+
+
+### Features
+
+* **widget:** Settings → Widget toggle (default on) ([36aae98](https://github.com/StackOneHQ/stack-nudge/commit/36aae98170995246c773851af1c038c6f5bf3c28))
+
+
+### Bug Fixes
+
+* **sessions:** start polling at app launch, not Sessions tab onAppear ([f8374e1](https://github.com/StackOneHQ/stack-nudge/commit/f8374e13cfb5ef6c87f139b53481d994a14d831e))
+* **updater:** explicit bundle relaunch + post-update render order ([eab3ab4](https://github.com/StackOneHQ/stack-nudge/commit/eab3ab455fd616ed6fae8e03892e78fa8269f091))
+* **widget:** rename Pill→Widget opacity; toggle-on keeps panel expanded ([533c85d](https://github.com/StackOneHQ/stack-nudge/commit/533c85de33965e89789be04ccbd301147994431a))
+
 ## [1.14.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.13.0...v1.14.0) (2026-06-02)
 
 
