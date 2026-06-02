@@ -668,7 +668,21 @@ private struct RobotMascot: View {
                 .frame(width: 4.5, height: 1.2)
                 .offset(y: 6)
         default:
-            EmptyView()
+            // Hover-only smile arc — the robot grins back when you reach
+            // for it, regardless of its current state.
+            if hovered {
+                Path { p in
+                    p.move(to: CGPoint(x: 0, y: 0))
+                    p.addQuadCurve(to: CGPoint(x: 6, y: 0),
+                                   control: CGPoint(x: 3, y: 2.2))
+                }
+                .stroke(Self.cyan, style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
+                .frame(width: 6, height: 2.2)
+                .offset(y: 6)
+                .transition(.scale.combined(with: .opacity))
+            } else {
+                EmptyView()
+            }
         }
     }
 }
@@ -686,12 +700,12 @@ private struct CatMascot: View {
 
     var body: some View {
         if paused {
-            ZStack { head; staticEyes; mouth; whiskers }
+            ZStack { head; staticEyes; mouth; whiskers; blep }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             TimelineView(.animation(minimumInterval: 0.05)) { tl in
                 let t = tl.date.timeIntervalSinceReferenceDate
-                ZStack { head; eyes(at: t); mouth; whiskers }
+                ZStack { head; eyes(at: t); mouth; whiskers; blep }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -699,6 +713,20 @@ private struct CatMascot: View {
 
     // Ears perked = head + ear-hints lift slightly while hovered.
     private var earLift: CGFloat { hovered ? -1.5 : 0 }
+
+    // Tiny tongue blep — a pink rounded triangle peeking out below the
+    // mouth on hover. Pure decoration; appears only while hovered.
+    @ViewBuilder
+    private var blep: some View {
+        if hovered {
+            Capsule()
+                .fill(Color(red: 1.0, green: 0.55, blue: 0.7))
+                .frame(width: 2.2, height: 2.8)
+                .offset(y: 7.5)
+                .transition(.scale.combined(with: .opacity))
+                .animation(.spring(response: 0.25, dampingFraction: 0.55), value: hovered)
+        }
+    }
 
     private var head: some View {
         ZStack {
@@ -888,14 +916,32 @@ private struct EyeMascot: View {
 
     var body: some View {
         if paused {
-            ZStack { lens; staticPupil }
+            ZStack { lens; staticPupil; eyebrow }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             TimelineView(.animation(minimumInterval: 0.05)) { tl in
                 let t = tl.date.timeIntervalSinceReferenceDate
-                ZStack { lens; pupil(at: t) }
+                ZStack { lens; pupil(at: t); eyebrow }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+        }
+    }
+
+    // Hover-only eyebrow arc above the lens — gives the sentinel a
+    // questioning, "oh hey you" expression when the cursor approaches.
+    @ViewBuilder
+    private var eyebrow: some View {
+        if hovered {
+            Path { p in
+                p.move(to: CGPoint(x: 0, y: 2))
+                p.addQuadCurve(to: CGPoint(x: 9, y: 2),
+                               control: CGPoint(x: 4.5, y: -1.5))
+            }
+            .stroke(Self.outline, style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+            .frame(width: 9, height: 3)
+            .offset(y: -10)
+            .transition(.scale.combined(with: .opacity))
+            .animation(.spring(response: 0.25, dampingFraction: 0.6), value: hovered)
         }
     }
 
@@ -977,21 +1023,51 @@ private struct GhostMascot: View {
 
     var body: some View {
         if paused {
-            ZStack { body_; staticEyes; mouth }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .offset(y: hovered ? -4 : 0)
-                .scaleEffect(hovered ? 1.08 : 1.0)
-                .animation(.spring(response: 0.32, dampingFraction: 0.55), value: hovered)
+            ZStack {
+                sparkles
+                ZStack { body_; staticEyes; mouth }
+                    .offset(y: hovered ? -4 : 0)
+                    .scaleEffect(hovered ? 1.08 : 1.0)
+                    .animation(.spring(response: 0.32, dampingFraction: 0.55), value: hovered)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             TimelineView(.animation(minimumInterval: 0.05)) { tl in
                 let t = tl.date.timeIntervalSinceReferenceDate
                 let bob = sin(t * 1.3) * 1.0
-                ZStack { body_; eyes(at: t); mouth }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .offset(y: bob + (hovered ? -4 : 0))
-                    .scaleEffect(hovered ? 1.08 : 1.0)
-                    .animation(.spring(response: 0.32, dampingFraction: 0.55), value: hovered)
+                ZStack {
+                    sparkles
+                    ZStack { body_; eyes(at: t); mouth }
+                        .offset(y: bob + (hovered ? -4 : 0))
+                        .scaleEffect(hovered ? 1.08 : 1.0)
+                        .animation(.spring(response: 0.32, dampingFraction: 0.55), value: hovered)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+        }
+    }
+
+    // Three little sparkles around the ghost on hover. They fade in via
+    // transition, then a subtle pulse via TimelineView would be overkill
+    // — keeping them static for clarity and frame budget.
+    @ViewBuilder
+    private var sparkles: some View {
+        if hovered {
+            ZStack {
+                sparkle.offset(x: -10, y: -8)
+                sparkle.offset(x: 10, y: -3).scaleEffect(0.7)
+                sparkle.offset(x: 8,  y: 9).scaleEffect(0.85)
+            }
+            .transition(.scale.combined(with: .opacity))
+            .animation(.spring(response: 0.3, dampingFraction: 0.55), value: hovered)
+        }
+    }
+
+    private var sparkle: some View {
+        // Four-point star drawn as two crossed thin capsules.
+        ZStack {
+            Capsule().fill(Self.cyan).frame(width: 1.2, height: 4)
+            Capsule().fill(Self.cyan).frame(width: 4, height: 1.2)
         }
     }
 
