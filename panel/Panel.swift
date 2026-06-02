@@ -788,14 +788,23 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func handlePostUpdateStatus(result: (state: String, version: String, error: String?)) {
         switch result.state {
         case "success":
+            // Expand the window BEFORE flipping the mode. The order matters:
+            // setting nav.mode = .postUpdate triggers a SwiftUI re-render
+            // immediately, and if the window is still pill-sized at that
+            // point, PostUpdateView (or even the Events page during a
+            // transition) renders into the 320×56 frame and looks crushed.
+            // Resizing first guarantees the full-panel content lands in a
+            // full-panel-sized window.
+            if nav.compactMode, !nav.compactExpanded {
+                nav.compactExpanded = true
+                // applyCompactLayout already ran via the Combine sink;
+                // call again here so the synchronous setFrame is committed
+                // before the mode flip below schedules SwiftUI work.
+                applyCompactLayout()
+            }
             nav.postUpdateVersion = result.version.isEmpty ? "?" : result.version
             nav.postUpdateNotes = nil
             nav.mode = .postUpdate
-            // Expand out of the pill so the changelog renders in the full
-            // panel rather than getting clipped into the widget frame.
-            if nav.compactMode, !nav.compactExpanded {
-                nav.compactExpanded = true
-            }
             // Auto-open the panel so the user immediately sees the
             // "what shipped" view rather than discovering it via hotkey.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
