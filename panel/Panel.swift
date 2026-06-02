@@ -656,6 +656,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         updater = Updater(nav: nav)
 
         startQuotaPolling()
+        // The pill (CompactView) reads sessions.sessions for the busy/idle
+        // headline and mascot state, so polling has to run as soon as the
+        // app is up — not gated on the Sessions tab being visible. Sessions
+        // view still calls startPolling on appear (idempotent), which keeps
+        // it polling even if some future code stops the timer.
+        sessions.startPolling()
 
         // Whenever SessionStore re-polls (~every 3s while polling, on
         // panel-becomes-visible otherwise), refresh transcript stats for
