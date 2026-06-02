@@ -55,41 +55,42 @@ struct SettingsView: View {
                         section("Widget") {
                             row(5 + off, label: "Widget corner", kind: .cycle, value: nav.compactCorner.label)
                             row(6 + off, label: "Mascot",        kind: .cycle, value: nav.mascot.label)
+                            row(7 + off, label: "Pill opacity",  kind: .cycle, value: "\(Int(nav.compactAlpha * 100))%")
                         }
 
                         section("Sounds") {
-                            row(7 + off, label: "Sound enabled", kind: .toggle, value: nav.soundEnabled ? "On" : "Off")
-                            row(8 + off, label: "Agent done",    kind: .cycle,  value: nav.soundStop,       enabled: nav.soundEnabled)
-                            row(9 + off, label: "Permission",    kind: .cycle,  value: nav.soundPermission, enabled: nav.soundEnabled)
+                            row(8 + off, label: "Sound enabled", kind: .toggle, value: nav.soundEnabled ? "On" : "Off")
+                            row(9 + off, label: "Agent done",    kind: .cycle,  value: nav.soundStop,       enabled: nav.soundEnabled)
+                            row(10 + off, label: "Permission",   kind: .cycle,  value: nav.soundPermission, enabled: nav.soundEnabled)
                         }
 
                         section("Voice") {
-                            row(10 + off, label: "Voice notifications", kind: .toggle, value: nav.voiceEnabled ? "On" : "Off")
+                            row(11 + off, label: "Voice notifications", kind: .toggle, value: nav.voiceEnabled ? "On" : "Off")
                             if nav.voiceModelCached {
-                                row(11 + off, label: "Voice", kind: .cycle, value: voiceLabel,                                  enabled: nav.voiceEnabled)
-                                row(12 + off, label: "Speed", kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed),     enabled: nav.voiceEnabled)
+                                row(12 + off, label: "Voice", kind: .cycle, value: voiceLabel,                                  enabled: nav.voiceEnabled)
+                                row(13 + off, label: "Speed", kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed),     enabled: nav.voiceEnabled)
                             } else {
-                                voiceModelDownloadRow(index: 11 + off)
+                                voiceModelDownloadRow(index: 12 + off)
                             }
                         }
 
                         section("Usage") {
-                            row(13 + off, label: "Quota tracking",  kind: .toggle, value: nav.quotaTrackingEnabled ? "On" : "Off")
-                            row(14 + off, label: "Quota alerts",    kind: .toggle, value: nav.quotaAlertsEnabled    ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
-                            row(15 + off, label: "Alert threshold", kind: .cycle,  value: "\(nav.quotaAlertThreshold)%",            enabled: nav.quotaTrackingEnabled && nav.quotaAlertsEnabled)
-                            row(16 + off, label: "Poll frequency",  kind: .cycle,  value: "\(nav.quotaPollMinutes) min",            enabled: nav.quotaTrackingEnabled)
-                            row(17 + off, label: "Context alert at", kind: .cycle, value: contextAlertLabel)
-                            row(18 + off, label: "Show remaining",   kind: .toggle, value: nav.quotaShowRemaining ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
+                            row(14 + off, label: "Quota tracking",  kind: .toggle, value: nav.quotaTrackingEnabled ? "On" : "Off")
+                            row(15 + off, label: "Quota alerts",    kind: .toggle, value: nav.quotaAlertsEnabled    ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
+                            row(16 + off, label: "Alert threshold", kind: .cycle,  value: "\(nav.quotaAlertThreshold)%",            enabled: nav.quotaTrackingEnabled && nav.quotaAlertsEnabled)
+                            row(17 + off, label: "Poll frequency",  kind: .cycle,  value: "\(nav.quotaPollMinutes) min",            enabled: nav.quotaTrackingEnabled)
+                            row(18 + off, label: "Context alert at", kind: .cycle, value: contextAlertLabel)
+                            row(19 + off, label: "Show remaining",   kind: .toggle, value: nav.quotaShowRemaining ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
                         }
 
                         section("Actions") {
-                            row(19 + off, label: "Edit phrases…",         kind: .action, value: "")
-                            row(20 + off, label: "Check permissions…",    kind: .action, value: "")
-                            row(21 + off, label: "Open config file…",     kind: .action, value: "")
-                            row(22 + off, label: "View release notes…",   kind: .action, value: "")
-                            row(23 + off, label: "Check for updates…",    kind: .action, value: checkForUpdatesStatus)
-                            row(24 + off, label: "Uninstall StackNudge…", kind: .action, value: "")
-                            row(25 + off, label: "Quit panel",            kind: .action, value: "")
+                            row(20 + off, label: "Edit phrases…",         kind: .action, value: "")
+                            row(21 + off, label: "Check permissions…",    kind: .action, value: "")
+                            row(22 + off, label: "Open config file…",     kind: .action, value: "")
+                            row(23 + off, label: "View release notes…",   kind: .action, value: "")
+                            row(24 + off, label: "Check for updates…",    kind: .action, value: checkForUpdatesStatus)
+                            row(25 + off, label: "Uninstall StackNudge…", kind: .action, value: "")
+                            row(26 + off, label: "Quit panel",            kind: .action, value: "")
                         }
 
                         aboutFooter

@@ -684,6 +684,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             .dropFirst()
             .sink { [weak self] _ in self?.applyCompactLayout() }
             .store(in: &cancellables)
+        nav.$compactAlpha
+            .removeDuplicates()
+            .sink { [weak self] _ in self?.applyCompactAlpha() }
+            .store(in: &cancellables)
         applyCompactLayout()
 
         // If a previous panel instance was pkilled mid-update by install.sh,
@@ -887,6 +891,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 panel.makeKeyAndOrderFront(nil)
             }
         }
+        applyCompactAlpha()
     }
 
     // Called from the widget's expand button. Sets the expanded flag,
@@ -896,6 +901,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func expandFromCompact() {
         nav.compactExpanded = true
         applyCompactLayout()
+    }
+
+    // Applies the user-configured pill opacity to the window. Only takes
+    // effect in pill mode; expanded panel + full-mode are always fully
+    // opaque so the user can actually read content.
+    private func applyCompactAlpha() {
+        if nav.compactMode, !nav.compactExpanded {
+            panel.alphaValue = CGFloat(nav.compactAlpha)
+        } else {
+            panel.alphaValue = 1.0
+        }
     }
 
     // Wraps expandFromCompact for entry points that come from mouse/tap

@@ -40,9 +40,9 @@ struct CompactView: View {
         .contentShape(Capsule())
         .onTapGesture(count: 2) { onExitCompact() }
         .onChange(of: store.events.first?.id) { _ in triggerRipple() }
-        // Hover state drives per-mascot reactions (robot antenna flick, cat
-        // wink + ear twitch, eye pupil dilate-and-dart, ghost pop-and-yawn).
-        // Gated on pill mode — the expanded panel doesn't need playfulness.
+        // Hover state drives per-mascot reactions (robot antenna flick,
+        // cat wink + ear twitch, eye pupil dilate-and-dart, ghost
+        // pop-and-yawn). Gated on pill mode inside each mascot.
         .onHover { isHovering = $0 }
     }
 
