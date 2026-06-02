@@ -113,7 +113,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let banner = ConfigFile.bool(config, "STACKNUDGE_BANNER", default: true)
         let voice  = ConfigFile.bool(config, "STACKNUDGE_VOICE",  default: false)
         let mute   = ConfigFile.bool(config, "STACKNUDGE_MUTE_WHEN_FOCUSED", default: true)
-        let hotkey = config["STACKNUDGE_PANEL_HOTKEY"] ?? "cmd+shift+n"
+        // Source of truth is nav.hotkeyDisplay so Settings recordings and
+        // unset-default fallback agree. Reading raw config here used to
+        // show a different default ("cmd+shift+n") than what Settings
+        // displayed ("cmd+opt+n") and never reflected new combos until
+        // the user manually edited the config file.
+        let hotkey = panelController?.nav.hotkeyDisplay ?? "cmd+opt+n"
 
         let status = NSMenuItem(title: "Hotkey · \(hotkey)", action: nil, keyEquivalent: "")
         status.isEnabled = false
