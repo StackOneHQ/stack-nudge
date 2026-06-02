@@ -151,15 +151,34 @@ final class Updater {
         // 7. Write status file so the next launch surfaces the welcome view.
         try writeStatusFile(state: "success", version: release.version, error: nil)
 
-        // 8. Restart launchd → current process dies, new bundle starts.
+        // 8. Restart. Try launchctl first (handles cases where a launchd
+        //    agent is loaded and will respawn us), then explicitly launch
+        //    the new bundle via NSWorkspace — this covers users who never
+        //    went through Bootstrap install, never have the panel plist,
+        //    or whose currently-running process is from a different path
+        //    than ~/Applications/ (e.g. a dev build still in the picture).
+        //    Without the explicit launch, kickstart silently fails and
+        //    the auto-quit kills the panel with nothing to restart it.
         setPhase(.done)
-        appendLog("Restarting via launchd…")
+        appendLog("Restarting…")
         try kickstartLaunchd()
-
-        // launchctl kickstart -k will SIGTERM us; if for some reason it
-        // doesn't, fall back to a self-quit after a brief delay so the
-        // user isn't stuck staring at "Restarting…" forever.
+        relaunchInstalledBundle()
         scheduleAutoQuit()
+    }
+
+    private func relaunchInstalledBundle() {
+        let url = URL(fileURLWithPath: Self.installedAppPath)
+        let cfg = NSWorkspace.OpenConfiguration()
+        cfg.activates = true
+        // newInstance=true bypasses the running-instance check so the new
+        // bundle starts even when an old process at a different path is
+        // still alive (it'll be killed by scheduleAutoQuit shortly after).
+        cfg.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: url, configuration: cfg) { [weak self] _, error in
+            if let error {
+                self?.appendLog("relaunch via NSWorkspace failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     // MARK: - Release manifest

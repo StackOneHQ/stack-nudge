@@ -267,8 +267,8 @@ struct PanelContentView: View {
     private var footer: some View {
         PageFooter {
             if store.events.isEmpty {
-                FooterHint(label: "Compact", keys: ["M"])
-                FooterHint(label: "Hide",    keys: ["Esc"])
+                if nav.compactMode { FooterHint(label: "Compact", keys: ["M"]) }
+                FooterHint(label: "Hide", keys: ["Esc"])
             } else {
                 if let primary = primaryActionLabel {
                     FooterHint(label: primary, keys: ["⏎"], primary: true)
@@ -282,8 +282,8 @@ struct PanelContentView: View {
                 FooterHint(label: "Snooze",  keys: ["S"])
                     .opacity(snoozeEnabled ? 1.0 : 0.35)
                 FooterHint(label: "Dismiss", keys: ["⌫"])
-                FooterHint(label: "Compact", keys: ["M"])
-                FooterHint(label: "Hide",    keys: ["Esc"])
+                if nav.compactMode { FooterHint(label: "Compact", keys: ["M"]) }
+                FooterHint(label: "Hide", keys: ["Esc"])
             }
         }
     }
@@ -656,6 +656,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         updater = Updater(nav: nav)
 
         startQuotaPolling()
+        // The pill (CompactView) reads sessions.sessions for the busy/idle
+        // headline and mascot state, so polling has to run as soon as the
+        // app is up — not gated on the Sessions tab being visible. Sessions
+        // view still calls startPolling on appear (idempotent), which keeps
+        // it polling even if some future code stops the timer.
+        sessions.startPolling()
 
         // Whenever SessionStore re-polls (~every 3s while polling, on
         // panel-becomes-visible otherwise), refresh transcript stats for
@@ -788,14 +794,23 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func handlePostUpdateStatus(result: (state: String, version: String, error: String?)) {
         switch result.state {
         case "success":
+            // Expand the window BEFORE flipping the mode. The order matters:
+            // setting nav.mode = .postUpdate triggers a SwiftUI re-render
+            // immediately, and if the window is still pill-sized at that
+            // point, PostUpdateView (or even the Events page during a
+            // transition) renders into the 320×56 frame and looks crushed.
+            // Resizing first guarantees the full-panel content lands in a
+            // full-panel-sized window.
+            if nav.compactMode, !nav.compactExpanded {
+                nav.compactExpanded = true
+                // applyCompactLayout already ran via the Combine sink;
+                // call again here so the synchronous setFrame is committed
+                // before the mode flip below schedules SwiftUI work.
+                applyCompactLayout()
+            }
             nav.postUpdateVersion = result.version.isEmpty ? "?" : result.version
             nav.postUpdateNotes = nil
             nav.mode = .postUpdate
-            // Expand out of the pill so the changelog renders in the full
-            // panel rather than getting clipped into the widget frame.
-            if nav.compactMode, !nav.compactExpanded {
-                nav.compactExpanded = true
-            }
             // Auto-open the panel so the user immediately sees the
             // "what shipped" view rather than discovering it via hotkey.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
@@ -903,7 +918,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         applyCompactLayout()
     }
 
-    // Applies the user-configured pill opacity to the window. Only takes
+    // Applies the user-configured widget opacity to the window. Only takes
     // effect in pill mode; expanded panel + full-mode are always fully
     // opaque so the user can actually read content.
     private func applyCompactAlpha() {
@@ -1803,8 +1818,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
         // From the pill (compact-not-expanded), M expands to full panel.
         // Mirrors the M-to-collapse shortcut shown in the full panel's
-        // footer. The pill must be key for this to land, so a single
-        // click anywhere on the pill arms it.
+        // footer. Gated on compactMode so the shortcut quietly no-ops
+        // when the user has turned off the widget.
         if nav.compactMode, !nav.compactExpanded,
            event.keyCode == KeyCode.mKey,
            mods.intersection([.command, .control, .option, .shift]).isEmpty {

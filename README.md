@@ -131,11 +131,7 @@ Add that to your shell profile.
 
 If you'd rather not click banners with the mouse, stack-nudge runs a small floating panel that you summon with a hotkey. It has four tabs — **Events**, **Sessions**, **Usage**, and **Settings** — and is fully keyboard-driven.
 
-The panel is installed and registered as a launchd agent by `./install.sh` — no opt-in needed. To run quietly without macOS banners (panel-only):
-
-```bash
-STACKNUDGE_BANNER=false   # optional — suppress macOS banners when using the panel
-```
+The panel is installed and registered as a launchd agent by `./install.sh` — no opt-in needed. To run quietly without macOS banners, toggle **Settings → Banner notifications** off (panel-only mode).
 
 Default hotkey is `cmd+opt+n`. Hit it from anywhere to summon the panel; hit it again while focused to hide. Switch tabs with `Cmd+1` (Events), `Cmd+2` (Sessions), `Cmd+3` (Usage), `Cmd+4` (Settings) — or click them. Banner and panel can run together, alone, or both off — the sound and voice still fire as passive signals.
 
@@ -186,7 +182,7 @@ Bars are color-coded: green below 50%, yellow 50–80%, red 80%+. Reset times sh
 
 Data is fetched from the same endpoint Claude Code's own statusline uses (`/api/oauth/usage`), reading your OAuth token from the macOS Keychain. **The first time stack-nudge polls you'll see a keychain dialog — click "Always Allow"** to grant access (one-time, per release).
 
-Polls every 60 seconds while the panel is visible, or every 5 minutes by default in the background (configurable via Settings → Usage → "Poll frequency"; underlying key `STACKNUDGE_USAGE_POLL_MIN`). On the Usage tab: `r` triggers a manual sync, `p` pauses/resumes the poller.
+Polls every 60 seconds while the panel is visible, or every 5 minutes by default in the background (configurable via Settings → Usage → "Poll frequency"). On the Usage tab: `r` triggers a manual sync, `p` pauses/resumes the poller.
 
 #### Threshold-crossing notifications
 
@@ -207,7 +203,7 @@ Independent of quota: stack-nudge can also fire a banner when an individual Clau
 
 #### Settings tab
 
-Reachable from the tab strip or `Cmd+4`. Keyboard-driven rows for hotkey, behavior toggles (banner, mute when focused, pin panel, launch at login), sound picks (with preview-on-cycle), voice notifications + picker + speed (with preview-on-cycle using a random conversational phrase), usage config (quota tracking + alerts + threshold + poll frequency + context alert threshold), and action rows (edit phrases, check permissions, open config file, view release notes, check for updates, uninstall, quit).
+Reachable from the tab strip or `Cmd+4`. Keyboard-driven rows for hotkey, behavior toggles (banner, mute when focused, pin panel, launch at login), widget (corner, mascot picker, opacity), sound picks (with preview-on-cycle), voice notifications + picker + speed (with preview-on-cycle using a random conversational phrase), usage config (quota tracking + alerts + threshold + poll frequency + context alert threshold + show-remaining), and action rows (edit phrases, check permissions, open config file, view release notes, check for updates, uninstall, quit).
 
 | Key | Action |
 |-----|--------|
@@ -216,9 +212,9 @@ Reachable from the tab strip or `Cmd+4`. Keyboard-driven rows for hotkey, behavi
 | `⏎` | Activate (toggles flip, action rows fire, hotkey row records a new combo) |
 | `Esc` | Back to events |
 
-The hotkey row records live: press `⏎` on it, press the new combo, and stack-nudge re-registers the global hotkey and writes it to config. If the combo is already grabbed by another app, the previous one stays and an inline error explains why.
+The hotkey row records live: press `⏎` on it, press the new combo, and stack-nudge re-registers the global hotkey. If the combo is already grabbed by another app, the previous one stays and an inline error explains why.
 
-stack-nudge also watches `~/.stack-nudge/config` for external edits, so changes you make via "Open config file…" or another editor flow back into the running panel without a restart.
+All Settings choices persist to `~/.stack-nudge/config` (a `KEY=value` text file). You don't need to edit it directly — Settings is the source of truth — but it's there for backup/sync or scripted setup.
 
 ### Menu bar (macOS)
 
@@ -227,14 +223,14 @@ When the panel daemon is running, a bell icon appears in your menu bar. The same
 | Item | What it does |
 |------|--------------|
 | `Hotkey · …` | Shows your current hotkey (info only) |
-| `Show banners` | Toggles `STACKNUDGE_BANNER`. Enabling fires a confirmation banner. |
-| `Voice notifications` | Toggles `STACKNUDGE_VOICE`. Enabling speaks *"Voice notifications enabled"*. |
+| `Show banners` | Toggles macOS banner notifications. Enabling fires a confirmation banner. |
+| `Voice notifications` | Toggles spoken notifications. Enabling speaks *"Voice notifications enabled"*. |
 | `Show panel` | Brings the floating panel up (handy when no events are queued) |
 | `Check permissions…` | Opens the permissions checker (see below) |
 | `Open config file…` | Opens `~/.stack-nudge/config` in your default editor |
 | `Quit stack-nudge panel` | Exits the daemon |
 
-Toggles re-read the live config every time the menu opens, so changes you make to `~/.stack-nudge/config` directly stay in sync. Banner and voice changes take effect immediately for the next nudge — no daemon restart needed.
+Menu changes take effect immediately for the next nudge — no daemon restart needed.
 
 ### Permissions (macOS)
 
@@ -287,15 +283,11 @@ Per-pool customisations are stored in `~/.stack-nudge/phrases.user.json` and mer
 
 stack-nudge uses [stackvox](https://github.com/StackOneHQ/stackvox), an offline Kokoro-82M TTS engine that speaks notifications aloud with ~13 ms latency. `./install.sh` pip-installs it from PyPI into an isolated venv at `~/.stack-nudge/venv` — no separate setup needed.
 
-**Enable in your config** (`~/.stack-nudge/config`):
-
-```bash
-STACKNUDGE_VOICE=true
-```
+**Enable** via Settings → Voice → "Voice notifications".
 
 The voice daemon starts automatically on first notification and is registered as a login item so it stays running across reboots.
 
-Voice fires whenever `STACKNUDGE_VOICE=true`, alongside the banner and panel surfaces. The frontmost-suppression check still applies — when the source window is already focused, sound, banner, panel post, *and* voice are all suppressed (you don't need a nudge for the thing you're looking at).
+Voice fires alongside the banner and panel surfaces. The frontmost-suppression check still applies — when the source window is already focused, sound, banner, panel post, *and* voice are all suppressed (you don't need a nudge for the thing you're looking at).
 
 When voice is enabled, the chime is suppressed automatically — voice replaces sound rather than playing alongside it.
 
@@ -308,12 +300,7 @@ Voice messages are picked at random from per-event phrase pools and labelled wit
 
 Phrase pools live in `~/.stack-nudge/phrases/` — `en.sh`, `fr.sh`, `hi.sh`, `it.sh`, `pt.sh`. The right pool is picked from the configured voice's prefix (`af_*`/`am_*`/`bf_*`/`bm_*` → en, `ff_*` → fr, `hf_*`/`hm_*` → hi, `if_*`/`im_*` → it, `pf_*`/`pm_*` → pt) so a French voice speaks French phrasing.
 
-Optional tuning (also in `~/.stack-nudge/config`):
-
-```bash
-STACKNUDGE_VOICE_NAME=af_heart   # voice ID (run `~/.stack-nudge/venv/bin/stackvox voices` for the full list)
-STACKNUDGE_VOICE_SPEED=1.1       # playback speed (1.0 = normal)
-```
+Tune via Settings → Voice → "Voice" (cycle voices with preview) and "Speed" (1.0 = normal).
 
 ## Sounds
 
@@ -322,14 +309,7 @@ STACKNUDGE_VOICE_SPEED=1.1       # playback speed (1.0 = normal)
 | Agent done | `Glass.aiff` | freedesktop bell | 800 Hz beep |
 | Waiting for approval | `Ping.aiff` | freedesktop bell | 1200 Hz beep |
 
-Any file from `/System/Library/Sounds/` works on macOS: Basso, Blow, Bottle, Frog, Funk, Glass, Hero, Morse, Ping, Pop, Purr, Sosumi, Submarine, Tink. Override per-event in `~/.stack-nudge/config`:
-
-```bash
-STACKNUDGE_SOUND_STOP=Glass
-STACKNUDGE_SOUND_PERMISSION=Ping
-```
-
-The Settings tab exposes the same picks with audio preview on each change.
+Any file from `/System/Library/Sounds/` works on macOS: Basso, Blow, Bottle, Frog, Funk, Glass, Hero, Morse, Ping, Pop, Purr, Sosumi, Submarine, Tink. Override per-event via Settings → Sounds → "Agent done" / "Permission" (cycle plays a preview on each step).
 
 ## Uninstall
 
