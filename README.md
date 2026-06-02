@@ -203,7 +203,7 @@ Independent of quota: stack-nudge can also fire a banner when an individual Clau
 
 #### Settings tab
 
-Reachable from the tab strip or `Cmd+4`. Keyboard-driven rows for hotkey, behavior toggles (banner, mute when focused, pin panel, launch at login), widget (corner, mascot picker, pill opacity), sound picks (with preview-on-cycle), voice notifications + picker + speed (with preview-on-cycle using a random conversational phrase), usage config (quota tracking + alerts + threshold + poll frequency + context alert threshold + show-remaining), and action rows (edit phrases, check permissions, open config file, view release notes, check for updates, uninstall, quit).
+Reachable from the tab strip or `Cmd+4`. Keyboard-driven rows for hotkey, behavior toggles (banner, mute when focused, pin panel, launch at login), widget (corner, mascot picker, opacity), sound picks (with preview-on-cycle), voice notifications + picker + speed (with preview-on-cycle using a random conversational phrase), usage config (quota tracking + alerts + threshold + poll frequency + context alert threshold + show-remaining), and action rows (edit phrases, check permissions, open config file, view release notes, check for updates, uninstall, quit).
 
 | Key | Action |
 |-----|--------|

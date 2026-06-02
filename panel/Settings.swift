@@ -56,7 +56,7 @@ struct SettingsView: View {
                             row(5 + off, label: "Widget",        kind: .toggle, value: nav.compactMode ? "On" : "Off")
                             row(6 + off, label: "Widget corner", kind: .cycle,  value: nav.compactCorner.label,             enabled: nav.compactMode)
                             row(7 + off, label: "Mascot",        kind: .cycle,  value: nav.mascot.label,                    enabled: nav.compactMode)
-                            row(8 + off, label: "Pill opacity",  kind: .cycle,  value: "\(Int(nav.compactAlpha * 100))%",   enabled: nav.compactMode)
+                            row(8 + off, label: "Widget opacity", kind: .cycle, value: "\(Int(nav.compactAlpha * 100))%",   enabled: nav.compactMode)
                         }
 
                         section("Sounds") {

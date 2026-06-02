@@ -918,7 +918,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         applyCompactLayout()
     }
 
-    // Applies the user-configured pill opacity to the window. Only takes
+    // Applies the user-configured widget opacity to the window. Only takes
     // effect in pill mode; expanded panel + full-mode are always fully
     // opaque so the user can actually read content.
     private func applyCompactAlpha() {

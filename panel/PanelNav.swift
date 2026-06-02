@@ -288,7 +288,7 @@ final class PanelNav: ObservableObject {
     //   5  Widget                toggle      (gates rows 6-8; off = classic show/hide-panel mode)
     //   6  Widget corner         cycle
     //   7  Mascot                cycle
-    //   8  Pill opacity          cycle       (40/60/80/100%; applied window-level)
+    //   8  Widget opacity        cycle       (40/60/80/100%; applied window-level)
     //   9  Sound enabled         toggle      (gates rows 10 + 11)
     //  10  Agent done sound      cycle
     //  11  Permission sound      cycle
@@ -601,13 +601,20 @@ final class PanelNav: ObservableObject {
                     "stack-nudge: setLaunchAtLogin(\(target)) failed: \(error)\n".utf8))
             }
         case 5:
-            // Widget on/off. When toggling off, collapse the pill to
-            // expanded-panel mode first; otherwise the next applyCompactLayout
-            // wouldn't know whether to restore the saved full-panel size.
+            // Widget on/off. The user is in the full panel (that's where
+            // the Settings row lives). On toggle-on we set compactExpanded
+            // so the panel stays open at full size; the pill only appears
+            // when the user dismisses (Esc / focus-out). On toggle-off we
+            // clear compactExpanded so the next applyCompactLayout commits
+            // the saved full-panel frame cleanly.
             compactMode.toggle()
             ConfigFile.write(key: "STACKNUDGE_COMPACT_MODE",
                              value: compactMode ? "true" : "false")
-            if !compactMode { compactExpanded = false }
+            if compactMode {
+                compactExpanded = true
+            } else {
+                compactExpanded = false
+            }
         case 6:
             let list = CompactCorner.allCases
             let idx = list.firstIndex(of: compactCorner) ?? 0
