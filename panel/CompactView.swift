@@ -19,6 +19,7 @@ struct CompactView: View {
 
     @State private var rippleScale: CGFloat = 0.3
     @State private var rippleOpacity: Double = 0
+    @State private var isHovering: Bool = false
 
     private static let glowColor = Color(red: 0.4, green: 0.85, blue: 1.0)
     private static let recentEventWindow: TimeInterval = 5 * 60
@@ -39,6 +40,14 @@ struct CompactView: View {
         .contentShape(Capsule())
         .onTapGesture(count: 2) { onExitCompact() }
         .onChange(of: store.events.first?.id) { _ in triggerRipple() }
+        // Hover state drives per-mascot reactions (robot antenna flick, cat
+        // wink + ear twitch, eye pupil dilate-and-dart, ghost pop-and-yawn).
+        // Gated on pill mode — the expanded panel doesn't need playfulness.
+        .onHover { isHovering = $0 }
+    }
+
+    private var mascotHovered: Bool {
+        isHovering && !nav.compactExpanded
     }
 
     // Soft outward wave on event arrival. Capsule scales from 0.3 → 1.15
@@ -79,7 +88,8 @@ struct CompactView: View {
                     hasSeven: nav.quota?.sevenDay != nil,
                     polling:  nav.quotaSyncing,
                     anyBusy:  anyBusy,
-                    paused:   nav.compactDragging
+                    paused:   nav.compactDragging,
+                    showRemaining: nav.quotaShowRemaining
                 )
                 .frame(width: 42, height: 42)
             }
@@ -97,7 +107,7 @@ struct CompactView: View {
     @ViewBuilder
     private var headline: some View {
         HStack(spacing: 6) {
-            BotMascot(state: botState, kind: nav.mascot, paused: nav.compactDragging)
+            BotMascot(state: botState, kind: nav.mascot, paused: nav.compactDragging, hovered: mascotHovered)
                 .frame(width: 26, height: 24)
             headlineText
         }
@@ -351,6 +361,7 @@ private struct QuotaGauge: View {
     let polling: Bool
     let anyBusy: Bool
     let paused: Bool
+    let showRemaining: Bool
 
     private static let cyan = Color(red: 0.30, green: 0.92, blue: 1.0)
     private static let outerLineWidth: CGFloat = 4.0
@@ -443,7 +454,11 @@ private struct QuotaGauge: View {
     }
 
     private var centerReadout: some View {
-        Text(hasFive ? "\(Int(fivePct.rounded()))" : "—")
+        // Ring still fills with "used" so the urgency-colored gradient
+        // (green→red as it grows) keeps its meaning. Only the number in
+        // the middle flips: 30% used ↔ 70% (remaining).
+        let pct = showRemaining ? max(0, 100 - fivePct) : fivePct
+        return Text(hasFive ? "\(Int(pct.rounded()))" : "—")
             .font(.system(size: 14, weight: .semibold).monospacedDigit())
             .foregroundStyle(.primary)
     }
@@ -474,13 +489,14 @@ private struct BotMascot: View {
     let state: BotState
     let kind: MascotKind
     let paused: Bool
+    let hovered: Bool
 
     var body: some View {
         switch kind {
-        case .robot: RobotMascot(state: state, paused: paused)
-        case .cat:   CatMascot(state: state, paused: paused)
-        case .eye:   EyeMascot(state: state, paused: paused)
-        case .ghost: GhostMascot(state: state, paused: paused)
+        case .robot: RobotMascot(state: state, paused: paused, hovered: hovered)
+        case .cat:   CatMascot(state: state, paused: paused, hovered: hovered)
+        case .eye:   EyeMascot(state: state, paused: paused, hovered: hovered)
+        case .ghost: GhostMascot(state: state, paused: paused, hovered: hovered)
         }
     }
 }
@@ -489,6 +505,7 @@ private struct RobotMascot: View {
 
     let state: BotState
     let paused: Bool
+    let hovered: Bool
 
     private static let cyan = Color(red: 0.4, green: 0.85, blue: 1.0)
     private static let outline = Color.secondary.opacity(0.7)
@@ -521,9 +538,11 @@ private struct RobotMascot: View {
         VStack(spacing: 0) {
             Circle().fill(antennaColor.opacity(0.9))
                 .frame(width: 3.5, height: 3.5)
+                .scaleEffect(hovered ? 1.5 : 1.0)
             Rectangle().fill(Self.outline).frame(width: 1, height: 3)
         }
-        .offset(y: -8.5)
+        .offset(y: hovered ? -10.5 : -8.5)
+        .animation(.spring(response: 0.25, dampingFraction: 0.5), value: hovered)
     }
 
     private var staticEyes: some View {
@@ -560,11 +579,13 @@ private struct RobotMascot: View {
             Circle()
                 .fill(antennaColor.opacity(0.6 + 0.4 * blink))
                 .frame(width: 3.5, height: 3.5)
+                .scaleEffect(hovered ? 1.5 : 1.0)
             Rectangle()
                 .fill(Self.outline)
                 .frame(width: 1, height: 3)
         }
-        .offset(y: -8.5)
+        .offset(y: hovered ? -10.5 : -8.5)
+        .animation(.spring(response: 0.25, dampingFraction: 0.5), value: hovered)
     }
 
     private var antennaColor: Color {
@@ -658,6 +679,7 @@ private struct CatMascot: View {
 
     let state: BotState
     let paused: Bool
+    let hovered: Bool
 
     private static let cyan = Color(red: 0.4, green: 0.85, blue: 1.0)
     private static let outline = Color.secondary.opacity(0.7)
@@ -675,6 +697,9 @@ private struct CatMascot: View {
         }
     }
 
+    // Ears perked = head + ear-hints lift slightly while hovered.
+    private var earLift: CGFloat { hovered ? -1.5 : 0 }
+
     private var head: some View {
         ZStack {
             // Face + ears combined as a single path so the ears feel
@@ -683,16 +708,19 @@ private struct CatMascot: View {
                 .fill(headFill)
                 .overlay(CatHeadShape().stroke(Self.outline, lineWidth: 1.2))
                 .frame(width: 20, height: 18)
-                .offset(y: 1)
+                .offset(y: 1 + earLift)
+                .animation(.spring(response: 0.28, dampingFraction: 0.6), value: hovered)
             // Inner ear hints (small triangles inside each ear)
             Triangle()
                 .fill(Self.outline.opacity(0.4))
                 .frame(width: 2, height: 2.2)
-                .offset(x: -5.5, y: -5.5)
+                .offset(x: -5.5, y: -5.5 + earLift)
+                .animation(.spring(response: 0.28, dampingFraction: 0.6), value: hovered)
             Triangle()
                 .fill(Self.outline.opacity(0.4))
                 .frame(width: 2, height: 2.2)
-                .offset(x: 5.5, y: -5.5)
+                .offset(x: 5.5, y: -5.5 + earLift)
+                .animation(.spring(response: 0.28, dampingFraction: 0.6), value: hovered)
             // Nose (tiny triangle)
             Triangle()
                 .rotation(.degrees(180))
@@ -715,14 +743,24 @@ private struct CatMascot: View {
         let cycle = t.truncatingRemainder(dividingBy: 3.5)
         let blinking = state != .alert && cycle < 0.15
         let scaleY: CGFloat = blinking ? 0.15 : 1.0
-        return HStack(spacing: 5) { eyeShape; eyeShape }
-            .scaleEffect(x: 1, y: scaleY)
-            .animation(.easeInOut(duration: 0.08), value: blinking)
-            .offset(y: -0.5)
+        // While hovered, scale the left eye flat → looks like a wink.
+        let leftScale: CGFloat = hovered ? 0.15 : scaleY
+        return HStack(spacing: 5) {
+            eyeShape.scaleEffect(x: 1, y: leftScale)
+            eyeShape.scaleEffect(x: 1, y: scaleY)
+        }
+        .animation(.easeInOut(duration: 0.18), value: hovered)
+        .animation(.easeInOut(duration: 0.08), value: blinking)
+        .offset(y: -0.5)
     }
 
     private var staticEyes: some View {
-        HStack(spacing: 5) { eyeShape; eyeShape }.offset(y: -0.5)
+        HStack(spacing: 5) {
+            eyeShape.scaleEffect(x: 1, y: hovered ? 0.15 : 1)
+            eyeShape
+        }
+        .animation(.easeInOut(duration: 0.18), value: hovered)
+        .offset(y: -0.5)
     }
 
     @ViewBuilder
@@ -843,6 +881,7 @@ private struct EyeMascot: View {
 
     let state: BotState
     let paused: Bool
+    let hovered: Bool
 
     private static let cyan = Color(red: 0.4, green: 0.85, blue: 1.0)
     private static let outline = Color.secondary.opacity(0.7)
@@ -884,15 +923,27 @@ private struct EyeMascot: View {
     }
 
     private func pupil(at t: TimeInterval) -> some View {
-        let scan = state == .watching ? sin(t * 1.5) * 3 : 0
+        // Hovered: faster, wider dart — the eye is "tracking" the cursor.
+        // Otherwise: the slow watching scan, or static.
+        let scan: Double
+        if hovered      { scan = sin(t * 6.0) * 4.5 }
+        else if state == .watching { scan = sin(t * 1.5) * 3 }
+        else            { scan = 0 }
         return Circle()
             .fill(pupilColor)
-            .frame(width: pupilSize, height: pupilSize)
+            .frame(width: pupilSize + (hovered ? 2.0 : 0),
+                   height: pupilSize + (hovered ? 2.0 : 0))
             .offset(x: scan, y: 1)
+            .animation(.easeInOut(duration: 0.18), value: hovered)
     }
 
     private var staticPupil: some View {
-        Circle().fill(pupilColor).frame(width: pupilSize, height: pupilSize).offset(y: 1)
+        Circle()
+            .fill(pupilColor)
+            .frame(width: pupilSize + (hovered ? 2.0 : 0),
+                   height: pupilSize + (hovered ? 2.0 : 0))
+            .offset(y: 1)
+            .animation(.easeInOut(duration: 0.18), value: hovered)
     }
 
     private var pupilSize: CGFloat {
@@ -919,6 +970,7 @@ private struct GhostMascot: View {
 
     let state: BotState
     let paused: Bool
+    let hovered: Bool
 
     private static let cyan = Color(red: 0.4, green: 0.85, blue: 1.0)
     private static let outline = Color.secondary.opacity(0.7)
@@ -927,13 +979,18 @@ private struct GhostMascot: View {
         if paused {
             ZStack { body_; staticEyes; mouth }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .offset(y: hovered ? -4 : 0)
+                .scaleEffect(hovered ? 1.08 : 1.0)
+                .animation(.spring(response: 0.32, dampingFraction: 0.55), value: hovered)
         } else {
             TimelineView(.animation(minimumInterval: 0.05)) { tl in
                 let t = tl.date.timeIntervalSinceReferenceDate
                 let bob = sin(t * 1.3) * 1.0
                 ZStack { body_; eyes(at: t); mouth }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .offset(y: bob)
+                    .offset(y: bob + (hovered ? -4 : 0))
+                    .scaleEffect(hovered ? 1.08 : 1.0)
+                    .animation(.spring(response: 0.32, dampingFraction: 0.55), value: hovered)
             }
         }
     }
@@ -1006,7 +1063,16 @@ private struct GhostMascot: View {
                 .frame(width: 2.4, height: 3.5)
                 .offset(y: 4)
         default:
-            EmptyView()
+            if hovered {
+                // Yawning "boo" while hovered — open oval mouth.
+                Capsule()
+                    .fill(Self.outline.opacity(0.85))
+                    .frame(width: 3, height: 4)
+                    .offset(y: 4)
+                    .transition(.scale.combined(with: .opacity))
+            } else {
+                EmptyView()
+            }
         }
     }
 }

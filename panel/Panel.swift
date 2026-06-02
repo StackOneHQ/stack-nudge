@@ -496,7 +496,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private var hotkey: Hotkey?
     private let store = EventStore()
     private let sessions = SessionStore()
-    private let nav = PanelNav()
+    let nav = PanelNav()
     private let phrases = PhrasesViewModel()
     private var listener: EventListener?
     private var menuBar: MenuBarController?
@@ -898,12 +898,27 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         applyCompactLayout()
     }
 
+    // Wraps expandFromCompact for entry points that come from mouse/tap
+    // events on the pill itself — the SwiftUI expand button and the
+    // double-tap gesture. Notification banners sit at the same screen
+    // corner as the pill, so a click meant for the banner can leak
+    // through and activate these. Hotkey + keyboard paths (M, global
+    // toggle) bypass this veto because keyboard input is unambiguous.
+    private func expandFromCompactUserGesture() {
+        if Date().timeIntervalSince(lastEventArrivalAt) < 2 { return }
+        expandFromCompact()
+    }
+
     // Compact mode is always on, so what used to be "exit compact"
     // (double-click, expand button) now means "expand to full panel
     // temporarily." Calling expandFromCompact lets the existing wiring
     // and Settings actions keep working without renaming.
     private func exitCompactMode() {
-        expandFromCompact()
+        // exitCompactMode is wired into the SwiftUI expand button and the
+        // pill's double-tap gesture — both ambiguous in the banner window.
+        // The hotkey/M paths call expandFromCompact directly and skip this
+        // veto, so a deliberate keystroke still expands instantly.
+        expandFromCompactUserGesture()
     }
 
     // Called from the "M" keystroke in Events/Sessions/Usage tabs to
@@ -1731,6 +1746,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             guard let self else { return }
+            // Compact mode: the pill is the resting state and is always
+            // visible. Unsolicited reopen events (Dock click, Spotlight,
+            // AppleEvent activations from other apps, banner side-effects
+            // not caught by the bannerActivationUntil veto) used to expand
+            // the pill into the full panel — surfacing as "panel randomly
+            // appears for a few seconds before collapsing." Keep the pill
+            // at rest; just raise it in case another full-screen app
+            // covered it.
+            if self.nav.compactMode, !self.nav.compactExpanded {
+                self.panel.orderFront(nil)
+                return
+            }
             if Date() < self.bannerActivationUntil { return }
             // Suppress if a banner just posted — macOS sometimes routes a
             // reopen through us as a side effect of the notification arriving,

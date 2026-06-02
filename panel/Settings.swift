@@ -79,16 +79,17 @@ struct SettingsView: View {
                             row(15 + off, label: "Alert threshold", kind: .cycle,  value: "\(nav.quotaAlertThreshold)%",            enabled: nav.quotaTrackingEnabled && nav.quotaAlertsEnabled)
                             row(16 + off, label: "Poll frequency",  kind: .cycle,  value: "\(nav.quotaPollMinutes) min",            enabled: nav.quotaTrackingEnabled)
                             row(17 + off, label: "Context alert at", kind: .cycle, value: contextAlertLabel)
+                            row(18 + off, label: "Show remaining",   kind: .toggle, value: nav.quotaShowRemaining ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
                         }
 
                         section("Actions") {
-                            row(18 + off, label: "Edit phrases…",         kind: .action, value: "")
-                            row(19 + off, label: "Check permissions…",    kind: .action, value: "")
-                            row(20 + off, label: "Open config file…",     kind: .action, value: "")
-                            row(21 + off, label: "View release notes…",   kind: .action, value: "")
-                            row(22 + off, label: "Check for updates…",    kind: .action, value: checkForUpdatesStatus)
-                            row(23 + off, label: "Uninstall StackNudge…", kind: .action, value: "")
-                            row(24 + off, label: "Quit panel",            kind: .action, value: "")
+                            row(19 + off, label: "Edit phrases…",         kind: .action, value: "")
+                            row(20 + off, label: "Check permissions…",    kind: .action, value: "")
+                            row(21 + off, label: "Open config file…",     kind: .action, value: "")
+                            row(22 + off, label: "View release notes…",   kind: .action, value: "")
+                            row(23 + off, label: "Check for updates…",    kind: .action, value: checkForUpdatesStatus)
+                            row(24 + off, label: "Uninstall StackNudge…", kind: .action, value: "")
+                            row(25 + off, label: "Quit panel",            kind: .action, value: "")
                         }
 
                         aboutFooter

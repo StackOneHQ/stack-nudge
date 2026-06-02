@@ -164,6 +164,7 @@ final class PanelNav: ObservableObject {
     // all tiers — banner fires once per period when any tier reaches it.
     @Published var quotaTrackingEnabled: Bool = true
     @Published var quotaAlertsEnabled:   Bool = true
+    @Published var quotaShowRemaining:   Bool = false
     @Published var quotaAlertThreshold:  Int  = 80
     // Background poll interval in minutes when the panel is hidden.
     // Visible-panel polling is fixed at 60s (see Panel.swift). Cycle
@@ -291,13 +292,14 @@ final class PanelNav: ObservableObject {
     //  15  Alert threshold       cycle
     //  16  Poll frequency        cycle
     //  17  Context alert at      cycle       (per-session token thresholds)
-    //  18  Edit phrases…         action
-    //  19  Check permissions…    action
-    //  20  Open config file…     action
-    //  21  View release notes…   action
-    //  22  Check for updates…    action
-    //  23  Uninstall stack-nudge action
-    //  24  Quit panel            action
+    //  18  Show remaining        toggle      (invert gauge readout: 70% left vs 30% used)
+    //  19  Edit phrases…         action
+    //  20  Check permissions…    action
+    //  21  Open config file…     action
+    //  22  View release notes…   action
+    //  23  Check for updates…    action
+    //  24  Uninstall stack-nudge action
+    //  25  Quit panel            action
 
     // MARK: - Disk I/O
 
@@ -321,6 +323,7 @@ final class PanelNav: ObservableObject {
         voiceSpeed      = Double(config["STACKNUDGE_VOICE_SPEED"] ?? "") ?? 1.1
         quotaTrackingEnabled = ConfigFile.bool(config, "STACKNUDGE_QUOTA_TRACKING", default: true)
         quotaAlertsEnabled   = ConfigFile.bool(config, "STACKNUDGE_QUOTA_ALERTS",   default: true)
+        quotaShowRemaining   = ConfigFile.bool(config, "STACKNUDGE_QUOTA_SHOW_REMAINING", default: false)
         // Coerce out-of-list values to the nearest valid threshold so a
         // hand-edited config can't desync the cycle row's selection.
         let rawThreshold = Int(config["STACKNUDGE_QUOTA_THRESHOLD"] ?? "") ?? 80
@@ -526,13 +529,13 @@ final class PanelNav: ObservableObject {
             } else {
                 startVoiceModelDownload()
             }
-        case 18: actions?.editPhrases()
-        case 19: actions?.checkPermissions()
-        case 20: actions?.openConfig()
-        case 21: actions?.openReleaseNotes()
-        case 22: actions?.checkForUpdates()
-        case 23: actions?.beginUninstall()
-        case 24: actions?.quit()
+        case 19: actions?.editPhrases()
+        case 20: actions?.checkPermissions()
+        case 21: actions?.openConfig()
+        case 22: actions?.openReleaseNotes()
+        case 23: actions?.checkForUpdates()
+        case 24: actions?.beginUninstall()
+        case 25: actions?.quit()
         default: applyCycle(forward: true)
         }
     }
@@ -655,6 +658,10 @@ final class PanelNav: ObservableObject {
             contextAlertThresholdK = list[next]
             ConfigFile.write(key: "STACKNUDGE_CONTEXT_ALERT_THRESHOLD",
                              value: String(contextAlertThresholdK))
+        case 18:
+            quotaShowRemaining.toggle()
+            ConfigFile.write(key: "STACKNUDGE_QUOTA_SHOW_REMAINING",
+                             value: quotaShowRemaining ? "true" : "false")
         default:
             break
         }

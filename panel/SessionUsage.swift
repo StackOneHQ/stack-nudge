@@ -269,10 +269,16 @@ struct UsageView: View {
     }
 
     private func tierRow(_ tier: QuotaTier) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        // Show "30% used" or "70% remaining" depending on the toggle. Bar
+        // still represents utilization so the color ramp keeps its meaning.
+        let display = nav.quotaShowRemaining
+            ? max(0, 100 - tier.utilization)
+            : tier.utilization
+        let suffix  = nav.quotaShowRemaining ? "% left" : "%"
+        return VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Spacer()
-                Text("\(Int(tier.utilization.rounded()))%")
+                Text("\(Int(display.rounded()))\(suffix)")
                     .font(.caption.monospacedDigit().weight(.semibold))
                     .foregroundStyle(barColor(tier.utilization))
             }
