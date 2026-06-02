@@ -489,6 +489,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                              UNUserNotificationCenterDelegate {
 
     private var panel: FloatingPanel!
+    // Held so applyCompactLayout can swap its corner radius between the
+    // full-panel value and the pill's capsule radius — otherwise the
+    // smaller-radius rect corners poke past the SwiftUI capsule curve.
+    private weak var contentBlurView: NSVisualEffectView?
     private var hotkey: Hotkey?
     private let store = EventStore()
     private let sessions = SessionStore()
@@ -563,6 +567,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         blur.wantsLayer = true
         blur.layer?.cornerRadius = 12
         blur.layer?.masksToBounds = true
+        contentBlurView = blur
 
         let host = NSHostingView(rootView: PanelContentView(
             store: store, sessions: sessions, nav: nav, phrases: phrases,
@@ -782,6 +787,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             nav.postUpdateVersion = result.version.isEmpty ? "?" : result.version
             nav.postUpdateNotes = nil
             nav.mode = .postUpdate
+            // Expand out of the pill so the changelog renders in the full
+            // panel rather than getting clipped into the widget frame.
+            if nav.compactMode, !nav.compactExpanded {
+                nav.compactExpanded = true
+            }
             // Auto-open the panel so the user immediately sees the
             // "what shipped" view rather than discovering it via hotkey.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
@@ -843,6 +853,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             ignoringProgrammaticMove = true
             panel.setFrame(frame, display: true, animate: false)
             ignoringProgrammaticMove = false
+            // Match the SwiftUI Capsule's corner radius (half the pill
+            // height) so the blur backing doesn't poke out beyond the
+            // capsule curve and show as dark squares in the corners.
+            contentBlurView?.layer?.cornerRadius = size.height / 2
             panel.level = .statusBar
             panel.collectionBehavior = [.canJoinAllSpaces, .stationary,
                                         .fullScreenAuxiliary, .ignoresCycle]
@@ -862,10 +876,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             // Restore the original layout-protecting minimum so SwiftUI's
             // full panel content (Settings, Sessions, etc.) has room.
             panel.contentMinSize = NSSize(width: 560, height: 260)
+            contentBlurView?.layer?.cornerRadius = 12
             panel.level = .floating
             panel.collectionBehavior = []
             panel.hasShadow = true
-            panel.isMovableByWindowBackground = false
+            panel.isMovableByWindowBackground = true
             positionPanel()
             if nav.compactExpanded {
                 NSApp.activate(ignoringOtherApps: true)
