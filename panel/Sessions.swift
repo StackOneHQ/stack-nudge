@@ -83,7 +83,7 @@ struct SessionsView: View {
                 FooterHint(label: "Focus",   keys: ["⏎"])
                 FooterHint(label: "Rename",  keys: ["N"])
                 FooterHint(label: "Kill",    keys: ["⌫"])
-                FooterHint(label: "Compact", keys: ["M"])
+                if nav.compactMode { FooterHint(label: "Compact", keys: ["M"]) }
                 FooterHint(label: "Back",    keys: ["Esc"])
             }
         }

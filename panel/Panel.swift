@@ -267,8 +267,8 @@ struct PanelContentView: View {
     private var footer: some View {
         PageFooter {
             if store.events.isEmpty {
-                FooterHint(label: "Compact", keys: ["M"])
-                FooterHint(label: "Hide",    keys: ["Esc"])
+                if nav.compactMode { FooterHint(label: "Compact", keys: ["M"]) }
+                FooterHint(label: "Hide", keys: ["Esc"])
             } else {
                 if let primary = primaryActionLabel {
                     FooterHint(label: primary, keys: ["⏎"], primary: true)
@@ -282,8 +282,8 @@ struct PanelContentView: View {
                 FooterHint(label: "Snooze",  keys: ["S"])
                     .opacity(snoozeEnabled ? 1.0 : 0.35)
                 FooterHint(label: "Dismiss", keys: ["⌫"])
-                FooterHint(label: "Compact", keys: ["M"])
-                FooterHint(label: "Hide",    keys: ["Esc"])
+                if nav.compactMode { FooterHint(label: "Compact", keys: ["M"]) }
+                FooterHint(label: "Hide", keys: ["Esc"])
             }
         }
     }
@@ -1818,8 +1818,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
         // From the pill (compact-not-expanded), M expands to full panel.
         // Mirrors the M-to-collapse shortcut shown in the full panel's
-        // footer. The pill must be key for this to land, so a single
-        // click anywhere on the pill arms it.
+        // footer. Gated on compactMode so the shortcut quietly no-ops
+        // when the user has turned off the widget.
         if nav.compactMode, !nav.compactExpanded,
            event.keyCode == KeyCode.mKey,
            mods.intersection([.command, .control, .option, .shift]).isEmpty {
