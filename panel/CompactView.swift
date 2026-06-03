@@ -410,7 +410,8 @@ private struct QuotaGauge: View {
     private var outerFill: some View {
         Circle()
             .trim(from: 0, to: max(0, min(1, sevenPct / 100)))
-            .stroke(gradient, style: StrokeStyle(lineWidth: Self.outerLineWidth, lineCap: .round))
+            .stroke(Self.urgencyColor(for: sevenPct),
+                    style: StrokeStyle(lineWidth: Self.outerLineWidth, lineCap: .round))
             .rotationEffect(.degrees(-90))
             .padding(Self.outerLineWidth / 2)
     }
@@ -418,23 +419,21 @@ private struct QuotaGauge: View {
     private var innerFill: some View {
         Circle()
             .trim(from: 0, to: max(0, min(1, fivePct / 100)))
-            .stroke(gradient, style: StrokeStyle(lineWidth: Self.innerLineWidth, lineCap: .round))
+            .stroke(Self.urgencyColor(for: fivePct),
+                    style: StrokeStyle(lineWidth: Self.innerLineWidth, lineCap: .round))
             .rotationEffect(.degrees(-90))
             .padding(Self.outerLineWidth + Self.ringGap)
     }
 
-    private var gradient: AngularGradient {
-        AngularGradient(
-            gradient: Gradient(stops: [
-                .init(color: Self.cyan,  location: 0.0),
-                .init(color: .yellow,    location: 0.55),
-                .init(color: .orange,    location: 0.80),
-                .init(color: .red,       location: 1.0),
-            ]),
-            center: .center,
-            startAngle: .degrees(-90),
-            endAngle: .degrees(270)
-        )
+    // Stroke color reflects urgency at a glance. Previous AngularGradient
+    // mapped cyan→red across the full 360°, so a nearly-full ring wrapped
+    // its red end back into cyan at 12 o'clock — a jarring blue notch.
+    // Solid color per band reads cleaner and matches the pill border.
+    private static func urgencyColor(for pct: Double) -> Color {
+        if pct >= 90 { return .red }
+        if pct >= 75 { return .orange }
+        if pct >= 50 { return .yellow }
+        return cyan
     }
 
     private func innerGlow(at date: Date) -> some View {
