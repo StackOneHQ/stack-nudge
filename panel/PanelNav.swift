@@ -179,6 +179,11 @@ final class PanelNav: ObservableObject {
     // tokens (not %) because Claude 4.x context windows vary by model.
     @Published var contextAlertThresholdK: Int = 0
     static let contextAlertThresholdOptions: [Int] = [0, 100, 150, 175, 200, 300, 500, 750]
+    // Per-session cap on Events history. Each Claude session (or
+    // agent+project bucket for non-Claude agents) keeps the newest N
+    // events; a global ceiling of 100 in EventStore caps total growth.
+    @Published var eventsPerSession: Int = 5
+    static let eventsPerSessionOptions: [Int] = [3, 5, 10, 20, 50]
     // Compact widget mode. Shrinks the panel to a glance-only widget pinned
     // to a screen corner; clicking it expands back to the full panel.
     // Compact mode is always-on now. The compactMode field is kept (and
@@ -347,6 +352,8 @@ final class PanelNav: ObservableObject {
         mascot        = MascotKind(rawValue: config["STACKNUDGE_MASCOT"] ?? "") ?? .robot
         let rawAlpha = Double(config["STACKNUDGE_COMPACT_ALPHA"] ?? "") ?? 1.0
         compactAlpha = Self.compactAlphaOptions.min(by: { abs($0 - rawAlpha) < abs($1 - rawAlpha) }) ?? 1.0
+        let rawPerSession = Int(config["STACKNUDGE_EVENTS_PER_SESSION"] ?? "") ?? 5
+        eventsPerSession = Self.eventsPerSessionOptions.min(by: { abs($0 - rawPerSession) < abs($1 - rawPerSession) }) ?? 5
     }
 
     // MARK: - Agent reconciliation
@@ -539,13 +546,13 @@ final class PanelNav: ObservableObject {
             } else {
                 startVoiceModelDownload()
             }
-        case 21: actions?.editPhrases()
-        case 22: actions?.checkPermissions()
-        case 23: actions?.openConfig()
-        case 24: actions?.openReleaseNotes()
-        case 25: actions?.checkForUpdates()
-        case 26: actions?.beginUninstall()
-        case 27: actions?.quit()
+        case 22: actions?.editPhrases()
+        case 23: actions?.checkPermissions()
+        case 24: actions?.openConfig()
+        case 25: actions?.openReleaseNotes()
+        case 26: actions?.checkForUpdates()
+        case 27: actions?.beginUninstall()
+        case 28: actions?.quit()
         default: applyCycle(forward: true)
         }
     }
@@ -588,6 +595,12 @@ final class PanelNav: ObservableObject {
         case 3:
             panelPinned.toggle()
             ConfigFile.write(key: "STACKNUDGE_PANEL_PIN", value: panelPinned ? "true" : "false")
+            // Pin + Widget: Pin wins. Toggling Pin on from the widget pill
+            // should bring the full panel forward so the user sees what
+            // they just pinned.
+            if panelPinned, compactMode, !compactExpanded {
+                compactExpanded = true
+            }
         case 4:
             // Optimistic UI flip; revert if launchctl fails so the toggle
             // never reports a state that disagrees with the plist on disk.
@@ -623,18 +636,18 @@ final class PanelNav: ObservableObject {
             ConfigFile.write(key: "STACKNUDGE_COMPACT_CORNER",
                              value: compactCorner.rawValue)
         case 7:
-            let list = MascotKind.allCases
-            let idx = list.firstIndex(of: mascot) ?? 0
-            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
-            mascot = list[next]
-            ConfigFile.write(key: "STACKNUDGE_MASCOT", value: mascot.rawValue)
-        case 8:
             let list = Self.compactAlphaOptions
             let idx = list.firstIndex(of: compactAlpha) ?? (list.count - 1)
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
             compactAlpha = list[next]
             ConfigFile.write(key: "STACKNUDGE_COMPACT_ALPHA",
                              value: String(format: "%.2f", compactAlpha))
+        case 8:
+            let list = MascotKind.allCases
+            let idx = list.firstIndex(of: mascot) ?? 0
+            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+            mascot = list[next]
+            ConfigFile.write(key: "STACKNUDGE_MASCOT", value: mascot.rawValue)
         case 9:
             soundEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_SOUND", value: soundEnabled ? "true" : "false")
@@ -694,6 +707,13 @@ final class PanelNav: ObservableObject {
             quotaShowRemaining.toggle()
             ConfigFile.write(key: "STACKNUDGE_QUOTA_SHOW_REMAINING",
                              value: quotaShowRemaining ? "true" : "false")
+        case 21:
+            let list = Self.eventsPerSessionOptions
+            let idx = list.firstIndex(of: eventsPerSession) ?? 1
+            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+            eventsPerSession = list[next]
+            ConfigFile.write(key: "STACKNUDGE_EVENTS_PER_SESSION",
+                             value: String(eventsPerSession))
         default:
             break
         }

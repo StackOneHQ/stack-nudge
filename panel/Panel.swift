@@ -694,6 +694,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             .removeDuplicates()
             .sink { [weak self] _ in self?.applyCompactAlpha() }
             .store(in: &cancellables)
+        store.maxEventsPerSession = nav.eventsPerSession
+        nav.$eventsPerSession
+            .removeDuplicates()
+            .sink { [weak self] value in self?.store.maxEventsPerSession = value }
+            .store(in: &cancellables)
         applyCompactLayout()
 
         // If a previous panel instance was pkilled mid-update by install.sh,
@@ -838,6 +843,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // so the panel actually shrinks before SwiftUI re-evaluates body
         // (otherwise the new CompactView renders at the still-large size).
         if nav.compactMode {
+            // Pin panel + Widget: Pin wins. Stay full-size on focus loss;
+            // the widget collapse still happens via Esc / hotkey / explicit
+            // user gestures, but auto-collapse on focus loss is suppressed.
+            if nav.panelPinned { return }
             if nav.compactExpanded {
                 nav.compactExpanded = false
                 applyCompactLayout()
@@ -1206,6 +1215,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     private func evaluateQuotaThresholds(_ snapshot: QuotaSnapshot) {
         guard nav.quotaAlertsEnabled else { return }
+        // Respect the global Banner notifications toggle — quota alerts
+        // are system-level banners and shouldn't bypass it.
+        guard nav.bannerEnabled else { return }
         let threshold = Double(nav.quotaAlertThreshold)
 
         let tiers: [(name: String, label: String, tier: QuotaTier?)] = [
@@ -1375,6 +1387,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func evaluateContextThreshold(sessionID: String, stats: TranscriptStats) {
         let thresholdK = nav.contextAlertThresholdK
         guard thresholdK > 0 else { return }
+        // Respect the global Banner notifications toggle — context-fill
+        // banners are still system-level notifications and shouldn't fire
+        // when the user has turned banners off.
+        guard nav.bannerEnabled else { return }
         let threshold = thresholdK * 1_000
         let current = stats.tokens
 
