@@ -137,7 +137,7 @@ final class EventStore: ObservableObject {
     @Published private(set) var events: [NudgeEvent] = []
     @Published var selectedID: NudgeEvent.ID?
 
-    private let maxEvents = 5
+    private let maxEvents = 20
 
     /// Called on main queue after each new event is inserted.
     var onAppend: ((NudgeEvent) -> Void)?
