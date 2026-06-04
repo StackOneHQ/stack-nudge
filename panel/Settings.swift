@@ -55,8 +55,8 @@ struct SettingsView: View {
                         section("Widget") {
                             row(5 + off, label: "Widget",        kind: .toggle, value: nav.compactMode ? "On" : "Off")
                             row(6 + off, label: "Widget corner", kind: .cycle,  value: nav.compactCorner.label,             enabled: nav.compactMode)
-                            row(7 + off, label: "Mascot",        kind: .cycle,  value: nav.mascot.label,                    enabled: nav.compactMode)
-                            row(8 + off, label: "Widget opacity", kind: .cycle, value: "\(Int(nav.compactAlpha * 100))%",   enabled: nav.compactMode)
+                            row(7 + off, label: "Widget opacity", kind: .cycle, value: "\(Int(nav.compactAlpha * 100))%",   enabled: nav.compactMode)
+                            row(8 + off, label: "Mascot",        kind: .cycle,  value: nav.mascot.label,                    enabled: nav.compactMode)
                         }
 
                         section("Sounds") {
@@ -84,14 +84,18 @@ struct SettingsView: View {
                             row(20 + off, label: "Show remaining",   kind: .toggle, value: nav.quotaShowRemaining ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
                         }
 
+                        section("Events") {
+                            row(21 + off, label: "History per session", kind: .cycle, value: "\(nav.eventsPerSession)")
+                        }
+
                         section("Actions") {
-                            row(21 + off, label: "Edit phrases…",         kind: .action, value: "")
-                            row(22 + off, label: "Check permissions…",    kind: .action, value: "")
-                            row(23 + off, label: "Open config file…",     kind: .action, value: "")
-                            row(24 + off, label: "View release notes…",   kind: .action, value: "")
-                            row(25 + off, label: "Check for updates…",    kind: .action, value: checkForUpdatesStatus)
-                            row(26 + off, label: "Uninstall StackNudge…", kind: .action, value: "")
-                            row(27 + off, label: "Quit panel",            kind: .action, value: "")
+                            row(22 + off, label: "Edit phrases…",         kind: .action, value: "")
+                            row(23 + off, label: "Check permissions…",    kind: .action, value: "")
+                            row(24 + off, label: "Open config file…",     kind: .action, value: "")
+                            row(25 + off, label: "View release notes…",   kind: .action, value: "")
+                            row(26 + off, label: "Check for updates…",    kind: .action, value: checkForUpdatesStatus)
+                            row(27 + off, label: "Uninstall StackNudge…", kind: .action, value: "")
+                            row(28 + off, label: "Quit panel",            kind: .action, value: "")
                         }
 
                         aboutFooter

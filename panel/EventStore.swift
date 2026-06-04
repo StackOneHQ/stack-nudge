@@ -137,7 +137,26 @@ final class EventStore: ObservableObject {
     @Published private(set) var events: [NudgeEvent] = []
     @Published var selectedID: NudgeEvent.ID?
 
-    private let maxEvents = 5
+    var maxEventsPerSession: Int = 5 {
+        didSet { if maxEventsPerSession != oldValue { prune() } }
+    }
+    private let maxEventsTotal = 100
+
+    private func sessionKey(_ e: NudgeEvent) -> String {
+        e.claudeSessionID ?? "\(e.agent):\(e.projectPath ?? "")"
+    }
+
+    private func prune() {
+        var counts: [String: Int] = [:]
+        events = events.filter { e in
+            let k = sessionKey(e)
+            counts[k, default: 0] += 1
+            return counts[k]! <= maxEventsPerSession
+        }
+        if events.count > maxEventsTotal {
+            events = Array(events.prefix(maxEventsTotal))
+        }
+    }
 
     /// Called on main queue after each new event is inserted.
     var onAppend: ((NudgeEvent) -> Void)?
@@ -157,9 +176,10 @@ final class EventStore: ObservableObject {
             return
         }
         events.insert(event, at: 0)
-        if events.count > maxEvents {
-            events = Array(events.prefix(maxEvents))
-        }
+        // Bound per-session first (so a chatty session can't crowd out quiet
+        // ones), then apply a hard global ceiling to cap memory/UI growth
+        // when many sessions are active in parallel.
+        prune()
         if selectedID != event.id { selectedID = event.id }
         onAppend?(event)
         if ProcessInfo.processInfo.environment["STACKNUDGE_PANEL_DEBUG"] != nil {
