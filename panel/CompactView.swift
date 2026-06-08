@@ -310,8 +310,16 @@ struct CompactView: View {
     }
 
     private func transcriptStats(for s: Session) -> TranscriptStats? {
-        guard let id = s.claudeSessionID else { return nil }
-        return nav.claudeSessionStats[id]
+        if let id = s.claudeSessionID, let stats = nav.claudeSessionStats[id] {
+            return stats
+        }
+        // Non-sidecar agents (Codex) have no claudeSessionID on the Session;
+        // resolve via the PID→transcript cache so the pill shows their context
+        // too, surviving navigation and event pruning.
+        if let ref = nav.transcriptRefByPID[s.pid] {
+            return nav.claudeSessionStats[ref.sessionID]
+        }
+        return nil
     }
 
     private func displayName(_ s: Session) -> String {

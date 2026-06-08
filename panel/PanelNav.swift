@@ -154,6 +154,11 @@ final class PanelNav: ObservableObject {
     // Sessions.swift renders entries from this map alongside matched
     // sessions in the Sessions tab.
     @Published var claudeSessionStats: [String: TranscriptStats] = [:]
+    // Agents without a per-pid session sidecar (Codex) learn their transcript
+    // (session id + path) from the first hook event; we cache it by agent PID
+    // so the Sessions/Compact views can resolve stats by PID instead of
+    // scanning the prunable event list, and so the poll refresh can re-read it.
+    @Published var transcriptRefByPID: [Int: TranscriptRef] = [:]
     // Transient feedback for the "Check for updates…" action row.
     // Set by PanelController around UpdateChecker.check(); cleared
     // back to .idle a few seconds after a terminal result so the
