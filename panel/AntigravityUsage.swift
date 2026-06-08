@@ -24,76 +24,12 @@ struct AntigravityQuotaSnapshot: Equatable {
 
 final class AntigravityUsageProbe {
 
-    private static let endpointPath =
-        "/exa.language_server_pb.LanguageServerService/GetUserStatus"
-    private static let requestBody =
-        #"{"metadata":{"ideName":"antigravity","extensionName":"antigravity","locale":"en"}}"#
-
-    private let session: URLSession
-
-    init() {
-        let cfg = URLSessionConfiguration.ephemeral
-        cfg.timeoutIntervalForRequest = 4
-        cfg.timeoutIntervalForResource = 6
-        session = URLSession(configuration: cfg)
-    }
-
-    // Calls completion on the main queue. Discovery + request run off-main.
+    // Calls completion on the main queue. The loopback request runs off-main.
     func fetch(completion: @escaping (AntigravityQuotaSnapshot?) -> Void) {
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let result = self?.probe() ?? nil
+        DispatchQueue.global(qos: .utility).async {
+            let result = AntigravityLocalServer.call("GetUserStatus").flatMap(Self.parse)
             DispatchQueue.main.async { completion(result) }
         }
-    }
-
-    private func probe() -> AntigravityQuotaSnapshot? {
-        for port in Self.listeningPorts() {
-            if let data = requestStatus(port: port), let snapshot = Self.parse(data) {
-                return snapshot
-            }
-        }
-        return nil
-    }
-
-    // agy listens on two loopback ports; the plaintext one answers our HTTP
-    // POST, the TLS one returns 400 — so try each over HTTP and take the first
-    // that returns a 200 we can parse.
-    private func requestStatus(port: Int) -> Data? {
-        guard let url = URL(string: "http://127.0.0.1:\(port)\(Self.endpointPath)") else { return nil }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("1", forHTTPHeaderField: "Connect-Protocol-Version")
-        request.httpBody = Self.requestBody.data(using: .utf8)
-
-        let semaphore = DispatchSemaphore(value: 0)
-        var payload: Data?
-        var status = 0
-        let task = session.dataTask(with: request) { data, response, _ in
-            payload = data
-            status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            semaphore.signal()
-        }
-        task.resume()
-        _ = semaphore.wait(timeout: .now() + 5)
-        return status == 200 ? payload : nil
-    }
-
-    // Loopback listen ports of the running `agy` process. Empty when agy isn't
-    // running (or has no listening socket yet).
-    private static func listeningPorts() -> [Int] {
-        let output = ProcessOutput.read(
-            "/usr/sbin/lsof",
-            ["-nP", "-a", "-iTCP", "-sTCP:LISTEN", "-c", "agy"]
-        )
-        var ports: Set<Int> = []
-        for line in output.split(separator: "\n") {
-            guard let range = line.range(of: #"127\.0\.0\.1:\d+"#, options: .regularExpression),
-                  let port = Int(line[range].split(separator: ":").last ?? "")
-            else { continue }
-            ports.insert(port)
-        }
-        return Array(ports)
     }
 
     private static let iso: ISO8601DateFormatter = {

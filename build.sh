@@ -237,6 +237,7 @@ build_app "$APP" "stack-nudge" \
   panel/SessionStore.swift \
   panel/SessionUsage.swift \
   panel/CodexUsage.swift \
+  panel/AntigravityLocalServer.swift \
   panel/AntigravityUsage.swift \
   panel/Sessions.swift \
   panel/CompactView.swift \

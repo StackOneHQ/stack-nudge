@@ -1492,7 +1492,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         guard let session = sessions.sessions.first(where: { $0.claudeSessionID == id })
         else { return "a session" }
         if let custom = session.customName, !custom.isEmpty { return custom }
-        if let name = session.claudeName,
+        if let name = session.liveTitle,
            !name.isEmpty, name != "main-agent" {
             return name
         }
@@ -1629,7 +1629,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         guard let session = sessions.sessions.first(where: { $0.claudeSessionID == id })
         else { return event.title }
         let custom = session.customName?.trimmingCharacters(in: .whitespaces)
-        let claude = session.claudeName?.trimmingCharacters(in: .whitespaces)
+        let claude = session.liveTitle?.trimmingCharacters(in: .whitespaces)
         let label: String?
         if let custom, !custom.isEmpty {
             label = custom

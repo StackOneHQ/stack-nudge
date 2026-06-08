@@ -24,15 +24,16 @@ struct Session: Identifiable, Equatable {
     // which is exactly the pre-Stage-2 behaviour.
     var tabId: String?
     var tabName: String?
-    // Read from ~/.claude/sessions/<pid>.json (one file per running claude
-    // process). Gives us authoritative session identity + state without
-    // needing a hook event to fire first. All optional — missing for
-    // non-claude agents, or if the sidecar doesn't exist yet for a freshly
-    // spawned process.
+    // Claude's per-pid sidecar (~/.claude/sessions/<pid>.json) gives an
+    // authoritative session id without waiting for a hook event.
     var claudeSessionID: String?
-    var claudeName: String?           // "main-agent" (default) or user-set
-    var claudeStatus: String?         // "busy" | "idle" | other
-    var claudeUpdatedAt: Date?        // last-activity timestamp from sidecar
+    // Live agent state, agent-agnostic: Claude fills these from its sidecar,
+    // Antigravity from its language-server RPC (see SessionStore.enrichAntigravity
+    // + AntigravityLocalServer). They drive the busy/idle dot, the status line,
+    // and the busy-first sort; nil for agents that expose no live state.
+    var liveTitle: String?            // session name (Claude sidecar; "main-agent" = default)
+    var liveStatus: String?           // "busy" | "idle" | other
+    var lastActivityAt: Date?         // last-activity timestamp
 }
 
 // Decoded shape of ~/.claude/sessions/<pid>.json. Only the fields we
@@ -206,7 +207,7 @@ final class SessionStore: ObservableObject {
         }
 
         // Sort: active first, busy above non-busy within active, then by
-        // most-recent claudeUpdatedAt (or process pid as tiebreaker so
+        // most-recent lastActivityAt (or process pid as tiebreaker so
         // ordering stays stable when sidecar timestamps are absent).
         // Distant past for sessions with no updatedAt sinks them below
         // any timestamped session.
@@ -216,12 +217,12 @@ final class SessionStore: ObservableObject {
             let rActive = rhs.status == .active
             if lActive != rActive { return lActive && !rActive }
 
-            let lBusy = lhs.claudeStatus == "busy"
-            let rBusy = rhs.claudeStatus == "busy"
+            let lBusy = lhs.liveStatus == "busy"
+            let rBusy = rhs.liveStatus == "busy"
             if lBusy != rBusy { return lBusy && !rBusy }
 
-            let lAt = lhs.claudeUpdatedAt ?? distantPast
-            let rAt = rhs.claudeUpdatedAt ?? distantPast
+            let lAt = lhs.lastActivityAt ?? distantPast
+            let rAt = rhs.lastActivityAt ?? distantPast
             if lAt != rAt { return lAt > rAt }
             return lhs.pid < rhs.pid
         }
@@ -276,12 +277,33 @@ final class SessionStore: ObservableObject {
                 tabId: nil,
                 tabName: nil,
                 claudeSessionID: sidecar?.sessionId,
-                claudeName:      sidecar?.name,
-                claudeStatus:    sidecar?.status,
-                claudeUpdatedAt: sidecar?.updatedAt.map { Date(timeIntervalSince1970: $0 / 1000) }
+                liveTitle:      sidecar?.name,
+                liveStatus:    sidecar?.status,
+                lastActivityAt: sidecar?.updatedAt.map { Date(timeIntervalSince1970: $0 / 1000) }
             ))
         }
+        enrichAntigravity(&found)
         return found
+    }
+
+    // Antigravity has no per-pid sidecar like Claude; instead the running `agy`
+    // process serves live session status over a local RPC. Match each agy
+    // session to its trajectory by workspace path (cwd) and fill the live
+    // busy/idle state, so agy sessions get the same dot + sort as Claude.
+    // One RPC call per scan, only when an agy session is present.
+    private static func enrichAntigravity(_ found: inout [Session]) {
+        guard found.contains(where: { $0.agent == "agy" }) else { return }
+        let states = AntigravityLocalServer.liveStatusByWorkspace()
+        guard !states.isEmpty else { return }
+        for index in found.indices where found[index].agent == "agy" {
+            guard let cwd = found[index].projectPath else { continue }
+            let match = states[cwd]
+                ?? states.first(where: { cwd == $0.key || cwd.hasPrefix($0.key + "/") })?.value
+            if let match {
+                found[index].liveStatus = match.status
+                found[index].lastActivityAt = match.lastActivityAt
+            }
+        }
     }
 
     private static func detectAgent(args: String) -> String? {
@@ -425,9 +447,9 @@ private extension Session {
             // we want the merge to surface the latest, not the stale value
             // from the previous poll.
             claudeSessionID: self.claudeSessionID,
-            claudeName:      self.claudeName,
-            claudeStatus:    self.claudeStatus,
-            claudeUpdatedAt: self.claudeUpdatedAt
+            liveTitle:      self.liveTitle,
+            liveStatus:    self.liveStatus,
+            lastActivityAt: self.lastActivityAt
         )
     }
 }
