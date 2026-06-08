@@ -1359,6 +1359,23 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 }
             }
         }
+
+        // Non-sidecar agents (Codex): re-read from the transcript path learned
+        // from their hook events, keyed by PID. Keeps stats live and repopulates
+        // them after EventStore pruning / panel navigation, mirroring the
+        // Claude path above (which is driven by the per-pid sidecar).
+        for session in sessions.sessions where session.status == .active {
+            guard session.agent != "claude",
+                  let ref = nav.transcriptRefByPID[session.pid]
+            else { continue }
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let stats = TranscriptReader.read(path: ref.path) else { return }
+                DispatchQueue.main.async {
+                    self?.nav.claudeSessionStats[ref.sessionID] = stats
+                    self?.evaluateContextThreshold(sessionID: ref.sessionID, stats: stats)
+                }
+            }
+        }
     }
 
     // Claude Code stores transcripts at:
@@ -1373,6 +1390,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         guard let sessionID = event.claudeSessionID,
               let path = event.transcriptPath, !path.isEmpty
         else { return }
+        // Cache the (session id, path) by agent PID so non-sidecar agents
+        // (Codex) resolve + re-read stats without depending on this event
+        // still being in the event list later.
+        if let pid = event.agentPID, pid > 0 {
+            nav.transcriptRefByPID[pid] = TranscriptRef(sessionID: sessionID, path: path)
+        }
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let stats = TranscriptReader.read(path: path) else { return }
             DispatchQueue.main.async {

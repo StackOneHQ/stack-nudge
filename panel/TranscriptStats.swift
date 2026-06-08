@@ -12,6 +12,18 @@ struct TranscriptStats: Equatable {
     let model: String?
 }
 
+// Stable per-PID handle to an agent's transcript, learned from a hook event.
+// Claude exposes a per-pid session sidecar so its sessions resolve stats
+// directly; agents without one (Codex) have no such anchor, so we cache the
+// (session id, transcript path) the first hook event carries, keyed by the
+// agent PID. The Sessions/Compact views resolve stats through this — which
+// survives EventStore pruning and panel navigation — and the poll refresh
+// re-reads `path` to keep stats live.
+struct TranscriptRef: Equatable {
+    let sessionID: String
+    let path: String
+}
+
 enum TranscriptReader {
 
     // Dispatch by transcript path. Codex rollout files live under

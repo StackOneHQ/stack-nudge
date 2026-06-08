@@ -115,6 +115,13 @@ struct SessionsView: View {
            let stats = nav.claudeSessionStats[id] {
             return stats
         }
+        // Non-sidecar agents (Codex): resolve via the PID→transcript cache.
+        // This persists across navigation and EventStore pruning, so the row
+        // doesn't vanish once the source event ages out of the event list.
+        if let ref = nav.transcriptRefByPID[session.pid],
+           let stats = nav.claudeSessionStats[ref.sessionID] {
+            return stats
+        }
         // Fallback for sessions whose sidecar isn't readable (e.g. pre-2.1
         // Claude Code): infer from the most recent matching event that
         // carried a claudeSessionID. events array is newest-first.
