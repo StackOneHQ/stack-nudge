@@ -400,8 +400,10 @@ final class Updater {
 
     // Move the existing bundle aside, move the new bundle into place. On
     // any error the swap reverts so the user isn't left with a half-
-    // installed app. The .old bundle stays on disk until the next clean
-    // shutdown — that's intentional, providing one extra layer of safety.
+    // installed app. The .old bundle stays on disk until the new bundle's
+    // applicationDidFinishLaunching runs Bootstrap.cleanupPostUpdateBackup
+    // — that's intentional: it's a rollback safety net for the failure
+    // window between swap and successful launch.
     private func atomicSwap(extractedAppURL: URL) throws {
         let fm = FileManager.default
         let target = URL(fileURLWithPath: Self.installedAppPath)

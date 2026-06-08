@@ -553,6 +553,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // stale bundle + rewrite the launchd plist so launchctl points
         // at us, not the old path.
         Bootstrap.migrateBundleNameIfNeeded()
+        // Updater preserves the previous bundle at StackNudge.app.old as a
+        // rollback safety net. We're the new bundle, we've successfully
+        // launched, so the safety net has served its purpose — recycle it
+        // so Spotlight stops indexing two StackNudge.app entries.
+        Bootstrap.cleanupPostUpdateBackup()
 
         let size = Self.loadSavedPanelSize()
         let frame = NSRect(origin: .zero, size: size)
