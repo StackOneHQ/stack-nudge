@@ -377,9 +377,9 @@ private struct SessionRow: View {
         // Prefer a user-set Claude session name when it's not the default
         // ("main-agent" is what Claude Code assigns by default; treat it
         // as not meaningful and fall through to project name).
-        if let claudeName = session.claudeName,
-           !claudeName.isEmpty, claudeName != "main-agent" {
-            return claudeName
+        if let liveTitle = session.liveTitle,
+           !liveTitle.isEmpty, liveTitle != "main-agent" {
+            return liveTitle
         }
         return session.projectName ?? "(no project)"
     }
@@ -407,7 +407,7 @@ private struct SessionRow: View {
             // so a glance at the panel tells the user which agents are
             // working vs. waiting. Other agents / unknown status default
             // to the existing green.
-            switch session.claudeStatus {
+            switch session.liveStatus {
             case "busy": return .yellow
             case "idle": return .green
             case nil:    return .green
@@ -426,8 +426,8 @@ private struct SessionRow: View {
             // activity Nm ago" from the sidecar's updatedAt when available
             // — more useful than process elapsed time, which only tells
             // you how long ago the process was spawned.
-            let head = session.claudeStatus ?? "active"
-            if let updated = session.claudeUpdatedAt {
+            let head = session.liveStatus ?? "active"
+            if let updated = session.lastActivityAt {
                 return "\(head) · \(Self.timeFormatter.localizedString(for: updated, relativeTo: Date()))"
             }
             let elapsed = session.elapsed?.trimmingCharacters(in: .whitespaces) ?? ""

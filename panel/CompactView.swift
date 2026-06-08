@@ -291,7 +291,7 @@ struct CompactView: View {
     // MARK: - Data helpers
 
     private var anyBusy: Bool {
-        sessions.sessions.contains { $0.claudeStatus == "busy" }
+        sessions.sessions.contains { $0.liveStatus == "busy" }
     }
 
     private var recentEvent: NudgeEvent? {
@@ -302,7 +302,7 @@ struct CompactView: View {
     }
 
     private var busiestSession: Session? {
-        sessions.sessions.first { $0.status == .active && $0.claudeStatus == "busy" }
+        sessions.sessions.first { $0.status == .active && $0.liveStatus == "busy" }
     }
 
     private var mostRecentActive: Session? {
@@ -324,7 +324,7 @@ struct CompactView: View {
 
     private func displayName(_ s: Session) -> String {
         if let custom = s.customName, !custom.isEmpty { return custom }
-        if let name = s.claudeName, !name.isEmpty, name != "main-agent" { return name }
+        if let name = s.liveTitle, !name.isEmpty, name != "main-agent" { return name }
         return s.projectName ?? "session"
     }
 
