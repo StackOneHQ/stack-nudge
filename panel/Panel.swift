@@ -649,6 +649,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             self?.lastEventArrivalAt = Date()
             self?.postBannerIfNeeded(event)
             self?.refreshTranscriptStats(for: event)
+            self?.nav.reactToEvent(event.kind)
         }
         nav.loadFromConfig()  // populate panelPinned + other live values up-front
         // Scan agent configs for missing wires (post-update / post-install

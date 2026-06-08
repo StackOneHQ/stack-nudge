@@ -207,6 +207,12 @@ final class PanelNav: ObservableObject {
     // animations so the main thread can keep up with AppKit's drag
     // handler. Reset by the controller's mouse-event monitor.
     @Published var compactDragging: Bool = false
+    // Most recent NudgeKind for the mascot to react to. Set by
+    // reactToEvent(_:) when EventStore appends a new event; cleared back to
+    // nil after 0.8s so the reaction is a one-shot pulse rather than a
+    // sticky state. Read by the per-mascot views in CompactView.
+    @Published var lastEventReaction: NudgeKind?
+    private var eventReactionClearTimer: Timer?
     // First-launch bootstrap wizard state. Populated by PanelController
     // on launch when Bootstrap.isInstalled() returns false; drives
     // BootstrapView (mode = .bootstrap).
@@ -321,6 +327,20 @@ final class PanelNav: ObservableObject {
     //  27  Quit panel            action
 
     // MARK: - Disk I/O
+
+    // Trigger a one-shot mascot reaction tied to the kind of event that
+    // just arrived. The pill mascot picks this up via @Published and runs
+    // an 800ms animation specific to .stop / .permission / .other; we
+    // clear it back to nil after the same window so the next event can
+    // re-trigger (Published only re-fires on change).
+    func reactToEvent(_ kind: NudgeKind) {
+        lastEventReaction = kind
+        eventReactionClearTimer?.invalidate()
+        eventReactionClearTimer = Timer.scheduledTimer(withTimeInterval: 0.8,
+                                                       repeats: false) { [weak self] _ in
+            self?.lastEventReaction = nil
+        }
+    }
 
     func loadFromConfig() {
         let config = ConfigFile.read()
