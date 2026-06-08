@@ -279,7 +279,13 @@ final class PanelNav: ObservableObject {
     // when the offset is 1.
     var updateRowOffset: Int { updateAvailable != nil ? 1 : 0 }
 
-    var rowCount: Int { 25 + updateRowOffset }
+    // 29 rows in the body: hotkey (1) + Toggles (4) + Widget (4) + Sounds (3)
+    // + Voice (2 — Voice + Speed, or 1 Download row with an unused index 14)
+    // + Usage (6) + Events (1) + Actions (7) = indices 0…28. Must be kept
+    // in sync with the row(...) calls in Settings.swift and the case bodies
+    // in applyCycle/activate; off-by-one here makes the last rows wrap to 0
+    // on the down-arrow.
+    var rowCount: Int { 29 + updateRowOffset }
 
     // Row layout (kept in one place so the controller, view, and indexing
     // logic all agree on what each row index means). When updateAvailable

@@ -905,7 +905,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             let size = Self.loadSavedPanelSize()
             var frame = panel.frame
             frame.size = size
-            panel.setFrame(frame, display: true, animate: false)
+            // display:false defers the redraw to AppKit's next layout pass,
+            // by which time SwiftUI has re-evaluated body and replaced
+            // CompactView with the full panel content. With display:true
+            // here, AppKit forces an immediate paint while SwiftUI still
+            // has the stale CompactView in its tree — the pill renders into
+            // the new larger frame for one frame and the user sees a flicker.
+            panel.setFrame(frame, display: false, animate: false)
             // Restore the original layout-protecting minimum so SwiftUI's
             // full panel content (Settings, Sessions, etc.) has room.
             panel.contentMinSize = NSSize(width: 560, height: 260)
