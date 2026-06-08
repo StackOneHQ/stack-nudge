@@ -207,6 +207,12 @@ final class PanelNav: ObservableObject {
     // animations so the main thread can keep up with AppKit's drag
     // handler. Reset by the controller's mouse-event monitor.
     @Published var compactDragging: Bool = false
+    // Most recent NudgeKind for the mascot to react to. Set by
+    // reactToEvent(_:) when EventStore appends a new event; cleared back to
+    // nil after 0.8s so the reaction is a one-shot pulse rather than a
+    // sticky state. Read by the per-mascot views in CompactView.
+    @Published var lastEventReaction: NudgeKind?
+    private var eventReactionClearTimer: Timer?
     // First-launch bootstrap wizard state. Populated by PanelController
     // on launch when Bootstrap.isInstalled() returns false; drives
     // BootstrapView (mode = .bootstrap).
@@ -279,7 +285,13 @@ final class PanelNav: ObservableObject {
     // when the offset is 1.
     var updateRowOffset: Int { updateAvailable != nil ? 1 : 0 }
 
-    var rowCount: Int { 25 + updateRowOffset }
+    // 29 rows in the body: hotkey (1) + Toggles (4) + Widget (4) + Sounds (3)
+    // + Voice (2 — Voice + Speed, or 1 Download row with an unused index 14)
+    // + Usage (6) + Events (1) + Actions (7) = indices 0…28. Must be kept
+    // in sync with the row(...) calls in Settings.swift and the case bodies
+    // in applyCycle/activate; off-by-one here makes the last rows wrap to 0
+    // on the down-arrow.
+    var rowCount: Int { 29 + updateRowOffset }
 
     // Row layout (kept in one place so the controller, view, and indexing
     // logic all agree on what each row index means). When updateAvailable
@@ -315,6 +327,20 @@ final class PanelNav: ObservableObject {
     //  27  Quit panel            action
 
     // MARK: - Disk I/O
+
+    // Trigger a one-shot mascot reaction tied to the kind of event that
+    // just arrived. The pill mascot picks this up via @Published and runs
+    // an 800ms animation specific to .stop / .permission / .other; we
+    // clear it back to nil after the same window so the next event can
+    // re-trigger (Published only re-fires on change).
+    func reactToEvent(_ kind: NudgeKind) {
+        lastEventReaction = kind
+        eventReactionClearTimer?.invalidate()
+        eventReactionClearTimer = Timer.scheduledTimer(withTimeInterval: 0.8,
+                                                       repeats: false) { [weak self] _ in
+            self?.lastEventReaction = nil
+        }
+    }
 
     func loadFromConfig() {
         let config = ConfigFile.read()

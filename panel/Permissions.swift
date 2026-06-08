@@ -259,10 +259,20 @@ struct PermissionsView: View {
 
 }
 
+// NSWindow doesn't handle Esc out of the box; cancelOperation is the
+// standard selector AppKit sends when the user hits Escape (or ⌘. ) in
+// a window that has no default text-field cancel target. Override to
+// close, so the permissions sheet feels like every other macOS modal.
+private final class EscClosesWindow: NSWindow {
+    override func cancelOperation(_ sender: Any?) {
+        performClose(sender)
+    }
+}
+
 final class PermissionsWindowController: NSWindowController {
 
     convenience init() {
-        let window = NSWindow(
+        let window = EscClosesWindow(
             contentRect: NSRect(x: 0, y: 0, width: 480, height: 440),
             styleMask: [.titled, .closable],
             backing: .buffered, defer: false)

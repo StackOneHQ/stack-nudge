@@ -69,6 +69,14 @@ final class SessionStore: ObservableObject {
     }
 
     func startPolling() {
+        // One-shot sweep of dead-PID sidecars left in ~/.claude/sessions/.
+        // Claude Code writes these but doesn't garbage-collect them, so they
+        // accumulate over weeks of use. Conservative guards (PID actually
+        // dead + file at least 5 min old) keep us from racing a session
+        // that's just starting up or mid-write.
+        DispatchQueue.global(qos: .utility).async {
+            Self.sweepStaleClaudeSidecars()
+        }
         scan()
         pollTimer?.invalidate()
         pollTimer = Timer.scheduledTimer(withTimeInterval: Self.pollInterval, repeats: true) { [weak self] _ in
@@ -299,6 +307,38 @@ final class SessionStore: ObservableObject {
             }
         }
         return nil
+    }
+
+    // Walk ~/.claude/sessions/ and recycle any <pid>.json whose PID is no
+    // longer running. Claude Code writes these on session start but doesn't
+    // remove them on exit, so a long-lived user accumulates dozens of stale
+    // entries which (a) take up inodes, (b) risk surfacing stale data if a
+    // future PID collides with a dead session's PID. Age guard (file must
+    // be at least 5 minutes old) protects against deleting the sidecar of
+    // a session that's mid-bootstrap on a freshly-reused PID.
+    private static func sweepStaleClaudeSidecars() {
+        let dir = "\(NSHomeDirectory())/.claude/sessions"
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { return }
+        let minAge: TimeInterval = 300
+        let now = Date()
+        for entry in entries {
+            guard entry.hasSuffix(".json") else { continue }
+            let basename = String(entry.dropLast(".json".count))
+            guard let pid = Int32(basename) else { continue }
+            // kill(pid, 0) returns 0 iff signal would be delivered. A
+            // not-running PID surfaces ESRCH; lacking permission surfaces
+            // EPERM (process exists but isn't ours) — only ESRCH lets us
+            // confidently say "gone."
+            if kill(pid, 0) == 0 { continue }
+            if errno != ESRCH { continue }
+            let path = "\(dir)/\(entry)"
+            if let mtime = (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date,
+               now.timeIntervalSince(mtime) < minAge {
+                continue
+            }
+            try? fm.removeItem(atPath: path)
+        }
     }
 
     // Per-PID sidecar emitted by Claude Code (interactive runs) with the

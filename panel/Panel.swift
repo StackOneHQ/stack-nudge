@@ -553,6 +553,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // stale bundle + rewrite the launchd plist so launchctl points
         // at us, not the old path.
         Bootstrap.migrateBundleNameIfNeeded()
+        // Updater preserves the previous bundle at StackNudge.app.old as a
+        // rollback safety net. We're the new bundle, we've successfully
+        // launched, so the safety net has served its purpose — recycle it
+        // so Spotlight stops indexing two StackNudge.app entries.
+        Bootstrap.cleanupPostUpdateBackup()
 
         let size = Self.loadSavedPanelSize()
         let frame = NSRect(origin: .zero, size: size)
@@ -644,6 +649,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             self?.lastEventArrivalAt = Date()
             self?.postBannerIfNeeded(event)
             self?.refreshTranscriptStats(for: event)
+            self?.nav.reactToEvent(event.kind)
         }
         nav.loadFromConfig()  // populate panelPinned + other live values up-front
         // Scan agent configs for missing wires (post-update / post-install
@@ -900,7 +906,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             let size = Self.loadSavedPanelSize()
             var frame = panel.frame
             frame.size = size
-            panel.setFrame(frame, display: true, animate: false)
+            // display:false defers the redraw to AppKit's next layout pass,
+            // by which time SwiftUI has re-evaluated body and replaced
+            // CompactView with the full panel content. With display:true
+            // here, AppKit forces an immediate paint while SwiftUI still
+            // has the stale CompactView in its tree — the pill renders into
+            // the new larger frame for one frame and the user sees a flicker.
+            panel.setFrame(frame, display: false, animate: false)
             // Restore the original layout-protecting minimum so SwiftUI's
             // full panel content (Settings, Sessions, etc.) has room.
             panel.contentMinSize = NSSize(width: 560, height: 260)

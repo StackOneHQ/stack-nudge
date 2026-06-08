@@ -107,7 +107,12 @@ struct CompactView: View {
     @ViewBuilder
     private var headline: some View {
         HStack(spacing: 6) {
-            BotMascot(state: botState, kind: nav.mascot, paused: nav.compactDragging, hovered: mascotHovered)
+            BotMascot(state: botState,
+                      kind: nav.mascot,
+                      dragging: nav.compactDragging,
+                      hovered: mascotHovered,
+                      eventReaction: nav.lastEventReaction,
+                      stressed: quotaStressed)
                 .frame(width: 26, height: 24)
             headlineText
         }
@@ -165,6 +170,16 @@ struct CompactView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
         }
+    }
+
+    // Passive quota-stress signal for the mascot. True when either the 5h
+    // session window or the 7d weekly utilization is ≥75%. The mascot
+    // shows a tired/worried expression so the user sees the budget
+    // pressure without opening the Usage tab.
+    private var quotaStressed: Bool {
+        let five  = nav.quota?.fiveHour?.utilization  ?? 0
+        let seven = nav.quota?.sevenDay?.utilization ?? 0
+        return five >= 75 || seven >= 75
     }
 
     private var botState: BotState {
@@ -487,15 +502,30 @@ private struct BotMascot: View {
 
     let state: BotState
     let kind: MascotKind
-    let paused: Bool
+    // Was `paused` — same value (nav.compactDragging) but renamed because
+    // each mascot now uses it for two things: gating the heavy TimelineView
+    // idle animations (the original perf concern) and triggering a
+    // lightweight drag-personality animation (.scaleEffect/.offset only).
+    let dragging: Bool
     let hovered: Bool
+    // One-shot pulse driven by EventStore.onAppend → nav.reactToEvent.
+    // Cleared back to nil after 0.8s. Each mascot reads it in onChange to
+    // kick off a kind-specific animation.
+    let eventReaction: NudgeKind?
+    // Passive quota-stress signal. Each mascot renders a tired/worried
+    // accent (sweat-drop, droopy mouth, bloodshot tint, translucent body).
+    let stressed: Bool
 
     var body: some View {
         switch kind {
-        case .robot: RobotMascot(state: state, paused: paused, hovered: hovered)
-        case .cat:   CatMascot(state: state, paused: paused, hovered: hovered)
-        case .eye:   EyeMascot(state: state, paused: paused, hovered: hovered)
-        case .ghost: GhostMascot(state: state, paused: paused, hovered: hovered)
+        case .robot: RobotMascot(state: state, dragging: dragging, hovered: hovered,
+                                 eventReaction: eventReaction, stressed: stressed)
+        case .cat:   CatMascot(state: state, dragging: dragging, hovered: hovered,
+                               eventReaction: eventReaction, stressed: stressed)
+        case .eye:   EyeMascot(state: state, dragging: dragging, hovered: hovered,
+                               eventReaction: eventReaction, stressed: stressed)
+        case .ghost: GhostMascot(state: state, dragging: dragging, hovered: hovered,
+                                 eventReaction: eventReaction, stressed: stressed)
         }
     }
 }
@@ -503,34 +533,130 @@ private struct BotMascot: View {
 private struct RobotMascot: View {
 
     let state: BotState
-    let paused: Bool
+    let dragging: Bool
     let hovered: Bool
+    let eventReaction: NudgeKind?
+    let stressed: Bool
+
+    // One-shot pulse state driven by eventReaction's onChange handler. Goes
+    // 0 → 1 on event arrival, springs back to 0 over ~0.8s. Per-kind colors
+    // and visuals are derived from the latched `pulseKind` so the animation
+    // can run after the published value has cleared.
+    @State private var pulse: Double = 0
+    @State private var pulseKind: NudgeKind?
 
     private static let cyan = Color(red: 0.4, green: 0.85, blue: 1.0)
     private static let outline = Color.secondary.opacity(0.7)
 
     var body: some View {
-        if paused {
-            // Static: no blink, no antenna pulse, no TimelineView ticks.
-            ZStack {
-                head
-                staticAntenna
-                staticEyes
-                mouth
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            TimelineView(.animation(minimumInterval: 0.05)) { tl in
-                let t = tl.date.timeIntervalSinceReferenceDate
+        Group {
+            if dragging {
+                // Drag: skip TimelineView to keep the AppKit drag handler
+                // snappy. Tiny scale + pixel-glitch jitter gives the robot
+                // a "GLITCH!" personality without per-frame cost.
                 ZStack {
                     head
-                    antenna(at: t)
-                    eyes(at: t)
+                    staticAntenna
+                    staticEyes
                     mouth
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .scaleEffect(1.05)
+                .offset(x: dragGlitchOffset)
+            } else {
+                TimelineView(.animation(minimumInterval: 0.05)) { tl in
+                    let t = tl.date.timeIntervalSinceReferenceDate
+                    ZStack {
+                        head
+                        antenna(at: t)
+                        eyes(at: t)
+                        mouth
+                        if let kind = pulseKind, pulse > 0 {
+                            reactionOverlay(kind: kind)
+                        }
+                        if stressed { sweatDrop }
+                        if idleTilting(at: t) {
+                            EmptyView()
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .rotationEffect(.degrees(idleTiltAngle(at: t)))
+                }
             }
         }
+        .animation(.spring(response: 0.18, dampingFraction: 0.6), value: dragging)
+        .onChange(of: eventReaction) { kind in
+            guard let kind else { return }
+            pulseKind = kind
+            // Pulse up fast, decay slower — feels like a flash that fades.
+            withAnimation(.spring(response: 0.18, dampingFraction: 0.55)) {
+                pulse = 1
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                withAnimation(.easeOut(duration: 0.45)) { pulse = 0 }
+            }
+        }
+    }
+
+    // Deterministic seed so multi-monitor pills don't sync. Offsets the
+    // sin() phase by a per-mascot-kind constant.
+    private static let idleSeed: Double = 0
+    // Tilt the head ~2° left/right every ~12s. The truncatingRemainder cycle
+    // is long enough that the motion reads as "robot occasionally looks
+    // around" rather than "robot is rocking."
+    private func idleTiltAngle(at t: TimeInterval) -> Double {
+        let phase = (t + Self.idleSeed).truncatingRemainder(dividingBy: 12.0)
+        // Active arc only during the final 1.5s of each 12s window.
+        guard phase > 10.5 else { return 0 }
+        let local = (phase - 10.5) / 1.5  // 0…1
+        return sin(local * .pi * 2) * 2
+    }
+    private func idleTilting(at t: TimeInterval) -> Bool { idleTiltAngle(at: t) != 0 }
+
+    private var dragGlitchOffset: CGFloat {
+        // Deterministic micro-jitter; stable across frames because dragging
+        // is a Bool. The user sees an instant offset on grab + release.
+        dragging ? 0.5 : 0
+    }
+
+    @ViewBuilder
+    private func reactionOverlay(kind: NudgeKind) -> some View {
+        switch kind {
+        case .stop:
+            // Green flash over the antenna + mouth area.
+            Circle()
+                .fill(Color.green.opacity(0.55 * pulse))
+                .frame(width: 16, height: 16)
+                .blur(radius: 4)
+                .offset(y: -6)
+        case .permission:
+            // Yellow flash over the head.
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.yellow.opacity(0.45 * pulse))
+                .blur(radius: 4)
+                .frame(width: 22, height: 18)
+                .offset(y: 2)
+        case .other:
+            // Subtle cyan cheek pulse.
+            HStack(spacing: 9) {
+                Circle()
+                    .fill(Self.cyan.opacity(0.55 * pulse))
+                    .frame(width: 3, height: 3)
+                Circle()
+                    .fill(Self.cyan.opacity(0.55 * pulse))
+                    .frame(width: 3, height: 3)
+            }
+            .offset(y: 4)
+        }
+    }
+
+    private var sweatDrop: some View {
+        // Tiny blue teardrop above the right side of the head — passive
+        // quota-stress signal. Only renders when `stressed` is true.
+        Circle()
+            .fill(Color(red: 0.45, green: 0.75, blue: 1.0).opacity(0.85))
+            .frame(width: 2.8, height: 2.8)
+            .offset(x: 8, y: -4)
     }
 
     private var staticAntenna: some View {
@@ -691,23 +817,100 @@ private struct RobotMascot: View {
 private struct CatMascot: View {
 
     let state: BotState
-    let paused: Bool
+    let dragging: Bool
     let hovered: Bool
+    let eventReaction: NudgeKind?
+    let stressed: Bool
+
+    @State private var pulse: Double = 0
+    @State private var pulseKind: NudgeKind?
 
     private static let cyan = Color(red: 0.4, green: 0.85, blue: 1.0)
     private static let outline = Color.secondary.opacity(0.7)
 
     var body: some View {
-        if paused {
-            ZStack { head; staticEyes; mouth; whiskers; blep }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            TimelineView(.animation(minimumInterval: 0.05)) { tl in
-                let t = tl.date.timeIntervalSinceReferenceDate
-                ZStack { head; eyes(at: t); mouth; whiskers; blep }
+        Group {
+            if dragging {
+                ZStack { head; staticEyes; mouth; whiskers; blep }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .scaleEffect(x: 1.0, y: 1.08)  // tail-up cling
+                    .offset(y: -1)
+            } else {
+                TimelineView(.animation(minimumInterval: 0.05)) { tl in
+                    let t = tl.date.timeIntervalSinceReferenceDate
+                    ZStack {
+                        head
+                        eyes(at: t)
+                        mouth
+                        whiskers
+                        blep
+                        if let kind = pulseKind, pulse > 0 {
+                            reactionOverlay(kind: kind)
+                        }
+                        if stressed { stressOverlay }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .offset(y: idleEarFlick(at: t))
+                }
             }
         }
+        .animation(.spring(response: 0.2, dampingFraction: 0.6), value: dragging)
+        .onChange(of: eventReaction) { kind in
+            guard let kind else { return }
+            pulseKind = kind
+            withAnimation(.spring(response: 0.18, dampingFraction: 0.55)) { pulse = 1 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                withAnimation(.easeOut(duration: 0.45)) { pulse = 0 }
+            }
+        }
+    }
+
+    // Tiny vertical bump every ~10s — reads as "ear flick".
+    private static let idleSeed: Double = 2.7  // offset from robot's phase
+    private func idleEarFlick(at t: TimeInterval) -> CGFloat {
+        let phase = (t + Self.idleSeed).truncatingRemainder(dividingBy: 10.0)
+        guard phase > 9.4 else { return 0 }
+        return CGFloat(-sin((phase - 9.4) / 0.6 * .pi)) * 0.8
+    }
+
+    @ViewBuilder
+    private func reactionOverlay(kind: NudgeKind) -> some View {
+        switch kind {
+        case .stop:
+            // Ears-perked glow above the head.
+            Capsule()
+                .fill(Color.green.opacity(0.5 * pulse))
+                .frame(width: 14, height: 4)
+                .blur(radius: 3)
+                .offset(y: -8)
+        case .permission:
+            // Yellow halo for "looking at you, please respond".
+            Circle()
+                .fill(Color.yellow.opacity(0.4 * pulse))
+                .blur(radius: 5)
+                .frame(width: 22, height: 22)
+        case .other:
+            // Cyan whisker shimmer.
+            Capsule()
+                .fill(Self.cyan.opacity(0.5 * pulse))
+                .frame(width: 18, height: 1.5)
+                .blur(radius: 1.5)
+                .offset(y: 4.5)
+        }
+    }
+
+    private var stressOverlay: some View {
+        // Slightly droopy frown (overrides the default cat mouth) when
+        // quota is high. Drawn small so it reads more as "concerned" than
+        // "sad".
+        Path { p in
+            p.move(to: CGPoint(x: 0, y: 1))
+            p.addQuadCurve(to: CGPoint(x: 4, y: 1),
+                           control: CGPoint(x: 2, y: -0.5))
+        }
+        .stroke(Color.orange.opacity(0.8), style: StrokeStyle(lineWidth: 0.9, lineCap: .round))
+        .frame(width: 4, height: 1.5)
+        .offset(y: 5)
     }
 
     // Ears perked = head + ear-hints lift slightly while hovered.
@@ -907,23 +1110,100 @@ private struct CatHeadShape: Shape {
 private struct EyeMascot: View {
 
     let state: BotState
-    let paused: Bool
+    let dragging: Bool
     let hovered: Bool
+    let eventReaction: NudgeKind?
+    let stressed: Bool
+
+    @State private var pulse: Double = 0
+    @State private var pulseKind: NudgeKind?
+    // Used by drag-personality: pupil lags slightly behind the drag
+    // direction. Set true while dragging, cleared on release.
+    @State private var lagging: Bool = false
 
     private static let cyan = Color(red: 0.4, green: 0.85, blue: 1.0)
     private static let outline = Color.secondary.opacity(0.7)
 
     var body: some View {
-        if paused {
-            ZStack { lens; staticPupil; eyebrow }
+        Group {
+            if dragging {
+                ZStack {
+                    lens
+                    staticPupil.offset(x: -2)  // pupil lags drag (offset opposite)
+                    eyebrow
+                    if stressed { stressOverlay }
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            TimelineView(.animation(minimumInterval: 0.05)) { tl in
-                let t = tl.date.timeIntervalSinceReferenceDate
-                ZStack { lens; pupil(at: t); eyebrow }
+            } else {
+                TimelineView(.animation(minimumInterval: 0.05)) { tl in
+                    let t = tl.date.timeIntervalSinceReferenceDate
+                    ZStack {
+                        lens
+                        pupil(at: t)
+                        eyebrow
+                        if let kind = pulseKind, pulse > 0 {
+                            reactionOverlay(kind: kind)
+                        }
+                        if stressed { stressOverlay }
+                    }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .scaleEffect(y: idleBlinkScale(at: t), anchor: .center)
+                }
             }
         }
+        .animation(.spring(response: 0.18, dampingFraction: 0.55), value: dragging)
+        .onChange(of: eventReaction) { kind in
+            guard let kind else { return }
+            pulseKind = kind
+            withAnimation(.spring(response: 0.18, dampingFraction: 0.55)) { pulse = 1 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                withAnimation(.easeOut(duration: 0.45)) { pulse = 0 }
+            }
+        }
+    }
+
+    // Squint-and-open every ~9s. Returns vertical scale that dips toward
+    // 0.4 briefly so the lens looks like it's closing for a moment.
+    private static let idleSeed: Double = 5.1
+    private func idleBlinkScale(at t: TimeInterval) -> CGFloat {
+        let phase = (t + Self.idleSeed).truncatingRemainder(dividingBy: 9.0)
+        guard phase > 8.7 else { return 1 }
+        let local = (phase - 8.7) / 0.3  // 0…1 over 300ms
+        return CGFloat(1.0 - 0.6 * sin(local * .pi))
+    }
+
+    @ViewBuilder
+    private func reactionOverlay(kind: NudgeKind) -> some View {
+        switch kind {
+        case .stop:
+            // Brief green ring around the lens — eye "registers" success.
+            Circle()
+                .stroke(Color.green.opacity(0.7 * pulse), lineWidth: 1.6)
+                .frame(width: 24, height: 24)
+                .offset(y: 1)
+        case .permission:
+            // Wider yellow halo — alarmed pupil.
+            Circle()
+                .fill(Color.yellow.opacity(0.35 * pulse))
+                .blur(radius: 5)
+                .frame(width: 22, height: 22)
+                .offset(y: 1)
+        case .other:
+            // Single cyan tick at the top — small blip.
+            Capsule()
+                .fill(Self.cyan.opacity(0.6 * pulse))
+                .frame(width: 6, height: 1.5)
+                .offset(y: -10)
+        }
+    }
+
+    private var stressOverlay: some View {
+        // Subtle red tint behind the pupil + tiny droop offset. Reads as
+        // bloodshot/tired without redesigning the lens.
+        Circle()
+            .fill(Color.red.opacity(0.18))
+            .frame(width: 14, height: 14)
+            .offset(y: 1)
     }
 
     // Hover-only eyebrow arc above the lens — gives the sentinel a
@@ -1014,35 +1294,92 @@ private struct EyeMascot: View {
 private struct GhostMascot: View {
 
     let state: BotState
-    let paused: Bool
+    let dragging: Bool
     let hovered: Bool
+    let eventReaction: NudgeKind?
+    let stressed: Bool
+
+    @State private var pulse: Double = 0
+    @State private var pulseKind: NudgeKind?
 
     private static let cyan = Color(red: 0.4, green: 0.85, blue: 1.0)
     private static let outline = Color.secondary.opacity(0.7)
 
     var body: some View {
-        if paused {
-            ZStack {
-                sparkles
-                ZStack { body_; staticEyes; mouth }
-                    .offset(y: hovered ? -4 : 0)
-                    .scaleEffect(hovered ? 1.08 : 1.0)
-                    .animation(.spring(response: 0.32, dampingFraction: 0.55), value: hovered)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            TimelineView(.animation(minimumInterval: 0.05)) { tl in
-                let t = tl.date.timeIntervalSinceReferenceDate
-                let bob = sin(t * 1.3) * 1.0
+        Group {
+            if dragging {
                 ZStack {
                     sparkles
-                    ZStack { body_; eyes(at: t); mouth }
+                    trailingSparkle  // one extra trailing sparkle while dragging
+                    ZStack { body_; staticEyes; mouth }
+                        .offset(y: hovered ? -4 : 0)
+                        .scaleEffect(hovered ? 1.08 : 1.0)
+                        .animation(.spring(response: 0.32, dampingFraction: 0.55), value: hovered)
+                        .opacity(0.85)  // floaty translucent while dragging
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                TimelineView(.animation(minimumInterval: 0.05)) { tl in
+                    let t = tl.date.timeIntervalSinceReferenceDate
+                    let bob = sin(t * 1.3) * 1.0
+                    ZStack {
+                        sparkles
+                        ZStack {
+                            body_
+                            eyes(at: t)
+                            mouth
+                            if let kind = pulseKind, pulse > 0 {
+                                reactionOverlay(kind: kind)
+                            }
+                        }
                         .offset(y: bob + (hovered ? -4 : 0))
                         .scaleEffect(hovered ? 1.08 : 1.0)
                         .animation(.spring(response: 0.32, dampingFraction: 0.55), value: hovered)
+                        .opacity(stressed ? 0.7 : 1.0)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+        }
+        .animation(.easeInOut(duration: 0.25), value: dragging)
+        .onChange(of: eventReaction) { kind in
+            guard let kind else { return }
+            pulseKind = kind
+            withAnimation(.spring(response: 0.18, dampingFraction: 0.55)) { pulse = 1 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                withAnimation(.easeOut(duration: 0.45)) { pulse = 0 }
+            }
+        }
+    }
+
+    private var trailingSparkle: some View {
+        sparkle
+            .scaleEffect(0.6)
+            .opacity(0.7)
+            .offset(x: -11, y: 3)
+    }
+
+    @ViewBuilder
+    private func reactionOverlay(kind: NudgeKind) -> some View {
+        switch kind {
+        case .stop:
+            // Star burst — reuse sparkle motif, scaled up.
+            sparkle
+                .scaleEffect(1.6 + 0.4 * pulse)
+                .opacity(pulse)
+                .offset(y: -10)
+        case .permission:
+            // "?" floats above the ghost.
+            Text("?")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(Color.yellow.opacity(pulse))
+                .offset(y: -12)
+        case .other:
+            // Soft cyan ring around the body.
+            Capsule()
+                .fill(Self.cyan.opacity(0.35 * pulse))
+                .frame(width: 22, height: 26)
+                .blur(radius: 4)
         }
     }
 

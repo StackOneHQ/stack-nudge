@@ -123,6 +123,23 @@ enum Bootstrap {
     //   3. The agent hook entries reference the old `…/notify.sh` —
     //      already covered by the existing stale-entry regex, which
     //      matches both `tinynudge/` and `stack-nudge/`. Nothing to do.
+    // The Updater leaves `~/Applications/StackNudge.app.old` behind after a
+    // successful swap as a rollback safety net. By the time we're running,
+    // launchd has already brought up the new bundle and the user is
+    // interacting with it — the .old is now just dead weight that Spotlight
+    // indexes, producing a confusing duplicate hit. Trash it so future
+    // searches only find the live app.
+    //
+    // Idempotent: no-op when the .old doesn't exist (steady state for users
+    // who installed fresh or who already had it cleaned up).
+    static func cleanupPostUpdateBackup() {
+        let backup = URL(fileURLWithPath: Updater.installedAppPath + ".old")
+        guard FileManager.default.fileExists(atPath: backup.path) else { return }
+        // Recycle (not rm -rf) so the user can restore from Trash if they
+        // somehow notice a regression we don't.
+        NSWorkspace.shared.recycle([backup]) { _, _ in }
+    }
+
     static func migrateBundleNameIfNeeded() {
         let fm = FileManager.default
         let runningFromNewPath = Bundle.main.bundleURL.lastPathComponent == "StackNudge.app"
