@@ -159,6 +159,53 @@ final class PanelNav: ObservableObject {
     // so the Sessions/Compact views can resolve stats by PID instead of
     // scanning the prunable event list, and so the poll refresh can re-read it.
     @Published var transcriptRefByPID: [Int: TranscriptRef] = [:]
+    // Codex (ChatGPT-plan) rate limits for the Usage tab, populated by
+    // CodexQuotaProbe — the Codex analogue of `quota` above.
+    @Published var codexQuota: CodexQuotaSnapshot?
+    // Antigravity (agy) usage from the running CLI's loopback RPC, populated by
+    // AntigravityUsageProbe — the agy analogue of `quota`/`codexQuota`.
+    @Published var antigravityQuota: AntigravityQuotaSnapshot?
+    // Usage tab: which connected client's quota is shown (index into
+    // availableUsageClients). ↑/↓ move it; read through clampedUsageClientIndex
+    // so a client losing its data can't strand the selection out of range.
+    @Published var usageClientIndex: Int = 0
+    // When true, keyboard focus is inside the Usage detail pane: ↑/↓ scroll it
+    // rather than switching client. →/Enter steps in; ←/Esc steps back out.
+    @Published var usageDetailFocused: Bool = false
+
+    // Connected clients that currently have quota to show, in display order.
+    var availableUsageClients: [UsageClient] {
+        var clients: [UsageClient] = []
+        if let claude = quota,
+           !(claude.fiveHour == nil && claude.sevenDay == nil
+             && claude.sevenDayOpus == nil && claude.sevenDaySonnet == nil) {
+            clients.append(.claude)
+        }
+        if let codex = codexQuota, codex.primary != nil || codex.secondary != nil {
+            clients.append(.codex)
+        }
+        if let agy = antigravityQuota, !agy.models.isEmpty {
+            clients.append(.antigravity)
+        }
+        return clients
+    }
+
+    var clampedUsageClientIndex: Int {
+        let count = availableUsageClients.count
+        guard count > 0 else { return 0 }
+        return max(0, min(usageClientIndex, count - 1))
+    }
+
+    func selectNextUsageClient() {
+        let count = availableUsageClients.count
+        guard count > 1 else { return }
+        usageClientIndex = min(clampedUsageClientIndex + 1, count - 1)
+    }
+
+    func selectPrevUsageClient() {
+        guard availableUsageClients.count > 1 else { return }
+        usageClientIndex = max(clampedUsageClientIndex - 1, 0)
+    }
     // Transient feedback for the "Check for updates…" action row.
     // Set by PanelController around UpdateChecker.check(); cleared
     // back to .idle a few seconds after a terminal result so the

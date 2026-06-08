@@ -504,6 +504,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private var updateChecker: UpdateChecker?
     private var updater: Updater?
     private let quotaProbe = QuotaProbe()
+    private let codexQuotaProbe = CodexQuotaProbe()
+    private let antigravityUsageProbe = AntigravityUsageProbe()
     private var quotaTimer: Timer?
     // Subscriptions to other ObservableObjects we react to from PanelController.
     // Currently: SessionStore.sessions → refresh transcript stats proactively
@@ -1172,10 +1174,51 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             self.nav.quotaLastUpdated = Date()
             self.evaluateQuotaThresholds(snapshot)
         }
+        // Codex (ChatGPT-plan) rate limits — read locally from the newest
+        // rollout, no network. Independent of the Anthropic probe above so one
+        // failing/absent doesn't suppress the other.
+        codexQuotaProbe.fetch { [weak self] snapshot in
+            guard let self, let snapshot else { return }
+            self.nav.codexQuota = snapshot
+            self.nav.quotaLastUpdated = Date()
+        }
+        // Antigravity (agy) usage — read from the running CLI's loopback RPC
+        // (localhost only, no auth). Independent of the probes above.
+        antigravityUsageProbe.fetch { [weak self] snapshot in
+            guard let self, let snapshot else { return }
+            self.nav.antigravityQuota = snapshot
+            self.nav.quotaLastUpdated = Date()
+        }
     }
 
     // Public hook for the Usage tab's "Sync now" keystroke.
     func syncQuotaNow() { runQuotaProbe() }
+
+    // MARK: - Usage tab detail scrolling
+
+    // SwiftUI's ScrollView has no programmatic delta-scroll API, so walk the
+    // AppKit hierarchy to the underlying NSScrollView and nudge its clip view.
+    // Only one ScrollView is rendered at a time (mode-gated), so the first
+    // match is the Usage detail pane (used when focus is stepped into it).
+    private func scrollUsageBy(_ dy: CGFloat) {
+        guard let scrollView = findScrollView(in: panel.contentView),
+              let doc = scrollView.documentView else { return }
+        let clip = scrollView.contentView
+        let maxY = max(0, doc.frame.height - clip.bounds.height)
+        var origin = clip.bounds.origin
+        origin.y = min(max(0, origin.y + dy), maxY)
+        clip.scroll(to: origin)
+        scrollView.reflectScrolledClipView(clip)
+    }
+
+    private func findScrollView(in view: NSView?) -> NSScrollView? {
+        guard let view else { return nil }
+        if let sv = view as? NSScrollView { return sv }
+        for sub in view.subviews {
+            if let found = findScrollView(in: sub) { return found }
+        }
+        return nil
+    }
 
     // User-triggered update check with transient row feedback. Sets
     // .checking immediately, swaps to .upToDate / .failed on response
@@ -1720,31 +1763,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         return true
     }
 
-    // MARK: - Usage tab keyboard scrolling
-
-    // SwiftUI's ScrollView doesn't expose a programmatic scroll API for
-    // arbitrary deltas, so walk the AppKit hierarchy to the underlying
-    // NSScrollView and nudge its clip view directly. Only one ScrollView
-    // is rendered at a time (mode-gated), so the first match is correct.
-    private func scrollUsageBy(_ dy: CGFloat) {
-        guard let scrollView = findScrollView(in: panel.contentView),
-              let doc = scrollView.documentView else { return }
-        let clip = scrollView.contentView
-        let maxY = max(0, doc.frame.height - clip.bounds.height)
-        var origin = clip.bounds.origin
-        origin.y = min(max(0, origin.y + dy), maxY)
-        clip.scroll(to: origin)
-        scrollView.reflectScrolledClipView(clip)
-    }
-
-    private func findScrollView(in view: NSView?) -> NSScrollView? {
-        guard let view else { return nil }
-        if let sv = view as? NSScrollView { return sv }
-        for sub in view.subviews {
-            if let found = findScrollView(in: sub) { return found }
-        }
-        return nil
-    }
 
     // MARK: - Config file watcher
 
@@ -2135,27 +2153,51 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return true
         }
 
-        // Usage tab: Esc hides, ↑/↓ nudge the ScrollView. No row-selection
-        // semantics here, so arrow keys drive scroll directly. Other keys
-        // are swallowed so they don't leak through to the events store.
+        // Usage tab: two focus levels. In the client list, ↑/↓ switch the
+        // connected client and →/Enter steps into the detail pane. Inside the
+        // detail, ↑/↓ scroll it and ←/Esc step back out. Other keys are
+        // swallowed so they don't leak through to the events store.
         if nav.mode == .usage {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain else { return false }
+            if nav.usageDetailFocused {
+                switch event.keyCode {
+                case KeyCode.escape:
+                    hidePanel()
+                case KeyCode.leftArrow:
+                    nav.usageDetailFocused = false
+                case KeyCode.upArrow:
+                    scrollUsageBy(-40)
+                case KeyCode.downArrow:
+                    scrollUsageBy(40)
+                case KeyCode.rKey:
+                    syncQuotaNow()
+                case KeyCode.pKey:
+                    nav.toggleQuotaTracking()
+                    if nav.quotaTrackingEnabled { syncQuotaNow() }
+                case KeyCode.mKey:
+                    enterCompactMode()
+                default:
+                    break
+                }
+                return true
+            }
             switch event.keyCode {
             case KeyCode.escape:
                 hidePanel()
             case KeyCode.upArrow:
-                scrollUsageBy(-40)
+                nav.selectPrevUsageClient()
             case KeyCode.downArrow:
-                scrollUsageBy(40)
+                nav.selectNextUsageClient()
+            case KeyCode.rightArrow, KeyCode.returnKey, KeyCode.numpadEnter:
+                nav.usageDetailFocused = true
             case KeyCode.rKey:
                 syncQuotaNow()
             case KeyCode.pKey:
                 nav.toggleQuotaTracking()
-                // Immediate probe on resume so the user sees fresh data
-                // right after the keystroke — otherwise they'd wait for
-                // the next scheduled tick (up to the configured poll
-                // interval, which could be 30 min).
+                // Immediate probe on resume so the user sees fresh data right
+                // after the keystroke — otherwise they'd wait for the next
+                // scheduled tick (up to the configured poll interval).
                 if nav.quotaTrackingEnabled { syncQuotaNow() }
             case KeyCode.mKey:
                 enterCompactMode()

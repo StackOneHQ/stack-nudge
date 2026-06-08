@@ -23,6 +23,25 @@ struct QuotaSnapshot: Equatable {
     let sevenDay: QuotaTier?
     let sevenDayOpus: QuotaTier?
     let sevenDaySonnet: QuotaTier?
+    // Subscription tier from the claudeAiOauth blob (e.g. "max", "pro"); nil
+    // when the field is absent. Shown next to the agent name in the Usage tab.
+    let planType: String?
+}
+
+// A connected client shown in the Usage tab's left-hand list. Each renders its
+// own quota tiers; ↑/↓ switches between the ones that currently have data.
+enum UsageClient: String, CaseIterable, Hashable {
+    case claude
+    case codex
+    case antigravity
+
+    var displayName: String {
+        switch self {
+        case .claude:      return "Claude"
+        case .codex:       return "Codex"
+        case .antigravity: return "Antigravity"
+        }
+    }
 }
 
 // Reads the Claude Code OAuth token and calls the (unofficial)
@@ -53,6 +72,11 @@ final class QuotaProbe {
     // the API rejects it (HTTP 401), we skip the prompts tied to rotations
     // that didn't invalidate the token we already have.
     private var cachedToken: String?
+
+    // Subscription tier read from the same claudeAiOauth blob as the token
+    // (e.g. "max", "pro"). Set whenever we read the blob; persists while the
+    // token is cached. nil when the field isn't present.
+    private var lastSubscriptionType: String?
 
     init() {
         let cfg = URLSessionConfiguration.ephemeral
@@ -100,7 +124,7 @@ final class QuotaProbe {
             }
 
             guard let data, code == 200,
-                  let snapshot = Self.parse(data) else {
+                  let snapshot = Self.parse(data, planType: self?.lastSubscriptionType ?? nil) else {
                 if let code, code != 200 {
                     FileHandle.standardError.write(Data(
                         "stack-nudge: /api/oauth/usage returned \(code)\n".utf8))
@@ -129,11 +153,11 @@ final class QuotaProbe {
         guard FileManager.default.fileExists(atPath: path),
               let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
               let blob = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let oauth = blob["claudeAiOauth"] as? [String: Any],
-              let token = oauth["accessToken"] as? String,
-              !token.isEmpty else {
+              let oauth = blob["claudeAiOauth"] as? [String: Any] else {
             return nil
         }
+        lastSubscriptionType = oauth["subscriptionType"] as? String
+        guard let token = oauth["accessToken"] as? String, !token.isEmpty else { return nil }
         return token
     }
 
@@ -154,11 +178,11 @@ final class QuotaProbe {
             return nil
         }
         guard let blob = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let oauth = blob["claudeAiOauth"] as? [String: Any],
-              let token = oauth["accessToken"] as? String,
-              !token.isEmpty else {
+              let oauth = blob["claudeAiOauth"] as? [String: Any] else {
             return nil
         }
+        lastSubscriptionType = oauth["subscriptionType"] as? String
+        guard let token = oauth["accessToken"] as? String, !token.isEmpty else { return nil }
         return token
     }
 
@@ -175,7 +199,7 @@ final class QuotaProbe {
         return f
     }()
 
-    private static func parse(_ data: Data) -> QuotaSnapshot? {
+    private static func parse(_ data: Data, planType: String?) -> QuotaSnapshot? {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
 
@@ -183,7 +207,8 @@ final class QuotaProbe {
             fiveHour:       tier(json["five_hour"]),
             sevenDay:       tier(json["seven_day"]),
             sevenDayOpus:   tier(json["seven_day_opus"]),
-            sevenDaySonnet: tier(json["seven_day_sonnet"])
+            sevenDaySonnet: tier(json["seven_day_sonnet"]),
+            planType:       planType
         )
     }
 
@@ -213,39 +238,25 @@ struct UsageView: View {
         VStack(alignment: .leading, spacing: 0) {
             if !nav.quotaTrackingEnabled {
                 trackingDisabledState
-            } else if let snapshot = nav.quota, !isAllNil(snapshot) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        if let tier = snapshot.fiveHour {
-                            section("Current session") { tierRow(tier) }
-                        }
-                        if let tier = snapshot.sevenDay {
-                            section("Current week (all models)") { tierRow(tier) }
-                        }
-                        if let tier = snapshot.sevenDayOpus {
-                            section("Current week (Opus only)") { tierRow(tier) }
-                        }
-                        if let tier = snapshot.sevenDaySonnet {
-                            section("Current week (Sonnet only)") { tierRow(tier) }
-                        }
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 14)
-                    .background(ThinScrollers())
-                }
-                // Explicit max-height claim so the ScrollView reliably
-                // bounds itself to the panel's available area instead of
-                // expanding to fit its content (which clipped behind the
-                // PageFooter without a visible scrollbar hint). Force the
-                // indicator visible so users can tell there's more to see.
-                .frame(maxHeight: .infinity)
-                .scrollIndicators(.visible)
+            } else if !nav.availableUsageClients.isEmpty {
+                clientSplit
             } else {
                 emptyState
             }
 
             PageFooter {
                 FooterHint(label: footerStatusLabel, keys: [])
+                if nav.usageDetailFocused {
+                    FooterHint(label: "Scroll", keys: ["↑↓"])
+                    FooterHint(label: "Back", keys: ["←"])
+                } else {
+                    if nav.availableUsageClients.count > 1 {
+                        FooterHint(label: "Switch", keys: ["↑↓"])
+                    }
+                    if !nav.availableUsageClients.isEmpty {
+                        FooterHint(label: "Enter", keys: ["→"])
+                    }
+                }
                 if nav.quotaTrackingEnabled {
                     FooterHint(label: "Sync now", keys: ["R"])
                 }
@@ -255,6 +266,149 @@ struct UsageView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // Always enter the tab in client-list focus, never stuck inside the pane.
+        .onAppear { nav.usageDetailFocused = false }
+    }
+
+    // Left: one row per connected client (↑/↓ or click to select). Right: the
+    // selected client's quota tiers, scrollable in case a client has several.
+    private var clientSplit: some View {
+        let clients = nav.availableUsageClients
+        let selected = clients[min(nav.clampedUsageClientIndex, max(0, clients.count - 1))]
+        return HStack(alignment: .top, spacing: 0) {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(clients, id: \.self) { client in
+                    clientRow(client, isSelected: client == selected)
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(width: 104)
+            .padding(.vertical, 10)
+            .padding(.leading, 6)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    tiers(for: selected)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(ThinScrollers())
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .scrollIndicators(.visible)
+            // Focus ring when the user has stepped into the pane (↑/↓ scroll).
+            .overlay(alignment: .top) {
+                if nav.usageDetailFocused {
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 2)
+                        .padding(2)
+                        .allowsHitTesting(false)
+                }
+            }
+        }
+        .frame(maxHeight: .infinity)
+    }
+
+    private func clientRow(_ client: UsageClient, isSelected: Bool) -> some View {
+        // Selection is shown brightly only while the client list holds focus;
+        // once focus steps into the detail pane it's de-emphasised so it's clear
+        // ↑/↓ now scroll rather than switch.
+        let activeSelection = isSelected && !nav.usageDetailFocused
+        return VStack(alignment: .leading, spacing: 1) {
+            Text(client.displayName)
+                .font(.callout.weight(isSelected ? .semibold : .regular))
+                .foregroundStyle(activeSelection ? Color.accentColor
+                                 : (isSelected ? .primary : .secondary))
+            if let plan = planLabel(for: client) {
+                Text(plan)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isSelected
+                      ? Color.accentColor.opacity(activeSelection ? 0.12 : 0.05)
+                      : Color.clear)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if let idx = nav.availableUsageClients.firstIndex(of: client) {
+                nav.usageClientIndex = idx
+                nav.usageDetailFocused = false
+            }
+        }
+    }
+
+    @ViewBuilder private func tiers(for client: UsageClient) -> some View {
+        switch client {
+        case .claude:
+            if let snapshot = nav.quota {
+                if let tier = snapshot.fiveHour {
+                    section("Current session") { tierRow(tier) }
+                }
+                if let tier = snapshot.sevenDay {
+                    section("Current week (all models)") { tierRow(tier) }
+                }
+                if let tier = snapshot.sevenDayOpus {
+                    section("Current week (Opus only)") { tierRow(tier) }
+                }
+                if let tier = snapshot.sevenDaySonnet {
+                    section("Current week (Sonnet only)") { tierRow(tier) }
+                }
+            }
+        case .codex:
+            if let codex = nav.codexQuota {
+                if let tier = codex.primary {
+                    section("Current session (5h)") { tierRow(tier) }
+                }
+                if let tier = codex.secondary {
+                    section("Current week") { tierRow(tier) }
+                }
+            }
+        case .antigravity:
+            if let agy = nav.antigravityQuota {
+                // One bar per model — agy reports a separate quota window per
+                // model, each with its own reset time.
+                ForEach(agy.models, id: \.label) { model in
+                    section(model.label) { tierRow(model.tier) }
+                }
+                if agy.promptCredits != nil || agy.flowCredits != nil {
+                    section("Credits") { creditsRow(agy) }
+                }
+            }
+        }
+    }
+
+    private func creditsRow(_ agy: AntigravityQuotaSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if let prompt = agy.promptCredits {
+                Text("Prompt: \(prompt.available) / \(prompt.monthly)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            if let flow = agy.flowCredits {
+                Text("Flow: \(flow.available) / \(flow.monthly)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 6)
+    }
+
+    // Subscription tier shown under the client name (e.g. "Max", "Plus").
+    private func planLabel(for client: UsageClient) -> String? {
+        switch client {
+        case .claude:      return nav.quota?.planType?.capitalized
+        case .codex:       return nav.codexQuota?.planType?.capitalized
+        case .antigravity: return nav.antigravityQuota?.planType?.capitalized
+        }
     }
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
@@ -293,22 +447,15 @@ struct UsageView: View {
         .padding(.horizontal, 6)
     }
 
-    // Treat a snapshot with all tiers nil the same as no snapshot at all —
-    // user sees the empty state rather than a blank page. Shouldn't happen
-    // for a real subscription, but covers anomalous endpoint responses.
-    private func isAllNil(_ s: QuotaSnapshot) -> Bool {
-        s.fiveHour == nil && s.sevenDay == nil
-            && s.sevenDayOpus == nil && s.sevenDaySonnet == nil
-    }
 
     private var emptyState: some View {
         VStack(spacing: 10) {
             ProgressView()
                 .controlSize(.small)
-            Text("Loading quota…")
+            Text("Loading usage…")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            Text("Requires Claude Code login. First read may prompt the system keychain.")
+            Text("Requires a signed-in Claude Code session, or a Codex session on a ChatGPT plan. The first Claude read may prompt the system keychain.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
