@@ -4,6 +4,20 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.15.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.14.2...v1.15.0) (2026-06-08)
+
+
+### Features
+
+* **widget:** mascot reactions — event arrivals, idle loops, drag, quota stress ([2b97d45](https://github.com/StackOneHQ/stack-nudge/commit/2b97d45d8ec72c826b4386f153013021fdcd73ef))
+
+
+### Bug Fixes
+
+* **hygiene:** clean up update tempdirs and stale Claude session sidecars ([db8c8cc](https://github.com/StackOneHQ/stack-nudge/commit/db8c8ccb97745f9825748ee3a7c874dd6d48ed13))
+* **panel:** row-nav wrap bug, Esc on Permissions window, expand flicker ([a432b9f](https://github.com/StackOneHQ/stack-nudge/commit/a432b9fbb90ee919cd36f812cf620af1318e4dc5))
+* **updater:** clean up StackNudge.app.old after successful relaunch ([6f273c2](https://github.com/StackOneHQ/stack-nudge/commit/6f273c2902a0294d50edecbffae621493cd1b432))
+
 ## [1.14.2](https://github.com/StackOneHQ/stack-nudge/compare/v1.14.1...v1.14.2) (2026-06-04)
 
 
