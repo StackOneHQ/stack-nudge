@@ -95,6 +95,11 @@ if [[ -z "$PYTHON" ]]; then
   exit 1
 fi
 if [[ ! -x "$VENV/bin/stackvox" ]]; then
+  # Clear any partial/incompatible venv first. `python -m venv` over an
+  # existing directory can fail with "[Errno 17] File exists" — e.g. a venv
+  # left by a different Python, or an interrupted earlier install — so make
+  # creation idempotent rather than aborting the whole install (set -e).
+  rm -rf "$VENV"
   "$PYTHON" -m venv "$VENV"
   "$VENV/bin/pip" install --quiet "$STACKVOX_SPEC"
   echo "  Voice engine installed -> $VENV  (using $PYTHON)"
@@ -301,6 +306,57 @@ PY
   installed_any=true
 fi
 
+# Codex
+# Codex's hooks file shares Claude Code's matcher-group JSON shape and event
+# names (Stop + PermissionRequest), in seconds — only the path and agent-arg
+# differ. See https://developers.openai.com/codex/hooks
+if [[ -d "$HOME/.codex" ]]; then
+  echo ""
+  echo "Detected Codex (~/.codex)"
+  python3 - "$HOME/.codex/hooks.json" "$NOTIFY" "codex" <<'PY'
+import json, os, re, sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+notify = sys.argv[2]
+agent = sys.argv[3]
+path.parent.mkdir(parents=True, exist_ok=True)
+if path.exists():
+    settings = json.loads(path.read_text() or "{}")
+else:
+    settings = {}
+
+STALE = re.compile(r"(?:^|/)\.?(?:tinynudge|stack-nudge)/notify\.sh(?:\s|$)")
+
+hooks = settings.setdefault("hooks", {})
+# PermissionRequest blocks on a FIFO until the user approves via stack-nudge,
+# so it needs a longer timeout than the default.
+for event, arg, timeout in [("Stop", "stop", 30), ("PermissionRequest", "permission", 600)]:
+    groups = hooks.setdefault(event, [])
+
+    cleaned = []
+    for g in groups:
+        inner = g.get("hooks", [])
+        kept = [h for h in inner if not STALE.search(h.get("command", "") or "")]
+        if not kept:
+            continue
+        if kept != inner:
+            g = {**g, "hooks": kept}
+        cleaned.append(g)
+    groups[:] = cleaned
+
+    cmd = f"{notify} {agent} {arg}"
+    groups.append({
+        "matcher": "",
+        "hooks": [{"type": "command", "command": cmd, "timeout": timeout}],
+    })
+
+path.write_text(json.dumps(settings, indent=2) + "\n")
+print(f"  Updated {path}")
+PY
+  installed_any=true
+fi
+
 # Gemini CLI
 if [[ -d "$HOME/.gemini" ]]; then
   echo ""
@@ -395,7 +451,7 @@ fi
 
 if [[ "$installed_any" == "false" ]]; then
   echo ""
-  echo "No supported agents detected (Claude Code, Cursor, Gemini CLI, Antigravity CLI)."
+  echo "No supported agents detected (Claude Code, Cursor, Codex, Gemini CLI, Antigravity CLI)."
   echo "Install one, then re-run this script."
   exit 0
 fi

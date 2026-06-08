@@ -14,17 +14,31 @@ struct TranscriptStats: Equatable {
 
 enum TranscriptReader {
 
-    // Read the transcript at `path`, scan from the end for the most
-    // recent assistant message with a usage block, and return its
-    // stats. Returns nil for unreadable files, empty transcripts, or
-    // transcripts that don't yet contain an assistant message.
+    // Dispatch by transcript path. Codex rollout files live under
+    // ~/.codex/sessions/.../rollout-*.jsonl and use a different JSONL schema
+    // (token_count events rather than assistant-message usage blocks), so they
+    // route to CodexTranscriptReader. Everything else is a Claude Code
+    // transcript. Both return the same TranscriptStats shape so the Sessions
+    // and Compact views render context usage identically across agents.
+    static func read(path: String) -> TranscriptStats? {
+        if path.contains("/.codex/")
+            || (path as NSString).lastPathComponent.hasPrefix("rollout-") {
+            return CodexTranscriptReader.read(path: path)
+        }
+        return readClaude(path: path)
+    }
+
+    // Read a Claude Code transcript at `path`, scan from the end for the most
+    // recent assistant message with a usage block, and return its stats.
+    // Returns nil for unreadable files, empty transcripts, or transcripts that
+    // don't yet contain an assistant message.
     //
     // We read the whole file rather than tail-seeking — Claude Code
     // transcripts are typically a few MB even for long sessions, and
     // tail-seeking JSONL safely requires byte-by-byte reverse scanning
     // to find a newline boundary. If transcripts grow to tens of MB
     // in practice we can revisit.
-    static func read(path: String) -> TranscriptStats? {
+    private static func readClaude(path: String) -> TranscriptStats? {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path), options: .mappedIfSafe),
               let text = String(data: data, encoding: .utf8)
         else { return nil }

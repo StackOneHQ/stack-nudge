@@ -130,6 +130,36 @@ print(f"  Cleaned {path}")
 PY
 fi
 
+# Remove hooks from Codex. Same matcher-group shape as Claude/Gemini.
+if [[ -f "$HOME/.codex/hooks.json" ]]; then
+  python3 - "$HOME/.codex/hooks.json" <<'PY'
+import json, re, sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+STALE = re.compile(r'(?:^|/|")\.?(?:tinynudge|stack-nudge)/notify\.sh')
+settings = json.loads(path.read_text())
+hooks = settings.get("hooks", {})
+for event in list(hooks.keys()):
+    cleaned = []
+    for g in hooks[event]:
+        inner = g.get("hooks", [])
+        kept = [h for h in inner if not STALE.search(h.get("command", "") or "")]
+        if not kept:
+            continue
+        if kept != inner:
+            g = {**g, "hooks": kept}
+        cleaned.append(g)
+    hooks[event] = cleaned
+    if not hooks[event]:
+        del hooks[event]
+if not hooks:
+    settings.pop("hooks", None)
+path.write_text(json.dumps(settings, indent=2) + "\n")
+print(f"  Cleaned {path}")
+PY
+fi
+
 # Stop and remove launchd agents (macOS)
 for label in com.stackonehq.stack-nudge com.stackonehq.stack-nudge-daemon com.stackonehq.stack-nudge-panel; do
   plist="$HOME/Library/LaunchAgents/${label}.plist"
