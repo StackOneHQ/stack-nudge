@@ -4,6 +4,16 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.16.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.15.1...v1.16.0) (2026-06-08)
+
+
+### Features
+
+* **agy-status:** handle the agy activity status in the sessions tab ([052feca](https://github.com/StackOneHQ/stack-nudge/commit/052feca6ea3198ab9fd99e22751e6d86f71a0e49))
+* **agy-status:** handle the agy activity status in the sessions tab ([cc8c7e0](https://github.com/StackOneHQ/stack-nudge/commit/cc8c7e016047a867358512d707e660097e23be5e))
+* **usage:** add codex and agy usage visibility ([e41f018](https://github.com/StackOneHQ/stack-nudge/commit/e41f0184197d363e187d8ab1e44c7b21f64aefeb))
+* **usage:** add codex and agy usage visibility ([29ca6cd](https://github.com/StackOneHQ/stack-nudge/commit/29ca6cd9c6d315fbe60a4a50564557caa4c636c9))
+
 ## [1.15.1](https://github.com/StackOneHQ/stack-nudge/compare/v1.15.0...v1.15.1) (2026-06-08)
 
 
