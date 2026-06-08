@@ -4,6 +4,14 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.15.1](https://github.com/StackOneHQ/stack-nudge/compare/v1.15.0...v1.15.1) (2026-06-08)
+
+
+### Bug Fixes
+
+* **codex-integration:** context row now persists ([04e48cf](https://github.com/StackOneHQ/stack-nudge/commit/04e48cf2ca84a1c200822aa7a808b598e7ee50c6))
+* **codex-integration:** context row now persists ([227655a](https://github.com/StackOneHQ/stack-nudge/commit/227655a340d030748d1e2768bea222308ed9b721))
+
 ## [1.15.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.14.2...v1.15.0) (2026-06-08)
 
 
