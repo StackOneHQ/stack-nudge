@@ -30,9 +30,10 @@
 | Cursor | ✅ |
 | Codex | ✅ |
 | Gemini CLI | ✅ † |
+| Antigravity CLI | ✅ † |
 | Any hooks-capable agent | ✅ — point it at `notify.sh` |
 
-† Gemini's tool-permission hook is observability-only — the banner shows the prompt, but the actual Allow / Deny click has to happen in Gemini's terminal. Claude Code, Cursor, and Codex permission events can be approved from the panel directly.
+† Gemini CLI and Antigravity route tool-permission prompts through an observability-only hook — the banner shows the prompt, but the Allow / Deny click still has to happen in the agent's own terminal. Claude Code and Codex permission events can be approved from the panel directly.
 
 **Platforms:** macOS — full app with panel, click-to-focus banners, auto-update, quota tracking, voice. Linux (PulseAudio / ALSA / libnotify) and Windows (Git Bash / WSL) get audio + basic notifications via `notify.sh` only.
 
@@ -75,7 +76,7 @@ cd stack-nudge
 
 **Prerequisites:** Python ≥ 3.10 (the bundled voice engine [stackvox](https://github.com/StackOneHQ/stackvox) requires it).
 
-The installer auto-wires hooks for **Claude Code** (`~/.claude/settings.json`) and **Cursor** (`~/.cursor/hooks.json`). Gemini CLI and Codex are supported through the same `notify.sh` entry-point, but their hooks must be wired manually — see [Manual setup](#manual-setup) below.
+The installer auto-wires hooks for every detected agent — **Claude Code** (`~/.claude`), **Cursor** (`~/.cursor`), **Codex** (`~/.codex`), **Gemini CLI** (`~/.gemini`), and **Antigravity CLI** (`~/.gemini/antigravity-cli`). Any other hooks-capable agent can be wired by hand — see [Manual setup](#manual-setup) below.
 
 ### From source (macOS dev)
 
@@ -335,7 +336,7 @@ Same set of cleanups as the in-app path, useful when the .app isn't reachable or
 
 ## Manual setup
 
-Claude Code, Cursor, Codex, and Gemini CLI are auto-wired by the first-launch wizard. For other hooks-capable agents (or to integrate from a custom script), all you need is to invoke `notify.sh <agent-label> <event>` from wherever your agent emits lifecycle events. `<event>` should be `stop` (agent finished a turn) or `permission` (waiting for approval); `<agent-label>` can be anything — it just controls the banner title.
+Claude Code, Cursor, Codex, Gemini CLI, and Antigravity CLI are auto-wired by the first-launch wizard. For other hooks-capable agents (or to integrate from a custom script), all you need is to invoke `notify.sh <agent-label> <event>` from wherever your agent emits lifecycle events. `<event>` should be `stop` (agent finished a turn) or `permission` (waiting for approval); `<agent-label>` can be anything — it just controls the banner title.
 
 Example block in any agent's hooks config:
 

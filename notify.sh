@@ -40,6 +40,18 @@ permission_context() {
       file=$(printf '%s' "$HOOK_JSON" | jq -r '.tool_input.file_path // empty' 2>/dev/null | sed 's|.*/||')
       [[ -n "$file" ]] && echo "${tool_name}: ${file}"
       ;;
+    apply_patch)
+      # Codex's edit tool. tool_input carries a patch envelope rather than a
+      # plain file_path; pull the first target file out of the patch body.
+      # tool_input may be the patch string itself or wrap it under .input/.patch.
+      local patch file
+      patch=$(printf '%s' "$HOOK_JSON" \
+        | jq -r '.tool_input | if type=="string" then . else (.input // .patch // empty) end' 2>/dev/null)
+      file=$(printf '%s\n' "$patch" \
+        | grep -m1 -oE '^\*\*\* (Add|Update|Delete) File: .+' \
+        | sed -E 's/^.*File: //; s|.*/||')
+      if [[ -n "$file" ]]; then echo "apply_patch: ${file}"; else echo "apply_patch"; fi
+      ;;
     *)
       echo "$tool_name"
       ;;
@@ -63,6 +75,15 @@ voice_permission_context() {
       local file
       file=$(printf '%s' "$HOOK_JSON" | jq -r '.tool_input.file_path // empty' 2>/dev/null | sed 's|.*/||')
       [[ -n "$file" ]] && echo "${tool_name}: ${file}"
+      ;;
+    apply_patch)
+      local patch file
+      patch=$(printf '%s' "$HOOK_JSON" \
+        | jq -r '.tool_input | if type=="string" then . else (.input // .patch // empty) end' 2>/dev/null)
+      file=$(printf '%s\n' "$patch" \
+        | grep -m1 -oE '^\*\*\* (Add|Update|Delete) File: .+' \
+        | sed -E 's/^.*File: //; s|.*/||')
+      if [[ -n "$file" ]]; then echo "apply_patch: ${file}"; else echo "Edit needs approval"; fi
       ;;
     *)
       echo "$tool_name"
@@ -216,6 +237,21 @@ agent_label() {
     agy|antigravity|antigravity-cli)
                          echo "Antigravity" ;;
     *)                   echo "$1" ;;
+  esac
+}
+
+# True when this agent's permission hook blocks on stdout for an allow/deny
+# decision, so the panel's Approve/Deny can actually drive it. Claude Code and
+# Codex use the blocking PermissionRequest hook with the hookSpecificOutput
+# decision schema. Gemini and Antigravity route permission alerts through the
+# fire-and-forget Notification hook, which can't consume a decision — creating
+# a FIFO and blocking on it for those just burns the hook's timeout budget and
+# shows an Allow button that does nothing. (Phase 2 will add antigravity here
+# once it's wired via the decision-capable PreToolUse hook.)
+agent_supports_decision() {
+  case "$AGENT" in
+    claude-code|codex) return 0 ;;
+    *)                 return 1 ;;
   esac
 }
 
@@ -477,9 +513,12 @@ notify_macos() {
       -e "end tell" 2>/dev/null)
   fi
 
+  # Only offer the in-panel Allow/Deny (and block on a FIFO for the response)
+  # when the agent's hook can actually consume a decision. For observability-
+  # only agents the banner still shows; the user approves in the agent's own UI.
   local has_action="false"
   local fifo_path=""
-  if [[ "${EVENT}" == "permission" ]]; then
+  if [[ "${EVENT}" == "permission" ]] && agent_supports_decision; then
     has_action="true"
     fifo_path=$(create_perm_fifo)
   fi

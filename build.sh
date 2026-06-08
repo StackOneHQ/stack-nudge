@@ -239,6 +239,7 @@ build_app "$APP" "stack-nudge" \
   panel/Sessions.swift \
   panel/CompactView.swift \
   panel/TranscriptStats.swift \
+  panel/CodexTranscriptStats.swift \
   panel/ModelLimits.swift \
   panel/Phrases.swift \
   panel/UpdateChecker.swift \
