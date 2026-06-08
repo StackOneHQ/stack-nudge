@@ -64,6 +64,11 @@ final class Updater {
 
     private weak var nav: PanelNav?
     private let session: URLSession
+    // Working directory under NSTemporaryDirectory() for the current run.
+    // Holds the downloaded tarball and the extracted .app until the swap
+    // moves the .app into ~/Applications/; cleanupTempDir() recycles it on
+    // both success and failure (run() defers the call).
+    private var tmpDir: URL?
 
     init(nav: PanelNav) {
         self.nav = nav
@@ -89,11 +94,46 @@ final class Updater {
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
+            // Sweep accumulated debris from past runs (failed updates, force-
+            // quit mid-update) so /tmp doesn't grow without bound. Cheap —
+            // we only touch our own UUID-namespaced directories.
+            Self.sweepStaleTempDirs()
+            // The defer fires before the closure exits, which is before
+            // scheduleAutoQuit's delayed terminate; the .app has already
+            // been moved out to ~/Applications/ by then, so we're only
+            // recycling the tarball and the empty tmpdir shell.
+            defer { self.cleanupTempDir() }
             do {
                 try self.performUpdate()
             } catch {
                 self.fail(error)
             }
+        }
+    }
+
+    // Remove the current run's tmpdir (downloaded tarball + any leftover
+    // extracted files). Idempotent: no-op when tmpDir is nil or already
+    // gone. Called from run()'s defer block so both success and failure
+    // paths converge here.
+    private func cleanupTempDir() {
+        guard let dir = tmpDir else { return }
+        try? FileManager.default.removeItem(at: dir)
+        tmpDir = nil
+    }
+
+    // Recycle any stack-nudge-update-* directory under NSTemporaryDirectory()
+    // left behind by a prior run that crashed, was force-quit, or failed
+    // before our defer-cleanup landed. Bounded by what's in /tmp; safe to
+    // call on every run() because the directories are UUID-namespaced and
+    // ours alone.
+    private static func sweepStaleTempDirs() {
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+        guard let entries = try? fm.contentsOfDirectory(at: root,
+                                                        includingPropertiesForKeys: nil)
+        else { return }
+        for entry in entries where entry.lastPathComponent.hasPrefix("stack-nudge-update-") {
+            try? fm.removeItem(at: entry)
         }
     }
 
@@ -302,12 +342,15 @@ final class Updater {
 
         // Write to a stable temp path so the rest of the pipeline can run
         // tar/xattr against it.
-        let tmpDir = URL(fileURLWithPath: NSTemporaryDirectory())
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("stack-nudge-update-\(UUID().uuidString)",
                                     isDirectory: true)
-        try FileManager.default.createDirectory(at: tmpDir,
+        try FileManager.default.createDirectory(at: dir,
                                                 withIntermediateDirectories: true)
-        let dest = tmpDir.appendingPathComponent("stack-nudge.tar.gz")
+        // Record on the instance so cleanupTempDir() can recycle it once
+        // performUpdate() returns (success or failure).
+        self.tmpDir = dir
+        let dest = dir.appendingPathComponent("stack-nudge.tar.gz")
         try data.write(to: dest)
         return dest
     }
