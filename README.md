@@ -152,7 +152,7 @@ When you press `⏎` on a permission event in a VS Code / Cursor terminal pane, 
 
 #### Sessions tab
 
-Live list of running agent processes (`claude`, `gemini`, `codex` — including node-hosted variants like `gemini-cli`). Polls every 3 seconds while visible. Sessions that exit linger for 30s with `ended Ns ago`.
+Live list of running agent processes (`claude`, `gemini`, `codex` — including node-hosted variants like `gemini-cli`). Polls every 3 seconds while visible and every 15 seconds in the background for the compact widget. Sessions that exit linger for 30s with `ended Ns ago`.
 
 For Claude Code sessions specifically, stack-nudge reads `~/.claude/sessions/<pid>.json` (Claude Code's per-process sidecar) to surface live data without waiting for a hook event:
 

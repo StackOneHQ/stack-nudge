@@ -18,10 +18,10 @@ struct SessionsView: View {
             footer
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        // Polling is started at app launch (PanelController) so the pill
-        // reads fresh session state without requiring this tab to be open.
-        // Kept here as a no-op safety in case the timer was ever stopped.
-        .onAppear { store.startPolling() }
+        // The widget uses a low-frequency background scan. Tighten it while
+        // this tab is visible, then return to the energy-friendly cadence.
+        .onAppear { store.startForegroundPolling() }
+        .onDisappear { store.startPolling() }
     }
 
     private var emptyState: some View {
