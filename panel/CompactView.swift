@@ -253,7 +253,7 @@ struct CompactView: View {
     }
 
     private var animatedPillBackground: some View {
-        TimelineView(.animation(minimumInterval: 0.05)) { tl in
+        TimelineView(.periodic(from: .now, by: backgroundTimelineInterval)) { tl in
             let pulse = pulseAmount(at: tl.date)
             let color = urgencyColor
             ZStack {
@@ -267,6 +267,10 @@ struct CompactView: View {
             .shadow(color: .black.opacity(0.30), radius: 10, y: 3)
             .animation(.easeInOut(duration: 0.6), value: color)
         }
+    }
+
+    private var backgroundTimelineInterval: TimeInterval {
+        (anyBusy || (nav.quota?.fiveHour?.utilization ?? 0) >= 75) ? 0.1 : 60
     }
 
     // Border color tracks 5h quota urgency: cyan under 75%, amber 75–90%,
@@ -402,7 +406,7 @@ private struct QuotaGauge: View {
                 centerReadout
             }
         } else {
-            TimelineView(.animation(minimumInterval: 0.05)) { tl in
+            TimelineView(.periodic(from: .now, by: timelineInterval)) { tl in
                 ZStack {
                     outerTrack
                     innerTrack
@@ -416,6 +420,10 @@ private struct QuotaGauge: View {
                 .animation(.easeOut(duration: 0.45), value: sevenPct)
             }
         }
+    }
+
+    private var timelineInterval: TimeInterval {
+        (polling || anyBusy) ? 0.1 : 60
     }
 
     private var outerTrack: some View {
@@ -572,7 +580,7 @@ private struct RobotMascot: View {
                 .scaleEffect(1.05)
                 .offset(x: dragGlitchOffset)
             } else {
-                TimelineView(.animation(minimumInterval: 0.05)) { tl in
+                TimelineView(.periodic(from: .now, by: timelineInterval)) { tl in
                     let t = tl.date.timeIntervalSinceReferenceDate
                     ZStack {
                         head
@@ -604,6 +612,10 @@ private struct RobotMascot: View {
                 withAnimation(.easeOut(duration: 0.45)) { pulse = 0 }
             }
         }
+    }
+
+    private var timelineInterval: TimeInterval {
+        (state == .busy || hovered || pulse > 0) ? 0.1 : 60
     }
 
     // Deterministic seed so multi-monitor pills don't sync. Offsets the
@@ -844,7 +856,7 @@ private struct CatMascot: View {
                     .scaleEffect(x: 1.0, y: 1.08)  // tail-up cling
                     .offset(y: -1)
             } else {
-                TimelineView(.animation(minimumInterval: 0.05)) { tl in
+                TimelineView(.periodic(from: .now, by: timelineInterval)) { tl in
                     let t = tl.date.timeIntervalSinceReferenceDate
                     ZStack {
                         head
@@ -871,6 +883,10 @@ private struct CatMascot: View {
                 withAnimation(.easeOut(duration: 0.45)) { pulse = 0 }
             }
         }
+    }
+
+    private var timelineInterval: TimeInterval {
+        (state == .busy || hovered || pulse > 0) ? 0.1 : 60
     }
 
     // Tiny vertical bump every ~10s — reads as "ear flick".
@@ -1143,7 +1159,7 @@ private struct EyeMascot: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                TimelineView(.animation(minimumInterval: 0.05)) { tl in
+                TimelineView(.periodic(from: .now, by: timelineInterval)) { tl in
                     let t = tl.date.timeIntervalSinceReferenceDate
                     ZStack {
                         lens
@@ -1168,6 +1184,10 @@ private struct EyeMascot: View {
                 withAnimation(.easeOut(duration: 0.45)) { pulse = 0 }
             }
         }
+    }
+
+    private var timelineInterval: TimeInterval {
+        (state == .busy || hovered || pulse > 0) ? 0.1 : 60
     }
 
     // Squint-and-open every ~9s. Returns vertical scale that dips toward
@@ -1327,7 +1347,7 @@ private struct GhostMascot: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                TimelineView(.animation(minimumInterval: 0.05)) { tl in
+                TimelineView(.periodic(from: .now, by: timelineInterval)) { tl in
                     let t = tl.date.timeIntervalSinceReferenceDate
                     let bob = sin(t * 1.3) * 1.0
                     ZStack {
@@ -1358,6 +1378,10 @@ private struct GhostMascot: View {
                 withAnimation(.easeOut(duration: 0.45)) { pulse = 0 }
             }
         }
+    }
+
+    private var timelineInterval: TimeInterval {
+        (state == .busy || hovered || pulse > 0) ? 0.1 : 60
     }
 
     private var trailingSparkle: some View {

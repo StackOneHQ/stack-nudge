@@ -46,10 +46,11 @@ private struct ClaudeSessionSidecar: Decodable {
     let updatedAt: Double?
 }
 
-// Polls for live agent processes (claude / gemini / codex) every few seconds
-// while the sessions view is on screen. Maintains "finished" state for
-// sessions that disappeared between polls so the user can see ones that
-// just exited.
+// Polls for live agent processes (claude / gemini / codex / agy). Uses a
+// tight cadence while the Sessions tab is visible and a lower-frequency
+// background cadence for the compact widget. Maintains "finished" state
+// for sessions that disappeared between polls so the user can see ones
+// that just exited.
 final class SessionStore: ObservableObject {
 
     @Published private(set) var sessions: [Session] = []
@@ -61,26 +62,42 @@ final class SessionStore: ObservableObject {
 
     private let persistence: SessionPersistence
     private var pollTimer: Timer?
+    private var pollInterval: TimeInterval?
+    private var hasSweptSidecars = false
     private let queue = DispatchQueue(label: "stack-nudge.sessions", qos: .utility)
     private static let agentBinaries: Set<String> = ["claude", "gemini", "codex", "agy"]
-    private static let pollInterval: TimeInterval = 3.0
+    private static let foregroundPollInterval: TimeInterval = 3.0
+    private static let backgroundPollInterval: TimeInterval = 15.0
 
     init(persistence: SessionPersistence = .shared) {
         self.persistence = persistence
     }
 
     func startPolling() {
+        startPolling(every: Self.backgroundPollInterval)
+    }
+
+    func startForegroundPolling() {
+        startPolling(every: Self.foregroundPollInterval)
+    }
+
+    private func startPolling(every interval: TimeInterval) {
         // One-shot sweep of dead-PID sidecars left in ~/.claude/sessions/.
         // Claude Code writes these but doesn't garbage-collect them, so they
         // accumulate over weeks of use. Conservative guards (PID actually
         // dead + file at least 5 min old) keep us from racing a session
         // that's just starting up or mid-write.
-        DispatchQueue.global(qos: .utility).async {
-            Self.sweepStaleClaudeSidecars()
+        if !hasSweptSidecars {
+            hasSweptSidecars = true
+            DispatchQueue.global(qos: .utility).async {
+                Self.sweepStaleClaudeSidecars()
+            }
         }
+        guard pollInterval != interval || pollTimer == nil else { return }
         scan()
         pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: Self.pollInterval, repeats: true) { [weak self] _ in
+        pollInterval = interval
+        pollTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             self?.scan()
         }
     }
@@ -88,6 +105,7 @@ final class SessionStore: ObservableObject {
     func stopPolling() {
         pollTimer?.invalidate()
         pollTimer = nil
+        pollInterval = nil
     }
 
     func killSession(_ pid: Int) {
@@ -136,6 +154,7 @@ final class SessionStore: ObservableObject {
     }
 
     private func scan() {
+        guard !isScanning else { return }
         isScanning = true
         queue.async { [weak self] in
             // discover() shells out to ps/lsof; TerminalRegistry.enrich
@@ -246,7 +265,7 @@ final class SessionStore: ObservableObject {
         let lines = runProcess("/bin/ps", ["-axo", "pid=,etime=,args="])
             .split(separator: "\n")
 
-        var found: [Session] = []
+        var candidates: [(pid: Int, elapsed: String, agent: String)] = []
         for raw in lines {
             let line = String(raw).trimmingCharacters(in: .whitespaces)
             // pid (digits) <ws> etime <ws> args...
@@ -258,20 +277,29 @@ final class SessionStore: ObservableObject {
             let args = String(parts[2])
 
             guard let agent = detectAgent(args: args) else { continue }
+            candidates.append((pid: pid, elapsed: etime, agent: agent))
+        }
 
-            let cwd = readCWD(pid: pid)
-            let chain = walkParentChain(from: pid)
-            let sidecar = (agent == "claude") ? readClaudeSidecar(pid: pid) : nil
+        let pids = candidates.map(\.pid)
+        let cwdByPID = readCWDs(pids: pids)
+        let processTable = readProcessTable()
 
+        var found: [Session] = []
+        for candidate in candidates {
+            let cwd = cwdByPID[candidate.pid]
+            let chain = walkParentChain(from: candidate.pid, processTable: processTable)
+            let sidecar = (candidate.agent == "claude")
+                ? readClaudeSidecar(pid: candidate.pid)
+                : nil
             found.append(Session(
-                id: pid,
-                pid: pid,
-                agent: agent,
+                id: candidate.pid,
+                pid: candidate.pid,
+                agent: candidate.agent,
                 projectPath: cwd,
                 projectName: cwd.map { ($0 as NSString).lastPathComponent },
                 terminalPID: chain.terminalPID,
                 terminalApp: chain.terminalApp,
-                elapsed: etime,
+                elapsed: candidate.elapsed,
                 customName: nil,
                 status: .active,
                 tabId: nil,
@@ -375,19 +403,33 @@ final class SessionStore: ObservableObject {
         return try? JSONDecoder().decode(ClaudeSessionSidecar.self, from: data)
     }
 
-    private static func readCWD(pid: Int) -> String? {
-        let output = runProcess("/usr/sbin/lsof", ["-a", "-d", "cwd", "-p", "\(pid)", "-Fn"])
+    private static func readCWDs(pids: [Int]) -> [Int: String] {
+        guard !pids.isEmpty else { return [:] }
+        let pidList = pids.map(String.init).joined(separator: ",")
+        let output = runProcess(
+            "/usr/sbin/lsof",
+            ["-a", "-d", "cwd", "-p", pidList, "-Fpn"]
+        )
+        var result: [Int: String] = [:]
+        var currentPID: Int?
         for line in output.split(separator: "\n") {
-            if line.hasPrefix("n") {
-                return String(line.dropFirst())
+            if line.hasPrefix("p") {
+                currentPID = Int(line.dropFirst())
+            } else if line.hasPrefix("n"), let currentPID {
+                result[currentPID] = String(line.dropFirst())
             }
         }
-        return nil
+        return result
     }
 
     private struct ParentChain {
         var terminalPID: Int?
         var terminalApp: String?
+    }
+
+    private struct ProcessInfo {
+        let parentPID: Int
+        let command: String
     }
 
     private static let terminalApps: Set<String> = [
@@ -397,22 +439,39 @@ final class SessionStore: ObservableObject {
         "iTerm2", "iTerm", "Terminal", "Warp", "WarpTerminal", "ghostty", "Ghostty",
     ]
 
-    private static func walkParentChain(from pid: Int) -> ParentChain {
+    private static func readProcessTable() -> [Int: ProcessInfo] {
+        let output = runProcess("/bin/ps", ["-axww", "-o", "pid=,ppid=,comm="])
+        var result: [Int: ProcessInfo] = [:]
+        for raw in output.split(separator: "\n") {
+            let parts = String(raw)
+                .trimmingCharacters(in: .whitespaces)
+                .split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+            guard parts.count == 3,
+                  let pid = Int(parts[0]),
+                  let parentPID = Int(parts[1])
+            else { continue }
+            result[pid] = ProcessInfo(parentPID: parentPID, command: String(parts[2]))
+        }
+        return result
+    }
+
+    private static func walkParentChain(
+        from pid: Int,
+        processTable: [Int: ProcessInfo]
+    ) -> ParentChain {
         var chain = ParentChain()
         var current: Int? = pid
         for _ in 0..<12 {
-            guard let next = current, next > 1 else { break }
-            let comm = runProcess("/bin/ps", ["-p", "\(next)", "-o", "comm="])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let base = (comm as NSString).lastPathComponent
+            guard let next = current, next > 1,
+                  let info = processTable[next]
+            else { break }
+            let base = (info.command as NSString).lastPathComponent
             if terminalApps.contains(base) {
                 chain.terminalPID = next
                 chain.terminalApp = base
                 return chain
             }
-            let ppidStr = runProcess("/bin/ps", ["-p", "\(next)", "-o", "ppid="])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            current = Int(ppidStr)
+            current = info.parentPID
         }
         return chain
     }
