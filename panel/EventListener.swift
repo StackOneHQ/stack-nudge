@@ -15,6 +15,11 @@ final class EventListener {
     private var serverFD: Int32 = -1
     private let queue = DispatchQueue(label: "stack-nudge.panel.listener")
     private let decoder = JSONDecoder()
+    // Inode of the socket file we created in start(). Checked again in
+    // stop() so we only unlink when the file on disk is still the one we
+    // bound to — protects against the post-update race where the old
+    // bundle's shutdown otherwise removes the new bundle's socket file.
+    private var boundInode: ino_t?
 
     init(store: EventStore, socketPath: String) {
         self.store = store
@@ -55,6 +60,14 @@ final class EventListener {
 
         chmod(socketPath, 0o600)
 
+        // Stat after bind so stop() can verify we still own this file
+        // before unlinking it. Avoids the post-update race where the old
+        // bundle's terminate handler removes the new bundle's socket.
+        var st = stat()
+        if stat(socketPath, &st) == 0 {
+            boundInode = st.st_ino
+        }
+
         if listen(serverFD, 16) != 0 {
             let err = errno
             close(serverFD); serverFD = -1
@@ -66,6 +79,13 @@ final class EventListener {
 
     func stop() {
         if serverFD >= 0 { close(serverFD); serverFD = -1 }
+        // Only remove the file if it's still the one we bound to. If a
+        // successor process (post-update relaunch) has already replaced
+        // it, our unlink would wipe their freshly-bound socket and break
+        // event delivery for them.
+        guard let want = boundInode else { return }
+        var st = stat()
+        guard stat(socketPath, &st) == 0, st.st_ino == want else { return }
         unlink(socketPath)
     }
 
