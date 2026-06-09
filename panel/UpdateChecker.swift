@@ -100,8 +100,13 @@ final class UpdateChecker {
     // this host's architecture. Mirrors Updater.currentArch — we look for
     // "-macos-arm64.tar.gz" or "-macos-x86_64.tar.gz" depending on uname.
     private static func hasArtifactForThisHost(in json: [String: Any]?) -> Bool {
+        hasArtifact(in: json, arch: currentHostArch())
+    }
+
+    // Parameterized variant exposed for tests so we can exercise both
+    // arm64 and x86_64 paths from a single host without spoofing uname.
+    static func hasArtifact(in json: [String: Any]?, arch: String) -> Bool {
         guard let assets = json?["assets"] as? [[String: Any]] else { return false }
-        let arch = currentHostArch()
         let suffix = "-macos-\(arch).tar.gz"
         return assets.contains { asset in
             guard let name = asset["name"] as? String else { return false }

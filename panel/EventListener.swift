@@ -113,12 +113,7 @@ final class EventListener {
         }
         guard !buffer.isEmpty else { return }
 
-        for line in buffer.split(separator: 0x0A) {
-            guard !line.isEmpty else { continue }
-            guard let dto = try? decoder.decode(NudgeEventDTO.self, from: line) else {
-                continue
-            }
-            let event = dto.toNudgeEvent()
+        for event in Self.parseEvents(buffer) {
             // Teach the VSCode integration about this event's window
             // before we dispatch — the Sessions tab's next poll will
             // pick up the new (ipcHook → window title) pairing.
@@ -133,6 +128,23 @@ final class EventListener {
                 self?.store.append(event)
             }
         }
+    }
+
+    // Pure parser: newline-split the wire buffer and decode each non-empty
+    // line as a NudgeEvent. Malformed lines are silently skipped (drop the
+    // bad line, keep the rest) — handleClient already enforced the payload
+    // size limit upstream. Exposed for tests.
+    static func parseEvents(_ buffer: Data) -> [NudgeEvent] {
+        let decoder = JSONDecoder()
+        var events: [NudgeEvent] = []
+        for line in buffer.split(separator: 0x0A) {
+            guard !line.isEmpty else { continue }
+            guard let dto = try? decoder.decode(NudgeEventDTO.self, from: line) else {
+                continue
+            }
+            events.append(dto.toNudgeEvent())
+        }
+        return events
     }
 }
 
