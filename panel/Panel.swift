@@ -507,6 +507,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private let codexQuotaProbe = CodexQuotaProbe()
     private let antigravityUsageProbe = AntigravityUsageProbe()
     private var quotaTimer: Timer?
+    private struct TranscriptRefreshKey: Equatable {
+        let pid: Int
+        let agent: String
+        let projectPath: String?
+        let claudeSessionID: String?
+        let liveStatus: String?
+        let lastActivityAt: Date?
+    }
     // Subscriptions to other ObservableObjects we react to from PanelController.
     // Currently: SessionStore.sessions → refresh transcript stats proactively
     // so threshold alerts fire even when no hook has arrived yet.
@@ -667,16 +675,26 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // The pill (CompactView) reads sessions.sessions for the busy/idle
         // headline and mascot state, so polling has to run as soon as the
         // app is up — not gated on the Sessions tab being visible. Sessions
-        // view still calls startPolling on appear (idempotent), which keeps
-        // it polling even if some future code stops the timer.
+        // view switches to the foreground cadence while it is on screen.
         sessions.startPolling()
 
-        // Whenever SessionStore re-polls (~every 3s while polling, on
-        // panel-becomes-visible otherwise), refresh transcript stats for
-        // any claude session we now know the UUID for. This is what makes
-        // stats populate without waiting for a hook — and what lets
-        // threshold alerts fire for sessions the user isn't watching.
+        // Refresh transcript stats when meaningful session state changes,
+        // not when ps's display-only elapsed string advances on every poll.
+        // Hook events still refresh immediately; sidecar activity changes
+        // keep proactive context alerts current.
         sessions.$sessions
+            .map { sessions in
+                sessions.map {
+                    TranscriptRefreshKey(
+                        pid: $0.pid,
+                        agent: $0.agent,
+                        projectPath: $0.projectPath,
+                        claudeSessionID: $0.claudeSessionID,
+                        liveStatus: $0.liveStatus,
+                        lastActivityAt: $0.lastActivityAt
+                    )
+                }
+            }
             .removeDuplicates()
             .sink { [weak self] _ in self?.refreshAllClaudeStats() }
             .store(in: &cancellables)
@@ -1383,9 +1401,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // off-main since transcripts can be a few MB; the final assignment
     // hops back to main so SwiftUI re-renders cleanly.
     // Refresh transcript stats for every known claude session whose
-    // sidecar gave us a sessionId. Triggered on SessionStore updates so
-    // stats stay current with the 3s poll cadence even when the user
-    // isn't generating events.
+    // sidecar gave us a sessionId. Triggered when meaningful SessionStore
+    // state changes, so stats stay current without rereading transcripts
+    // for elapsed-time-only poll updates.
     private func refreshAllClaudeStats() {
         for session in sessions.sessions
             where session.agent == "claude" && session.status == .active
