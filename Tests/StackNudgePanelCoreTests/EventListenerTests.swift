@@ -36,13 +36,11 @@ final class EventListenerTests: XCTestCase {
     }
 
     func test_parseEvents_populatesOptionalEnrichmentFields() {
-        let data = payload(#"""
-        {"agent":"claude-code","event":"permission","title":"Allow?","message":"rm -rf",
-         "project_path":"/repo","bundle_id":"com.googlecode.iterm2","window_title":"agent: repo",
-         "session_id":"w0t0p0","term_program":"iTerm.app","claude_session_id":"abc-123",
-         "transcript_path":"/tmp/t.jsonl","sound_name":"Ping","voice_message":"Please review",
-         "bypass_mute":true,"has_action_button":true}
-        """#)
+        // Must stay on a single line — parseEvents splits on \n before
+        // decoding, so any embedded newlines in the JSON payload would
+        // shred it into malformed fragments and the test would observe
+        // zero events.
+        let data = payload(#"{"agent":"claude-code","event":"permission","title":"Allow?","message":"rm -rf","project_path":"/repo","bundle_id":"com.googlecode.iterm2","window_title":"agent: repo","session_id":"w0t0p0","term_program":"iTerm.app","claude_session_id":"abc-123","transcript_path":"/tmp/t.jsonl","sound_name":"Ping","voice_message":"Please review","bypass_mute":true,"has_action_button":true}"#)
         let events = EventListener.parseEvents(data)
         XCTAssertEqual(events.count, 1)
         let e = events[0]
