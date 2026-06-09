@@ -67,7 +67,14 @@ final class SessionStore: ObservableObject {
     private let queue = DispatchQueue(label: "stack-nudge.sessions", qos: .utility)
     private static let agentBinaries: Set<String> = ["claude", "gemini", "codex", "agy"]
     private static let foregroundPollInterval: TimeInterval = 3.0
-    private static let backgroundPollInterval: TimeInterval = 15.0
+    // Pill-only cadence when the Sessions tab isn't open. 10s keeps the
+    // mascot's busy/idle reflection on hook-less sidecar state changes
+    // (Claude liveStatus) with a worst-case latency that still feels
+    // live, while combined with the batched discover() (3 forks/scan
+    // instead of ~22) it cuts steady-state subprocess load by ~91% vs
+    // the original 3s, ~22-fork design. Hook events still surface
+    // immediately via the socket regardless of this interval.
+    private static let backgroundPollInterval: TimeInterval = 10.0
 
     init(persistence: SessionPersistence = .shared) {
         self.persistence = persistence

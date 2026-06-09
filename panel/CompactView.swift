@@ -614,8 +614,19 @@ private struct RobotMascot: View {
         }
     }
 
+    // Three-tier interval keeps the heavy 10fps cadence for actively
+    // changing visuals while still leaving headroom for the idle micro-
+    // loops (head tilt every ~12s, ear flick every ~10s, blink every ~9s,
+    // ghost bob) — those run off TimelineView ticks and would freeze
+    // entirely at a 60s interval. 0.5s = 2fps is plenty for the slow
+    // idle accents and still ~25× cheaper than the original 0.05s.
+    // Two-tier interval. The 0.5s idle cadence is paired with widened blink /
+    // ear-flick / micro-loop windows below so each animation is reliably
+    // sampled at 2fps. Going lower (e.g. 60s) freezes the idle micro-loops
+    // we added in the mascot-reactions release; going faster wastes cycles
+    // when nothing visibly changing depends on a higher framerate.
     private var timelineInterval: TimeInterval {
-        (state == .busy || hovered || pulse > 0) ? 0.1 : 60
+        (state == .busy || hovered || pulse > 0) ? 0.1 : 0.5
     }
 
     // Deterministic seed so multi-monitor pills don't sync. Offsets the
@@ -745,7 +756,10 @@ private struct RobotMascot: View {
     private func eyes(at t: TimeInterval) -> some View {
         // Blink: scale the eyes vertically toward 0 every ~3.2s for ~150ms.
         let cycle = t.truncatingRemainder(dividingBy: 3.2)
-        let blinking = state != .alert && cycle < 0.15
+        // 0.5s window matches the idle TimelineView cadence so each blink
+        // is guaranteed to be sampled at least once. The wider window
+        // reads as a sleepy slow blink, fitting the idle state.
+        let blinking = state != .alert && cycle < 0.5
         let scaleY: CGFloat = blinking ? 0.15 : 1.0
 
         return HStack(spacing: 4.5) {
@@ -885,16 +899,30 @@ private struct CatMascot: View {
         }
     }
 
+    // Three-tier interval keeps the heavy 10fps cadence for actively
+    // changing visuals while still leaving headroom for the idle micro-
+    // loops (head tilt every ~12s, ear flick every ~10s, blink every ~9s,
+    // ghost bob) — those run off TimelineView ticks and would freeze
+    // entirely at a 60s interval. 0.5s = 2fps is plenty for the slow
+    // idle accents and still ~25× cheaper than the original 0.05s.
+    // Two-tier interval. The 0.5s idle cadence is paired with widened blink /
+    // ear-flick / micro-loop windows below so each animation is reliably
+    // sampled at 2fps. Going lower (e.g. 60s) freezes the idle micro-loops
+    // we added in the mascot-reactions release; going faster wastes cycles
+    // when nothing visibly changing depends on a higher framerate.
     private var timelineInterval: TimeInterval {
-        (state == .busy || hovered || pulse > 0) ? 0.1 : 60
+        (state == .busy || hovered || pulse > 0) ? 0.1 : 0.5
     }
 
     // Tiny vertical bump every ~10s — reads as "ear flick".
     private static let idleSeed: Double = 2.7  // offset from robot's phase
     private func idleEarFlick(at t: TimeInterval) -> CGFloat {
         let phase = (t + Self.idleSeed).truncatingRemainder(dividingBy: 10.0)
-        guard phase > 9.4 else { return 0 }
-        return CGFloat(-sin((phase - 9.4) / 0.6 * .pi)) * 0.8
+        // Active arc widened from 0.6s → 1.5s so a 0.5s idle tick lands at
+        // least 1–2 samples inside it. Reads as a slower, more deliberate
+        // ear-flick which suits the resting state.
+        guard phase > 8.5 else { return 0 }
+        return CGFloat(-sin((phase - 8.5) / 1.5 * .pi)) * 0.8
     }
 
     @ViewBuilder
@@ -995,7 +1023,10 @@ private struct CatMascot: View {
 
     private func eyes(at t: TimeInterval) -> some View {
         let cycle = t.truncatingRemainder(dividingBy: 3.5)
-        let blinking = state != .alert && cycle < 0.15
+        // 0.5s window matches the idle TimelineView cadence so each blink
+        // is guaranteed to be sampled at least once. The wider window
+        // reads as a sleepy slow blink, fitting the idle state.
+        let blinking = state != .alert && cycle < 0.5
         let scaleY: CGFloat = blinking ? 0.15 : 1.0
         // While hovered, scale the left eye flat → looks like a wink.
         let leftScale: CGFloat = hovered ? 0.15 : scaleY
@@ -1186,8 +1217,19 @@ private struct EyeMascot: View {
         }
     }
 
+    // Three-tier interval keeps the heavy 10fps cadence for actively
+    // changing visuals while still leaving headroom for the idle micro-
+    // loops (head tilt every ~12s, ear flick every ~10s, blink every ~9s,
+    // ghost bob) — those run off TimelineView ticks and would freeze
+    // entirely at a 60s interval. 0.5s = 2fps is plenty for the slow
+    // idle accents and still ~25× cheaper than the original 0.05s.
+    // Two-tier interval. The 0.5s idle cadence is paired with widened blink /
+    // ear-flick / micro-loop windows below so each animation is reliably
+    // sampled at 2fps. Going lower (e.g. 60s) freezes the idle micro-loops
+    // we added in the mascot-reactions release; going faster wastes cycles
+    // when nothing visibly changing depends on a higher framerate.
     private var timelineInterval: TimeInterval {
-        (state == .busy || hovered || pulse > 0) ? 0.1 : 60
+        (state == .busy || hovered || pulse > 0) ? 0.1 : 0.5
     }
 
     // Squint-and-open every ~9s. Returns vertical scale that dips toward
@@ -1195,8 +1237,11 @@ private struct EyeMascot: View {
     private static let idleSeed: Double = 5.1
     private func idleBlinkScale(at t: TimeInterval) -> CGFloat {
         let phase = (t + Self.idleSeed).truncatingRemainder(dividingBy: 9.0)
-        guard phase > 8.7 else { return 1 }
-        let local = (phase - 8.7) / 0.3  // 0…1 over 300ms
+        // Active window widened from 0.3s → 1.0s so a 0.5s idle tick lands
+        // at least one sample inside the squint. Reads as a longer, more
+        // pronounced lens-narrow when idle.
+        guard phase > 8.0 else { return 1 }
+        let local = (phase - 8.0) / 1.0
         return CGFloat(1.0 - 0.6 * sin(local * .pi))
     }
 
@@ -1380,8 +1425,19 @@ private struct GhostMascot: View {
         }
     }
 
+    // Three-tier interval keeps the heavy 10fps cadence for actively
+    // changing visuals while still leaving headroom for the idle micro-
+    // loops (head tilt every ~12s, ear flick every ~10s, blink every ~9s,
+    // ghost bob) — those run off TimelineView ticks and would freeze
+    // entirely at a 60s interval. 0.5s = 2fps is plenty for the slow
+    // idle accents and still ~25× cheaper than the original 0.05s.
+    // Two-tier interval. The 0.5s idle cadence is paired with widened blink /
+    // ear-flick / micro-loop windows below so each animation is reliably
+    // sampled at 2fps. Going lower (e.g. 60s) freezes the idle micro-loops
+    // we added in the mascot-reactions release; going faster wastes cycles
+    // when nothing visibly changing depends on a higher framerate.
     private var timelineInterval: TimeInterval {
-        (state == .busy || hovered || pulse > 0) ? 0.1 : 60
+        (state == .busy || hovered || pulse > 0) ? 0.1 : 0.5
     }
 
     private var trailingSparkle: some View {
@@ -1457,7 +1513,10 @@ private struct GhostMascot: View {
 
     private func eyes(at t: TimeInterval) -> some View {
         let cycle = t.truncatingRemainder(dividingBy: 3.0)
-        let blinking = state != .alert && cycle < 0.15
+        // 0.5s window matches the idle TimelineView cadence so each blink
+        // is guaranteed to be sampled at least once. The wider window
+        // reads as a sleepy slow blink, fitting the idle state.
+        let blinking = state != .alert && cycle < 0.5
         let scaleY: CGFloat = blinking ? 0.15 : 1.0
         return HStack(spacing: 4) { eyeShape; eyeShape }
             .scaleEffect(x: 1, y: scaleY)
