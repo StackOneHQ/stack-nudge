@@ -75,12 +75,53 @@ final class UpdateChecker {
             let latest = Self.stripV(tag)
             let newer = Self.isNewer(latest, than: current)
             let body = json?["body"] as? String
+            // release-please creates the GitHub Release the moment its PR
+            // merges, but release.yml takes 5–15 min more to build, sign,
+            // notarize, and upload the per-arch .tar.gz. Without an artifact
+            // present, clicking "Update" downstream fails with
+            // noArtifactForArch. Suppress the badge until the matching
+            // artifact actually exists on the release.
+            let artifactReady = newer && Self.hasArtifactForThisHost(in: json)
             DispatchQueue.main.async {
-                self?.nav?.updateAvailable = newer ? latest : nil
-                self?.nav?.updateReleaseNotes = newer ? body : nil
-                completion?(newer ? .updateAvailable(latest) : .upToDate)
+                self?.nav?.updateAvailable = artifactReady ? latest : nil
+                self?.nav?.updateReleaseNotes = artifactReady ? body : nil
+                if newer && !artifactReady {
+                    // upToDate from the user's perspective right now —
+                    // they'll see the badge once CI finishes uploading.
+                    completion?(.upToDate)
+                } else {
+                    completion?(artifactReady ? .updateAvailable(latest) : .upToDate)
+                }
             }
         }
+    }
+
+    // True when the release JSON's `assets[]` includes a `.tar.gz` matching
+    // this host's architecture. Mirrors Updater.currentArch — we look for
+    // "-macos-arm64.tar.gz" or "-macos-x86_64.tar.gz" depending on uname.
+    private static func hasArtifactForThisHost(in json: [String: Any]?) -> Bool {
+        hasArtifact(in: json, arch: currentHostArch())
+    }
+
+    // Parameterized variant exposed for tests so we can exercise both
+    // arm64 and x86_64 paths from a single host without spoofing uname.
+    static func hasArtifact(in json: [String: Any]?, arch: String) -> Bool {
+        guard let assets = json?["assets"] as? [[String: Any]] else { return false }
+        let suffix = "-macos-\(arch).tar.gz"
+        return assets.contains { asset in
+            guard let name = asset["name"] as? String else { return false }
+            return name.hasSuffix(suffix) && !name.hasSuffix(".sha256")
+        }
+    }
+
+    private static func currentHostArch() -> String {
+        var sysinfo = utsname()
+        uname(&sysinfo)
+        let m = withUnsafePointer(to: &sysinfo.machine) {
+            $0.withMemoryRebound(to: CChar.self, capacity: 1) { String(cString: $0) }
+        }
+        // uname returns "arm64" / "x86_64" on macOS.
+        return m == "x86_64" ? "x86_64" : "arm64"
     }
 
     // One-shot fetch of release notes for the update-confirm view. Used when

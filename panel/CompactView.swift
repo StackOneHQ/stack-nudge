@@ -20,9 +20,15 @@ struct CompactView: View {
     @State private var rippleScale: CGFloat = 0.3
     @State private var rippleOpacity: Double = 0
     @State private var isHovering: Bool = false
+    // Rotating index into `activeSessions` for the cycling display. Only
+    // advances when `shouldCycle` is true (≥2 active sessions and nothing
+    // more urgent on screen). Stays bounded by % so a session disappearing
+    // mid-rotation doesn't crash.
+    @State private var cycleIndex: Int = 0
 
     private static let glowColor = Color(red: 0.4, green: 0.85, blue: 1.0)
     private static let recentEventWindow: TimeInterval = 5 * 60
+    private static let cyclePeriod: TimeInterval = 5.0
 
     var body: some View {
         HStack(spacing: 10) {
@@ -160,6 +166,8 @@ struct CompactView: View {
                         .lineLimit(1)
                 }
             }
+        } else if shouldCycle {
+            cyclingActiveSession
         } else if let active = mostRecentActive {
             Text(displayName(active))
                 .font(.system(size: 11, weight: .medium))
@@ -169,6 +177,50 @@ struct CompactView: View {
             Text("watching")
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
+        }
+    }
+
+    // When ≥2 sessions are active and no busy session / recent event is
+    // demanding the spotlight, cycle through each active session every
+    // `cyclePeriod` seconds so the user can see all of their parallel
+    // agents at a glance instead of just one. Soft crossfade between
+    // entries. Snap-back to the single-session display is automatic —
+    // `shouldCycle` flips false the moment busy or recent-event branches
+    // take over, SwiftUI tears down this view, and the Timer.publish
+    // subscription cancels with it.
+    @ViewBuilder
+    private var cyclingActiveSession: some View {
+        let pool = activeSessions
+        let session = pool[cycleIndex % max(pool.count, 1)]
+        HStack(spacing: 4) {
+            Text(displayName(session))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Text("·")
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+            if let stats = transcriptStats(for: session) {
+                Text(Self.formatTokens(stats.tokens))
+                    .font(.system(size: 10, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.secondary)
+            } else {
+                let position = (pool.firstIndex { $0.pid == session.pid } ?? 0) + 1
+                Text("\(position)/\(pool.count)")
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .id(session.pid)
+        .transition(.opacity)
+        .onReceive(Timer.publish(every: Self.cyclePeriod, on: .main, in: .common).autoconnect()) { _ in
+            // Re-check shouldCycle on every tick — pool size can change as
+            // sessions finish or new ones start. Skip during drag so we
+            // don't compete with AppKit's mouse handler.
+            guard shouldCycle, !nav.compactDragging else { return }
+            withAnimation(.easeInOut(duration: 0.45)) {
+                cycleIndex = (cycleIndex + 1) % max(activeSessions.count, 1)
+            }
         }
     }
 
@@ -311,6 +363,22 @@ struct CompactView: View {
 
     private var mostRecentActive: Session? {
         sessions.sessions.first { $0.status == .active }
+    }
+
+    // Stable, PID-sorted list of every currently-active session. Drives
+    // the pill's rotation when ≥2 are alive at the same time.
+    private var activeSessions: [Session] {
+        sessions.sessions
+            .filter { $0.status == .active }
+            .sorted { $0.pid < $1.pid }
+    }
+
+    // Rotate sessions only when nothing more important is on screen and
+    // there's actually something to rotate through.
+    private var shouldCycle: Bool {
+        busiestSession == nil
+            && recentEvent == nil
+            && activeSessions.count >= 2
     }
 
     private func transcriptStats(for s: Session) -> TranscriptStats? {

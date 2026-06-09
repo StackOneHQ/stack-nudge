@@ -212,6 +212,12 @@ sign_venv_contents() {
 
 echo "Building stack-nudge ($ARCH)..."
 rm -rf build
+mkdir -p build
+# Exclude the dev build from Spotlight so re-builds don't surface a stale
+# StackNudge.app duplicate next to ~/Applications/StackNudge.app in search
+# results. Touched here (not committed) because `rm -rf build` wipes it
+# every run.
+touch build/.metadata_never_index
 
 build_app "$APP" "stack-nudge" \
   "panel/Info.plist" "notifier/Icon.icns" "13.0" \
