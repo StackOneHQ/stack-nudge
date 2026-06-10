@@ -13,6 +13,12 @@ struct HandoffRecord: Codable, Identifiable, Equatable {
     var ticket: String?         // Linear/Jira key (e.g. "ENG-12142"); nil if none
     var model: String?
     var contextTokens: Int?     // latest context-window tokens for the session
+    // Uncommitted working-tree diff at the latest Stop (vs HEAD, + untracked).
+    // Optional so records written before this field decode cleanly.
+    var headCommit: String?
+    var filesChanged: Int?
+    var insertions: Int?
+    var deletions: Int?
     let createdAt: Date
     var updatedAt: Date
 }

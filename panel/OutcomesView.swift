@@ -2,13 +2,28 @@ import AppKit
 import Foundation
 import SwiftUI
 
+// Uncommitted working-tree size, aggregated for display. Files are summed
+// across branches (each branch contributing its latest snapshot); line deltas
+// likewise. `isEmpty` lets the UI omit the segment when there's nothing pending.
+struct DiffStat: Equatable {
+    let filesChanged: Int
+    let insertions: Int
+    let deletions: Int
+
+    var isEmpty: Bool { filesChanged == 0 && insertions == 0 && deletions == 0 }
+}
+
 // A single branch's slice of a ticket — shown as an indented sub-row so a
 // ticket that spans several branches reveals where its sessions/tokens went.
+// `diff` is the branch's latest snapshot (pending work), not a sum across its
+// sessions — uncommitted state is point-in-time, so summing would double-count.
 struct BranchBreakdown: Identifiable, Equatable {
     var id: String { branch }
     let branch: String
+    let repoRoot: String?   // for the per-branch outcome lookup (repo+branch keyed)
     let sessionCount: Int
     let totalTokens: Int
+    let diff: DiffStat
 }
 
 // One aggregated row in the Tickets tab: every session that shares a grouping
@@ -22,7 +37,10 @@ struct TicketGroup: Identifiable, Equatable {
     let sessionCount: Int
     let totalTokens: Int
     let agents: [String]    // distinct canonical agents, first-seen order
-    let branches: [BranchBreakdown]  // sub-rows; populated for ticket groups
+    let diff: DiffStat      // pending work, summed across the group's branches
+    // All branch slices in the group (used for the outcome rollup); rendered as
+    // sub-rows only for ticket groups — a branch-only group's slice is itself.
+    let branches: [BranchBreakdown]
 }
 
 // Tickets tab — the first slice of the usage-to-outcome dashboard. Reads the
@@ -64,7 +82,10 @@ struct OutcomesView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onAppear { ticketURLTemplate = ConfigFile.read()["STACKNUDGE_TICKET_URL"] }
+        .onAppear {
+            ticketURLTemplate = ConfigFile.read()["STACKNUDGE_TICKET_URL"]
+            nav.refreshOutcomes?()
+        }
     }
 
     // MARK: - Rows
@@ -95,7 +116,13 @@ struct OutcomesView: View {
             Text(detailLine(group))
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
-            if !group.branches.isEmpty {
+            let rollup = outcomeRollup(group)
+            if !rollup.isEmpty {
+                HStack(spacing: 10) {
+                    ForEach(rollup, id: \.status) { statusChip($0.status, count: $0.count) }
+                }
+            }
+            if group.isTicket, !group.branches.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(group.branches) { branchRow($0) }
                 }
@@ -126,24 +153,88 @@ struct OutcomesView: View {
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.tertiary)
                 .fixedSize()
+            if let status = outcome(for: branch), status != .clean {
+                statusChip(status)
+            }
         }
         .padding(.leading, 12)
     }
 
-    // "3 sessions · 218K tokens · Claude, Codex" — the tokens segment is
-    // dropped when no session in the group carried a token count.
+    // "3 sessions · 218K tokens · 23 files · +1.8k/−400 · Claude, Codex" —
+    // each segment is dropped when it has nothing to show.
     private func detailLine(_ group: TicketGroup) -> String {
         var parts = [Self.sessionsLabel(group.sessionCount)]
         if group.totalTokens > 0 { parts.append("\(Self.shortTokens(group.totalTokens)) tokens") }
+        if !group.diff.isEmpty {
+            parts.append(Self.filesLabel(group.diff.filesChanged))
+            if group.diff.insertions > 0 || group.diff.deletions > 0 {
+                parts.append(Self.lineDelta(group.diff))
+            }
+        }
         if !group.agents.isEmpty { parts.append(group.agents.joined(separator: ", ")) }
         return parts.joined(separator: " · ")
     }
 
-    // Compact sub-row trailing: "2 sessions · 600K".
+    // Compact sub-row trailing: "2 sessions · 600K · 12 files".
     private func branchDetail(_ branch: BranchBreakdown) -> String {
         var parts = [Self.sessionsLabel(branch.sessionCount)]
         if branch.totalTokens > 0 { parts.append(Self.shortTokens(branch.totalTokens)) }
+        if branch.diff.filesChanged > 0 { parts.append(Self.filesLabel(branch.diff.filesChanged)) }
         return parts.joined(separator: " · ")
+    }
+
+    // MARK: - Outcome ("did it ship?")
+
+    private func outcome(for branch: BranchBreakdown) -> OutcomeStatus? {
+        nav.outcomeByBranch[PanelNav.outcomeKey(branch.repoRoot, branch.branch)]
+    }
+
+    // Counts of each non-clean outcome across the group's branches, ordered
+    // most-shipped first. Empty when nothing has a status yet (e.g. still
+    // computing) or everything is clean.
+    private func outcomeRollup(_ group: TicketGroup) -> [(status: OutcomeStatus, count: Int)] {
+        var counts: [OutcomeStatus: Int] = [:]
+        for branch in group.branches {
+            guard let status = outcome(for: branch), status != .clean else { continue }
+            counts[status, default: 0] += 1
+        }
+        return Self.outcomeOrder.compactMap { status in
+            counts[status].map { (status, $0) }
+        }
+    }
+
+    private func statusChip(_ status: OutcomeStatus, count: Int? = nil) -> some View {
+        HStack(spacing: 3) {
+            Circle()
+                .fill(Self.outcomeColor(status))
+                .frame(width: 6, height: 6)
+            Text(count.map { "\($0) \(Self.outcomeLabel(status))" } ?? Self.outcomeLabel(status))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .fixedSize()
+    }
+
+    private static let outcomeOrder: [OutcomeStatus] = [.merged, .pushed, .committed, .needsReview]
+
+    private static func outcomeLabel(_ status: OutcomeStatus) -> String {
+        switch status {
+        case .merged:      return "merged"
+        case .pushed:      return "pushed"
+        case .committed:   return "committed"
+        case .needsReview: return "needs review"
+        case .clean:       return "clean"
+        }
+    }
+
+    private static func outcomeColor(_ status: OutcomeStatus) -> Color {
+        switch status {
+        case .merged:      return .purple
+        case .pushed:      return .blue
+        case .committed:   return .teal
+        case .needsReview: return .orange
+        case .clean:       return .secondary
+        }
     }
 
     // MARK: - Deep link
@@ -189,10 +280,14 @@ struct OutcomesView: View {
             let agents = orderedDistinct(rows.map { displayAgent($0.agent) })
             let repos = orderedDistinct(rows.compactMap { repoName($0.repoRoot) })
             let last = rows.map(\.updatedAt).max() ?? .distantPast
-            let branches = isTicket ? branchBreakdown(rows) : []
+            let slices = branchBreakdown(rows)
+            let diff = DiffStat(
+                filesChanged: slices.reduce(0) { $0 + $1.diff.filesChanged },
+                insertions: slices.reduce(0) { $0 + $1.diff.insertions },
+                deletions: slices.reduce(0) { $0 + $1.diff.deletions })
             return (TicketGroup(id: key, isTicket: isTicket, repos: repos,
                                 sessionCount: rows.count, totalTokens: tokens,
-                                agents: agents, branches: branches), last)
+                                agents: agents, diff: diff, branches: slices), last)
         }
         return groups.sorted {
             if $0.group.isTicket != $1.group.isTicket { return $0.group.isTicket }
@@ -212,7 +307,13 @@ struct OutcomesView: View {
         return order.map { branch -> BranchBreakdown in
             let group = byBranch[branch] ?? []
             let tokens = group.compactMap(\.contextTokens).reduce(0, +)
-            return BranchBreakdown(branch: branch, sessionCount: group.count, totalTokens: tokens)
+            let latest = group.max { $0.updatedAt < $1.updatedAt }
+            let diff = DiffStat(
+                filesChanged: latest?.filesChanged ?? 0,
+                insertions: latest?.insertions ?? 0,
+                deletions: latest?.deletions ?? 0)
+            return BranchBreakdown(branch: branch, repoRoot: latest?.repoRoot,
+                                   sessionCount: group.count, totalTokens: tokens, diff: diff)
         }.sorted { $0.totalTokens > $1.totalTokens }
     }
 
@@ -245,6 +346,19 @@ struct OutcomesView: View {
         if count >= 1_000_000 { return String(format: "%.1fM", Double(count) / 1_000_000) }
         if count >= 1_000 { return "\(Int((Double(count) / 1_000).rounded()))K" }
         return "\(count)"
+    }
+
+    private static func filesLabel(_ count: Int) -> String {
+        count == 1 ? "1 file" : "\(count) files"
+    }
+
+    // "+1.8k/−400" — uses the minus sign (U+2212) to match the app's typography.
+    private static func lineDelta(_ diff: DiffStat) -> String {
+        "+\(shortCount(diff.insertions))/−\(shortCount(diff.deletions))"
+    }
+
+    private static func shortCount(_ count: Int) -> String {
+        count >= 1_000 ? String(format: "%.1fk", Double(count) / 1_000) : "\(count)"
     }
 
     // MARK: - Footer + empty state
