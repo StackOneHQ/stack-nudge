@@ -33,6 +33,7 @@ final class HandoffLedger {
         var record = byID[id] ?? HandoffRecord(
             id: id, agent: agent,
             repoRoot: nil, branch: nil, ticket: nil, model: nil, contextTokens: nil,
+            headCommit: nil, filesChanged: nil, insertions: nil, deletions: nil,
             createdAt: now, updatedAt: now)
         merge(&record)
         record.updatedAt = now

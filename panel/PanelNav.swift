@@ -171,6 +171,18 @@ final class PanelNav: ObservableObject {
     // in-memory HandoffLedger and reflect the new session live. The ledger
     // isn't itself observable; this is the single change-signal that drives it.
     @Published var handoffsRevision: Int = 0
+    // Derived "did it ship?" status per repo+branch, computed off-main by
+    // PanelController's outcome pass and read by the Tickets tab. Keyed by
+    // `outcomeKey(repoRoot, branch)`. Empty until the first pass completes.
+    @Published var outcomeByBranch: [String: OutcomeStatus] = [:]
+    // Wired by PanelController; OutcomesView calls it on appear to recompute
+    // outcomes for the branches in the ledger. Kept as a closure so the view
+    // doesn't need to know about git/process work.
+    var refreshOutcomes: (() -> Void)?
+
+    static func outcomeKey(_ repoRoot: String?, _ branch: String?) -> String {
+        "\(repoRoot ?? "")\n\(branch ?? "")"
+    }
     // Usage tab: which connected client's quota is shown (index into
     // availableUsageClients). ↑/↓ move it; read through clampedUsageClientIndex
     // so a client losing its data can't strand the selection out of range.

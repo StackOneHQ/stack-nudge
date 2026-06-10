@@ -14,11 +14,15 @@ final class OutcomesViewTests: XCTestCase {
                         branch: String? = nil,
                         ticket: String? = nil,
                         tokens: Int? = nil,
+                        files: Int? = nil,
+                        insertions: Int? = nil,
+                        deletions: Int? = nil,
                         updated: TimeInterval = 0) -> HandoffRecord {
         let date = Date(timeIntervalSince1970: updated)
         return HandoffRecord(
             id: id, agent: agent, repoRoot: repoRoot, branch: branch, ticket: ticket,
-            model: nil, contextTokens: tokens, createdAt: date, updatedAt: date)
+            model: nil, contextTokens: tokens, headCommit: nil, filesChanged: files,
+            insertions: insertions, deletions: deletions, createdAt: date, updatedAt: date)
     }
 
     func test_groupsByTicket_sumsTokensAndCountsSessions() {
@@ -104,8 +108,35 @@ final class OutcomesViewTests: XCTestCase {
         XCTAssertEqual(branches.last?.sessionCount, 2)
     }
 
-    func test_branchGroup_hasNoBranchSubRows() {
+    func test_branchOnlyGroup_exposesItsOwnBranchSlice() {
+        // Branch-only groups carry their single slice (for the outcome rollup);
+        // the view just doesn't render it as a redundant sub-row.
         let groups = OutcomesView.groups(from: [record(id: "a", branch: "feat/x")])
-        XCTAssertEqual(groups.first?.branches, [])
+        XCTAssertEqual(groups.first?.isTicket, false)
+        XCTAssertEqual(groups.first?.branches.map(\.branch), ["feat/x"])
+    }
+
+    func test_branchDiff_usesLatestSnapshotNotSum() {
+        // Two sessions on one branch: the diff is the latest snapshot (current
+        // pending state), not the sum — uncommitted state is point-in-time.
+        let groups = OutcomesView.groups(from: [
+            record(id: "a", branch: "ENG-1/x", ticket: "ENG-1", files: 5, insertions: 50, deletions: 5, updated: 1),
+            record(id: "b", branch: "ENG-1/x", ticket: "ENG-1", files: 8, insertions: 80, deletions: 9, updated: 2),
+        ])
+        XCTAssertEqual(groups.first?.branches.first?.diff,
+                       DiffStat(filesChanged: 8, insertions: 80, deletions: 9))
+    }
+
+    func test_groupDiff_sumsLatestAcrossBranches() {
+        let groups = OutcomesView.groups(from: [
+            record(id: "a", branch: "ENG-1/be", ticket: "ENG-1", files: 3, insertions: 30, deletions: 1, updated: 1),
+            record(id: "b", branch: "ENG-1/fe", ticket: "ENG-1", files: 7, insertions: 70, deletions: 2, updated: 2),
+        ])
+        XCTAssertEqual(groups.first?.diff, DiffStat(filesChanged: 10, insertions: 100, deletions: 3))
+    }
+
+    func test_diff_emptyWhenNoSnapshotCaptured() {
+        let groups = OutcomesView.groups(from: [record(id: "a", ticket: "ENG-1")])
+        XCTAssertEqual(groups.first?.diff.isEmpty, true)
     }
 }

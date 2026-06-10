@@ -246,6 +246,8 @@ build_app "$APP" "stack-nudge" \
   panel/AntigravityLocalServer.swift \
   panel/AntigravityUsage.swift \
   panel/TicketAttribution.swift \
+  panel/GitSnapshot.swift \
+  panel/OutcomeWatcher.swift \
   panel/Handoff.swift \
   panel/HandoffLedger.swift \
   panel/OutcomesView.swift \

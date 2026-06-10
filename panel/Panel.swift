@@ -663,6 +663,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         nav.setHotkey = { [weak self] spec in
             self?.registerHotkey(spec: spec) ?? false
         }
+        nav.refreshOutcomes = { [weak self] in self?.refreshOutcomes() }
 
         startConfigWatcher()
         setupNotificationCenter()
@@ -1494,23 +1495,68 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         DispatchQueue.global(qos: .utility).async {
             guard let repoRoot = Self.gitValue(cwd, ["rev-parse", "--show-toplevel"]) else { return }
             let branch = Self.gitValue(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])
-            let commitSubject = Self.gitValue(cwd, ["log", "-1", "--format=%s"])
+            // Only consider the subject of a commit *unique to this branch*
+            // (base..HEAD). The absolute last commit may already be on main —
+            // e.g. an ENG-689 commit — and must not be attributed to the
+            // current, still-uncommitted ENG-688 work. No base / no branch-local
+            // commit ⇒ no commit subject ⇒ fall back to the branch alone.
+            let baseSha = OutcomeWatcher.resolveBaseSha { Self.gitValue(cwd, $0) }
+            let commitSubject = baseSha.flatMap {
+                Self.gitValue(cwd, ["log", "-1", "--format=%s", "\($0)..HEAD"])
+            }
             let ticket = TicketAttribution.ticket(branch: branch, commitSubject: commitSubject)
             let stats = transcriptPath.flatMap { TranscriptReader.read(path: $0) }
+            let snapshot = GitSnapshot.capture(cwd: cwd) { Self.gitValue($0, $1) }
             DispatchQueue.main.async { [weak self] in
                 HandoffLedger.shared.upsert(id: sessionID, agent: agent) { record in
                     record.repoRoot = repoRoot
                     record.branch = branch
-                    if record.ticket == nil { record.ticket = ticket }  // derive once, fill if empty
+                    // Re-derive every Stop (not derive-once): git state evolves
+                    // within a session, so the latest derivation is the most
+                    // accurate and lets a misattributed row self-correct. nil is
+                    // fine — the rollup re-derives from the branch at display.
+                    record.ticket = ticket
                     if let stats {
                         record.model = stats.model
                         record.contextTokens = stats.tokens
+                    }
+                    if let snapshot {
+                        record.headCommit = snapshot.headCommit
+                        record.filesChanged = snapshot.filesChanged
+                        record.insertions = snapshot.insertions
+                        record.deletions = snapshot.deletions
                     }
                 }
                 // Nudge the Tickets tab + its tab-strip count to re-read the
                 // ledger so a session shows up live while the panel is open.
                 self?.nav.handoffsRevision += 1
+                self?.refreshOutcomes()
             }
+        }
+    }
+
+    // Recompute "did it ship?" for every distinct repo+branch in the ledger,
+    // off-main (git is slow), then publish to nav for the Tickets tab. Uses the
+    // newest record per branch (ledger is newest-first) for the headCommit /
+    // uncommitted-at-Stop inputs to the derivation.
+    func refreshOutcomes() {
+        var pairs: [(repo: String, branch: String, head: String?, files: Int)] = []
+        var seen = Set<String>()
+        for record in HandoffLedger.shared.all() {
+            guard let repo = record.repoRoot, let branch = record.branch else { continue }
+            if seen.insert(PanelNav.outcomeKey(repo, branch)).inserted {
+                pairs.append((repo, branch, record.headCommit, record.filesChanged ?? 0))
+            }
+        }
+        guard !pairs.isEmpty else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            var result: [String: OutcomeStatus] = [:]
+            for pair in pairs {
+                result[PanelNav.outcomeKey(pair.repo, pair.branch)] = OutcomeWatcher.derive(
+                    branch: pair.branch, headCommit: pair.head, filesChangedAtStop: pair.files
+                ) { Self.gitValue(pair.repo, $0) }
+            }
+            DispatchQueue.main.async { self?.nav.outcomeByBranch = result }
         }
     }
 
