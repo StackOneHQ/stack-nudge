@@ -245,6 +245,9 @@ build_app "$APP" "stack-nudge" \
   panel/CodexUsage.swift \
   panel/AntigravityLocalServer.swift \
   panel/AntigravityUsage.swift \
+  panel/TicketAttribution.swift \
+  panel/Handoff.swift \
+  panel/HandoffLedger.swift \
   panel/Sessions.swift \
   panel/CompactView.swift \
   panel/TranscriptStats.swift \
