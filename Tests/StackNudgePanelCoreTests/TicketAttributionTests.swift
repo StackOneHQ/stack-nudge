@@ -60,4 +60,19 @@ final class TicketAttributionTests: XCTestCase {
     func test_nonAnchoredBranchKey_foundViaFallback() {
         XCTAssertEqual(TicketAttribution.ticket(branch: "feature/ENG-77-thing"), "ENG-77")
     }
+
+    func test_lowercaseBranchKey_normalisedToUppercase() {
+        // Branches are commonly lowercased; the canonical Linear key is upper.
+        XCTAssertEqual(TicketAttribution.ticket(branch: "eng-75/connector-sync"), "ENG-75")
+    }
+
+    func test_mixedCaseBranchKey_normalisedToUppercase() {
+        XCTAssertEqual(TicketAttribution.ticket(branch: "Eng-75/x"), "ENG-75")
+    }
+
+    func test_lowercaseInCommitFallback_notMatched() {
+        // The fuzzy fallback stays uppercase-only so it can't catch shapes
+        // like "utf-8" that aren't tickets.
+        XCTAssertNil(TicketAttribution.ticket(branch: "spike", commitSubject: "bump to utf-8"))
+    }
 }

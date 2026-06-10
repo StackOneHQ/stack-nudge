@@ -27,6 +27,7 @@ private enum KeyCode {
     static let two:       UInt16 = 19
     static let three:     UInt16 = 20
     static let four:      UInt16 = 21
+    static let five:      UInt16 = 23
     static let nKey:      UInt16 = 45
     static let pKey:      UInt16 = 35
     static let mKey:      UInt16 = 46
@@ -124,6 +125,7 @@ struct PanelContentView: View {
                 case .events:   eventsBody
                 case .sessions: SessionsView(store: sessions, events: store, nav: nav)
                 case .usage:    UsageView(nav: nav)
+                case .outcomes: OutcomesView(nav: nav)
                 case .settings: SettingsView(nav: nav)
                 case .phrases:  PhrasesView(model: phrases) { nav.mode = .settings }
                 case .updateConfirm:
@@ -146,6 +148,14 @@ struct PanelContentView: View {
         }
     }
 
+    // Distinct ticket/branch groups in the ledger — the badge on the Tickets
+    // tab. Reads nav.handoffsRevision so the count refreshes when a Stop adds
+    // a session while the panel is open.
+    private var ticketGroupCount: Int {
+        _ = nav.handoffsRevision
+        return Set(HandoffLedger.shared.all().map { $0.ticket ?? $0.branch ?? "—" }).count
+    }
+
     private var tabStrip: some View {
         HStack(spacing: 4) {
             Image(systemName: "bell.badge.fill")
@@ -156,6 +166,7 @@ struct PanelContentView: View {
             tab(.events,   label: "Events",   count: store.events.count)
             tab(.sessions, label: "Sessions", count: sessions.sessions.filter { $0.status == .active }.count)
             tab(.usage,    label: "Usage",    count: 0)
+            tab(.outcomes, label: "Tickets",  count: ticketGroupCount)
             tab(.settings, label: "Settings", count: 0, dot: nav.updateAvailable != nil)
 
             Spacer()
@@ -164,7 +175,7 @@ struct PanelContentView: View {
             // uncluttered while still surfacing the shortcut range.
             HStack(spacing: 2) {
                 KeyCapView(symbol: "⌘")
-                KeyCapView(symbol: "1-4")
+                KeyCapView(symbol: "1-5")
             }
             .opacity(0.7)
         }
@@ -1218,8 +1229,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // SwiftUI's ScrollView has no programmatic delta-scroll API, so walk the
     // AppKit hierarchy to the underlying NSScrollView and nudge its clip view.
     // Only one ScrollView is rendered at a time (mode-gated), so the first
-    // match is the Usage detail pane (used when focus is stepped into it).
-    private func scrollUsageBy(_ dy: CGFloat) {
+    // match is whichever detail pane is showing — the Usage tiers or the
+    // Tickets rollup.
+    private func scrollDetailBy(_ dy: CGFloat) {
         guard let scrollView = findScrollView(in: panel.contentView),
               let doc = scrollView.documentView else { return }
         let clip = scrollView.contentView
@@ -1485,7 +1497,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             let commitSubject = Self.gitValue(cwd, ["log", "-1", "--format=%s"])
             let ticket = TicketAttribution.ticket(branch: branch, commitSubject: commitSubject)
             let stats = transcriptPath.flatMap { TranscriptReader.read(path: $0) }
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
                 HandoffLedger.shared.upsert(id: sessionID, agent: agent) { record in
                     record.repoRoot = repoRoot
                     record.branch = branch
@@ -1495,6 +1507,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                         record.contextTokens = stats.tokens
                     }
                 }
+                // Nudge the Tickets tab + its tab-strip count to re-read the
+                // ledger so a session shows up live while the panel is open.
+                self?.nav.handoffsRevision += 1
             }
         }
     }
@@ -2000,9 +2015,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             case KeyCode.three:
                 nav.mode = .usage; return true
             case KeyCode.four:
+                nav.mode = .outcomes; return true
+            case KeyCode.five:
                 nav.mode = .settings; return true
             case KeyCode.leftArrow, KeyCode.rightArrow:
-                let tabs: [PanelMode] = [.events, .sessions, .usage, .settings]
+                let tabs: [PanelMode] = [.events, .sessions, .usage, .outcomes, .settings]
                 if let idx = tabs.firstIndex(of: nav.mode) {
                     let next = event.keyCode == KeyCode.leftArrow ? idx - 1 : idx + 1
                     if tabs.indices.contains(next) {
@@ -2227,9 +2244,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 case KeyCode.leftArrow:
                     nav.usageDetailFocused = false
                 case KeyCode.upArrow:
-                    scrollUsageBy(-40)
+                    scrollDetailBy(-40)
                 case KeyCode.downArrow:
-                    scrollUsageBy(40)
+                    scrollDetailBy(40)
                 case KeyCode.rKey:
                     syncQuotaNow()
                 case KeyCode.pKey:
@@ -2259,6 +2276,27 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 // after the keystroke — otherwise they'd wait for the next
                 // scheduled tick (up to the configured poll interval).
                 if nav.quotaTrackingEnabled { syncQuotaNow() }
+            case KeyCode.mKey:
+                enterCompactMode()
+            default:
+                break
+            }
+            return true
+        }
+
+        // Tickets tab: a single scrollable rollup, no sub-selection. ↑/↓ scroll
+        // it, M enters the widget, Esc hides. Other keys are swallowed so they
+        // don't leak through to the events store.
+        if nav.mode == .outcomes {
+            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            guard plain else { return false }
+            switch event.keyCode {
+            case KeyCode.escape:
+                hidePanel()
+            case KeyCode.upArrow:
+                scrollDetailBy(-40)
+            case KeyCode.downArrow:
+                scrollDetailBy(40)
             case KeyCode.mKey:
                 enterCompactMode()
             default:

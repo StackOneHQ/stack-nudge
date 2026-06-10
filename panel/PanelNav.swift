@@ -5,6 +5,7 @@ enum PanelMode {
     case events
     case sessions
     case usage
+    case outcomes
     case settings
     case phrases
     // Confirmation step after the user clicks the "Update available" row.
@@ -165,6 +166,11 @@ final class PanelNav: ObservableObject {
     // Antigravity (agy) usage from the running CLI's loopback RPC, populated by
     // AntigravityUsageProbe — the agy analogue of `quota`/`codexQuota`.
     @Published var antigravityQuota: AntigravityQuotaSnapshot?
+    // Bumped by PanelController after a handoff is upserted into the ledger so
+    // the Tickets tab (OutcomesView) and its tab-strip count re-read the
+    // in-memory HandoffLedger and reflect the new session live. The ledger
+    // isn't itself observable; this is the single change-signal that drives it.
+    @Published var handoffsRevision: Int = 0
     // Usage tab: which connected client's quota is shown (index into
     // availableUsageClients). ↑/↓ move it; read through clampedUsageClientIndex
     // so a client losing its data can't strand the selection out of range.
