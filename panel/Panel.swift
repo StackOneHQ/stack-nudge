@@ -659,6 +659,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             self?.lastEventArrivalAt = Date()
             self?.postBannerIfNeeded(event)
             self?.refreshTranscriptStats(for: event)
+            self?.captureHandoff(for: event)
             self?.nav.reactToEvent(event.kind)
         }
         nav.loadFromConfig()  // populate panelPinned + other live values up-front
@@ -1464,6 +1465,47 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self?.evaluateContextThreshold(sessionID: sessionID, stats: stats)
             }
         }
+    }
+
+    // Persist a per-session handoff record at Stop (Claude + Codex — agy has no
+    // Stop hook). Resolves git repo/branch + ticket + the latest token usage
+    // off-main, then upserts the session's row in the ledger. This is the basis
+    // for the per-ticket usage rollup. Non-git directories are skipped — there's
+    // nothing to attribute to a repo/ticket.
+    private func captureHandoff(for event: NudgeEvent) {
+        guard event.kind == .stop,
+              let sessionID = event.claudeSessionID,
+              let cwd = event.projectPath, !cwd.isEmpty
+        else { return }
+        let agent = Agent.canonical(event.agent)
+        let transcriptPath = event.transcriptPath
+        DispatchQueue.global(qos: .utility).async {
+            guard let repoRoot = Self.gitValue(cwd, ["rev-parse", "--show-toplevel"]) else { return }
+            let branch = Self.gitValue(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])
+            let commitSubject = Self.gitValue(cwd, ["log", "-1", "--format=%s"])
+            let ticket = TicketAttribution.ticket(branch: branch, commitSubject: commitSubject)
+            let stats = transcriptPath.flatMap { TranscriptReader.read(path: $0) }
+            DispatchQueue.main.async {
+                HandoffLedger.shared.upsert(id: sessionID, agent: agent) { record in
+                    record.repoRoot = repoRoot
+                    record.branch = branch
+                    if record.ticket == nil { record.ticket = ticket }  // derive once, fill if empty
+                    if let stats {
+                        record.model = stats.model
+                        record.contextTokens = stats.tokens
+                    }
+                }
+            }
+        }
+    }
+
+    // Run `git -C <cwd> <args>`; trim, and treat non-repo / empty output as nil.
+    private static func gitValue(_ cwd: String, _ args: [String]) -> String? {
+        let output = ProcessOutput.read("/usr/bin/git", ["-C", cwd] + args)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !output.isEmpty, !output.hasPrefix("fatal"),
+              !output.contains("not a git repository") else { return nil }
+        return output
     }
 
     // Per-session state for context-threshold dedup. Lives on the
