@@ -4,6 +4,17 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.17.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.16.1...v1.17.0) (2026-06-10)
+
+
+### Features
+
+* **gh-pr-linking:** link prs to gh via device mode login oauth app ([#88](https://github.com/StackOneHQ/stack-nudge/issues/88)) ([ac0ec00](https://github.com/StackOneHQ/stack-nudge/commit/ac0ec00d97ff8396dabe6e83a16f38d02cf9e8e3))
+* **git-snapshot:** check diff and branch status for session branches ([#87](https://github.com/StackOneHQ/stack-nudge/issues/87)) ([be1c84e](https://github.com/StackOneHQ/stack-nudge/commit/be1c84e678c6125b186d6e2c72a9359c88595bd2))
+* **tickets-lifecycle:** enforce ticket lifecycle & gh disconnect ([#89](https://github.com/StackOneHQ/stack-nudge/issues/89)) ([c2610fd](https://github.com/StackOneHQ/stack-nudge/commit/c2610fde314a5daa0b68a4a8e2dd3dc2b6aa697a))
+* **token-count:** add Tickets tab for per-ticket usage ([#86](https://github.com/StackOneHQ/stack-nudge/issues/86)) ([85620f0](https://github.com/StackOneHQ/stack-nudge/commit/85620f057d6f4bf71208690519108ad28e1ac92a))
+* **token-count:** store token counts against branch and ticket ([#84](https://github.com/StackOneHQ/stack-nudge/issues/84)) ([b0622f2](https://github.com/StackOneHQ/stack-nudge/commit/b0622f2c3a7fff098f4916482a41fbe64c8ce3ac))
+
 ## [1.16.1](https://github.com/StackOneHQ/stack-nudge/compare/v1.16.0...v1.16.1) (2026-06-09)
 
 
