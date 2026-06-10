@@ -248,6 +248,7 @@ build_app "$APP" "stack-nudge" \
   panel/TicketAttribution.swift \
   panel/Handoff.swift \
   panel/HandoffLedger.swift \
+  panel/OutcomesView.swift \
   panel/Sessions.swift \
   panel/CompactView.swift \
   panel/TranscriptStats.swift \

@@ -13,9 +13,13 @@ enum TicketAttribution {
 
     /// Resolve a ticket key, first match wins by reliability:
     ///   1. `branch` anchored at the start — the convention puts the key first,
-    ///      so an anchored hit is trusted as-is (no prefix filtering).
+    ///      so an anchored hit is trusted as-is (no prefix filtering). Matched
+    ///      case-insensitively and normalised to uppercase, because branches
+    ///      are commonly lowercased (`eng-75/…`) while the canonical Linear/Jira
+    ///      key is uppercase (`ENG-75`).
     ///   2. otherwise, the first key found *anywhere* in branch / commit subject
-    ///      / PR head-ref-or-title.
+    ///      / PR head-ref-or-title — uppercase-only, since a case-insensitive
+    ///      free search would catch shapes like `utf-8` / `sha-1`.
     /// `allowedPrefixes` (e.g. `["ENG"]`) guards the fuzzier any-match fallback
     /// against shapes like `UTF-8`; `nil` accepts any prefix.
     /// Returns the bare key (e.g. `"ENG-12142"`) or `nil` when nothing matches.
@@ -23,20 +27,23 @@ enum TicketAttribution {
                        commitSubject: String? = nil,
                        pr: String? = nil,
                        allowedPrefixes: Set<String>? = nil) -> String? {
-        if let branch, let anchored = firstMatch(branch, anchored: true) {
-            return anchored
+        if let branch, let anchored = firstMatch(branch, anchored: true, caseInsensitive: true) {
+            return anchored.uppercased()
         }
         for source in [branch, commitSubject, pr].compactMap({ $0 }) {
-            if let hit = firstMatch(source, anchored: false), passes(hit, allowedPrefixes) {
+            if let hit = firstMatch(source, anchored: false, caseInsensitive: false),
+               passes(hit, allowedPrefixes) {
                 return hit
             }
         }
         return nil
     }
 
-    private static func firstMatch(_ string: String, anchored: Bool) -> String? {
+    private static func firstMatch(_ string: String, anchored: Bool, caseInsensitive: Bool) -> String? {
         let pattern = anchored ? "^(?:\(key))" : "\\b(?:\(key))\\b"
-        guard let range = string.range(of: pattern, options: .regularExpression) else { return nil }
+        var options: String.CompareOptions = .regularExpression
+        if caseInsensitive { options.insert(.caseInsensitive) }
+        guard let range = string.range(of: pattern, options: options) else { return nil }
         return String(string[range])
     }
 
