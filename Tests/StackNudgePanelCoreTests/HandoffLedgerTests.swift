@@ -49,6 +49,23 @@ final class HandoffLedgerTests: XCTestCase {
         XCTAssertEqual(Set(ids), ["s3", "s4"])  // oldest two pruned
     }
 
+    func test_remove_dropsByID() {
+        let ledger = HandoffLedger(path: tempURL())
+        ledger.upsert(id: "s1", agent: "codex") { $0.ticket = "ENG-1" }
+        ledger.upsert(id: "s2", agent: "claude") { $0.ticket = "ENG-2" }
+        ledger.remove(ids: ["s1"])
+        XCTAssertEqual(ledger.all().map(\.id), ["s2"])
+    }
+
+    func test_pruneOnInit_dropsStaleAtLoad() {
+        let url = tempURL()
+        // A 2020-dated record on disk should be gone after init, with no upsert.
+        let old = #"{"id":"old","agent":"codex","createdAt":"2020-01-01T00:00:00Z","updatedAt":"2020-01-01T00:00:00Z"}"# + "\n"
+        try? old.write(to: url, atomically: true, encoding: .utf8)
+        let ledger = HandoffLedger(path: url, maxAgeDays: 90)
+        XCTAssertTrue(ledger.all().isEmpty)
+    }
+
     func test_ageRetention_dropsStaleOnNextWrite() {
         let url = tempURL()
         // Pre-seed a 2020-dated record directly (the API always stamps

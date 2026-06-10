@@ -2466,6 +2466,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 nav.moveOutcomeSelection(1)
             case KeyCode.rightArrow, KeyCode.returnKey, KeyCode.numpadEnter:
                 nav.activateSelectedOutcome()
+            case KeyCode.delete, KeyCode.forwardDelete:
+                nav.dismissSelectedOutcome()
             case KeyCode.mKey:
                 enterCompactMode()
             default:

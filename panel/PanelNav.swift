@@ -197,6 +197,9 @@ final class PanelNav: ObservableObject {
     // Mirror of STACKNUDGE_GITHUB; gates the PR fetch. Off by default — local
     // git tracking stays fully functional without a GitHub token.
     @Published var githubLinkingEnabled: Bool = false
+    // STACKNUDGE_HIDE_SHIPPED — drop groups whose PR reads merged so the tab
+    // focuses on in-flight work. Needs GitHub linking to know "merged".
+    @Published var hideShippedTickets: Bool = false
     // True when a GitHub token is stored (signed in). Drives whether the Tickets
     // tab shows PR chips or the "Connect GitHub" card. Set from the Keychain on
     // load and after the device flow completes.
@@ -216,10 +219,28 @@ final class PanelNav: ObservableObject {
     // each group header, then its branch sub-rows (ticket groups only).
     @Published var outcomeSelectedIndex: Int = 0
 
+    // The groups the Tickets tab renders, after the hide-shipped filter. Single
+    // source of truth so the view and the keyboard indexing never disagree.
+    func visibleOutcomeGroups() -> [TicketGroup] {
+        let groups = OutcomesView.groups(from: HandoffLedger.shared.all())
+        guard hideShippedTickets else { return groups }
+        return groups.filter { !isShipped($0) }
+    }
+
+    // "Shipped" = every branch in the group reads merged (PR state preferred,
+    // else the local outcome). Empty groups aren't shipped.
+    func isShipped(_ group: TicketGroup) -> Bool {
+        !group.branches.isEmpty && group.branches.allSatisfy {
+            let key = Self.outcomeKey($0.repoRoot, $0.branch)
+            if let pr = pullRequestByBranch[key] { return pr.state == .merged }
+            return outcomeByBranch[key] == .merged
+        }
+    }
+
     // Row count for clamping — header + (ticket) branch sub-rows, same order the
     // view renders. No config/network, so cheap to call on every keystroke.
     func outcomeRowCount() -> Int {
-        OutcomesView.groups(from: HandoffLedger.shared.all()).reduce(0) { total, group in
+        visibleOutcomeGroups().reduce(0) { total, group in
             total + 1 + (group.isTicket ? group.branches.count : 0)
         }
     }
@@ -235,7 +256,7 @@ final class PanelNav: ObservableObject {
     func activateSelectedOutcome() {
         let template = ConfigFile.read()["STACKNUDGE_TICKET_URL"]
         var urls: [String?] = []
-        for group in OutcomesView.groups(from: HandoffLedger.shared.all()) {
+        for group in visibleOutcomeGroups() {
             urls.append(headerURL(group, template: template))
             if group.isTicket {
                 for branch in group.branches {
@@ -258,6 +279,58 @@ final class PanelNav: ObservableObject {
             return pullRequestByBranch[Self.outcomeKey(branch.repoRoot, branch.branch)]?.url
         }
         return nil
+    }
+
+    // Remove the selected row's records: a ticket header drops the whole group
+    // (every branch); a branch sub-row / branch-only header drops just that
+    // branch. Matched by (repoRoot, branch), which lives on each record.
+    func dismissSelectedOutcome() {
+        let records = HandoffLedger.shared.all()
+        let rowKeys = branchKeysForRows(visibleOutcomeGroups())
+        guard !rowKeys.isEmpty else { return }
+        let index = min(max(0, outcomeSelectedIndex), rowKeys.count - 1)
+        let targets = Set(rowKeys[index])
+        guard !targets.isEmpty else { return }
+        let ids = records
+            .filter { targets.contains(Self.outcomeKey($0.repoRoot, $0.branch)) }
+            .map(\.id)
+        HandoffLedger.shared.remove(ids: ids)
+        let newCount = outcomeRowCount()
+        if outcomeSelectedIndex >= newCount { outcomeSelectedIndex = max(0, newCount - 1) }
+        handoffsRevision += 1
+    }
+
+    // Per-row branch keys in render order, matching outcomeRowCount: a header
+    // (ticket → all its branches; branch-only → its one), then a ticket group's
+    // branch sub-rows.
+    private func branchKeysForRows(_ groups: [TicketGroup]) -> [[String]] {
+        var rows: [[String]] = []
+        for group in groups {
+            rows.append(group.branches.map { Self.outcomeKey($0.repoRoot, $0.branch) })
+            if group.isTicket {
+                rows.append(contentsOf: group.branches.map { [Self.outcomeKey($0.repoRoot, $0.branch)] })
+            }
+        }
+        return rows
+    }
+
+    // Settings "Disconnect GitHub": wipe the local token + PR state, then open
+    // GitHub's authorized-apps page so the user can fully revoke there too
+    // (clearing locally stops us using it but doesn't revoke server-side).
+    func disconnectGithub() {
+        GitHubAuth.clearToken()
+        githubSignedIn = false
+        githubSignIn = .idle
+        pullRequestByBranch = [:]
+        if let url = URL(string: "https://github.com/settings/applications") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    func toggleHideShipped() {
+        hideShippedTickets.toggle()
+        ConfigFile.write(key: "STACKNUDGE_HIDE_SHIPPED",
+                         value: hideShippedTickets ? "true" : "false")
     }
     // Usage tab: which connected client's quota is shown (index into
     // availableUsageClients). ↑/↓ move it; read through clampedUsageClientIndex
@@ -431,13 +504,13 @@ final class PanelNav: ObservableObject {
     // when the offset is 1.
     var updateRowOffset: Int { updateAvailable != nil ? 1 : 0 }
 
-    // 30 rows in the body: hotkey (1) + Toggles (4) + Widget (4) + Sounds (3)
+    // 32 rows in the body: hotkey (1) + Toggles (4) + Widget (4) + Sounds (3)
     // + Voice (2 — Voice + Speed, or 1 Download row with an unused index 14)
-    // + Usage (6) + Tickets (1) + Events (1) + Actions (7) = indices 0…29. Must
+    // + Usage (6) + Tickets (3) + Events (1) + Actions (7) = indices 0…31. Must
     // be kept in sync with the row(...) calls in Settings.swift and the case
     // bodies in applyCycle/activate; off-by-one here makes the last rows wrap to
     // 0 on the down-arrow.
-    var rowCount: Int { 30 + updateRowOffset }
+    var rowCount: Int { 32 + updateRowOffset }
 
     // Row layout (kept in one place so the controller, view, and indexing
     // logic all agree on what each row index means). When updateAvailable
@@ -464,15 +537,17 @@ final class PanelNav: ObservableObject {
     //  18  Poll frequency        cycle
     //  19  Context alert at      cycle       (per-session token thresholds)
     //  20  Show remaining        toggle      (invert gauge readout: 70% left vs 30% used)
-    //  21  GitHub PR links       toggle      (opt-in gh PR/CI linking; STACKNUDGE_GITHUB)
-    //  22  History per session   cycle
-    //  23  Edit phrases…         action
-    //  24  Check permissions…    action
-    //  25  Open config file…     action
-    //  26  View release notes…   action
-    //  27  Check for updates…    action
-    //  28  Uninstall stack-nudge action
-    //  29  Quit panel            action
+    //  21  GitHub PR links       toggle      (opt-in PR/CI linking; STACKNUDGE_GITHUB)
+    //  22  Hide shipped          toggle      (drop merged groups; STACKNUDGE_HIDE_SHIPPED)
+    //  23  Disconnect GitHub…    action      (enabled when signed in)
+    //  24  History per session   cycle
+    //  25  Edit phrases…         action
+    //  26  Check permissions…    action
+    //  27  Open config file…     action
+    //  28  View release notes…   action
+    //  29  Check for updates…    action
+    //  30  Uninstall stack-nudge action
+    //  31  Quit panel            action
 
     // MARK: - Disk I/O
 
@@ -509,6 +584,7 @@ final class PanelNav: ObservableObject {
         voice           = config["STACKNUDGE_VOICE_NAME"]       ?? "af_aoede"
         voiceSpeed      = Double(config["STACKNUDGE_VOICE_SPEED"] ?? "") ?? 1.1
         githubLinkingEnabled = ConfigFile.bool(config, "STACKNUDGE_GITHUB", default: false)
+        hideShippedTickets = ConfigFile.bool(config, "STACKNUDGE_HIDE_SHIPPED", default: false)
         githubSignedIn = GitHubAuth.token() != nil
         quotaTrackingEnabled = ConfigFile.bool(config, "STACKNUDGE_QUOTA_TRACKING", default: true)
         quotaAlertsEnabled   = ConfigFile.bool(config, "STACKNUDGE_QUOTA_ALERTS",   default: true)
@@ -722,13 +798,14 @@ final class PanelNav: ObservableObject {
             } else {
                 startVoiceModelDownload()
             }
-        case 23: actions?.editPhrases()
-        case 24: actions?.checkPermissions()
-        case 25: actions?.openConfig()
-        case 26: actions?.openReleaseNotes()
-        case 27: actions?.checkForUpdates()
-        case 28: actions?.beginUninstall()
-        case 29: actions?.quit()
+        case 23: disconnectGithub()
+        case 25: actions?.editPhrases()
+        case 26: actions?.checkPermissions()
+        case 27: actions?.openConfig()
+        case 28: actions?.openReleaseNotes()
+        case 29: actions?.checkForUpdates()
+        case 30: actions?.beginUninstall()
+        case 31: actions?.quit()
         default: applyCycle(forward: true)
         }
     }
@@ -902,6 +979,8 @@ final class PanelNav: ObservableObject {
         case 21:
             toggleGithubLinking()
         case 22:
+            toggleHideShipped()
+        case 24:
             let list = Self.eventsPerSessionOptions
             let idx = list.firstIndex(of: eventsPerSession) ?? 1
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count

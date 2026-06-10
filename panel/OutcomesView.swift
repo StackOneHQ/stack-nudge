@@ -58,7 +58,7 @@ struct OutcomesView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            let groups = Self.groups(from: HandoffLedger.shared.all())
+            let groups = nav.visibleOutcomeGroups()
             let selectedRowID = Self.selectedRowID(groups, index: nav.outcomeSelectedIndex)
             if nav.githubLinkingEnabled, !nav.githubSignedIn {
                 connectGithubCard
@@ -96,6 +96,7 @@ struct OutcomesView: View {
                 if !groups.isEmpty {
                     FooterHint(label: "Select", keys: ["↑↓"])
                     FooterHint(label: "Open", keys: ["↵"])
+                    FooterHint(label: "Remove", keys: ["⌫"])
                 }
                 if nav.compactMode { FooterHint(label: "Compact", keys: ["M"]) }
                 FooterHint(label: "Hide", keys: ["Esc"])

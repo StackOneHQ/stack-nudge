@@ -22,6 +22,11 @@ final class HandoffLedger {
         self.maxAge = maxAgeDays * 86_400
         self.maxCount = maxCount
         self.byID = Self.load(url)
+        // Prune on launch too — retention otherwise only runs on the next
+        // upsert, so an idle ledger would keep stale rows indefinitely.
+        let before = byID.count
+        prune()
+        if byID.count != before { persist() }
     }
 
     // Create on first sight of a session id, or merge into the existing record.
@@ -39,6 +44,13 @@ final class HandoffLedger {
         record.updatedAt = now
         byID[id] = record
         prune()
+        persist()
+    }
+
+    // Drop records by session id (manual dismiss from the Tickets tab).
+    func remove(ids: [String]) {
+        guard !ids.isEmpty else { return }
+        for id in ids { byID.removeValue(forKey: id) }
         persist()
     }
 
