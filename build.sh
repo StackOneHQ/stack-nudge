@@ -248,6 +248,8 @@ build_app "$APP" "stack-nudge" \
   panel/TicketAttribution.swift \
   panel/GitSnapshot.swift \
   panel/OutcomeWatcher.swift \
+  panel/GitHubAPI.swift \
+  panel/GitHubAuth.swift \
   panel/Handoff.swift \
   panel/HandoffLedger.swift \
   panel/OutcomesView.swift \

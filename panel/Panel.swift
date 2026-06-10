@@ -664,6 +664,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             self?.registerHotkey(spec: spec) ?? false
         }
         nav.refreshOutcomes = { [weak self] in self?.refreshOutcomes() }
+        nav.refreshPullRequests = { [weak self] in self?.refreshPullRequests() }
+        nav.startGithubSignIn = { [weak self] in self?.startGithubSignIn() }
+        nav.cancelGithubSignIn = { [weak self] in self?.cancelGithubSignIn() }
 
         startConfigWatcher()
         setupNotificationCenter()
@@ -1560,6 +1563,124 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
     }
 
+    // Opt-in (STACKNUDGE_GITHUB): fetch the PR + CI state for each distinct
+    // repo+branch via the GitHub GraphQL API with our stored token, off-main,
+    // publishing incrementally so chips appear as each branch resolves. A PR's
+    // MERGED state is what closes the squash gap the local OutcomeWatcher can't
+    // see. No-op when disabled or not signed in.
+    func refreshPullRequests() {
+        guard nav.githubLinkingEnabled, let token = GitHubAuth.token() else { return }
+        var pairs: [(repo: String, branch: String)] = []
+        var seen = Set<String>()
+        for record in HandoffLedger.shared.all() {
+            guard let repo = record.repoRoot, let branch = record.branch else { continue }
+            if seen.insert(PanelNav.outcomeKey(repo, branch)).inserted {
+                pairs.append((repo, branch))
+            }
+        }
+        guard !pairs.isEmpty else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            for pair in pairs {
+                guard let slug = Self.repoSlug(forRepo: pair.repo) else { continue }
+                let info = GitHubAPI.pullRequest(owner: slug.owner, repo: slug.repo,
+                                                 branch: pair.branch) { body in
+                    Self.graphQLPOST(body, token: token)
+                }
+                guard let info else { continue }
+                let key = PanelNav.outcomeKey(pair.repo, pair.branch)
+                DispatchQueue.main.async { self?.nav.pullRequestByBranch[key] = info }
+            }
+        }
+    }
+
+    // owner/repo for a working copy — prefer `upstream` (the real mainline in a
+    // fork workflow, where PRs live) then `origin`.
+    private static func repoSlug(forRepo repoRoot: String) -> (owner: String, repo: String)? {
+        for remote in ["upstream", "origin"] {
+            if let url = gitValue(repoRoot, ["remote", "get-url", remote]),
+               let slug = GitHubAPI.repoSlug(fromRemoteURL: url) {
+                return slug
+            }
+        }
+        return nil
+    }
+
+    // Synchronous GraphQL POST (called from the off-main fetch loop) — blocks on
+    // a semaphore so the caller's loop stays simple; 10s ceiling.
+    private static func graphQLPOST(_ body: String, token: String) -> String? {
+        var request = URLRequest(url: GitHubAPI.graphQLEndpoint)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body.data(using: .utf8)
+        var result: String?
+        let done = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            if let data { result = String(data: data, encoding: .utf8) }
+            done.signal()
+        }.resume()
+        _ = done.wait(timeout: .now() + 10)
+        return result
+    }
+
+    // MARK: - GitHub device-flow sign-in
+
+    // Kick off the in-panel device flow: request a code, surface it to the
+    // Tickets-tab card, then poll until the user approves (or it expires).
+    func startGithubSignIn() {
+        guard let clientID = GitHubAuth.clientID() else {
+            nav.githubSignIn = .failed("GitHub client ID not configured")
+            return
+        }
+        nav.githubSignIn = .requesting
+        GitHubAuth.requestDeviceCode(clientID: clientID) { [weak self] response in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                guard let response else {
+                    self.nav.githubSignIn = .failed("Couldn't reach GitHub — try again")
+                    return
+                }
+                self.nav.githubSignIn = .awaitingApproval(
+                    userCode: response.userCode, verificationURI: response.verificationURI)
+                self.pollGithubSignIn(clientID: clientID,
+                                      deviceCode: response.deviceCode,
+                                      interval: response.interval)
+            }
+        }
+    }
+
+    func cancelGithubSignIn() { nav.githubSignIn = .idle }
+
+    // One poll per `interval` seconds. Stops if the user cancelled (state left
+    // awaitingApproval). On success, stores the token and kicks a PR refresh.
+    private func pollGithubSignIn(clientID: String, deviceCode: String, interval: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(max(1, interval))) { [weak self] in
+            guard let self, case .awaitingApproval = self.nav.githubSignIn else { return }
+            GitHubAuth.poll(clientID: clientID, deviceCode: deviceCode) { result in
+                DispatchQueue.main.async {
+                    guard case .awaitingApproval = self.nav.githubSignIn else { return }
+                    switch result {
+                    case .token(let token):
+                        GitHubAuth.store(token: token)
+                        self.nav.githubSignedIn = true
+                        self.nav.githubSignIn = .idle
+                        self.refreshPullRequests()
+                    case .pending:
+                        self.pollGithubSignIn(clientID: clientID, deviceCode: deviceCode, interval: interval)
+                    case .slowDown(let slower):
+                        self.pollGithubSignIn(clientID: clientID, deviceCode: deviceCode, interval: slower)
+                    case .expired:
+                        self.nav.githubSignIn = .failed("Code expired — try again")
+                    case .denied:
+                        self.nav.githubSignIn = .failed("Access denied")
+                    case .failed(let message):
+                        self.nav.githubSignIn = .failed(message)
+                    }
+                }
+            }
+        }
+    }
+
     // Run `git -C <cwd> <args>`; trim, and treat non-repo / empty output as nil.
     private static func gitValue(_ cwd: String, _ args: [String]) -> String? {
         let output = ProcessOutput.read("/usr/bin/git", ["-C", cwd] + args)
@@ -2330,9 +2451,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return true
         }
 
-        // Tickets tab: a single scrollable rollup, no sub-selection. ↑/↓ scroll
-        // it, M enters the widget, Esc hides. Other keys are swallowed so they
-        // don't leak through to the events store.
+        // Tickets tab: ↑/↓ move the row selection, →/Enter open the selected
+        // row's ticket/PR link, M enters the widget, Esc hides. Other keys are
+        // swallowed so they don't leak through to the events store.
         if nav.mode == .outcomes {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain else { return false }
@@ -2340,9 +2461,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             case KeyCode.escape:
                 hidePanel()
             case KeyCode.upArrow:
-                scrollDetailBy(-40)
+                nav.moveOutcomeSelection(-1)
             case KeyCode.downArrow:
-                scrollDetailBy(40)
+                nav.moveOutcomeSelection(1)
+            case KeyCode.rightArrow, KeyCode.returnKey, KeyCode.numpadEnter:
+                nav.activateSelectedOutcome()
             case KeyCode.mKey:
                 enterCompactMode()
             default:

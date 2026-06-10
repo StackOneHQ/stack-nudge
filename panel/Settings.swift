@@ -84,18 +84,22 @@ struct SettingsView: View {
                             row(20 + off, label: "Show remaining",   kind: .toggle, value: nav.quotaShowRemaining ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
                         }
 
+                        section("Tickets") {
+                            row(21 + off, label: "GitHub PR links", kind: .toggle, value: nav.githubLinkingEnabled ? "On" : "Off")
+                        }
+
                         section("Events") {
-                            row(21 + off, label: "History per session", kind: .cycle, value: "\(nav.eventsPerSession)")
+                            row(22 + off, label: "History per session", kind: .cycle, value: "\(nav.eventsPerSession)")
                         }
 
                         section("Actions") {
-                            row(22 + off, label: "Edit phrases…",         kind: .action, value: "")
-                            row(23 + off, label: "Check permissions…",    kind: .action, value: "")
-                            row(24 + off, label: "Open config file…",     kind: .action, value: "")
-                            row(25 + off, label: "View release notes…",   kind: .action, value: "")
-                            row(26 + off, label: "Check for updates…",    kind: .action, value: checkForUpdatesStatus)
-                            row(27 + off, label: "Uninstall StackNudge…", kind: .action, value: "")
-                            row(28 + off, label: "Quit panel",            kind: .action, value: "")
+                            row(23 + off, label: "Edit phrases…",         kind: .action, value: "")
+                            row(24 + off, label: "Check permissions…",    kind: .action, value: "")
+                            row(25 + off, label: "Open config file…",     kind: .action, value: "")
+                            row(26 + off, label: "View release notes…",   kind: .action, value: "")
+                            row(27 + off, label: "Check for updates…",    kind: .action, value: checkForUpdatesStatus)
+                            row(28 + off, label: "Uninstall StackNudge…", kind: .action, value: "")
+                            row(29 + off, label: "Quit panel",            kind: .action, value: "")
                         }
 
                         aboutFooter

@@ -59,24 +59,44 @@ struct OutcomesView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             let groups = Self.groups(from: HandoffLedger.shared.all())
+            let selectedRowID = Self.selectedRowID(groups, index: nav.outcomeSelectedIndex)
+            if nav.githubLinkingEnabled, !nav.githubSignedIn {
+                connectGithubCard
+                Divider().opacity(0.4)
+            }
             if groups.isEmpty {
                 emptyState
             } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(groups) { groupRow($0) }
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(groups) { group in
+                                groupRow(group, selectedRowID: selectedRowID)
+                                    .id(Self.headerID(group))
+                            }
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(ThinScrollers())
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(ThinScrollers())
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .scrollIndicators(.visible)
+                    .onChange(of: nav.outcomeSelectedIndex) { _ in
+                        guard let selectedRowID else { return }
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            proxy.scrollTo(selectedRowID, anchor: .center)
+                        }
+                    }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .scrollIndicators(.visible)
             }
 
             PageFooter {
                 FooterHint(label: footerStatus(groups), keys: [])
+                if !groups.isEmpty {
+                    FooterHint(label: "Select", keys: ["↑↓"])
+                    FooterHint(label: "Open", keys: ["↵"])
+                }
                 if nav.compactMode { FooterHint(label: "Compact", keys: ["M"]) }
                 FooterHint(label: "Hide", keys: ["Esc"])
             }
@@ -84,14 +104,17 @@ struct OutcomesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             ticketURLTemplate = ConfigFile.read()["STACKNUDGE_TICKET_URL"]
+            nav.outcomeSelectedIndex = 0
             nav.refreshOutcomes?()
+            nav.refreshPullRequests?()
         }
     }
 
     // MARK: - Rows
 
-    private func groupRow(_ group: TicketGroup) -> some View {
+    private func groupRow(_ group: TicketGroup, selectedRowID: String?) -> some View {
         let linkable = group.isTicket && ticketURL(for: group.id) != nil
+        let selected = selectedRowID == Self.headerID(group)
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
                 Text(group.id)
@@ -116,30 +139,49 @@ struct OutcomesView: View {
             Text(detailLine(group))
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
-            let rollup = outcomeRollup(group)
-            if !rollup.isEmpty {
-                HStack(spacing: 10) {
-                    ForEach(rollup, id: \.status) { statusChip($0.status, count: $0.count) }
+            if group.isTicket {
+                let rollup = outcomeRollup(group)
+                if !rollup.isEmpty {
+                    HStack(spacing: 10) {
+                        ForEach(rollup, id: \.status) { statusChip($0.status, count: $0.count) }
+                    }
                 }
-            }
-            if group.isTicket, !group.branches.isEmpty {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(group.branches) { branchRow($0) }
+                if !group.branches.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(group.branches) { branch in
+                            branchRow(branch, selectedRowID: selectedRowID)
+                                .id(Self.branchID(branch))
+                        }
+                    }
+                    .padding(.top, 1)
                 }
-                .padding(.top, 1)
+            } else if let branch = group.branches.first {
+                // Branch-only group: one branch == the group, with no sub-row to
+                // host a chip — so render it on the header. Clickable PR chip
+                // when a PR exists, else the local-outcome chip.
+                HStack(spacing: 8) {
+                    if let pr = prInfo(for: branch) {
+                        prChip(pr)
+                    } else if let status = outcome(for: branch), status != .clean {
+                        statusChip(status)
+                    }
+                    Spacer(minLength: 0)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.04)))
+        .background(RoundedRectangle(cornerRadius: 6)
+            .fill(selected ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.04)))
         .contentShape(Rectangle())
         .onTapGesture { if linkable { openTicket(group) } }
         .help(linkable ? "Open \(group.id) in your tracker" : "")
     }
 
-    private func branchRow(_ branch: BranchBreakdown) -> some View {
-        HStack(spacing: 6) {
+    private func branchRow(_ branch: BranchBreakdown, selectedRowID: String?) -> some View {
+        let selected = selectedRowID == Self.branchID(branch)
+        return HStack(spacing: 6) {
             Image(systemName: "arrow.turn.down.right")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
@@ -153,11 +195,34 @@ struct OutcomesView: View {
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.tertiary)
                 .fixedSize()
-            if let status = outcome(for: branch), status != .clean {
+            if let pr = prInfo(for: branch) {
+                prChip(pr)
+            } else if let status = outcome(for: branch), status != .clean {
                 statusChip(status)
             }
         }
         .padding(.leading, 12)
+        .padding(.vertical, 1)
+        .background(RoundedRectangle(cornerRadius: 4)
+            .fill(selected ? Color.accentColor.opacity(0.14) : Color.clear))
+    }
+
+    // Stable per-row ids — order must match PanelNav's selection indexing
+    // (header, then a ticket group's branch sub-rows).
+    private static func headerID(_ group: TicketGroup) -> String { "g:\(group.id)" }
+
+    private static func branchID(_ branch: BranchBreakdown) -> String {
+        "b:\(PanelNav.outcomeKey(branch.repoRoot, branch.branch))"
+    }
+
+    private static func selectedRowID(_ groups: [TicketGroup], index: Int) -> String? {
+        var ids: [String] = []
+        for group in groups {
+            ids.append(headerID(group))
+            if group.isTicket { ids.append(contentsOf: group.branches.map(branchID)) }
+        }
+        guard !ids.isEmpty else { return nil }
+        return ids[min(max(0, index), ids.count - 1)]
     }
 
     // "3 sessions · 218K tokens · 23 files · +1.8k/−400 · Claude, Codex" —
@@ -189,13 +254,31 @@ struct OutcomesView: View {
         nav.outcomeByBranch[PanelNav.outcomeKey(branch.repoRoot, branch.branch)]
     }
 
-    // Counts of each non-clean outcome across the group's branches, ordered
-    // most-shipped first. Empty when nothing has a status yet (e.g. still
-    // computing) or everything is clean.
+    private func prInfo(for branch: BranchBreakdown) -> PullRequestInfo? {
+        nav.pullRequestByBranch[PanelNav.outcomeKey(branch.repoRoot, branch.branch)]
+    }
+
+    // A PR's state, when known, supersedes the local heuristic — a MERGED PR is
+    // how a squash-merged branch finally reads as "merged". Open → at least
+    // pushed; closed-not-merged falls back to the local truth.
+    private func effectiveStatus(for branch: BranchBreakdown) -> OutcomeStatus? {
+        if let pr = prInfo(for: branch) {
+            switch pr.state {
+            case .merged: return .merged
+            case .open:   return .pushed
+            case .closed: return outcome(for: branch)
+            }
+        }
+        return outcome(for: branch)
+    }
+
+    // Counts of each non-clean status across the group's branches (PR state
+    // preferred), ordered most-shipped first. Empty when nothing has resolved
+    // yet or everything is clean.
     private func outcomeRollup(_ group: TicketGroup) -> [(status: OutcomeStatus, count: Int)] {
         var counts: [OutcomeStatus: Int] = [:]
         for branch in group.branches {
-            guard let status = outcome(for: branch), status != .clean else { continue }
+            guard let status = effectiveStatus(for: branch), status != .clean else { continue }
             counts[status, default: 0] += 1
         }
         return Self.outcomeOrder.compactMap { status in
@@ -234,6 +317,71 @@ struct OutcomesView: View {
         case .committed:   return .teal
         case .needsReview: return .orange
         case .clean:       return .secondary
+        }
+    }
+
+    // Clickable PR chip: state dot + label + a CI glyph. Opens the PR in the
+    // browser. Used in place of the local-outcome chip when a PR is known.
+    private func prChip(_ pr: PullRequestInfo) -> some View {
+        Button {
+            if let url = URL(string: pr.url) { NSWorkspace.shared.open(url) }
+        } label: {
+            HStack(spacing: 3) {
+                Circle()
+                    .fill(Self.prColor(pr))
+                    .frame(width: 6, height: 6)
+                Text(Self.prLabel(pr))
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(Color.accentColor)
+                if let ci = pr.ci {
+                    Image(systemName: Self.ciSymbol(ci))
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(Self.ciColor(ci))
+                }
+                // Link affordance so the chip reads as clickable (vs the static
+                // local-outcome chip) regardless of PR state — merged included.
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundStyle(Color.accentColor.opacity(0.7))
+            }
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(Color.accentColor.opacity(0.12)))
+            .fixedSize()
+        }
+        .buttonStyle(.plain)
+        .help("Open PR #\(pr.number)")
+    }
+
+    private static func prLabel(_ pr: PullRequestInfo) -> String {
+        switch pr.state {
+        case .merged: return "merged"
+        case .closed: return "closed"
+        case .open:   return pr.isDraft ? "draft #\(pr.number)" : "PR #\(pr.number)"
+        }
+    }
+
+    private static func prColor(_ pr: PullRequestInfo) -> Color {
+        switch pr.state {
+        case .merged: return .purple
+        case .closed: return .secondary
+        case .open:   return pr.isDraft ? .secondary : .blue
+        }
+    }
+
+    private static func ciSymbol(_ ci: CIStatus) -> String {
+        switch ci {
+        case .passing: return "checkmark"
+        case .failing: return "xmark"
+        case .pending: return "clock"
+        }
+    }
+
+    private static func ciColor(_ ci: CIStatus) -> Color {
+        switch ci {
+        case .passing: return .green
+        case .failing: return .red
+        case .pending: return .yellow
         }
     }
 
@@ -369,6 +517,75 @@ struct OutcomesView: View {
         let groupWord = groups.count == 1 ? "group" : "groups"
         let sessionWord = sessions == 1 ? "session" : "sessions"
         return "\(groups.count) \(groupWord) · \(sessions) \(sessionWord)"
+    }
+
+    // MARK: - Connect GitHub (device-flow sign-in)
+
+    @ViewBuilder private var connectGithubCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("GitHub PR links")
+                .font(.callout.weight(.semibold))
+            switch nav.githubSignIn {
+            case .idle:
+                Text("Connect GitHub to show PR + CI status on these branches.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                cardButton("Connect GitHub", prominent: true) { nav.startGithubSignIn?() }
+            case .requesting:
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Contacting GitHub…").font(.caption).foregroundStyle(.secondary)
+                }
+            case let .awaitingApproval(userCode, verificationURI):
+                Text("Enter this code at \(displayURL(verificationURI)):")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(userCode)
+                    .font(.title3.monospaced().weight(.bold))
+                    .textSelection(.enabled)
+                HStack(spacing: 8) {
+                    cardButton("Copy & open GitHub", prominent: true) {
+                        copyAndOpen(code: userCode, url: verificationURI)
+                    }
+                    cardButton("Cancel") { nav.cancelGithubSignIn?() }
+                }
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Waiting for approval…").font(.caption2).foregroundStyle(.tertiary)
+                }
+            case let .failed(message):
+                Text(message).font(.caption).foregroundStyle(.orange)
+                cardButton("Try again", prominent: true) { nav.startGithubSignIn?() }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+    }
+
+    private func cardButton(_ title: String, prominent: Bool = false,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(.medium))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(prominent ? Color.accentColor.opacity(0.9) : Color.primary.opacity(0.08)))
+                .foregroundStyle(prominent ? Color.white : Color.primary)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func copyAndOpen(code: String, url: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(code, forType: .string)
+        if let target = URL(string: url) { NSWorkspace.shared.open(target) }
+    }
+
+    private func displayURL(_ url: String) -> String {
+        url.replacingOccurrences(of: "https://", with: "")
     }
 
     private var emptyState: some View {

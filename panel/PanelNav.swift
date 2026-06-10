@@ -71,6 +71,15 @@ enum MascotKind: String, CaseIterable {
     }
 }
 
+// In-panel GitHub device-flow sign-in state. `awaitingApproval` carries the
+// one-time code + verification URL to show while we poll in the background.
+enum GithubSignIn: Equatable {
+    case idle
+    case requesting
+    case awaitingApproval(userCode: String, verificationURI: String)
+    case failed(String)
+}
+
 struct SettingsActions {
     let checkPermissions: () -> Void
     let openConfig:       () -> Void
@@ -179,9 +188,76 @@ final class PanelNav: ObservableObject {
     // outcomes for the branches in the ledger. Kept as a closure so the view
     // doesn't need to know about git/process work.
     var refreshOutcomes: (() -> Void)?
+    // Opt-in GitHub PR/CI state per repo+branch (STACKNUDGE_GITHUB), fetched via
+    // `gh` by PanelController and read by the Tickets tab. Supersedes the local
+    // outcome when present — a PR reporting MERGED closes the squash gap. Keyed
+    // by `outcomeKey`. Empty when the feature is off or `gh` is absent.
+    @Published var pullRequestByBranch: [String: PullRequestInfo] = [:]
+    var refreshPullRequests: (() -> Void)?
+    // Mirror of STACKNUDGE_GITHUB; gates the PR fetch. Off by default — local
+    // git tracking stays fully functional without a GitHub token.
+    @Published var githubLinkingEnabled: Bool = false
+    // True when a GitHub token is stored (signed in). Drives whether the Tickets
+    // tab shows PR chips or the "Connect GitHub" card. Set from the Keychain on
+    // load and after the device flow completes.
+    @Published var githubSignedIn: Bool = false
+    // Live device-flow state for the in-panel "Connect GitHub" card.
+    @Published var githubSignIn: GithubSignIn = .idle
+    // Wired by PanelController — start/cancel the device-flow sign-in.
+    var startGithubSignIn:  (() -> Void)?
+    var cancelGithubSignIn: (() -> Void)?
 
     static func outcomeKey(_ repoRoot: String?, _ branch: String?) -> String {
         "\(repoRoot ?? "")\n\(branch ?? "")"
+    }
+
+    // Tickets-tab keyboard selection (↑/↓ move, Enter/→ opens the row's link),
+    // mirroring the Usage tab. Indexes a flat list of rows in render order:
+    // each group header, then its branch sub-rows (ticket groups only).
+    @Published var outcomeSelectedIndex: Int = 0
+
+    // Row count for clamping — header + (ticket) branch sub-rows, same order the
+    // view renders. No config/network, so cheap to call on every keystroke.
+    func outcomeRowCount() -> Int {
+        OutcomesView.groups(from: HandoffLedger.shared.all()).reduce(0) { total, group in
+            total + 1 + (group.isTicket ? group.branches.count : 0)
+        }
+    }
+
+    func moveOutcomeSelection(_ delta: Int) {
+        let count = outcomeRowCount()
+        guard count > 0 else { return }
+        outcomeSelectedIndex = min(max(0, outcomeSelectedIndex + delta), count - 1)
+    }
+
+    // Open the selected row's link: a ticket's tracker URL (STACKNUDGE_TICKET_URL)
+    // for ticket headers, else the PR URL for a branch / branch-only header.
+    func activateSelectedOutcome() {
+        let template = ConfigFile.read()["STACKNUDGE_TICKET_URL"]
+        var urls: [String?] = []
+        for group in OutcomesView.groups(from: HandoffLedger.shared.all()) {
+            urls.append(headerURL(group, template: template))
+            if group.isTicket {
+                for branch in group.branches {
+                    urls.append(pullRequestByBranch[Self.outcomeKey(branch.repoRoot, branch.branch)]?.url)
+                }
+            }
+        }
+        guard !urls.isEmpty else { return }
+        let index = min(max(0, outcomeSelectedIndex), urls.count - 1)
+        if let url = urls[index], let target = URL(string: url) {
+            NSWorkspace.shared.open(target)
+        }
+    }
+
+    private func headerURL(_ group: TicketGroup, template: String?) -> String? {
+        if group.isTicket, let template, template.contains("{key}") {
+            return template.replacingOccurrences(of: "{key}", with: group.id)
+        }
+        if !group.isTicket, let branch = group.branches.first {
+            return pullRequestByBranch[Self.outcomeKey(branch.repoRoot, branch.branch)]?.url
+        }
+        return nil
     }
     // Usage tab: which connected client's quota is shown (index into
     // availableUsageClients). ↑/↓ move it; read through clampedUsageClientIndex
@@ -355,13 +431,13 @@ final class PanelNav: ObservableObject {
     // when the offset is 1.
     var updateRowOffset: Int { updateAvailable != nil ? 1 : 0 }
 
-    // 29 rows in the body: hotkey (1) + Toggles (4) + Widget (4) + Sounds (3)
+    // 30 rows in the body: hotkey (1) + Toggles (4) + Widget (4) + Sounds (3)
     // + Voice (2 — Voice + Speed, or 1 Download row with an unused index 14)
-    // + Usage (6) + Events (1) + Actions (7) = indices 0…28. Must be kept
-    // in sync with the row(...) calls in Settings.swift and the case bodies
-    // in applyCycle/activate; off-by-one here makes the last rows wrap to 0
-    // on the down-arrow.
-    var rowCount: Int { 29 + updateRowOffset }
+    // + Usage (6) + Tickets (1) + Events (1) + Actions (7) = indices 0…29. Must
+    // be kept in sync with the row(...) calls in Settings.swift and the case
+    // bodies in applyCycle/activate; off-by-one here makes the last rows wrap to
+    // 0 on the down-arrow.
+    var rowCount: Int { 30 + updateRowOffset }
 
     // Row layout (kept in one place so the controller, view, and indexing
     // logic all agree on what each row index means). When updateAvailable
@@ -388,13 +464,15 @@ final class PanelNav: ObservableObject {
     //  18  Poll frequency        cycle
     //  19  Context alert at      cycle       (per-session token thresholds)
     //  20  Show remaining        toggle      (invert gauge readout: 70% left vs 30% used)
-    //  21  Edit phrases…         action
-    //  22  Check permissions…    action
-    //  23  Open config file…     action
-    //  24  View release notes…   action
-    //  25  Check for updates…    action
-    //  26  Uninstall stack-nudge action
-    //  27  Quit panel            action
+    //  21  GitHub PR links       toggle      (opt-in gh PR/CI linking; STACKNUDGE_GITHUB)
+    //  22  History per session   cycle
+    //  23  Edit phrases…         action
+    //  24  Check permissions…    action
+    //  25  Open config file…     action
+    //  26  View release notes…   action
+    //  27  Check for updates…    action
+    //  28  Uninstall stack-nudge action
+    //  29  Quit panel            action
 
     // MARK: - Disk I/O
 
@@ -430,6 +508,8 @@ final class PanelNav: ObservableObject {
         soundPermission = config["STACKNUDGE_SOUND_PERMISSION"] ?? "Ping"
         voice           = config["STACKNUDGE_VOICE_NAME"]       ?? "af_aoede"
         voiceSpeed      = Double(config["STACKNUDGE_VOICE_SPEED"] ?? "") ?? 1.1
+        githubLinkingEnabled = ConfigFile.bool(config, "STACKNUDGE_GITHUB", default: false)
+        githubSignedIn = GitHubAuth.token() != nil
         quotaTrackingEnabled = ConfigFile.bool(config, "STACKNUDGE_QUOTA_TRACKING", default: true)
         quotaAlertsEnabled   = ConfigFile.bool(config, "STACKNUDGE_QUOTA_ALERTS",   default: true)
         quotaShowRemaining   = ConfigFile.bool(config, "STACKNUDGE_QUOTA_SHOW_REMAINING", default: false)
@@ -642,13 +722,13 @@ final class PanelNav: ObservableObject {
             } else {
                 startVoiceModelDownload()
             }
-        case 22: actions?.editPhrases()
-        case 23: actions?.checkPermissions()
-        case 24: actions?.openConfig()
-        case 25: actions?.openReleaseNotes()
-        case 26: actions?.checkForUpdates()
-        case 27: actions?.beginUninstall()
-        case 28: actions?.quit()
+        case 23: actions?.editPhrases()
+        case 24: actions?.checkPermissions()
+        case 25: actions?.openConfig()
+        case 26: actions?.openReleaseNotes()
+        case 27: actions?.checkForUpdates()
+        case 28: actions?.beginUninstall()
+        case 29: actions?.quit()
         default: applyCycle(forward: true)
         }
     }
@@ -668,6 +748,22 @@ final class PanelNav: ObservableObject {
         if !quotaTrackingEnabled {
             quota = nil
             quotaLastUpdated = nil
+        }
+    }
+
+    // Settings "GitHub PR links" toggle. Persists STACKNUDGE_GITHUB; on enable
+    // kicks an immediate PR fetch so chips appear without waiting for the next
+    // tab visit, on disable drops cached PR state so chips revert to the local
+    // outcome.
+    func toggleGithubLinking() {
+        githubLinkingEnabled.toggle()
+        ConfigFile.write(key: "STACKNUDGE_GITHUB",
+                         value: githubLinkingEnabled ? "true" : "false")
+        if githubLinkingEnabled {
+            if githubSignedIn { refreshPullRequests?() } else { startGithubSignIn?() }
+        } else {
+            pullRequestByBranch = [:]
+            githubSignIn = .idle
         }
     }
 
@@ -804,6 +900,8 @@ final class PanelNav: ObservableObject {
             ConfigFile.write(key: "STACKNUDGE_QUOTA_SHOW_REMAINING",
                              value: quotaShowRemaining ? "true" : "false")
         case 21:
+            toggleGithubLinking()
+        case 22:
             let list = Self.eventsPerSessionOptions
             let idx = list.firstIndex(of: eventsPerSession) ?? 1
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
