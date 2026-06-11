@@ -6,7 +6,7 @@ import Foundation
 // fields are the basis for the per-ticket usage rollup; risk/outcome/PR fields
 // are added by later iterations (RiskClassifier, OutcomeWatcher).
 struct HandoffRecord: Codable, Identifiable, Equatable {
-    let id: String              // agent session id — the upsert key
+    let id: String              // upsert key "<session id>\n<branch>" (per session+branch)
     let agent: String           // canonical agent: "claude" | "codex" | "agy"
     var repoRoot: String?
     var branch: String?
