@@ -180,10 +180,7 @@ final class UpdateChecker {
     // authenticated, network issue, repo not accessible) yields a nil result
     // and a no-op upstream.
     private func fetchViaGH(apiPath: String, completion: @escaping ([String: Any]?) -> Void) {
-        let candidates = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"]
-        guard let ghPath = candidates.first(where: {
-            FileManager.default.isExecutableFile(atPath: $0)
-        }) else {
+        guard let ghPath = ProcessOutput.gh() else {
             completion(nil)
             return
         }

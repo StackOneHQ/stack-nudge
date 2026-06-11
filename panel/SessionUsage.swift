@@ -439,7 +439,7 @@ struct UsageView: View {
             ProgressView(value: min(tier.utilization, 100), total: 100)
                 .tint(barColor(tier.utilization))
             if let resets = tier.resetsAt {
-                Text("Resets \(Self.relative(.full, resets))")
+                Text("Resets \(RelativeTime.string(resets, style: .full))")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -497,27 +497,7 @@ struct UsageView: View {
         if !nav.quotaTrackingEnabled { return "Tracking off" }
         if nav.quotaSyncing { return "Syncing…" }
         guard let updated = nav.quotaLastUpdated else { return "Never synced" }
-        return "Updated \(Self.relative(.abbreviated, updated))"
-    }
-
-    // Cached so SwiftUI re-renders don't allocate a fresh formatter on
-    // every call. Two styles cover all current uses (full for "Resets in
-    // 3 days", abbreviated for footer "Updated 5s ago").
-    private static let fullFormatter: RelativeDateTimeFormatter = {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .full
-        return f
-    }()
-    private static let abbreviatedFormatter: RelativeDateTimeFormatter = {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .abbreviated
-        return f
-    }()
-
-    private static func relative(_ style: RelativeDateTimeFormatter.UnitsStyle,
-                                 _ date: Date) -> String {
-        let formatter = (style == .abbreviated) ? abbreviatedFormatter : fullFormatter
-        return formatter.localizedString(for: date, relativeTo: Date())
+        return "Updated \(RelativeTime.string(updated, style: .abbreviated))"
     }
 
 }

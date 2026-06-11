@@ -230,7 +230,7 @@ struct OutcomesView: View {
     // each segment is dropped when it has nothing to show.
     private func detailLine(_ group: TicketGroup) -> String {
         var parts = [Self.sessionsLabel(group.sessionCount)]
-        if group.totalTokens > 0 { parts.append("\(Self.shortTokens(group.totalTokens)) tokens") }
+        if group.totalTokens > 0 { parts.append("\(TokenFormat.short(group.totalTokens)) tokens") }
         if !group.diff.isEmpty {
             parts.append(Self.filesLabel(group.diff.filesChanged))
             if group.diff.insertions > 0 || group.diff.deletions > 0 {
@@ -244,7 +244,7 @@ struct OutcomesView: View {
     // Compact sub-row trailing: "2 sessions · 600K · 12 files".
     private func branchDetail(_ branch: BranchBreakdown) -> String {
         var parts = [Self.sessionsLabel(branch.sessionCount)]
-        if branch.totalTokens > 0 { parts.append(Self.shortTokens(branch.totalTokens)) }
+        if branch.totalTokens > 0 { parts.append(TokenFormat.short(branch.totalTokens)) }
         if branch.diff.filesChanged > 0 { parts.append(Self.filesLabel(branch.diff.filesChanged)) }
         return parts.joined(separator: " · ")
     }
@@ -491,11 +491,6 @@ struct OutcomesView: View {
         count == 1 ? "1 session" : "\(count) sessions"
     }
 
-    private static func shortTokens(_ count: Int) -> String {
-        if count >= 1_000_000 { return String(format: "%.1fM", Double(count) / 1_000_000) }
-        if count >= 1_000 { return "\(Int((Double(count) / 1_000).rounded()))K" }
-        return "\(count)"
-    }
 
     private static func filesLabel(_ count: Int) -> String {
         count == 1 ? "1 file" : "\(count) files"

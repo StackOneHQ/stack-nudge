@@ -321,11 +321,6 @@ struct EventRow: View {
     // (agent, projectPath) — render-time lookup, not ingest-time snapshot.
     @EnvironmentObject private var persistence: SessionPersistence
 
-    private static let timeFormatter: RelativeDateTimeFormatter = {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter
-    }()
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -479,9 +474,9 @@ struct EventRow: View {
     // timestamp so the user can see how long is left until the re-fire.
     private var rightTimestamp: String {
         if let until = event.snoozedUntil, until > Date() {
-            return "snoozed " + Self.timeFormatter.localizedString(for: until, relativeTo: Date())
+            return "snoozed " + RelativeTime.string(until)
         }
-        return Self.timeFormatter.localizedString(for: event.timestamp, relativeTo: Date())
+        return RelativeTime.string(event.timestamp)
     }
 
     private var glyph: String {
@@ -1345,18 +1340,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
     }
 
-    // Cached — banner posts can fire frequently in test/edge cases; avoid
-    // allocating a fresh formatter every time.
-    private static let quotaBannerFormatter: RelativeDateTimeFormatter = {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .full
-        return f
-    }()
-
     private func postQuotaBanner(label: String, percent: Int, resetsAt: Date?) {
         let body: String
         if let resetsAt {
-            body = "\(percent)% used. Resets \(Self.quotaBannerFormatter.localizedString(for: resetsAt, relativeTo: Date()))."
+            body = "\(percent)% used. Resets \(RelativeTime.string(resetsAt, style: .full))."
         } else {
             body = "\(percent)% used."
         }

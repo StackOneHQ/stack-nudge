@@ -286,10 +286,7 @@ final class Updater {
 
     // gh CLI fallback for private repos. Mirrors UpdateChecker.fetchViaGH.
     private func ghFetchJSON(_ apiPath: String) -> [String: Any]? {
-        let candidates = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"]
-        guard let ghPath = candidates.first(where: {
-            FileManager.default.isExecutableFile(atPath: $0)
-        }) else { return nil }
+        guard let ghPath = ProcessOutput.gh() else { return nil }
         let task = Process()
         task.executableURL = URL(fileURLWithPath: ghPath)
         task.arguments = ["api", apiPath]
