@@ -136,7 +136,7 @@ struct CompactView: View {
                     Text("·")
                         .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
-                    Text(Self.formatTokens(stats.tokens))
+                    Text(TokenFormat.short(stats.tokens))
                         .font(.system(size: 10, weight: .medium).monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
@@ -160,7 +160,7 @@ struct CompactView: View {
                         .lineLimit(1)
                         .fixedSize()
                 } else {
-                    Text(Self.relative.localizedString(for: recent.timestamp, relativeTo: Date()))
+                    Text(RelativeTime.string(recent.timestamp, style: .short))
                         .font(.system(size: 10).monospacedDigit())
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -201,7 +201,7 @@ struct CompactView: View {
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
             if let stats = transcriptStats(for: session) {
-                Text(Self.formatTokens(stats.tokens))
+                Text(TokenFormat.short(stats.tokens))
                     .font(.system(size: 10, weight: .medium).monospacedDigit())
                     .foregroundStyle(.secondary)
             } else {
@@ -415,21 +415,7 @@ struct CompactView: View {
         return Color(red: 0.4, green: 0.85, blue: 1.0)
     }
 
-    private static let relative: RelativeDateTimeFormatter = {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .short
-        return f
-    }()
 
-    private static func formatTokens(_ n: Int) -> String {
-        if n >= 1_000_000 {
-            return String(format: "%.1fM", Double(n) / 1_000_000)
-        }
-        if n >= 1_000 {
-            return "\(Int((Double(n) / 1_000).rounded()))K"
-        }
-        return "\(n)"
-    }
 
     private static func shortDuration(until date: Date) -> String {
         let s = max(0, Int(date.timeIntervalSinceNow))

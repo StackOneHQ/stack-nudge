@@ -219,50 +219,12 @@ mkdir -p build
 # every run.
 touch build/.metadata_never_index
 
+# Sources are globbed (mirrors Package.swift's `sources: ["panel","shared"]`)
+# so new files are picked up automatically — no hand-maintained list to drift.
 build_app "$APP" "stack-nudge" \
   "panel/Info.plist" "notifier/Icon.icns" "13.0" \
-  panel/main.swift \
-  panel/Config.swift \
-  panel/Hotkey.swift \
-  panel/EventStore.swift \
-  panel/EventListener.swift \
-  panel/Panel.swift \
-  panel/PanelNav.swift \
-  panel/Components.swift \
-  panel/Speaker.swift \
-  panel/MenuBar.swift \
-  panel/Permissions.swift \
-  panel/Settings.swift \
-  panel/ProcessOutput.swift \
-  panel/TerminalIntegration.swift \
-  panel/ITerm2Integration.swift \
-  panel/TerminalAppIntegration.swift \
-  panel/VSCodeIntegration.swift \
-  panel/EnvVarTerminalIntegration.swift \
-  panel/SessionPersistence.swift \
-  panel/SessionStore.swift \
-  panel/SessionUsage.swift \
-  panel/CodexUsage.swift \
-  panel/AntigravityLocalServer.swift \
-  panel/AntigravityUsage.swift \
-  panel/TicketAttribution.swift \
-  panel/GitSnapshot.swift \
-  panel/OutcomeWatcher.swift \
-  panel/GitHubAPI.swift \
-  panel/GitHubAuth.swift \
-  panel/Handoff.swift \
-  panel/HandoffLedger.swift \
-  panel/OutcomesView.swift \
-  panel/Sessions.swift \
-  panel/CompactView.swift \
-  panel/TranscriptStats.swift \
-  panel/CodexTranscriptStats.swift \
-  panel/ModelLimits.swift \
-  panel/Phrases.swift \
-  panel/UpdateChecker.swift \
-  panel/Updater.swift \
-  panel/Bootstrap.swift \
-  shared/AppActivator.swift \
+  panel/*.swift \
+  shared/*.swift \
   -framework Foundation -framework AppKit -framework SwiftUI -framework Carbon \
   -framework UserNotifications
 echo "  Built $APP"

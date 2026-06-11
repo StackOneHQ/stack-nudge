@@ -173,11 +173,6 @@ private struct SessionRow: View {
 
     @FocusState private var nameFieldFocused: Bool
 
-    private static let timeFormatter: RelativeDateTimeFormatter = {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .abbreviated
-        return f
-    }()
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -313,7 +308,7 @@ private struct SessionRow: View {
         // varies (Opus/Sonnet on 1M context; Haiku on 200K; Sonnet 1M is
         // opt-in beta), and there's no reliable way to disambiguate from
         // the model ID. Showing the model name keeps the row honest.
-        let tokens = Self.formatTokens(stats.tokens)
+        let tokens = "\(TokenFormat.short(stats.tokens)) tokens"
         if let model = stats.model {
             return "\(tokens) · \(Self.shortModel(model))"
         }
@@ -332,12 +327,6 @@ private struct SessionRow: View {
         return s
     }
 
-    private static func formatTokens(_ n: Int) -> String {
-        if n >= 1_000 {
-            return String(format: "%.0fK tokens", Double(n) / 1_000.0)
-        }
-        return "\(n) tokens"
-    }
 
     private var nudgeRow: some View {
         HStack(spacing: 6) {
@@ -428,12 +417,12 @@ private struct SessionRow: View {
             // you how long ago the process was spawned.
             let head = session.liveStatus ?? "active"
             if let updated = session.lastActivityAt {
-                return "\(head) · \(Self.timeFormatter.localizedString(for: updated, relativeTo: Date()))"
+                return "\(head) · \(RelativeTime.string(updated))"
             }
             let elapsed = session.elapsed?.trimmingCharacters(in: .whitespaces) ?? ""
             return elapsed.isEmpty ? head : "\(head) · \(elapsed)"
         case .finished(let at):
-            return "ended " + Self.timeFormatter.localizedString(for: at, relativeTo: Date())
+            return "ended " + RelativeTime.string(at)
         }
     }
 
@@ -446,7 +435,7 @@ private struct SessionRow: View {
     private var nudgeSummary: String {
         let countLabel = activeNudgeCount == 1 ? "1 nudge" : "\(activeNudgeCount) nudges"
         guard let last = lastNudgeAt else { return countLabel }
-        let when = Self.timeFormatter.localizedString(for: last, relativeTo: Date())
+        let when = RelativeTime.string(last)
         return "\(countLabel) · last \(when)"
     }
 }
