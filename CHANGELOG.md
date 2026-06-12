@@ -4,6 +4,13 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.18.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.17.0...v1.18.0) (2026-06-12)
+
+
+### Features
+
+* **settings:** keep panel open when empty + data-driven Settings rows ([#92](https://github.com/StackOneHQ/stack-nudge/issues/92)) ([aa5256c](https://github.com/StackOneHQ/stack-nudge/commit/aa5256cfc473f12eb1668043d7ba39475812b8f7))
+
 ## [1.17.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.16.1...v1.17.0) (2026-06-10)
 
 
