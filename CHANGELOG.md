@@ -4,6 +4,14 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.19.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.18.0...v1.19.0) (2026-06-12)
+
+
+### Features
+
+* **tickets:** accumulate context tokens across compactions ([#96](https://github.com/StackOneHQ/stack-nudge/issues/96)) ([dcbfc56](https://github.com/StackOneHQ/stack-nudge/commit/dcbfc56f6735d4c0495b41e3e582b5988bb8aaa4))
+* **tickets:** group unticketed sessions by repo ([#95](https://github.com/StackOneHQ/stack-nudge/issues/95)) ([f250a0c](https://github.com/StackOneHQ/stack-nudge/commit/f250a0c07edcc3be1f72307950d4e48a8228defb))
+
 ## [1.18.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.17.0...v1.18.0) (2026-06-12)
 
 
