@@ -47,6 +47,18 @@ final class HandoffLedger {
         persist()
     }
 
+    // Key by session *and* branch so a session that moves across branches keeps
+    // a row per branch — capturing all the effort spent on each — instead of
+    // overwriting as it switches. A resume on the same branch still merges.
+    func upsert(sessionID: String, branch: String?, agent: String,
+                _ merge: (inout HandoffRecord) -> Void) {
+        upsert(id: Self.key(sessionID: sessionID, branch: branch), agent: agent, merge)
+    }
+
+    static func key(sessionID: String, branch: String?) -> String {
+        "\(sessionID)\n\(branch ?? "")"
+    }
+
     // Drop records by session id (manual dismiss from the Tickets tab).
     func remove(ids: [String]) {
         guard !ids.isEmpty else { return }

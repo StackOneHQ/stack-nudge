@@ -49,6 +49,24 @@ final class HandoffLedgerTests: XCTestCase {
         XCTAssertEqual(Set(ids), ["s3", "s4"])  // oldest two pruned
     }
 
+    func test_sessionBranchKey_oneRowPerBranch() {
+        let ledger = HandoffLedger(path: tempURL())
+        // Same session, two branches → two rows (effort kept per branch).
+        ledger.upsert(sessionID: "s1", branch: "eng-75/a", agent: "claude") { $0.branch = "eng-75/a" }
+        ledger.upsert(sessionID: "s1", branch: "eng-75/b", agent: "claude") { $0.branch = "eng-75/b" }
+        XCTAssertEqual(Set(ledger.all().compactMap(\.branch)), ["eng-75/a", "eng-75/b"])
+        XCTAssertEqual(ledger.all().count, 2)
+    }
+
+    func test_sessionBranchKey_sameBranchMerges() {
+        let ledger = HandoffLedger(path: tempURL())
+        // Same session + same branch (e.g. a resume) → one row, last write wins.
+        ledger.upsert(sessionID: "s1", branch: "eng-75/a", agent: "claude") { $0.contextTokens = 100 }
+        ledger.upsert(sessionID: "s1", branch: "eng-75/a", agent: "claude") { $0.contextTokens = 250 }
+        XCTAssertEqual(ledger.all().count, 1)
+        XCTAssertEqual(ledger.all().first?.contextTokens, 250)
+    }
+
     func test_remove_dropsByID() {
         let ledger = HandoffLedger(path: tempURL())
         ledger.upsert(id: "s1", agent: "codex") { $0.ticket = "ENG-1" }

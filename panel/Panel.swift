@@ -1498,7 +1498,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             let stats = transcriptPath.flatMap { TranscriptReader.read(path: $0) }
             let snapshot = GitSnapshot.capture(cwd: cwd) { Self.gitValue($0, $1) }
             DispatchQueue.main.async { [weak self] in
-                HandoffLedger.shared.upsert(id: sessionID, agent: agent) { record in
+                HandoffLedger.shared.upsert(sessionID: sessionID, branch: branch, agent: agent) { record in
                     record.repoRoot = repoRoot
                     record.branch = branch
                     // Re-derive every Stop (not derive-once): git state evolves
