@@ -80,6 +80,23 @@ enum GithubSignIn: Equatable {
     case failed(String)
 }
 
+// Every Settings row, as a stable identity rather than a numeric index. The
+// ordered list (PanelNav.settingsRows) is the single source of truth for both
+// rendering and keyboard nav, so adding/removing/reordering a row is a one-line
+// change with no renumbering — and the applyCycle switch over this is
+// exhaustive, so the compiler flags any row left unhandled.
+enum SettingsRow: Hashable {
+    case update, hotkey
+    case banner, muteWhenFocused, pinPanel, keepOpenWhenEmpty, launchAtLogin
+    case widget, widgetCorner, widgetOpacity, mascot
+    case soundEnabled, agentDoneSound, permissionSound
+    case voiceEnabled, voice, voiceSpeed, downloadVoiceModel
+    case quotaTracking, quotaAlerts, alertThreshold, pollFrequency, contextAlert, showRemaining
+    case githubLinks, hideShipped, disconnectGithub
+    case historyPerSession
+    case editPhrases, checkPermissions, openConfig, releaseNotes, checkUpdates, uninstall, quit
+}
+
 struct SettingsActions {
     let checkPermissions: () -> Void
     let openConfig:       () -> Void
@@ -115,6 +132,9 @@ final class PanelNav: ObservableObject {
     @Published var voiceEnabled:    Bool = false
     @Published var muteWhenFocused: Bool = true
     @Published var panelPinned:     Bool = true
+    // When true, clearing the last event leaves the panel open instead of
+    // auto-hiding (STACKNUDGE_KEEP_OPEN_WHEN_EMPTY). Default off = prior behaviour.
+    @Published var keepOpenWhenEmpty: Bool = false
     @Published var launchAtLogin:   Bool = true
     @Published var soundStop:       String = "Glass"
     @Published var soundPermission: String = "Ping"
@@ -502,52 +522,40 @@ final class PanelNav: ObservableObject {
     // +1 when an update is available and the "Update to vX.Y.Z" row is
     // pinned at the top of the Settings list. All other indices shift down
     // when the offset is 1.
-    var updateRowOffset: Int { updateAvailable != nil ? 1 : 0 }
+    // Settings rows in render order — the single source of truth for both the
+    // view (Settings.swift looks up indices from this) and keyboard nav
+    // (selectedRow indexes into it). The conditionals keep render + dispatch in
+    // sync automatically: the update row appears only when an update is
+    // pending, and Voice collapses to a single Download row until the model is
+    // cached — no hand-maintained indices, no off-by-one to chase.
+    var settingsRows: [SettingsRow] {
+        var rows: [SettingsRow] = []
+        if updateAvailable != nil { rows.append(.update) }
+        rows += [.hotkey,
+                 .banner, .muteWhenFocused, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin,
+                 .widget, .widgetCorner, .widgetOpacity, .mascot,
+                 .soundEnabled, .agentDoneSound, .permissionSound,
+                 .voiceEnabled]
+        rows += voiceModelCached ? [.voice, .voiceSpeed] : [.downloadVoiceModel]
+        rows += [.quotaTracking, .quotaAlerts, .alertThreshold, .pollFrequency, .contextAlert, .showRemaining,
+                 .githubLinks, .hideShipped, .disconnectGithub,
+                 .historyPerSession,
+                 .editPhrases, .checkPermissions, .openConfig, .releaseNotes, .checkUpdates, .uninstall, .quit]
+        return rows
+    }
 
-    // 32 rows in the body: hotkey (1) + Toggles (4) + Widget (4) + Sounds (3)
-    // + Voice (2 — Voice + Speed, or 1 Download row with an unused index 14)
-    // + Usage (6) + Tickets (3) + Events (1) + Actions (7) = indices 0…31. Must
-    // be kept in sync with the row(...) calls in Settings.swift and the case
-    // bodies in applyCycle/activate; off-by-one here makes the last rows wrap to
-    // 0 on the down-arrow.
-    var rowCount: Int { 32 + updateRowOffset }
+    var rowCount: Int { settingsRows.count }
 
-    // Row layout (kept in one place so the controller, view, and indexing
-    // logic all agree on what each row index means). When updateAvailable
-    // is non-nil, row 0 becomes "Update to vX.Y.Z" and every following row
-    // shifts down by one — use `index - updateRowOffset` when matching:
-    //   0  Hotkey                hotkey-record
-    //   1  Banner notifications  toggle
-    //   2  Mute when focused     toggle
-    //   3  Pin panel             toggle
-    //   4  Launch at login       toggle
-    //   5  Widget                toggle      (gates rows 6-8; off = classic show/hide-panel mode)
-    //   6  Widget corner         cycle
-    //   7  Mascot                cycle
-    //   8  Widget opacity        cycle       (40/60/80/100%; applied window-level)
-    //   9  Sound enabled         toggle      (gates rows 10 + 11)
-    //  10  Agent done sound      cycle
-    //  11  Permission sound      cycle
-    //  12  Voice notifications   toggle      (gates rows 13 + 14)
-    //  13  Voice                 cycle       (or "Download model" action)
-    //  14  Speed                 cycle
-    //  15  Quota tracking        toggle      (master; gates rows 16-18)
-    //  16  Quota alerts          toggle
-    //  17  Alert threshold       cycle
-    //  18  Poll frequency        cycle
-    //  19  Context alert at      cycle       (per-session token thresholds)
-    //  20  Show remaining        toggle      (invert gauge readout: 70% left vs 30% used)
-    //  21  GitHub PR links       toggle      (opt-in PR/CI linking; STACKNUDGE_GITHUB)
-    //  22  Hide shipped          toggle      (drop merged groups; STACKNUDGE_HIDE_SHIPPED)
-    //  23  Disconnect GitHub…    action      (enabled when signed in)
-    //  24  History per session   cycle
-    //  25  Edit phrases…         action
-    //  26  Check permissions…    action
-    //  27  Open config file…     action
-    //  28  View release notes…   action
-    //  29  Check for updates…    action
-    //  30  Uninstall stack-nudge action
-    //  31  Quit panel            action
+    // The row the keyboard selection currently points at (clamped to range).
+    var selectedRow: SettingsRow? {
+        let rows = settingsRows
+        guard !rows.isEmpty else { return nil }
+        return rows[min(max(0, selectedSettingIndex), rows.count - 1)]
+    }
+
+    // Flat index of a row in the current layout, so Settings.swift never
+    // hard-codes a number.
+    func index(of row: SettingsRow) -> Int { settingsRows.firstIndex(of: row) ?? 0 }
 
     // MARK: - Disk I/O
 
@@ -573,6 +581,7 @@ final class PanelNav: ObservableObject {
         voiceEnabled    = ConfigFile.bool(config, "STACKNUDGE_VOICE",     default: false)
         muteWhenFocused = ConfigFile.bool(config, "STACKNUDGE_MUTE_WHEN_FOCUSED", default: true)
         panelPinned     = ConfigFile.bool(config, "STACKNUDGE_PANEL_PIN", default: true)
+        keepOpenWhenEmpty = ConfigFile.bool(config, "STACKNUDGE_KEEP_OPEN_WHEN_EMPTY", default: false)
         // Source of truth for the toggle is the plist's presence on disk
         // (Bootstrap.isLaunchAtLoginEnabled) — the config key is just a
         // mirror used for parity with the other toggles. If the two ever
@@ -759,23 +768,12 @@ final class PanelNav: ObservableObject {
 
     func selectNextRow() {
         guard rowCount > 0 else { return }
-        var next = (selectedSettingIndex + 1) % rowCount
-        // When the voice model isn't cached we collapse Voice + Speed
-        // into a single "Download voice model" action at index 7. Index 8
-        // (Speed) doesn't render; skip it during keyboard nav.
-        if !voiceModelCached, next - updateRowOffset == 9 {
-            next = (next + 1) % rowCount
-        }
-        selectedSettingIndex = next
+        selectedSettingIndex = (selectedSettingIndex + 1) % rowCount
     }
 
     func selectPrevRow() {
         guard rowCount > 0 else { return }
-        var prev = (selectedSettingIndex - 1 + rowCount) % rowCount
-        if !voiceModelCached, prev - updateRowOffset == 9 {
-            prev = (prev - 1 + rowCount) % rowCount
-        }
-        selectedSettingIndex = prev
+        selectedSettingIndex = (selectedSettingIndex - 1 + rowCount) % rowCount
     }
 
     // MARK: - Cycle / activate
@@ -783,29 +781,22 @@ final class PanelNav: ObservableObject {
     // Enter: toggles flip, cycle rows step forward, actions fire, hotkey
     // row enters record mode.
     func activate() {
-        if updateRowOffset == 1, selectedSettingIndex == 0 {
-            actions?.beginUpdate()
-            return
-        }
-        switch selectedSettingIndex - updateRowOffset {
-        case 0: startRecordingHotkey()
-        case 11 where !voiceModelCached:
-            // Pre-download state: index 11 is the "Download voice model"
-            // action, not a cycle. Enter triggers (or cancels) the
-            // download.
-            if voiceModelDownloading {
-                cancelVoiceModelDownload()
-            } else {
-                startVoiceModelDownload()
-            }
-        case 23: disconnectGithub()
-        case 25: actions?.editPhrases()
-        case 26: actions?.checkPermissions()
-        case 27: actions?.openConfig()
-        case 28: actions?.openReleaseNotes()
-        case 29: actions?.checkForUpdates()
-        case 30: actions?.beginUninstall()
-        case 31: actions?.quit()
+        switch selectedRow {
+        case .update: actions?.beginUpdate()
+        case .hotkey: startRecordingHotkey()
+        case .downloadVoiceModel:
+            // The pre-download row is an action: Enter triggers (or cancels)
+            // the model download.
+            if voiceModelDownloading { cancelVoiceModelDownload() } else { startVoiceModelDownload() }
+        case .disconnectGithub: disconnectGithub()
+        case .editPhrases:      actions?.editPhrases()
+        case .checkPermissions: actions?.checkPermissions()
+        case .openConfig:       actions?.openConfig()
+        case .releaseNotes:     actions?.openReleaseNotes()
+        case .checkUpdates:     actions?.checkForUpdates()
+        case .uninstall:        actions?.beginUninstall()
+        case .quit:             actions?.quit()
+        // Toggles + cycles flip/step on Enter, same as left/right.
         default: applyCycle(forward: true)
         }
     }
@@ -828,6 +819,12 @@ final class PanelNav: ObservableObject {
         }
     }
 
+    func toggleKeepOpenWhenEmpty() {
+        keepOpenWhenEmpty.toggle()
+        ConfigFile.write(key: "STACKNUDGE_KEEP_OPEN_WHEN_EMPTY",
+                         value: keepOpenWhenEmpty ? "true" : "false")
+    }
+
     // Settings "GitHub PR links" toggle. Persists STACKNUDGE_GITHUB; on enable
     // kicks an immediate PR fetch so chips appear without waiting for the next
     // tab visit, on disable drops cached PR state so chips revert to the local
@@ -845,23 +842,20 @@ final class PanelNav: ObservableObject {
     }
 
     private func applyCycle(forward: Bool) {
-        // Update row (when present at index 0) treats left/right arrows the
-        // same as Enter — there's nothing to cycle, so just begin update.
-        if updateRowOffset == 1, selectedSettingIndex == 0 {
+        switch selectedRow {
+        case .update:
+            // Nothing to cycle — arrows behave like Enter.
             actions?.beginUpdate()
-            return
-        }
-        switch selectedSettingIndex - updateRowOffset {
-        case 0:
+        case .hotkey:
             // Cycle on the hotkey row also enters record mode.
             startRecordingHotkey()
-        case 1:
+        case .banner:
             bannerEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_BANNER", value: bannerEnabled ? "true" : "false")
-        case 2:
+        case .muteWhenFocused:
             muteWhenFocused.toggle()
             ConfigFile.write(key: "STACKNUDGE_MUTE_WHEN_FOCUSED", value: muteWhenFocused ? "true" : "false")
-        case 3:
+        case .pinPanel:
             panelPinned.toggle()
             ConfigFile.write(key: "STACKNUDGE_PANEL_PIN", value: panelPinned ? "true" : "false")
             // Pin + Widget: Pin wins. Toggling Pin on from the widget pill
@@ -870,7 +864,9 @@ final class PanelNav: ObservableObject {
             if panelPinned, compactMode, !compactExpanded {
                 compactExpanded = true
             }
-        case 4:
+        case .keepOpenWhenEmpty:
+            toggleKeepOpenWhenEmpty()
+        case .launchAtLogin:
             // Optimistic UI flip; revert if launchctl fails so the toggle
             // never reports a state that disagrees with the plist on disk.
             let target = !launchAtLogin
@@ -882,112 +878,96 @@ final class PanelNav: ObservableObject {
                 FileHandle.standardError.write(Data(
                     "stack-nudge: setLaunchAtLogin(\(target)) failed: \(error)\n".utf8))
             }
-        case 5:
-            // Widget on/off. The user is in the full panel (that's where
-            // the Settings row lives). On toggle-on we set compactExpanded
-            // so the panel stays open at full size; the pill only appears
-            // when the user dismisses (Esc / focus-out). On toggle-off we
-            // clear compactExpanded so the next applyCompactLayout commits
+        case .widget:
+            // Widget on/off. On toggle-on we set compactExpanded so the panel
+            // stays open at full size; the pill only appears when the user
+            // dismisses. On toggle-off we clear it so the next layout commits
             // the saved full-panel frame cleanly.
             compactMode.toggle()
             ConfigFile.write(key: "STACKNUDGE_COMPACT_MODE",
                              value: compactMode ? "true" : "false")
-            if compactMode {
-                compactExpanded = true
-            } else {
-                compactExpanded = false
-            }
-        case 6:
+            compactExpanded = compactMode
+        case .widgetCorner:
             let list = CompactCorner.allCases
             let idx = list.firstIndex(of: compactCorner) ?? 0
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
             compactCorner = list[next]
-            ConfigFile.write(key: "STACKNUDGE_COMPACT_CORNER",
-                             value: compactCorner.rawValue)
-        case 7:
+            ConfigFile.write(key: "STACKNUDGE_COMPACT_CORNER", value: compactCorner.rawValue)
+        case .widgetOpacity:
             let list = Self.compactAlphaOptions
             let idx = list.firstIndex(of: compactAlpha) ?? (list.count - 1)
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
             compactAlpha = list[next]
-            ConfigFile.write(key: "STACKNUDGE_COMPACT_ALPHA",
-                             value: String(format: "%.2f", compactAlpha))
-        case 8:
+            ConfigFile.write(key: "STACKNUDGE_COMPACT_ALPHA", value: String(format: "%.2f", compactAlpha))
+        case .mascot:
             let list = MascotKind.allCases
             let idx = list.firstIndex(of: mascot) ?? 0
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
             mascot = list[next]
             ConfigFile.write(key: "STACKNUDGE_MASCOT", value: mascot.rawValue)
-        case 9:
+        case .soundEnabled:
             soundEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_SOUND", value: soundEnabled ? "true" : "false")
-        case 10:
+        case .agentDoneSound:
             soundStop = step(soundStop, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_STOP", preview: true)
-        case 11:
+        case .permissionSound:
             soundPermission = step(soundPermission, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_PERMISSION", preview: true)
-        case 12:
+        case .voiceEnabled:
             voiceEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_VOICE", value: voiceEnabled ? "true" : "false")
-        case 13:
-            // Pre-download: the row is an action, not a cycle. Treat
-            // left/right arrow as a trigger so a user discovering the
-            // row keyboard-only can still start the download.
-            if !voiceModelCached {
-                if !voiceModelDownloading { startVoiceModelDownload() }
-                return
-            }
+        case .voice:
+            // Only reachable when the model is cached (otherwise the row is
+            // .downloadVoiceModel), so there's no download branch here.
             guard !voicesLoading, !voicesAvailable.isEmpty else { return }
             voice = step(voice, in: voicesAvailable, forward: forward, key: "STACKNUDGE_VOICE_NAME", preview: false)
             let phrase = Self.voicePreviewPhrases.randomElement() ?? "Hello."
             Speaker.speak(phrase, voice: voice, speed: String(format: "%.2f", voiceSpeed))
-        case 14:
+        case .voiceSpeed:
             let next = forward ? voiceSpeed + Self.speedStep : voiceSpeed - Self.speedStep
             voiceSpeed = max(Self.speedMin, min(Self.speedMax, (next * 100).rounded() / 100))
             ConfigFile.write(key: "STACKNUDGE_VOICE_SPEED", value: String(format: "%.2f", voiceSpeed))
-        case 15:
+        case .downloadVoiceModel:
+            // Arrow on the pre-download row triggers the download too.
+            if !voiceModelDownloading { startVoiceModelDownload() }
+        case .quotaTracking:
             toggleQuotaTracking()
-        case 16:
+        case .quotaAlerts:
             quotaAlertsEnabled.toggle()
-            ConfigFile.write(key: "STACKNUDGE_QUOTA_ALERTS",
-                             value: quotaAlertsEnabled ? "true" : "false")
-        case 17:
-            // Cycle through the static thresholds list. Index wraps in both
-            // directions so the user can dial in either way.
+            ConfigFile.write(key: "STACKNUDGE_QUOTA_ALERTS", value: quotaAlertsEnabled ? "true" : "false")
+        case .alertThreshold:
             let list = Self.quotaThresholds
             let idx = list.firstIndex(of: quotaAlertThreshold) ?? 2
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
             quotaAlertThreshold = list[next]
-            ConfigFile.write(key: "STACKNUDGE_QUOTA_THRESHOLD",
-                             value: String(quotaAlertThreshold))
-        case 18:
+            ConfigFile.write(key: "STACKNUDGE_QUOTA_THRESHOLD", value: String(quotaAlertThreshold))
+        case .pollFrequency:
             let list = Self.quotaPollMinuteOptions
             let idx = list.firstIndex(of: quotaPollMinutes) ?? 2
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
             quotaPollMinutes = list[next]
-            ConfigFile.write(key: "STACKNUDGE_USAGE_POLL_MIN",
-                             value: String(quotaPollMinutes))
-        case 19:
+            ConfigFile.write(key: "STACKNUDGE_USAGE_POLL_MIN", value: String(quotaPollMinutes))
+        case .contextAlert:
             let list = Self.contextAlertThresholdOptions
             let idx = list.firstIndex(of: contextAlertThresholdK) ?? 0
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
             contextAlertThresholdK = list[next]
-            ConfigFile.write(key: "STACKNUDGE_CONTEXT_ALERT_THRESHOLD",
-                             value: String(contextAlertThresholdK))
-        case 20:
+            ConfigFile.write(key: "STACKNUDGE_CONTEXT_ALERT_THRESHOLD", value: String(contextAlertThresholdK))
+        case .showRemaining:
             quotaShowRemaining.toggle()
-            ConfigFile.write(key: "STACKNUDGE_QUOTA_SHOW_REMAINING",
-                             value: quotaShowRemaining ? "true" : "false")
-        case 21:
+            ConfigFile.write(key: "STACKNUDGE_QUOTA_SHOW_REMAINING", value: quotaShowRemaining ? "true" : "false")
+        case .githubLinks:
             toggleGithubLinking()
-        case 22:
+        case .hideShipped:
             toggleHideShipped()
-        case 24:
+        case .historyPerSession:
             let list = Self.eventsPerSessionOptions
             let idx = list.firstIndex(of: eventsPerSession) ?? 1
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
             eventsPerSession = list[next]
-            ConfigFile.write(key: "STACKNUDGE_EVENTS_PER_SESSION",
-                             value: String(eventsPerSession))
-        default:
+            ConfigFile.write(key: "STACKNUDGE_EVENTS_PER_SESSION", value: String(eventsPerSession))
+        // Action rows have nothing to cycle.
+        case .disconnectGithub, .editPhrases, .checkPermissions, .openConfig,
+             .releaseNotes, .checkUpdates, .uninstall, .quit, .none:
             break
         }
     }

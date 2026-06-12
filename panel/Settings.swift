@@ -25,15 +25,14 @@ struct SettingsView: View {
                         } else if !nav.recentlyWiredAgents.isEmpty {
                             wiredConfirmationRow(nav.recentlyWiredAgents)
                         }
-                        // Index 0 when present, shifting everything else by
-                        // +1. The offset is held on nav (updateRowOffset).
+                        // Shown only when an update is pending; nav.settingsRows
+                        // puts it first (index 0) so selection lines up.
                         if let version = nav.updateAvailable {
                             updateRow(version: version)
                         }
-                        let off = nav.updateRowOffset
 
                         section("Hotkey") {
-                            row(0 + off, label: "Panel shortcut",
+                            row(.hotkey, label: "Panel shortcut",
                                 kind: .cycle,
                                 value: nav.recordingHotkey ? "Press combo…" : nav.hotkeyDisplay)
                             if let error = nav.hotkeyError {
@@ -46,62 +45,63 @@ struct SettingsView: View {
                         }
 
                         section("Toggles") {
-                            row(1 + off, label: "Banner notifications", kind: .toggle, value: nav.bannerEnabled   ? "On" : "Off")
-                            row(2 + off, label: "Mute when focused",    kind: .toggle, value: nav.muteWhenFocused ? "On" : "Off")
-                            row(3 + off, label: "Pin panel",            kind: .toggle, value: nav.panelPinned     ? "On" : "Off")
-                            row(4 + off, label: "Launch at login",      kind: .toggle, value: nav.launchAtLogin   ? "On" : "Off")
+                            row(.banner,           label: "Banner notifications", kind: .toggle, value: nav.bannerEnabled    ? "On" : "Off")
+                            row(.muteWhenFocused,  label: "Mute when focused",    kind: .toggle, value: nav.muteWhenFocused  ? "On" : "Off")
+                            row(.pinPanel,         label: "Pin panel",            kind: .toggle, value: nav.panelPinned      ? "On" : "Off")
+                            row(.keepOpenWhenEmpty, label: "Keep open when empty", kind: .toggle, value: nav.keepOpenWhenEmpty ? "On" : "Off")
+                            row(.launchAtLogin,    label: "Launch at login",      kind: .toggle, value: nav.launchAtLogin    ? "On" : "Off")
                         }
 
                         section("Widget") {
-                            row(5 + off, label: "Widget",        kind: .toggle, value: nav.compactMode ? "On" : "Off")
-                            row(6 + off, label: "Widget corner", kind: .cycle,  value: nav.compactCorner.label,             enabled: nav.compactMode)
-                            row(7 + off, label: "Widget opacity", kind: .cycle, value: "\(Int(nav.compactAlpha * 100))%",   enabled: nav.compactMode)
-                            row(8 + off, label: "Mascot",        kind: .cycle,  value: nav.mascot.label,                    enabled: nav.compactMode)
+                            row(.widget,        label: "Widget",        kind: .toggle, value: nav.compactMode ? "On" : "Off")
+                            row(.widgetCorner,  label: "Widget corner", kind: .cycle,  value: nav.compactCorner.label,            enabled: nav.compactMode)
+                            row(.widgetOpacity, label: "Widget opacity", kind: .cycle, value: "\(Int(nav.compactAlpha * 100))%",  enabled: nav.compactMode)
+                            row(.mascot,        label: "Mascot",        kind: .cycle,  value: nav.mascot.label,                   enabled: nav.compactMode)
                         }
 
                         section("Sounds") {
-                            row(9 + off, label: "Sound enabled", kind: .toggle, value: nav.soundEnabled ? "On" : "Off")
-                            row(10 + off, label: "Agent done",   kind: .cycle,  value: nav.soundStop,       enabled: nav.soundEnabled)
-                            row(11 + off, label: "Permission",   kind: .cycle,  value: nav.soundPermission, enabled: nav.soundEnabled)
+                            row(.soundEnabled,    label: "Sound enabled", kind: .toggle, value: nav.soundEnabled ? "On" : "Off")
+                            row(.agentDoneSound,  label: "Agent done",    kind: .cycle,  value: nav.soundStop,       enabled: nav.soundEnabled)
+                            row(.permissionSound, label: "Permission",    kind: .cycle,  value: nav.soundPermission, enabled: nav.soundEnabled)
                         }
 
                         section("Voice") {
-                            row(12 + off, label: "Voice notifications", kind: .toggle, value: nav.voiceEnabled ? "On" : "Off")
+                            row(.voiceEnabled, label: "Voice notifications", kind: .toggle, value: nav.voiceEnabled ? "On" : "Off")
                             if nav.voiceModelCached {
-                                row(13 + off, label: "Voice", kind: .cycle, value: voiceLabel,                                  enabled: nav.voiceEnabled)
-                                row(14 + off, label: "Speed", kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed),     enabled: nav.voiceEnabled)
+                                row(.voice,      label: "Voice", kind: .cycle, value: voiceLabel,                              enabled: nav.voiceEnabled)
+                                row(.voiceSpeed, label: "Speed", kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed), enabled: nav.voiceEnabled)
                             } else {
-                                voiceModelDownloadRow(index: 13 + off)
+                                voiceModelDownloadRow(index: nav.index(of: .downloadVoiceModel))
                             }
                         }
 
                         section("Usage") {
-                            row(15 + off, label: "Quota tracking",  kind: .toggle, value: nav.quotaTrackingEnabled ? "On" : "Off")
-                            row(16 + off, label: "Quota alerts",    kind: .toggle, value: nav.quotaAlertsEnabled    ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
-                            row(17 + off, label: "Alert threshold", kind: .cycle,  value: "\(nav.quotaAlertThreshold)%",            enabled: nav.quotaTrackingEnabled && nav.quotaAlertsEnabled)
-                            row(18 + off, label: "Poll frequency",  kind: .cycle,  value: "\(nav.quotaPollMinutes) min",            enabled: nav.quotaTrackingEnabled)
-                            row(19 + off, label: "Context alert at", kind: .cycle, value: contextAlertLabel)
-                            row(20 + off, label: "Show remaining",   kind: .toggle, value: nav.quotaShowRemaining ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
+                            row(.quotaTracking, label: "Quota tracking",  kind: .toggle, value: nav.quotaTrackingEnabled ? "On" : "Off")
+                            row(.quotaAlerts,   label: "Quota alerts",    kind: .toggle, value: nav.quotaAlertsEnabled    ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
+                            row(.alertThreshold, label: "Alert threshold", kind: .cycle,  value: "\(nav.quotaAlertThreshold)%",            enabled: nav.quotaTrackingEnabled && nav.quotaAlertsEnabled)
+                            row(.pollFrequency, label: "Poll frequency",  kind: .cycle,  value: "\(nav.quotaPollMinutes) min",            enabled: nav.quotaTrackingEnabled)
+                            row(.contextAlert,  label: "Context alert at", kind: .cycle, value: contextAlertLabel)
+                            row(.showRemaining, label: "Show remaining",   kind: .toggle, value: nav.quotaShowRemaining ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
                         }
 
                         section("Tickets") {
-                            row(21 + off, label: "GitHub PR links",  kind: .toggle, value: nav.githubLinkingEnabled ? "On" : "Off")
-                            row(22 + off, label: "Hide shipped",     kind: .toggle, value: nav.hideShippedTickets ? "On" : "Off", enabled: nav.githubLinkingEnabled)
-                            row(23 + off, label: "Disconnect GitHub…", kind: .action, value: nav.githubSignedIn ? "Signed in" : "", enabled: nav.githubSignedIn)
+                            row(.githubLinks,     label: "GitHub PR links",  kind: .toggle, value: nav.githubLinkingEnabled ? "On" : "Off")
+                            row(.hideShipped,     label: "Hide shipped",     kind: .toggle, value: nav.hideShippedTickets ? "On" : "Off", enabled: nav.githubLinkingEnabled)
+                            row(.disconnectGithub, label: "Disconnect GitHub…", kind: .action, value: nav.githubSignedIn ? "Signed in" : "", enabled: nav.githubSignedIn)
                         }
 
                         section("Events") {
-                            row(24 + off, label: "History per session", kind: .cycle, value: "\(nav.eventsPerSession)")
+                            row(.historyPerSession, label: "History per session", kind: .cycle, value: "\(nav.eventsPerSession)")
                         }
 
                         section("Actions") {
-                            row(25 + off, label: "Edit phrases…",         kind: .action, value: "")
-                            row(26 + off, label: "Check permissions…",    kind: .action, value: "")
-                            row(27 + off, label: "Open config file…",     kind: .action, value: "")
-                            row(28 + off, label: "View release notes…",   kind: .action, value: "")
-                            row(29 + off, label: "Check for updates…",    kind: .action, value: checkForUpdatesStatus)
-                            row(30 + off, label: "Uninstall StackNudge…", kind: .action, value: "")
-                            row(31 + off, label: "Quit panel",            kind: .action, value: "")
+                            row(.editPhrases,      label: "Edit phrases…",         kind: .action, value: "")
+                            row(.checkPermissions, label: "Check permissions…",    kind: .action, value: "")
+                            row(.openConfig,       label: "Open config file…",     kind: .action, value: "")
+                            row(.releaseNotes,     label: "View release notes…",   kind: .action, value: "")
+                            row(.checkUpdates,     label: "Check for updates…",    kind: .action, value: checkForUpdatesStatus)
+                            row(.uninstall,        label: "Uninstall StackNudge…", kind: .action, value: "")
+                            row(.quit,             label: "Quit panel",            kind: .action, value: "")
                         }
 
                         aboutFooter
@@ -323,7 +323,7 @@ struct SettingsView: View {
     // releases page via the openReleasePage action.
     @ViewBuilder
     private func updateRow(version: String) -> some View {
-        let selected = nav.selectedSettingIndex == 0
+        let selected = nav.selectedSettingIndex == nav.index(of: .update)
         HStack(spacing: 10) {
             Image(systemName: "arrow.down.circle.fill")
                 .font(.body)
@@ -393,12 +393,12 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private func row(_ index: Int, label: String, kind: SettingsKind, value: String, enabled: Bool = true) -> some View {
+    private func row(_ id: SettingsRow, label: String, kind: SettingsKind, value: String, enabled: Bool = true) -> some View {
         SettingsRowView(
             label: label,
             value: value,
             kind: kind,
-            selected: nav.selectedSettingIndex == index
+            selected: nav.selectedSettingIndex == nav.index(of: id)
         )
         // Visual-only dimming when a row is gated by another setting
         // (Sound section's deps when Sound is off; Usage deps when
@@ -406,9 +406,9 @@ struct SettingsView: View {
         // these rows so muscle memory isn't disrupted — the user just
         // sees that the row is currently inert.
         .opacity(enabled ? 1.0 : 0.4)
-        .id(index)
+        .id(nav.index(of: id))
         .onTapGesture {
-            nav.selectedSettingIndex = index
+            nav.selectedSettingIndex = nav.index(of: id)
             // For actions, single-click is enough. For toggles/cycles a click
             // on the row also acts so mouse users don't have to keyboard.
             if kind == .action || kind == .toggle {

@@ -2552,7 +2552,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func dismissSelected() {
         guard let id = store.selectedID else { return }
         store.remove(id: id)
-        if store.events.isEmpty { hidePanel() }
+        // Auto-close once the list empties, unless the user opted to keep the
+        // panel open (Settings → Keep open when empty).
+        if store.events.isEmpty, !nav.keepOpenWhenEmpty { hidePanel() }
     }
 
     // MARK: - Sessions actions
