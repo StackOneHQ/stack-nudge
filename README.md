@@ -217,6 +217,19 @@ The hotkey row records live: press `⏎` on it, press the new combo, and stack-n
 
 All Settings choices persist to `~/.stack-nudge/config` (a `KEY=value` text file). You don't need to edit it directly — Settings is the source of truth — but it's there for backup/sync or scripted setup.
 
+### Tickets (usage → outcomes)
+
+The **Tickets** tab (`⌘4`) rolls every captured agent session up **by ticket** — derived from your branch naming (`eng-123/…` → `ENG-123`), falling back to the branch when there's no ticket — and shows the tokens spent, files changed, and the live git outcome: *needs-review → committed → pushed → merged*. Select rows with `↑ ↓`, open the ticket or PR with `⏎`, dismiss one with `⌫`.
+
+Opt-in GitHub linking adds real **PR + CI status** (so even squash-merged work reads as *merged*). Turn it on in Settings → Tickets → **GitHub PR links**, then sign in via the in-panel device flow (no `gh` needed). Config keys (all optional; the toggles in Settings write the same file):
+
+| Key | What it does |
+|-----|--------------|
+| `STACKNUDGE_GITHUB` | `true` to enable GitHub PR/CI linking (off by default) |
+| `STACKNUDGE_GITHUB_CLIENT_ID` | Override the embedded OAuth app Client ID (rarely needed) |
+| `STACKNUDGE_TICKET_URL` | Deep-link template for ticket rows, e.g. `https://linear.app/acme/issue/{key}` — `{key}` is replaced with the ticket |
+| `STACKNUDGE_HIDE_SHIPPED` | `true` to drop groups once their PR reads merged, keeping the tab on in-flight work |
+
 ### Menu bar (macOS)
 
 When the panel daemon is running, a bell icon appears in your menu bar. The same items you can reach from the in-panel Settings tab are mirrored here for one-click access without summoning the panel:
