@@ -18,7 +18,8 @@ struct DiffStat: Equatable {
 // `diff` is the branch's latest snapshot (pending work), not a sum across its
 // sessions — uncommitted state is point-in-time, so summing would double-count.
 struct BranchBreakdown: Identifiable, Equatable {
-    var id: String { branch }
+    // (repoRoot, branch) so two repos with a same-named branch stay distinct.
+    var id: String { PanelNav.outcomeKey(repoRoot, branch) }
     let branch: String
     let repoRoot: String?   // for the per-branch outcome lookup (repo+branch keyed)
     let sessionCount: Int
@@ -26,27 +27,39 @@ struct BranchBreakdown: Identifiable, Equatable {
     let diff: DiffStat
 }
 
+// How a group is keyed. Ticket groups carry a real Linear/Jira key and deep-link
+// to the tracker; repo groups are the bucket for unticketed work, gathering every
+// branch that ran in a repo so loose work-streams nest under the repo instead of
+// scattering one anonymous row per branch.
+enum GroupKind: Equatable { case ticket, repo }
+
 // One aggregated row in the Tickets tab: every session that shares a grouping
-// key. The key is the derived Linear/Jira ticket when one was found, else the
-// git branch (so unticketed work-streams stay separate instead of collapsing
-// into one anonymous bucket). Tokens are summed across the group's sessions.
+// key. Ticket sessions key by their derived ticket; unticketed sessions key by
+// the repo they ran in. Tokens are summed across the group's sessions.
 struct TicketGroup: Identifiable, Equatable {
-    let id: String          // grouping key = ticket ?? branch ?? placeholder
-    let isTicket: Bool      // true when id is a real ticket key (gets the deep link)
+    // Stable, unique identity = the namespaced grouping key ("t:<ticket>" /
+    // "r:<repoRoot>"). Used for SwiftUI identity, row ids, and selection — never
+    // shown. Two groups can share a `label` (a ticket and a repo both called
+    // "ENG-9", or two repos with the same basename) without colliding here.
+    let id: String
+    let label: String       // display text: ticket key, or repo basename
+    let kind: GroupKind
     let repos: [String]     // distinct repo names the sessions ran in
     let sessionCount: Int
     let totalTokens: Int
     let agents: [String]    // distinct canonical agents, first-seen order
     let diff: DiffStat      // pending work, summed across the group's branches
-    // All branch slices in the group (used for the outcome rollup); rendered as
-    // sub-rows only for ticket groups — a branch-only group's slice is itself.
+    // All branch slices in the group, rendered as indented sub-rows (both kinds).
     let branches: [BranchBreakdown]
+
+    // True when this is a real ticket key — the only kind that deep-links.
+    var isTicket: Bool { kind == .ticket }
 }
 
 // Tickets tab — the first slice of the usage-to-outcome dashboard. Reads the
-// handoff ledger, rolls token usage + session counts up per `ticket ?? branch`,
-// shows the repo each group ran in and (for tickets) the branches beneath it,
-// and deep-links each ticket row to its tracker when STACKNUDGE_TICKET_URL is
+// handoff ledger, rolls token usage + session counts up per ticket (or per repo
+// for unticketed work), shows the branches beneath each group, and deep-links
+// each ticket row to its tracker when STACKNUDGE_TICKET_URL is
 // set. Pure read over data the ledger already holds; no capture, no network.
 struct OutcomesView: View {
 
@@ -114,11 +127,16 @@ struct OutcomesView: View {
     // MARK: - Rows
 
     private func groupRow(_ group: TicketGroup, selectedRowID: String?) -> some View {
-        let linkable = group.isTicket && ticketURL(for: group.id) != nil
+        let linkable = group.isTicket && ticketURL(for: group.label) != nil
         let selected = selectedRowID == Self.headerID(group)
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
-                Text(group.id)
+                if group.kind == .repo {
+                    Image(systemName: "shippingbox")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text(group.label)
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(group.isTicket ? Color.primary : Color.secondary)
                     .lineLimit(1)
@@ -129,7 +147,14 @@ struct OutcomesView: View {
                         .foregroundStyle(Color.accentColor)
                 }
                 Spacer(minLength: 8)
-                if !group.repos.isEmpty {
+                // Repo groups put the repo name in the title, so the trailing
+                // slot shows the branch count instead of the (redundant) repo.
+                if group.kind == .repo {
+                    Text(Self.branchesLabel(group.branches.count))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize()
+                } else if !group.repos.isEmpty {
                     Text(group.repos.joined(separator: ", "))
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
@@ -140,34 +165,20 @@ struct OutcomesView: View {
             Text(detailLine(group))
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
-            if group.isTicket {
-                let rollup = outcomeRollup(group)
-                if !rollup.isEmpty {
-                    HStack(spacing: 10) {
-                        ForEach(rollup, id: \.status) { statusChip($0.status, count: $0.count) }
+            let rollup = outcomeRollup(group)
+            if !rollup.isEmpty {
+                HStack(spacing: 10) {
+                    ForEach(rollup, id: \.status) { statusChip($0.status, count: $0.count) }
+                }
+            }
+            if !group.branches.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(group.branches) { branch in
+                        branchRow(branch, selectedRowID: selectedRowID)
+                            .id(Self.branchID(branch))
                     }
                 }
-                if !group.branches.isEmpty {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(group.branches) { branch in
-                            branchRow(branch, selectedRowID: selectedRowID)
-                                .id(Self.branchID(branch))
-                        }
-                    }
-                    .padding(.top, 1)
-                }
-            } else if let branch = group.branches.first {
-                // Branch-only group: one branch == the group, with no sub-row to
-                // host a chip — so render it on the header. Clickable PR chip
-                // when a PR exists, else the local-outcome chip.
-                HStack(spacing: 8) {
-                    if let pr = prInfo(for: branch) {
-                        prChip(pr)
-                    } else if let status = outcome(for: branch), status != .clean {
-                        statusChip(status)
-                    }
-                    Spacer(minLength: 0)
-                }
+                .padding(.top, 1)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -177,7 +188,7 @@ struct OutcomesView: View {
             .fill(selected ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.04)))
         .contentShape(Rectangle())
         .onTapGesture { if linkable { openTicket(group) } }
-        .help(linkable ? "Open \(group.id) in your tracker" : "")
+        .help(linkable ? "Open \(group.label) in your tracker" : "")
     }
 
     private func branchRow(_ branch: BranchBreakdown, selectedRowID: String?) -> some View {
@@ -220,7 +231,7 @@ struct OutcomesView: View {
         var ids: [String] = []
         for group in groups {
             ids.append(headerID(group))
-            if group.isTicket { ids.append(contentsOf: group.branches.map(branchID)) }
+            ids.append(contentsOf: group.branches.map(branchID))
         }
         guard !ids.isEmpty else { return nil }
         return ids[min(max(0, index), ids.count - 1)]
@@ -394,7 +405,7 @@ struct OutcomesView: View {
     }
 
     private func openTicket(_ group: TicketGroup) {
-        guard let url = ticketURL(for: group.id) else { return }
+        guard let url = ticketURL(for: group.label) else { return }
         NSWorkspace.shared.open(url)
     }
 
@@ -406,25 +417,32 @@ struct OutcomesView: View {
     // Tickets sort first (they're the unit the user tracks), then by most-recent
     // activity within each band.
     static func groups(from records: [HandoffRecord]) -> [TicketGroup] {
-        struct Resolved { let key: String; let isTicket: Bool; let record: HandoffRecord }
+        // Ticketed sessions key by their derived ticket; everything else buckets
+        // by repo. The dedupKey is namespaced (t:/r:) and, for repos, uses the
+        // full repoRoot — two checkouts with the same basename (…/acme/api,
+        // …/example/api) must stay separate. The label is the human text
+        // (ticket key, or repo basename), which may repeat across groups.
+        struct Resolved { let dedupKey: String; let label: String; let kind: GroupKind; let record: HandoffRecord }
         let resolved = records.map { record -> Resolved in
             if let ticket = record.ticket ?? TicketAttribution.ticket(branch: record.branch) {
-                return Resolved(key: ticket, isTicket: true, record: record)
+                return Resolved(dedupKey: "t:\(ticket)", label: ticket, kind: .ticket, record: record)
             }
-            return Resolved(key: record.branch ?? "—", isTicket: false, record: record)
+            let root = record.repoRoot ?? "—"
+            return Resolved(dedupKey: "r:\(root)", label: repoName(record.repoRoot) ?? "—", kind: .repo, record: record)
         }
 
         var keyOrder: [String] = []
         var byKey: [String: [Resolved]] = [:]
         for item in resolved {
-            if byKey[item.key] == nil { keyOrder.append(item.key) }
-            byKey[item.key, default: []].append(item)
+            if byKey[item.dedupKey] == nil { keyOrder.append(item.dedupKey) }
+            byKey[item.dedupKey, default: []].append(item)
         }
 
         let groups = keyOrder.map { key -> (group: TicketGroup, last: Date) in
             let items = byKey[key] ?? []
             let rows = items.map(\.record)
-            let isTicket = items.first?.isTicket ?? false
+            let kind = items.first?.kind ?? .repo
+            let label = items.first?.label ?? "—"
             let tokens = rows.compactMap(\.contextTokens).reduce(0, +)
             let agents = orderedDistinct(rows.map { displayAgent($0.agent) })
             let repos = orderedDistinct(rows.compactMap { repoName($0.repoRoot) })
@@ -434,34 +452,37 @@ struct OutcomesView: View {
                 filesChanged: slices.reduce(0) { $0 + $1.diff.filesChanged },
                 insertions: slices.reduce(0) { $0 + $1.diff.insertions },
                 deletions: slices.reduce(0) { $0 + $1.diff.deletions })
-            return (TicketGroup(id: key, isTicket: isTicket, repos: repos,
+            return (TicketGroup(id: key, label: label, kind: kind, repos: repos,
                                 sessionCount: rows.count, totalTokens: tokens,
                                 agents: agents, diff: diff, branches: slices), last)
         }
+        // Tickets first, then repo buckets; most-recent within each band.
         return groups.sorted {
             if $0.group.isTicket != $1.group.isTicket { return $0.group.isTicket }
             return $0.last > $1.last
         }.map(\.group)
     }
 
-    // Per-branch slices within a ticket, heaviest token use first.
+    // Per-branch slices within a group, heaviest token use first. Keyed by
+    // (repoRoot, branch) — matching the outcome/PR lookup — so a branch name
+    // shared across two repos doesn't collapse into one slice or lose a repoRoot.
     static func branchBreakdown(_ rows: [HandoffRecord]) -> [BranchBreakdown] {
         var order: [String] = []
-        var byBranch: [String: [HandoffRecord]] = [:]
+        var byKey: [String: [HandoffRecord]] = [:]
         for row in rows {
-            let branch = row.branch ?? "—"
-            if byBranch[branch] == nil { order.append(branch) }
-            byBranch[branch, default: []].append(row)
+            let key = PanelNav.outcomeKey(row.repoRoot, row.branch)
+            if byKey[key] == nil { order.append(key) }
+            byKey[key, default: []].append(row)
         }
-        return order.map { branch -> BranchBreakdown in
-            let group = byBranch[branch] ?? []
+        return order.map { key -> BranchBreakdown in
+            let group = byKey[key] ?? []
             let tokens = group.compactMap(\.contextTokens).reduce(0, +)
             let latest = group.max { $0.updatedAt < $1.updatedAt }
             let diff = DiffStat(
                 filesChanged: latest?.filesChanged ?? 0,
                 insertions: latest?.insertions ?? 0,
                 deletions: latest?.deletions ?? 0)
-            return BranchBreakdown(branch: branch, repoRoot: latest?.repoRoot,
+            return BranchBreakdown(branch: latest?.branch ?? "—", repoRoot: latest?.repoRoot,
                                    sessionCount: group.count, totalTokens: tokens, diff: diff)
         }.sorted { $0.totalTokens > $1.totalTokens }
     }
@@ -494,6 +515,9 @@ struct OutcomesView: View {
 
     private static func filesLabel(_ count: Int) -> String {
         count == 1 ? "1 file" : "\(count) files"
+    }
+    static func branchesLabel(_ count: Int) -> String {
+        count == 1 ? "1 branch" : "\(count) branches"
     }
 
     // "+1.8k/−400" — uses the minus sign (U+2212) to match the app's typography.
