@@ -3,9 +3,9 @@ import XCTest
 @testable import StackNudgePanelCore
 
 // OutcomesView.groups rolls the handoff ledger up for the Tickets tab. These
-// pin the grouping key (ticket, falling back to branch), the token/session
-// aggregation, the tickets-before-branches ordering, and the recency sort
-// within a band.
+// pin the grouping key (ticket, else the repo the unticketed work ran in), the
+// token/session aggregation, the tickets-before-repos ordering, and the recency
+// sort within a band.
 final class OutcomesViewTests: XCTestCase {
 
     private func record(id: String,
@@ -31,27 +31,29 @@ final class OutcomesViewTests: XCTestCase {
             record(id: "b", ticket: "ENG-1", tokens: 200, updated: 2),
         ])
         XCTAssertEqual(groups.count, 1)
-        XCTAssertEqual(groups.first?.id, "ENG-1")
+        XCTAssertEqual(groups.first?.label, "ENG-1")
         XCTAssertEqual(groups.first?.isTicket, true)
         XCTAssertEqual(groups.first?.sessionCount, 2)
         XCTAssertEqual(groups.first?.totalTokens, 300)
     }
 
-    func test_branchUsedAsKeyWhenNoTicket() {
+    func test_unticketedWork_groupsUnderItsRepo() {
         let groups = OutcomesView.groups(from: [
-            record(id: "a", branch: "feat/x", ticket: nil, tokens: 50),
+            record(id: "a", repoRoot: "/work/stack-nudge", branch: "feat/x", ticket: nil, tokens: 50),
         ])
-        XCTAssertEqual(groups.first?.id, "feat/x")
+        XCTAssertEqual(groups.first?.label, "stack-nudge")
+        XCTAssertEqual(groups.first?.kind, .repo)
         XCTAssertEqual(groups.first?.isTicket, false)
+        XCTAssertEqual(groups.first?.branches.map(\.branch), ["feat/x"])
         XCTAssertEqual(groups.first?.totalTokens, 50)
     }
 
-    func test_ticketsSortBeforeBranches_evenWhenBranchIsNewer() {
+    func test_ticketsSortBeforeRepos_evenWhenRepoIsNewer() {
         let groups = OutcomesView.groups(from: [
-            record(id: "a", branch: "feat/x", updated: 100),  // newest, but a branch
-            record(id: "b", ticket: "ENG-1", updated: 1),     // older, but a ticket
+            record(id: "a", repoRoot: "/work/stack-nudge", branch: "feat/x", updated: 100),  // newest, but unticketed
+            record(id: "b", ticket: "ENG-1", updated: 1),                                    // older, but a ticket
         ])
-        XCTAssertEqual(groups.map(\.id), ["ENG-1", "feat/x"])
+        XCTAssertEqual(groups.map(\.label), ["ENG-1", "stack-nudge"])
     }
 
     func test_withinTickets_sortedByMostRecentActivity() {
@@ -59,7 +61,7 @@ final class OutcomesViewTests: XCTestCase {
             record(id: "a", ticket: "ENG-1", updated: 1),
             record(id: "b", ticket: "ENG-2", updated: 5),
         ])
-        XCTAssertEqual(groups.map(\.id), ["ENG-2", "ENG-1"])
+        XCTAssertEqual(groups.map(\.label), ["ENG-2", "ENG-1"])
     }
 
     func test_distinctAgentsPreservedInFirstSeenOrder() {
@@ -71,10 +73,10 @@ final class OutcomesViewTests: XCTestCase {
         XCTAssertEqual(groups.first?.agents, ["Claude", "Codex"])
     }
 
-    func test_noTicketNoBranch_fallsBackToPlaceholder() {
-        let groups = OutcomesView.groups(from: [record(id: "a", branch: nil)])
-        XCTAssertEqual(groups.first?.id, "—")
-        XCTAssertEqual(groups.first?.isTicket, false)
+    func test_noTicketNoRepo_fallsBackToPlaceholder() {
+        let groups = OutcomesView.groups(from: [record(id: "a", repoRoot: nil, branch: nil)])
+        XCTAssertEqual(groups.first?.label, "—")
+        XCTAssertEqual(groups.first?.kind, .repo)
     }
 
     func test_lowercaseBranch_regroupsUnderTicket_evenWhenStoredTicketIsNil() {
@@ -83,7 +85,7 @@ final class OutcomesViewTests: XCTestCase {
         let groups = OutcomesView.groups(from: [
             record(id: "a", branch: "eng-75/sync", ticket: nil, tokens: 100),
         ])
-        XCTAssertEqual(groups.first?.id, "ENG-75")
+        XCTAssertEqual(groups.first?.label, "ENG-75")
         XCTAssertEqual(groups.first?.isTicket, true)
     }
 
@@ -108,12 +110,77 @@ final class OutcomesViewTests: XCTestCase {
         XCTAssertEqual(branches.last?.sessionCount, 2)
     }
 
-    func test_branchOnlyGroup_exposesItsOwnBranchSlice() {
-        // Branch-only groups carry their single slice (for the outcome rollup);
-        // the view just doesn't render it as a redundant sub-row.
-        let groups = OutcomesView.groups(from: [record(id: "a", branch: "feat/x")])
-        XCTAssertEqual(groups.first?.isTicket, false)
-        XCTAssertEqual(groups.first?.branches.map(\.branch), ["feat/x"])
+    func test_repoGroup_gathersUnticketedBranches_heaviestFirst() {
+        // Several unticketed branches in one repo collapse into a single repo
+        // group, each branch a sub-row ordered by tokens.
+        let groups = OutcomesView.groups(from: [
+            record(id: "a", repoRoot: "/work/stack-nudge", branch: "feat/light", tokens: 100),
+            record(id: "b", repoRoot: "/work/stack-nudge", branch: "feat/heavy", tokens: 900),
+            record(id: "c", repoRoot: "/work/stack-nudge", branch: "feat/light", tokens: 100),
+        ])
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups.first?.label, "stack-nudge")
+        XCTAssertEqual(groups.first?.kind, .repo)
+        XCTAssertEqual(groups.first?.branches.map(\.branch), ["feat/heavy", "feat/light"])
+        XCTAssertEqual(groups.first?.sessionCount, 3)
+        XCTAssertEqual(groups.first?.totalTokens, 1100)
+    }
+
+    func test_unticketedWork_splitsByRepo() {
+        let groups = OutcomesView.groups(from: [
+            record(id: "a", repoRoot: "/work/stack-nudge", branch: "feat/x", updated: 1),
+            record(id: "b", repoRoot: "/work/hub",         branch: "feat/y", updated: 2),
+        ])
+        XCTAssertEqual(groups.map(\.label), ["hub", "stack-nudge"])  // distinct repo groups, recency-sorted
+        XCTAssertTrue(groups.allSatisfy { $0.kind == .repo })
+    }
+
+    func test_ticketAndRepoCoexist_ticketFirst() {
+        let groups = OutcomesView.groups(from: [
+            record(id: "a", repoRoot: "/work/stack-nudge", branch: "feat/x", updated: 5),  // unticketed → repo
+            record(id: "b", repoRoot: "/work/stack-nudge", branch: "eng-9/api", updated: 1),  // ticket
+        ])
+        XCTAssertEqual(groups.map(\.label), ["ENG-9", "stack-nudge"])
+        XCTAssertEqual(groups.map(\.kind), [.ticket, .repo])
+    }
+
+    func test_groupID_uniqueWhenTicketAndRepoShareName() {
+        // A repo literally named "ENG-9" and a ticket ENG-9 produce the same
+        // display label but must stay distinct groups with distinct ids — else
+        // SwiftUI's ForEach / row selection collides on the shared id.
+        let groups = OutcomesView.groups(from: [
+            record(id: "a", repoRoot: "/work/ENG-9", branch: "feat/x", ticket: nil),  // repo basename "ENG-9"
+            record(id: "b", repoRoot: "/work/svc",   branch: "eng-9/api", ticket: nil), // derives ticket ENG-9
+        ])
+        XCTAssertEqual(groups.count, 2)
+        XCTAssertEqual(Set(groups.map(\.label)), ["ENG-9"])               // same display text
+        XCTAssertEqual(Set(groups.map(\.id)).count, 2)                    // distinct ids
+        XCTAssertEqual(Set(groups.map(\.kind)), [.ticket, .repo])
+    }
+
+    func test_distinctReposSameBasename_notMerged() {
+        // …/acme/api and …/example/api share a basename but are different repos.
+        let groups = OutcomesView.groups(from: [
+            record(id: "a", repoRoot: "/clients/acme/api",    branch: "feat/x", tokens: 100),
+            record(id: "b", repoRoot: "/clients/example/api", branch: "feat/y", tokens: 200),
+        ])
+        XCTAssertEqual(groups.count, 2)                                   // not merged
+        XCTAssertEqual(Set(groups.map(\.label)), ["api"])                 // same display label
+        XCTAssertEqual(Set(groups.map(\.id)), ["r:/clients/acme/api", "r:/clients/example/api"])
+    }
+
+    func test_branchBreakdown_sameBranchNameAcrossRepos_staysDistinct() {
+        // One ticket worked in two repos, each with a branch named ENG-9/main.
+        // Keying by (repoRoot, branch) keeps them as two slices with their own
+        // repoRoot, rather than collapsing into one and losing a repo.
+        let groups = OutcomesView.groups(from: [
+            record(id: "a", repoRoot: "/work/api-a", branch: "ENG-9/main", ticket: "ENG-9", tokens: 100),
+            record(id: "b", repoRoot: "/work/api-b", branch: "ENG-9/main", ticket: "ENG-9", tokens: 200),
+        ])
+        let branches = groups.first?.branches ?? []
+        XCTAssertEqual(branches.count, 2)
+        XCTAssertEqual(Set(branches.map(\.repoRoot)), ["/work/api-a", "/work/api-b"])
+        XCTAssertEqual(Set(branches.map(\.id)).count, 2)
     }
 
     func test_branchDiff_usesLatestSnapshotNotSum() {

@@ -257,11 +257,11 @@ final class PanelNav: ObservableObject {
         }
     }
 
-    // Row count for clamping — header + (ticket) branch sub-rows, same order the
-    // view renders. No config/network, so cheap to call on every keystroke.
+    // Row count for clamping — header + branch sub-rows for every group, same
+    // order the view renders. No config/network, so cheap to call per keystroke.
     func outcomeRowCount() -> Int {
         visibleOutcomeGroups().reduce(0) { total, group in
-            total + 1 + (group.isTicket ? group.branches.count : 0)
+            total + 1 + group.branches.count
         }
     }
 
@@ -271,17 +271,16 @@ final class PanelNav: ObservableObject {
         outcomeSelectedIndex = min(max(0, outcomeSelectedIndex + delta), count - 1)
     }
 
-    // Open the selected row's link: a ticket's tracker URL (STACKNUDGE_TICKET_URL)
-    // for ticket headers, else the PR URL for a branch / branch-only header.
+    // Open the selected row's link: a ticket header → its tracker URL
+    // (STACKNUDGE_TICKET_URL); a branch sub-row → its PR. Repo headers don't
+    // link anywhere (no single PR for a repo) — their branches carry the links.
     func activateSelectedOutcome() {
         let template = ConfigFile.read()["STACKNUDGE_TICKET_URL"]
         var urls: [String?] = []
         for group in visibleOutcomeGroups() {
             urls.append(headerURL(group, template: template))
-            if group.isTicket {
-                for branch in group.branches {
-                    urls.append(pullRequestByBranch[Self.outcomeKey(branch.repoRoot, branch.branch)]?.url)
-                }
+            for branch in group.branches {
+                urls.append(pullRequestByBranch[Self.outcomeKey(branch.repoRoot, branch.branch)]?.url)
             }
         }
         guard !urls.isEmpty else { return }
@@ -292,18 +291,13 @@ final class PanelNav: ObservableObject {
     }
 
     private func headerURL(_ group: TicketGroup, template: String?) -> String? {
-        if group.isTicket, let template, template.contains("{key}") {
-            return template.replacingOccurrences(of: "{key}", with: group.id)
-        }
-        if !group.isTicket, let branch = group.branches.first {
-            return pullRequestByBranch[Self.outcomeKey(branch.repoRoot, branch.branch)]?.url
-        }
-        return nil
+        guard group.isTicket, let template, template.contains("{key}") else { return nil }
+        return template.replacingOccurrences(of: "{key}", with: group.label)
     }
 
-    // Remove the selected row's records: a ticket header drops the whole group
-    // (every branch); a branch sub-row / branch-only header drops just that
-    // branch. Matched by (repoRoot, branch), which lives on each record.
+    // Remove the selected row's records: a group header (ticket or repo) drops
+    // the whole group (every branch); a branch sub-row drops just that branch.
+    // Matched by (repoRoot, branch), which lives on each record.
     func dismissSelectedOutcome() {
         let records = HandoffLedger.shared.all()
         let rowKeys = branchKeysForRows(visibleOutcomeGroups())
@@ -321,15 +315,13 @@ final class PanelNav: ObservableObject {
     }
 
     // Per-row branch keys in render order, matching outcomeRowCount: a header
-    // (ticket → all its branches; branch-only → its one), then a ticket group's
-    // branch sub-rows.
+    // (drops all the group's branches), then one row per branch sub-row (drops
+    // just that branch). Same for ticket and repo groups.
     private func branchKeysForRows(_ groups: [TicketGroup]) -> [[String]] {
         var rows: [[String]] = []
         for group in groups {
             rows.append(group.branches.map { Self.outcomeKey($0.repoRoot, $0.branch) })
-            if group.isTicket {
-                rows.append(contentsOf: group.branches.map { [Self.outcomeKey($0.repoRoot, $0.branch)] })
-            }
+            rows.append(contentsOf: group.branches.map { [Self.outcomeKey($0.repoRoot, $0.branch)] })
         }
         return rows
     }
