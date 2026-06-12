@@ -1508,7 +1508,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                     record.ticket = ticket
                     if let stats {
                         record.model = stats.model
-                        record.contextTokens = stats.tokens
+                        // Fold the reading into a running total so a compacted
+                        // session reflects its real effort, not just the
+                        // post-compaction remainder (see ContextTokens.fold).
+                        let folded = ContextTokens.fold(total: record.contextTokens,
+                                                        lastReading: record.lastContextReading,
+                                                        newReading: stats.tokens)
+                        record.contextTokens = folded.total
+                        record.lastContextReading = folded.lastReading
                     }
                     if let snapshot {
                         record.headCommit = snapshot.headCommit
@@ -1682,7 +1689,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // alert pipeline, not anything the UI observes.
     private var contextAlertLastTokens: [String: Int] = [:]
     private var contextAlertFired: Set<String> = []
-    private static let contextCompactDropThreshold = 20_000
 
     // Decide whether to fire a context-fill banner for this session.
     // Rules:
@@ -1702,7 +1708,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         let current = stats.tokens
 
         if let last = contextAlertLastTokens[sessionID],
-           last - current >= Self.contextCompactDropThreshold {
+           last - current >= ContextTokens.compactDropThreshold {
             contextAlertFired.remove(sessionID)
         }
         contextAlertLastTokens[sessionID] = current

@@ -12,7 +12,14 @@ struct HandoffRecord: Codable, Identifiable, Equatable {
     var branch: String?
     var ticket: String?         // Linear/Jira key (e.g. "ENG-12142"); nil if none
     var model: String?
-    var contextTokens: Int?     // latest context-window tokens for the session
+    // Cumulative context-window tokens for the session — summed growth across
+    // compaction cycles (see ContextTokens.fold), not just the latest reading,
+    // so a compacted session still reflects its real effort.
+    var contextTokens: Int?
+    // Last raw context-occupancy reading, kept only to fold the next one. Defaults
+    // nil so records written before cumulative tracking decode cleanly (→ re-seeded)
+    // and existing constructions don't need to supply this bookkeeping field.
+    var lastContextReading: Int? = nil
     // Uncommitted working-tree diff at the latest Stop (vs HEAD, + untracked).
     // Optional so records written before this field decode cleanly.
     var headCommit: String?
