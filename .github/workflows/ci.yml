@@ -13,11 +13,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  pr-title:
+    name: PR title (Conventional Commits)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      # release-please only bumps/releases on a parseable Conventional Commit.
+      # A malformed title (e.g. an empty scope `fix():`) silently skips the
+      # release with no error, so gate it here at PR time. Title is read via
+      # env, never interpolated into the script (avoids title injection).
+      - name: Validate PR title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          echo "Title: $TITLE"
+          pattern='^(feat|fix|docs|chore|refactor|test|build|ci|perf|style|revert)(\([a-z0-9._-]+\))?!?: .+'
+          if ! printf '%s' "$TITLE" | grep -qE "$pattern"; then
+            echo "::error::PR title must be a Conventional Commit — 'type: subject' or 'type(scope): subject'. An empty scope like 'fix():' is invalid and silently skips the release."
+            exit 1
+          fi
+
   shell:
     name: shell syntax + shellcheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: bash -n on tracked shell scripts
         run: |
@@ -29,7 +49,7 @@ jobs:
           done
 
       - name: shellcheck
-        uses: ludeeus/action-shellcheck@master
+        uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38 # v2.0.0
         with:
           severity: warning
 
@@ -41,7 +61,7 @@ jobs:
       matrix:
         arch: [arm64, x86_64]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: build StackNudge.app
         run: ./build.sh ${{ matrix.arch }}
@@ -60,7 +80,7 @@ jobs:
     name: swift test
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: print toolchain
         run: |
