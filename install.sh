@@ -49,6 +49,13 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
       exit 1
     fi
   fi
+  # Don't destroy the installed copy until we've confirmed the new bundle
+  # actually carries an executable — a corrupt or incomplete artifact would
+  # otherwise leave the user with no app installed at all.
+  if ! ls "$PREBUILT_APP"/Contents/MacOS/* >/dev/null 2>&1; then
+    echo "  ✗ $PREBUILT_APP has no executable in Contents/MacOS — refusing to replace the installed app."
+    exit 1
+  fi
   rm -rf "$HOME/Applications/StackNudge.app"
   rm -rf "$HOME/Applications/stack-nudge-panel.app"  # clean up old panel binary
   cp -r "$PREBUILT_APP" "$HOME/Applications/StackNudge.app"
@@ -116,10 +123,22 @@ register_launchd_agent() {
   shift 3
   local plist_path="$HOME/Library/LaunchAgents/${label}.plist"
 
+  # Escape XML metacharacters before interpolating any value into the plist —
+  # a program arg or path containing & < > (e.g. an install dir whose name
+  # contains them) would otherwise produce a malformed plist launchd rejects.
+  xml_escape() {
+    local s="$1"
+    s="${s//&/&amp;}"; s="${s//</&lt;}"; s="${s//>/&gt;}"
+    printf '%s' "$s"
+  }
+
   local program_xml=""
   for arg in "$@"; do
-    program_xml+="        <string>${arg}</string>"$'\n'
+    program_xml+="        <string>$(xml_escape "$arg")</string>"$'\n'
   done
+  local label_xml log_xml
+  label_xml=$(xml_escape "$label")
+  log_xml=$(xml_escape "$log_path")
 
   local keep_alive_xml
   case "$keep_alive_mode" in
@@ -134,7 +153,7 @@ register_launchd_agent() {
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>${label}</string>
+    <string>${label_xml}</string>
     <key>ProgramArguments</key>
     <array>
 ${program_xml}    </array>
@@ -143,9 +162,9 @@ ${program_xml}    </array>
     <key>KeepAlive</key>
     ${keep_alive_xml}
     <key>StandardOutPath</key>
-    <string>${log_path}</string>
+    <string>${log_xml}</string>
     <key>StandardErrorPath</key>
-    <string>${log_path}</string>
+    <string>${log_xml}</string>
 </dict>
 </plist>
 PLIST

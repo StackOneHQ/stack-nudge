@@ -44,3 +44,8 @@
 # always notify regardless of focus.
 # Default: true
 #STACKNUDGE_MUTE_WHEN_FOCUSED=false
+
+# Log a debug line (to the launchd log) explaining voice decisions — useful
+# when a notification played silently and you want to know why.
+# Default: false
+#STACKNUDGE_DEBUG=true
