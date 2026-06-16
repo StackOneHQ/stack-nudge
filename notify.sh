@@ -239,8 +239,11 @@ voice_phrase_for() {
   fi
 
   local template="${templates[$((RANDOM % ${#templates[@]}))]}"
-  # shellcheck disable=SC2059
-  printf "$template" "$repo"
+  # Substitute the repo name into the %s placeholder ourselves rather than
+  # letting the phrase be a printf format string — a phrase (especially a
+  # user-supplied one from phrases.user.json) with stray % tokens would
+  # otherwise corrupt or truncate the spoken output.
+  printf '%s' "${template//%s/$repo}"
 }
 
 PANEL_SOCK="${HOME}/.stack-nudge/panel.sock"
@@ -583,10 +586,17 @@ notify_macos() {
 # Create a unique FIFO at /tmp for the user's response. Echoes the path.
 # Returns empty if mkfifo fails.
 create_perm_fifo() {
-  local fifo
-  fifo="/tmp/stack-nudge-perm-$$-$(date +%s)-$RANDOM.fifo"
+  # Place the FIFO inside a private mktemp dir (mode 0700, CSPRNG-named) rather
+  # than a $RANDOM-suffixed /tmp path — $RANDOM is only 16-bit, so the old name
+  # was guessable, letting a local attacker pre-create the FIFO or inject a
+  # decision. The dir is removed alongside the FIFO in wait_for_permission_response.
+  local dir
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/stack-nudge-perm.XXXXXXXX" 2>/dev/null) || return
+  local fifo="$dir/fifo"
   if mkfifo -m 0600 "$fifo" 2>/dev/null; then
     echo "$fifo"
+  else
+    rmdir "$dir" 2>/dev/null
   fi
 }
 
@@ -598,7 +608,7 @@ wait_for_permission_response() {
   local fifo="$1"
   local timeout=550  # Claude Code's hook timeout defaults to 600s — leave buffer
 
-  trap 'rm -f "$fifo"' EXIT
+  trap 'rm -f "$fifo"; rmdir "$(dirname "$fifo")" 2>/dev/null' EXIT
 
   local decision
   decision=$(NUDGE_FIFO="$fifo" NUDGE_TIMEOUT="$timeout" python3 - <<'PY' 2>/dev/null
