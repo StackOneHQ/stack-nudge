@@ -9,9 +9,27 @@ AGENT="${1:-agent}"
 EVENT="${2:-stop}"
 OS="$(uname -s 2>/dev/null || echo Windows)"
 
-# Load user config (overrides defaults below).
+# Load user config (overrides defaults below). Parse as KEY=VALUE data only —
+# never `source` it, so anything able to write to this file (a compromised
+# postinstall, a stray tool) can't get arbitrary code to run on every hook
+# event. Only STACKNUDGE_* keys are recognised; anything else is ignored.
 # Copy notify.conf.example to ~/.stack-nudge/config to customise.
-[[ -f "${HOME}/.stack-nudge/config" ]] && source "${HOME}/.stack-nudge/config"
+load_stacknudge_config() {
+  local config="${HOME}/.stack-nudge/config"
+  [[ -f "$config" ]] || return 0
+  local line key value
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?(STACKNUDGE_[A-Z0-9_]+)=(.*)$ ]] || continue
+    key="${BASH_REMATCH[2]}"
+    value="${BASH_REMATCH[3]}"
+    # Strip one layer of matching surrounding quotes, if present.
+    if [[ "$value" =~ ^\"(.*)\"$ ]] || [[ "$value" =~ ^\'(.*)\'$ ]]; then
+      value="${BASH_REMATCH[1]}"
+    fi
+    printf -v "$key" '%s' "$value"
+  done < "$config"
+}
+load_stacknudge_config
 
 # Read JSON piped from Claude Code hooks (contains transcript_path for Stop events).
 # Skip if stdin is a terminal (manual invocation).
@@ -305,12 +323,17 @@ detect_iterm_tab_name() {
   tty_path=$(tty 2>/dev/null) || return
   [[ -z "$tty_path" || "$tty_path" == "not a tty" ]] && return
 
-  ITERM_TAB_NAME=$(osascript <<APPLESCRIPT 2>/dev/null || true
+  # Pass the tty path through the environment and read it back with
+  # `system attribute` inside a quoted heredoc, rather than letting bash
+  # interpolate it into the script text — keeps an unusual /dev path (or a
+  # symlinked pseudo-tty name) from breaking out of the AppleScript string.
+  ITERM_TAB_NAME=$(STACKNUDGE_TTY="$tty_path" osascript <<'APPLESCRIPT' 2>/dev/null || true
+set ttyPath to system attribute "STACKNUDGE_TTY"
 tell application "iTerm2"
   repeat with w in windows
     repeat with t in tabs of w
       repeat with s in sessions of t
-        if (tty of s) is equal to "$tty_path" then
+        if (tty of s) is equal to ttyPath then
           return name of s
         end if
       end repeat
@@ -503,11 +526,17 @@ notify_macos() {
   local project_name
   project_name=$(basename "$PWD")
   if [[ -n "$process_name" ]]; then
-    win_title=$(osascript \
+    # Pass the project name through the environment and read it back inside
+    # AppleScript via `system attribute`, rather than interpolating it into the
+    # script text — a directory named `foo" & do shell script "…` would
+    # otherwise close the string and inject AppleScript/shell. process_name is
+    # safe to interpolate (it comes from the fixed bundle-id allowlist above).
+    win_title=$(STACKNUDGE_PROJECT_NAME="$project_name" osascript \
+      -e "set projectName to system attribute \"STACKNUDGE_PROJECT_NAME\"" \
       -e "tell application \"System Events\"" \
       -e "  tell process \"${process_name}\"" \
       -e "    try" \
-      -e "      get title of first window whose title contains \"${project_name}\"" \
+      -e "      get title of first window whose title contains projectName" \
       -e "    end try" \
       -e "  end tell" \
       -e "end tell" 2>/dev/null)
