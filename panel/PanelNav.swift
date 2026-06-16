@@ -178,6 +178,19 @@ final class PanelNav: ObservableObject {
     // True while a probe is in-flight. Set by PanelController around the
     // fetch call so the UI can swap the footer status to "Syncing…".
     @Published var quotaSyncing:     Bool = false
+    // Set when a probe had a token but the request/parse failed (vs. simply
+    // having no Claude Code session). Drives the Usage tab's "quota unavailable"
+    // state so a silently-changed endpoint isn't read as "still loading".
+    // Cleared on the next successful probe.
+    @Published var quotaError:       String?
+    // True when the Claude token was read from the plaintext
+    // ~/.claude/.credentials.json rather than the Keychain — any same-user
+    // process can read that file. Drives a warning in Settings → Usage.
+    @Published var usingPlaintextCredentials: Bool = false
+    // Set when the event socket failed to bind at startup — the panel is then
+    // deaf to every agent notification. Drives the banner at the top of the
+    // Events tab so the failure isn't silent. Cleared when the socket binds.
+    @Published var listenerError:    String?
     // Per-Claude-session context-window stats. Keyed by Claude's
     // session_id UUID (NudgeEvent.claudeSessionID), populated by
     // PanelController whenever an event arrives with a transcript_path.

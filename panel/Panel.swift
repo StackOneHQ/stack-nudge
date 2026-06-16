@@ -219,6 +219,9 @@ struct PanelContentView: View {
 
     private var eventsBody: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if let error = nav.listenerError {
+                listenerErrorBanner(error)
+            }
             if store.events.isEmpty {
                 emptyState
             } else {
@@ -227,6 +230,21 @@ struct PanelContentView: View {
             footer
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func listenerErrorBanner(_ error: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(error)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.12))
     }
 
     private var emptyState: some View {
@@ -1198,10 +1216,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         quotaProbe.fetch { [weak self] snapshot in
             guard let self else { return }
             self.nav.quotaSyncing = false
-            guard let snapshot else { return }
-            self.nav.quota = snapshot
-            self.nav.quotaLastUpdated = Date()
-            self.evaluateQuotaThresholds(snapshot)
+            self.nav.usingPlaintextCredentials = self.quotaProbe.usingPlaintextCredentials
+            if let snapshot {
+                self.nav.quota = snapshot
+                self.nav.quotaError = nil
+                self.nav.quotaLastUpdated = Date()
+                self.evaluateQuotaThresholds(snapshot)
+            } else if self.quotaProbe.lastProbeFailed {
+                self.nav.quotaError = "Quota data unavailable — the usage endpoint may have changed."
+            }
         }
         // Codex (ChatGPT-plan) rate limits — read locally from the newest
         // rollout, no network. Independent of the Anthropic probe above so one
@@ -2790,9 +2813,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         listener = EventListener(store: store, socketPath: socketPath)
         do {
             try listener?.start()
+            nav.listenerError = nil
         } catch {
             FileHandle.standardError.write(Data(
                 "stack-nudge-panel: listener failed: \(error)\n".utf8))
+            nav.listenerError =
+                "Event socket failed to start — agent notifications won't arrive. "
+                + "Restart StackNudge to retry. (\(error))"
         }
     }
 }
