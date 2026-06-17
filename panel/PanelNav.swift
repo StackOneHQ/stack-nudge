@@ -821,6 +821,8 @@ final class PanelNav: ObservableObject {
         if !quotaTrackingEnabled {
             quota = nil
             quotaLastUpdated = nil
+            quotaError = nil
+            usingPlaintextCredentials = false
         }
     }
 

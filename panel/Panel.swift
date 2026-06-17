@@ -310,7 +310,7 @@ struct PanelContentView: View {
                 // snoozable rows, so the dim state matches behavior.
                 FooterHint(label: "Snooze",  keys: ["S"])
                     .opacity(snoozeEnabled ? 1.0 : 0.35)
-                FooterHint(label: "Dismiss", keys: ["⌫"])
+                FooterHint(label: dismissLabel, keys: ["⌫"])
                 if nav.compactMode { FooterHint(label: "Compact", keys: ["M"]) }
                 FooterHint(label: "Hide", keys: ["Esc"])
             }
@@ -325,6 +325,14 @@ struct PanelContentView: View {
     private var primaryActionLabel: String? {
         guard let event = store.selectedEvent else { return nil }
         return event.kind == .permission ? "Approve" : "Open editor"
+    }
+
+    // ⌫ denies a blocking permission (writes "deny" to its FIFO); for any other
+    // event it's a plain dismiss. Label it to match so the gesture isn't a surprise.
+    private var dismissLabel: String {
+        guard let event = store.selectedEvent,
+              event.kind == .permission, event.hasActionButton else { return "Dismiss" }
+        return "Deny"
     }
 }
 
@@ -1394,14 +1402,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // expansion automatically once the action count exceeds two.
         let allow = UNNotificationAction(identifier: "ALLOW",
                                           title: "Allow", options: [])
+        let deny = UNNotificationAction(identifier: "DENY",
+                                         title: "Deny", options: [])
         let snooze5 = UNNotificationAction(identifier: "SNOOZE_5M",
                                             title: "Snooze 5 min", options: [])
         let snooze15 = UNNotificationAction(identifier: "SNOOZE_15M",
                                              title: "Snooze 15 min", options: [])
+        // .customDismissAction routes a swipe-away through didReceive (as
+        // UNNotificationDismissActionIdentifier) so we can resolve a blocking
+        // permission's FIFO instead of leaving the hook hung to its timeout.
         let permCategory = UNNotificationCategory(identifier: "PERMISSION",
-                                                   actions: [allow, snooze5, snooze15],
+                                                   actions: [allow, deny, snooze5, snooze15],
                                                    intentIdentifiers: [],
-                                                   options: [])
+                                                   options: [.customDismissAction])
         let stopCategory = UNNotificationCategory(identifier: "STOP",
                                                    actions: [],
                                                    intentIdentifiers: [],
@@ -1967,19 +1980,29 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             break
         }
 
-        store.remove(id: event.id)
-        let approve = response.actionIdentifier == "ALLOW"
-
-        // If we have a FIFO, the source hook is blocking on it — write the
-        // decision and let Claude Code skip its own UI prompt entirely.
-        // No keystroke injection or window targeting needed.
-        if approve, let fifo = event.fifoPath {
-            DispatchQueue.global(qos: .userInitiated).async {
-                Self.writeFIFO(fifo, "allow")
+        // Resolve a blocking permission's FIFO from the chosen action so the
+        // agent never hangs to its 550s timeout: Allow → "allow"; Deny or a
+        // swipe-away dismiss → "deny". A plain body-tap (DEFAULT) on a blocking
+        // permission is left in the panel to decide there (not removed), so it
+        // falls through to focus the editor without resolving the decision.
+        if let fifo = event.fifoPath {
+            switch response.actionIdentifier {
+            case "ALLOW":
+                store.remove(id: event.id)
+                DispatchQueue.global(qos: .userInitiated).async { Self.writeFIFO(fifo, "allow") }
+                return
+            case "DENY", UNNotificationDismissActionIdentifier:
+                store.remove(id: event.id)
+                DispatchQueue.global(qos: .userInitiated).async { Self.writeFIFO(fifo, "deny") }
+                return
+            default:
+                break  // body tap: keep the event in the panel, focus editor below
             }
-            return
+        } else {
+            store.remove(id: event.id)
         }
 
+        let approve = response.actionIdentifier == "ALLOW"
         guard let bundleID = event.bundleID else { return }
 
         // Hide the app first so the system restores focus to the previous
@@ -2563,13 +2586,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
         let sendApproval = approve && event.hasActionButton
 
-        // FIFO path = the source hook is blocking on a permission decision.
-        // Write the decision (allow or deny) and we're done — the agent consumes
-        // it and skips its own UI prompt. Previously only "allow" was written, so
-        // a Deny left the hook blocked until its 550s timeout.
-        if let fifo = event.fifoPath {
+        // Approve a blocking permission by writing "allow" to its FIFO; the agent
+        // then skips its own prompt. Deny is the Dismiss gesture (see
+        // dismissSelected), NOT this path — so 'O' (approve:false, "Open editor")
+        // falls through to focusing the editor without resolving the decision.
+        if sendApproval, let fifo = event.fifoPath {
             DispatchQueue.global(qos: .userInitiated).async {
-                Self.writeFIFO(fifo, approve ? "allow" : "deny")
+                Self.writeFIFO(fifo, "allow")
             }
             return
         }
@@ -2589,8 +2612,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     }
 
     private func dismissSelected() {
-        guard let id = store.selectedID else { return }
-        store.remove(id: id)
+        guard let event = store.selectedEvent else { return }
+        // Dismissing a permission the hook is blocking on = deny it, so the
+        // agent gets an answer instead of hanging to its 550s timeout.
+        if let fifo = event.fifoPath {
+            DispatchQueue.global(qos: .userInitiated).async {
+                Self.writeFIFO(fifo, "deny")
+            }
+        }
+        store.remove(id: event.id)
         // Auto-close once the list empties, unless the user opted to keep the
         // panel open (Settings → Keep open when empty).
         if store.events.isEmpty, !nav.keepOpenWhenEmpty { hidePanel() }
