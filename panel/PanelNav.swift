@@ -55,6 +55,22 @@ enum CompactCorner: String, CaseIterable {
     }
 }
 
+// What the pill's headline area displays when no busy session / recent event
+// is preempting. `.sessions` is the original behavior; `.usage` swaps in a
+// usage display (5h + 7d quota bars + reset countdown) for users who'd
+// rather see quota at-a-glance than session names.
+enum CompactContent: String, CaseIterable {
+    case sessions
+    case usage
+
+    var label: String {
+        switch self {
+        case .sessions: return "Sessions"
+        case .usage:    return "Usage"
+        }
+    }
+}
+
 enum MascotKind: String, CaseIterable {
     case robot
     case cat
@@ -88,7 +104,7 @@ enum GithubSignIn: Equatable {
 enum SettingsRow: Hashable {
     case update, hotkey
     case banner, muteWhenFocused, pinPanel, keepOpenWhenEmpty, launchAtLogin
-    case widget, widgetCorner, widgetOpacity, mascot
+    case widget, widgetCorner, widgetOpacity, widgetContent, mascot
     case soundEnabled, agentDoneSound, permissionSound
     case voiceEnabled, voice, voiceSpeed, downloadVoiceModel
     case quotaTracking, quotaAlerts, alertThreshold, pollFrequency, contextAlert, showRemaining
@@ -435,6 +451,11 @@ final class PanelNav: ObservableObject {
     // the controller's compact-aware code; just don't expose a toggle.
     @Published var compactMode:   Bool = true
     @Published var compactCorner: CompactCorner = .topRight
+    // What the pill's headline area shows. `.sessions` = current behavior
+    // (busy / event / cycling / most-recent / "watching"). `.usage` swaps
+    // the headline for a usage display (5h + 7d bar fills + reset
+    // countdown) — busy session and recent events still preempt for urgency.
+    @Published var compactContent: CompactContent = .sessions
     @Published var mascot:        MascotKind = .robot
     // Pill window alpha when at rest. 1.0 = fully opaque; lower values
     // let the desktop show through so the widget recedes. Applied
@@ -538,7 +559,7 @@ final class PanelNav: ObservableObject {
         if updateAvailable != nil { rows.append(.update) }
         rows += [.hotkey,
                  .banner, .muteWhenFocused, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin,
-                 .widget, .widgetCorner, .widgetOpacity, .mascot,
+                 .widget, .widgetCorner, .widgetOpacity, .widgetContent, .mascot,
                  .soundEnabled, .agentDoneSound, .permissionSound,
                  .voiceEnabled]
         rows += voiceModelCached ? [.voice, .voiceSpeed] : [.downloadVoiceModel]
@@ -615,6 +636,8 @@ final class PanelNav: ObservableObject {
         compactMode   = ConfigFile.bool(config, "STACKNUDGE_COMPACT_MODE", default: true)
         compactCorner = CompactCorner(rawValue: config["STACKNUDGE_COMPACT_CORNER"] ?? "")
             ?? .topRight
+        compactContent = CompactContent(rawValue: config["STACKNUDGE_COMPACT_CONTENT"] ?? "")
+            ?? .sessions
         mascot        = MascotKind(rawValue: config["STACKNUDGE_MASCOT"] ?? "") ?? .robot
         let rawAlpha = Double(config["STACKNUDGE_COMPACT_ALPHA"] ?? "") ?? 1.0
         compactAlpha = Self.compactAlphaOptions.min(by: { abs($0 - rawAlpha) < abs($1 - rawAlpha) }) ?? 1.0
@@ -904,6 +927,12 @@ final class PanelNav: ObservableObject {
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
             compactAlpha = list[next]
             ConfigFile.write(key: "STACKNUDGE_COMPACT_ALPHA", value: String(format: "%.2f", compactAlpha))
+        case .widgetContent:
+            let list = CompactContent.allCases
+            let idx = list.firstIndex(of: compactContent) ?? 0
+            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+            compactContent = list[next]
+            ConfigFile.write(key: "STACKNUDGE_COMPACT_CONTENT", value: compactContent.rawValue)
         case .mascot:
             let list = MascotKind.allCases
             let idx = list.firstIndex(of: mascot) ?? 0

@@ -31,15 +31,30 @@ struct CompactView: View {
     private static let cyclePeriod: TimeInterval = 5.0
 
     var body: some View {
-        HStack(spacing: 10) {
-            gaugeCluster
-            separator
-            headline
-            Spacer(minLength: 4)
-            sessionBadge
-            expandButton
+        Group {
+            if nav.compactContent == .usage {
+                // Mini widget: gauge ring (5h%) + reset countdown +
+                // expand button. No mascot, no session count, no
+                // headline. Stays mini even during busy/event states —
+                // the user explicitly picked a focused usage view.
+                HStack(spacing: 6) {
+                    gaugeCluster
+                    Spacer(minLength: 0)
+                    expandButton
+                }
+                .padding(.horizontal, 4)
+            } else {
+                HStack(spacing: 10) {
+                    gaugeCluster
+                    separator
+                    headline
+                    Spacer(minLength: 4)
+                    sessionBadge
+                    expandButton
+                }
+                .padding(.horizontal, 12)
+            }
         }
-        .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(pillBackground)
         .overlay(ripple)
@@ -79,12 +94,16 @@ struct CompactView: View {
     // MARK: - Gauge cluster (5h gauge + 7d + reset countdown)
 
     private var gaugeCluster: some View {
+        gaugeClusterBody(size: nav.compactContent == .usage ? 52 : 42)
+    }
+
+    private func gaugeClusterBody(size: CGFloat) -> some View {
         HStack(spacing: 6) {
             ZStack {
                 if !nav.compactDragging {
                     Circle()
                         .fill(urgencyColor.opacity(0.18))
-                        .frame(width: 44, height: 44)
+                        .frame(width: size + 2, height: size + 2)
                         .blur(radius: 8)
                 }
                 QuotaGauge(
@@ -97,15 +116,62 @@ struct CompactView: View {
                     paused:   nav.compactDragging,
                     showRemaining: nav.quotaShowRemaining
                 )
-                .frame(width: 42, height: 42)
+                .frame(width: size, height: size)
             }
 
+            // On hover, the reset countdown swaps with a compact legend
+            // showing both ring percentages — same horizontal slot, no
+            // layout shift, no clipping at the pill edge. At rest the
+            // countdown is back.
+            sideText
+        }
+        // Hover pop: scale + tiny brightness lift so the chart visibly
+        // responds when the cursor lands on the pill. Subtle enough not
+        // to distract; eases on enter and exit. Gated on !dragging so we
+        // don't fight AppKit's drag handler.
+        .scaleEffect(isHovering && !nav.compactDragging ? 1.07 : 1.0)
+        .brightness(isHovering && !nav.compactDragging ? 0.06 : 0)
+        .animation(.easeInOut(duration: 0.18), value: isHovering)
+        // Native macOS tooltip — discoverable without any visual chrome at
+        // rest. Pairs with the inline legend below for instant "which
+        // ring is which" recognition.
+        .help("Inner ring: 5h session quota · Outer ring: 7d weekly quota")
+    }
+
+    // Side text next to the gauge: hover → legend (two-line: "5h 62%"
+    // above "7d 21%"), resting → reset countdown ("1h41m"). Crossfade
+    // between the two so the swap reads as continuous, not jarring.
+    // Frame height pinned to the gauge so both states center on the same
+    // y-axis regardless of which is showing.
+    @ViewBuilder
+    private var sideText: some View {
+        let show = isHovering && !nav.compactDragging
+        let size: CGFloat = nav.compactContent == .usage ? 52 : 42
+        ZStack(alignment: .center) {
             if let reset = nav.quota?.fiveHour?.resetsAt {
                 Text(Self.shortDuration(until: reset))
                     .font(.system(size: 9).monospacedDigit())
                     .foregroundStyle(.tertiary)
+                    .opacity(show ? 0 : 1)
             }
+            hoverLegend
+                .opacity(show ? 1 : 0)
         }
+        .frame(height: size, alignment: .center)
+        .animation(.easeInOut(duration: 0.18), value: show)
+    }
+
+    private var hoverLegend: some View {
+        let fiveText  = nav.quota?.fiveHour.map  { "5h \(Int($0.utilization.rounded()))%" } ?? "5h —"
+        let sevenText = nav.quota?.sevenDay.map { "7d \(Int($0.utilization.rounded()))%" } ?? "7d —"
+        return VStack(alignment: .leading, spacing: 1) {
+            Text(fiveText)
+            Text(sevenText)
+        }
+        .font(.system(size: 9, weight: .medium).monospacedDigit())
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .fixedSize()
     }
 
     // MARK: - Headline

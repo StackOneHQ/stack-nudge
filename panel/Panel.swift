@@ -749,6 +749,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             .removeDuplicates()
             .sink { [weak self] _ in self?.applyCompactAlpha() }
             .store(in: &cancellables)
+        // Re-apply pill layout when the user toggles Usage ↔ Sessions so
+        // the window resizes between the full pill and the mini gauge.
+        nav.$compactContent
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] _ in self?.applyCompactLayout() }
+            .store(in: &cancellables)
         store.maxEventsPerSession = nav.eventsPerSession
         nav.$eventsPerSession
             .removeDuplicates()
@@ -915,7 +922,20 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // MARK: - Compact widget layout
 
     private static let compactWidgetSize = NSSize(width: 320, height: 56)
+    // Mini-widget size used when nav.compactContent == .usage. The Usage
+    // pill drops the mascot + session badge + headline and shows only the
+    // gauge cluster, so it can comfortably shrink to a small fixed footprint.
+    private static let compactWidgetUsageSize = NSSize(width: 150, height: 66)
     private static let compactWidgetInset: CGFloat = 14
+
+    // Pick the right pill window size based on what the pill is rendering.
+    // Sessions = full 320×56 with mascot + headline + badge; Usage = the
+    // smaller 168×44 mini widget showing only the gauge cluster.
+    private var compactWidgetSizeForMode: NSSize {
+        nav.compactContent == .usage
+            ? Self.compactWidgetUsageSize
+            : Self.compactWidgetSize
+    }
 
     // Apply window size + origin appropriate to the current compact-mode
     // state. Called whenever nav.compactMode or nav.compactExpanded changes
@@ -925,7 +945,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             // Widget: shrink + pin to the chosen corner, float above
             // everything, follow the user across spaces. Transparent
             // window background so the SwiftUI Capsule shows through.
-            let size = Self.compactWidgetSize
+            let size = compactWidgetSizeForMode
             // Lower the minimum content size below the widget dimensions
             // so AppKit doesn't enforce the original 560x260 floor after
             // a system event like screen reconfiguration or lock/unlock.
