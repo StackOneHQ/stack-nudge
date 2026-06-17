@@ -2616,14 +2616,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // target's key window.
     private func actOnSelected(approve: Bool) {
         guard let event = store.selectedEvent else { return }
-        store.remove(id: event.id)
-        // Stay on the panel if there are more events to act on; otherwise
-        // close so the system frontmost reverts naturally and the approval
-        // keystroke lands in the target app's key window (see comment above
-        // about why hiding must precede the keystroke dispatch).
-        if store.events.isEmpty { hidePanel() }
-
         let sendApproval = approve && event.hasActionButton
+
+        // A blocking permission opened via 'O' (approve:false, "Open editor")
+        // must stay in the panel so the user can still resolve it (Dismiss →
+        // deny); removing it would orphan the hook for ~550s with no recovery
+        // path. Approvals — and any event without a pending FIFO — are removed
+        // as before. Stay on the panel if other events remain; otherwise close
+        // so the system frontmost reverts naturally and the approval keystroke
+        // lands in the target app's key window (see comment above re: hiding).
+        if sendApproval || event.fifoPath == nil {
+            store.remove(id: event.id)
+            if store.events.isEmpty { hidePanel() }
+        }
 
         // Approve a blocking permission by writing "allow" to its FIFO; the agent
         // then skips its own prompt. Deny is the Dismiss gesture (see

@@ -176,6 +176,22 @@ private struct NudgeEventDTO: Decodable {
     let claude_session_id: String?
     let transcript_path: String?
 
+    // Only accept a fifo_path that looks like one of our permission FIFOs AND
+    // is actually a FIFO on disk. The socket is a trust boundary: any same-uid
+    // process that can write it could otherwise supply an arbitrary path, and
+    // the panel's writeFIFO would then clobber a regular file or deliver a
+    // fabricated allow/deny to the agent. We drop just the path (not the whole
+    // event) on failure, so the nudge still shows but can't auto-resolve.
+    private static func validatedFifoPath(_ path: String?) -> String? {
+        guard let path,
+              path.contains("/stack-nudge-perm."),
+              (path as NSString).lastPathComponent == "fifo"
+        else { return nil }
+        var st = stat()
+        guard stat(path, &st) == 0, (st.st_mode & S_IFMT) == S_IFIFO else { return nil }
+        return path
+    }
+
     func toNudgeEvent() -> NudgeEvent {
         NudgeEvent(
             agent: agent,
@@ -195,7 +211,7 @@ private struct NudgeEventDTO: Decodable {
             termProgram: term_program,
             sessionID: session_id,
             itermTabName: iterm_tab_name,
-            fifoPath: fifo_path,
+            fifoPath: Self.validatedFifoPath(fifo_path),
             voiceMessage: voice_message,
             soundName: sound_name,
             bypassMute: bypass_mute ?? false,
