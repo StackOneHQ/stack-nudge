@@ -37,11 +37,12 @@ struct CompactView: View {
                 // expand button. No mascot, no session count, no
                 // headline. Stays mini even during busy/event states —
                 // the user explicitly picked a focused usage view.
-                HStack(spacing: 6) {
+                HStack(alignment: .center, spacing: 6) {
                     gaugeCluster
                     Spacer(minLength: 0)
                     expandButton
                 }
+                .frame(maxHeight: .infinity)
                 .padding(.horizontal, 4)
             } else {
                 HStack(spacing: 10) {
@@ -141,13 +142,19 @@ struct CompactView: View {
     // Side text next to the gauge: hover → legend (two-line: "5h 62%"
     // above "7d 21%"), resting → reset countdown ("1h41m"). Crossfade
     // between the two so the swap reads as continuous, not jarring.
-    // Frame height pinned to the gauge so both states center on the same
-    // y-axis regardless of which is showing.
+    // We pin the ZStack frame to the HOVER state's natural height (the
+    // taller two-line legend) so the resting countdown sits at the same
+    // y-center as it does mid-hover — no jitter when the cursor lands.
     @ViewBuilder
     private var sideText: some View {
         let show = isHovering && !nav.compactDragging
-        let size: CGFloat = nav.compactContent == .usage ? 52 : 42
         ZStack(alignment: .center) {
+            // Invisible sizer: always-rendered hoverLegend at 0 opacity
+            // reserves the slot's intrinsic height so the visible content
+            // (countdown OR legend) centers within a stable box.
+            hoverLegend
+                .opacity(0)
+                .accessibilityHidden(true)
             if let reset = nav.quota?.fiveHour?.resetsAt {
                 Text(Self.shortDuration(until: reset))
                     .font(.system(size: 9).monospacedDigit())
@@ -157,7 +164,6 @@ struct CompactView: View {
             hoverLegend
                 .opacity(show ? 1 : 0)
         }
-        .frame(height: size, alignment: .center)
         .animation(.easeInOut(duration: 0.18), value: show)
     }
 
