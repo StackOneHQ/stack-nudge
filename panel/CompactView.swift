@@ -33,10 +33,6 @@ struct CompactView: View {
     var body: some View {
         Group {
             if nav.compactContent == .usage {
-                // Mini widget: gauge ring (5h%) + reset countdown +
-                // expand button. No mascot, no session count, no
-                // headline. Stays mini even during busy/event states —
-                // the user explicitly picked a focused usage view.
                 HStack(alignment: .center, spacing: 6) {
                     gaugeCluster
                     Spacer(minLength: 0)
@@ -120,38 +116,21 @@ struct CompactView: View {
                 .frame(width: size, height: size)
             }
 
-            // On hover, the reset countdown swaps with a compact legend
-            // showing both ring percentages — same horizontal slot, no
-            // layout shift, no clipping at the pill edge. At rest the
-            // countdown is back.
             sideText
         }
-        // Hover pop: scale + tiny brightness lift so the chart visibly
-        // responds when the cursor lands on the pill. Subtle enough not
-        // to distract; eases on enter and exit. Gated on !dragging so we
-        // don't fight AppKit's drag handler.
+        // Gated on !dragging so we don't fight AppKit's drag handler.
         .scaleEffect(isHovering && !nav.compactDragging ? 1.07 : 1.0)
         .brightness(isHovering && !nav.compactDragging ? 0.06 : 0)
         .animation(.easeInOut(duration: 0.18), value: isHovering)
-        // Native macOS tooltip — discoverable without any visual chrome at
-        // rest. Pairs with the inline legend below for instant "which
-        // ring is which" recognition.
         .help("Inner ring: 5h session quota · Outer ring: 7d weekly quota")
     }
 
-    // Side text next to the gauge: hover → legend (two-line: "5h 62%"
-    // above "7d 21%"), resting → reset countdown ("1h41m"). Crossfade
-    // between the two so the swap reads as continuous, not jarring.
-    // We pin the ZStack frame to the HOVER state's natural height (the
-    // taller two-line legend) so the resting countdown sits at the same
-    // y-center as it does mid-hover — no jitter when the cursor lands.
     @ViewBuilder
     private var sideText: some View {
         let show = isHovering && !nav.compactDragging
         ZStack(alignment: .center) {
-            // Invisible sizer: always-rendered hoverLegend at 0 opacity
-            // reserves the slot's intrinsic height so the visible content
-            // (countdown OR legend) centers within a stable box.
+            // Invisible sizer: reserves the legend's slot height so the
+            // resting countdown centers at the same y as it does on hover.
             hoverLegend
                 .opacity(0)
                 .accessibilityHidden(true)

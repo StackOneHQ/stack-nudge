@@ -139,10 +139,7 @@ struct SessionsView: View {
     }
 }
 
-// Top-level so PanelNav can reuse the same matcher when gating per-session
-// mute (see `PanelNav.isSessionMuted`). Identity rules match Sessions tab
-// rendering exactly — anything else would invite "muted in the UI, not
-// muted in the dispatch path" drift.
+// Top-level so PanelNav can reuse this when gating per-session mute.
 func sessionMatches(event: NudgeEvent, session: Session) -> Bool {
     guard Agent.canonical(event.agent) == Agent.canonical(session.agent) else {
         return false

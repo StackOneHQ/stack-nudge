@@ -755,8 +755,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             .removeDuplicates()
             .sink { [weak self] _ in self?.applyCompactAlpha() }
             .store(in: &cancellables)
-        // Re-apply pill layout when the user toggles Usage ↔ Sessions so
-        // the window resizes between the full pill and the mini gauge.
         nav.$compactContent
             .removeDuplicates()
             .dropFirst()
@@ -928,15 +926,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // MARK: - Compact widget layout
 
     private static let compactWidgetSize = NSSize(width: 320, height: 56)
-    // Mini-widget size used when nav.compactContent == .usage. The Usage
-    // pill drops the mascot + session badge + headline and shows only the
-    // gauge cluster, so it can comfortably shrink to a small fixed footprint.
     private static let compactWidgetUsageSize = NSSize(width: 150, height: 66)
     private static let compactWidgetInset: CGFloat = 14
 
-    // Pick the right pill window size based on what the pill is rendering.
-    // Sessions = full 320×56 with mascot + headline + badge; Usage = the
-    // smaller 168×44 mini widget showing only the gauge cluster.
     private var compactWidgetSizeForMode: NSSize {
         nav.compactContent == .usage
             ? Self.compactWidgetUsageSize
@@ -971,13 +963,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                                         .fullScreenAuxiliary, .ignoresCycle]
             panel.hasShadow = false  // SwiftUI Capsule provides its own
             panel.isMovableByWindowBackground = true  // drag to reposition
-            // Drop .resizable while in pill mode. Two reasons: (1) AppKit
-            // exposes invisible resize edges on borderless+resizable windows
-            // so dragging near the pill's edge would silently resize it;
-            // (2) macOS Sequoia's drag-to-screen-edge auto-tile feature only
-            // engages on resizable windows — disabling .resizable opts out
-            // of the "snap to half screen" gesture that fights our snap-to-
-            // nearest-corner behavior.
+            // Dropping .resizable kills invisible edge-resize handles and
+            // opts out of macOS Sequoia's drag-to-edge tile gesture.
             panel.styleMask.remove(.resizable)
             panel.orderFront(nil)
         } else {
@@ -1004,8 +991,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             panel.collectionBehavior = []
             panel.hasShadow = true
             panel.isMovableByWindowBackground = true
-            // Restore resizability for the full panel — users can drag edges
-            // and we save the size in positionPanel/loadSavedPanelSize.
             panel.styleMask.insert(.resizable)
             positionPanel()
             if nav.compactExpanded {
@@ -1816,13 +1801,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func postBannerIfNeeded(_ event: NudgeEvent) {
         let config = PanelConfig.load()
 
-        // Per-session mute: when the user has silenced a specific session
-        // from the Sessions tab (S key), drop banner + sound + voice for
-        // events tied to that session. Mascot/ripple still fire via the
-        // EventStore.onAppend → nav.reactToEvent path, which lives outside
-        // this function — the visual glance signal is preserved by design.
-        // `bypassMute` (if set on the event) skips this gate, matching
-        // the muteWhenFocused contract below.
+        // Mascot/ripple still fire — they're driven from onAppend, not here.
         if !event.bypassMute,
            nav.isSessionMuted(event: event, in: sessions.sessions) {
             return

@@ -55,10 +55,6 @@ enum CompactCorner: String, CaseIterable {
     }
 }
 
-// What the pill's headline area displays when no busy session / recent event
-// is preempting. `.sessions` is the original behavior; `.usage` swaps in a
-// usage display (5h + 7d quota bars + reset countdown) for users who'd
-// rather see quota at-a-glance than session names.
 enum CompactContent: String, CaseIterable {
     case sessions
     case usage
@@ -451,10 +447,6 @@ final class PanelNav: ObservableObject {
     // the controller's compact-aware code; just don't expose a toggle.
     @Published var compactMode:   Bool = true
     @Published var compactCorner: CompactCorner = .topRight
-    // What the pill's headline area shows. `.sessions` = current behavior
-    // (busy / event / cycling / most-recent / "watching"). `.usage` swaps
-    // the headline for a usage display (5h + 7d bar fills + reset
-    // countdown) — busy session and recent events still preempt for urgency.
     @Published var compactContent: CompactContent = .sessions
     @Published var mascot:        MascotKind = .robot
     // Pill window alpha when at rest. 1.0 = fully opaque; lower values
@@ -503,12 +495,8 @@ final class PanelNav: ObservableObject {
     // event types we should wire.
     @Published var unwiredAgents:    [BootstrapAgent] = []
     @Published var dismissedAgents:  Set<String>      = []
-    // Per-session mute. Holds SessionPersistence keys
-    // ("agent::projectPath[::tabId]") of sessions whose banner/sound/voice
-    // are suppressed. Mascot reaction + pill ripple are intentionally
-    // unaffected — visual glance signals stay so the user still sees
-    // *something* fired. Persisted to ~/.stack-nudge/muted-sessions.json
-    // so a mute survives restart and PID churn.
+    // Mascot reaction + pill ripple stay unmuted by design — only banner /
+    // sound / voice are suppressed for events from these sessions.
     @Published var mutedSessions:    Set<String>      = []
     // Transient confirmation state. When the user clicks Set up on the
     // reconciliation banner, `recentlyWiredAgents` holds the agents we
@@ -723,9 +711,6 @@ final class PanelNav: ObservableObject {
         try? data.write(to: url, options: [.atomic])
     }
 
-    // Toggle mute for a session. No-op if the session has no stable key
-    // (no projectPath) — there's no way to remember the choice across
-    // restart, so silently ignoring beats a half-working toggle.
     func toggleMute(for session: Session) {
         guard let key = SessionPersistence.key(for: session) else { return }
         if mutedSessions.contains(key) {
@@ -741,11 +726,8 @@ final class PanelNav: ObservableObject {
         return mutedSessions.contains(key)
     }
 
-    // Lookup helper for the notification dispatch path. Resolves an event
-    // to a session via the same matcher SessionsView uses, then checks
-    // the session's persistence key against `mutedSessions`. Returns
-    // false when no session matches (let the event through — better to
-    // notify on something we can't classify than to silently drop it).
+    // Unmatched events fall through unmuted — better to notify on
+    // something we can't classify than to silently drop it.
     func isSessionMuted(event: NudgeEvent, in sessions: [Session]) -> Bool {
         guard let match = sessions.first(where: { sessionMatches(event: event, session: $0) }) else {
             return false

@@ -276,19 +276,11 @@ agent_supports_decision() {
   esac
 }
 
-# True when the permission event is really an agent-initiated question to
-# the user (multi-select / open prompt) rather than a tool-permission
-# request. Pressing Approve in the panel for a question writes "allow" to
-# the FIFO — which CC interprets as "press Enter on whatever option is
-# highlighted", making it pick a default and continue without the user's
-# real answer. By emitting has_action=false for these, Enter in the panel
-# falls through to "focus editor" and the user types the answer in the
-# terminal as intended.
-#
-# Claude Code is the only agent we can classify today — its tool_name is
-# AskUserQuestion. Codex doesn't expose a tool_name on its question path
-# (Notification hook with a type discriminator, still being probed);
-# Antigravity needs an Elicitation event we don't yet subscribe to.
+# Agent-initiated question (multi-select / open prompt), not a tool
+# permission. Approving in the panel would write "allow" to the FIFO,
+# which CC interprets as "press Enter on the highlighted option" — making
+# it pick a default. By emitting has_action=false, panel Enter falls
+# through to focusing the editor so the user answers in the terminal.
 is_question_event() {
   [[ "$AGENT" != "claude-code" ]] && return 1
   command -v jq &>/dev/null || return 1
