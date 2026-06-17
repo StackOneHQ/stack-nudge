@@ -113,7 +113,11 @@ struct PhraseStore {
         let pipe = Pipe()
         task.standardOutput = pipe
         task.standardError  = Pipe()
-        do { try task.run() } catch { return [:] }
+        do { try task.run() } catch {
+            FileHandle.standardError.write(Data(
+                "stack-nudge: failed to load phrase defaults for \(lang): \(error)\n".utf8))
+            return [:]
+        }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         task.waitUntilExit()
 

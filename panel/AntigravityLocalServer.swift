@@ -46,7 +46,10 @@ enum AntigravityLocalServer {
             status = (response as? HTTPURLResponse)?.statusCode ?? 0
             semaphore.signal()
         }.resume()
-        _ = semaphore.wait(timeout: .now() + 5)
+        // Backstop above URLSession's own resource timeout (6s) so the request's
+        // completion handler is what releases the wait — not a shorter deadline
+        // that returns while the dataTask is still running.
+        _ = semaphore.wait(timeout: .now() + 8)
         return status == 200 ? payload : nil
     }
 

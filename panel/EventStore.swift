@@ -167,7 +167,7 @@ final class EventStore: ObservableObject {
         // identical one landed within the dedup window.
         let dedupWindow: TimeInterval = 2
         if events.contains(where: { existing in
-            event.timestamp.timeIntervalSince(existing.timestamp) < dedupWindow
+            abs(event.timestamp.timeIntervalSince(existing.timestamp)) < dedupWindow
                 && existing.agent == event.agent
                 && existing.kind == event.kind
                 && existing.message == event.message

@@ -163,16 +163,17 @@ final class Updater {
                                           expectedSize: asset.size)
         appendLog("Downloaded to \(tarballURL.path)")
 
-        // 3. Verify checksum if a sidecar was published.
-        if let sha = shaAsset {
-            setPhase(.verifying)
-            try verifyChecksum(tarballURL: tarballURL,
-                               shaAssetURL: sha.downloadURL,
-                               assetName: asset.name)
-            appendLog("Checksum OK")
-        } else {
-            appendLog("No .sha256 sidecar — skipping checksum (release isn't yet wired for it)")
+        // 3. Verify checksum. Every release publishes a .sha256 sidecar
+        //    (release.yml), so a missing one means a tampered or incomplete
+        //    release — refuse rather than install an unverified artifact.
+        guard let sha = shaAsset else {
+            throw UpdateError.checksumSidecarMissing(assetName: asset.name)
         }
+        setPhase(.verifying)
+        try verifyChecksum(tarballURL: tarballURL,
+                           shaAssetURL: sha.downloadURL,
+                           assetName: asset.name)
+        appendLog("Checksum OK")
 
         // 4. Extract.
         setPhase(.extracting)
@@ -576,6 +577,7 @@ enum UpdateError: LocalizedError {
     case downloadHTTP(status: Int)
     case downloadSizeMismatch(expected: Int, got: Int)
     case checksumFetchFailed
+    case checksumSidecarMissing(assetName: String)
     case checksumMismatch(expected: String, actual: String, assetName: String)
     case extractFailed(stderr: String)
     case swapFailed(underlying: Error)
@@ -594,6 +596,8 @@ enum UpdateError: LocalizedError {
             return "Downloaded \(got) bytes, expected \(expected) bytes."
         case .checksumFetchFailed:
             return "Couldn't fetch the .sha256 sidecar for the release artifact."
+        case .checksumSidecarMissing(let assetName):
+            return "No .sha256 sidecar published for \(assetName) — refusing to install an unverified update."
         case .checksumMismatch(let expected, let actual, let assetName):
             return "Checksum mismatch for \(assetName). Expected \(expected), got \(actual)."
         case .extractFailed(let stderr):

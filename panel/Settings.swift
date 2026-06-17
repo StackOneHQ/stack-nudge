@@ -82,6 +82,14 @@ struct SettingsView: View {
                             row(.pollFrequency, label: "Poll frequency",  kind: .cycle,  value: "\(nav.quotaPollMinutes) min",            enabled: nav.quotaTrackingEnabled)
                             row(.contextAlert,  label: "Context alert at", kind: .cycle, value: contextAlertLabel)
                             row(.showRemaining, label: "Show remaining",   kind: .toggle, value: nav.quotaShowRemaining ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
+                            if nav.usingPlaintextCredentials {
+                                Text("⚠︎ Reading the Claude token from ~/.claude/.credentials.json (plaintext) — any process running as you can read it. Delete that file to fall back to the Keychain.")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                                    .padding(.horizontal, 14)
+                                    .padding(.top, 2)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
 
                         section("Tickets") {

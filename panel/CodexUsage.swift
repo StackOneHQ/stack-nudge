@@ -29,10 +29,15 @@ final class CodexQuotaProbe {
     private var cacheKey: String?
     private var cached: CodexQuotaSnapshot?
 
+    // Serialises read() so overlapping polls — the 60s/5min timer firing while a
+    // prior fetch is still doing disk I/O on a large ~/.codex/sessions tree —
+    // can't race on cacheKey/cached. These are only ever touched on this queue.
+    private let probeQueue = DispatchQueue(label: "stack-nudge.codex-quota")
+
     // Calls completion on the main queue. File IO runs off-main.
     func fetch(completion: @escaping (CodexQuotaSnapshot?) -> Void) {
         let dir = sessionsDir
-        DispatchQueue.global(qos: .utility).async { [weak self] in
+        probeQueue.async { [weak self] in
             let result = self?.read(dir: dir) ?? nil
             DispatchQueue.main.async { completion(result) }
         }

@@ -71,8 +71,17 @@ enum GitHubAPI {
 
     static func parse(_ json: String) -> PullRequestInfo? {
         guard let data = json.data(using: .utf8),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let node = firstPRNode(root),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        // GraphQL returns HTTP 200 with {"data":null,"errors":[…]} on failures
+        // (bad token, rate limit, field errors). Surface them instead of
+        // silently treating the response as "no PR found".
+        if let errors = root["errors"] as? [[String: Any]], !errors.isEmpty {
+            let messages = errors.compactMap { $0["message"] as? String }.joined(separator: "; ")
+            FileHandle.standardError.write(Data("stack-nudge: GitHub GraphQL errors: \(messages)\n".utf8))
+            return nil
+        }
+        guard let node = firstPRNode(root),
               let number = node["number"] as? Int,
               let url = node["url"] as? String,
               let stateRaw = node["state"] as? String,
