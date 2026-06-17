@@ -276,6 +276,31 @@ agent_supports_decision() {
   esac
 }
 
+# True when the permission event is really an agent-initiated question to
+# the user (multi-select / open prompt) rather than a tool-permission
+# request. Pressing Approve in the panel for a question writes "allow" to
+# the FIFO — which CC interprets as "press Enter on whatever option is
+# highlighted", making it pick a default and continue without the user's
+# real answer. By emitting has_action=false for these, Enter in the panel
+# falls through to "focus editor" and the user types the answer in the
+# terminal as intended.
+#
+# Claude Code is the only agent we can classify today — its tool_name is
+# AskUserQuestion. Codex doesn't expose a tool_name on its question path
+# (Notification hook with a type discriminator, still being probed);
+# Antigravity needs an Elicitation event we don't yet subscribe to.
+is_question_event() {
+  [[ "$AGENT" != "claude-code" ]] && return 1
+  command -v jq &>/dev/null || return 1
+  [[ -z "$HOOK_JSON" ]] && return 1
+  local tool_name
+  tool_name=$(printf '%s' "$HOOK_JSON" | jq -r '.tool_name // empty' 2>/dev/null)
+  case "$tool_name" in
+    AskUserQuestion) return 0 ;;
+    *)               return 1 ;;
+  esac
+}
+
 # Bundled voice engine paths. stackvox 0.3.x consolidated the CLI — there
 # is no separate `stackvox-say` console script anymore; speech goes through
 # `stackvox say <text>` as a subcommand.
@@ -550,7 +575,7 @@ notify_macos() {
   # only agents the banner still shows; the user approves in the agent's own UI.
   local has_action="false"
   local fifo_path=""
-  if [[ "${EVENT}" == "permission" ]] && agent_supports_decision; then
+  if [[ "${EVENT}" == "permission" ]] && agent_supports_decision && ! is_question_event; then
     has_action="true"
     fifo_path=$(create_perm_fifo)
   fi
