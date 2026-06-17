@@ -927,6 +927,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                                         .fullScreenAuxiliary, .ignoresCycle]
             panel.hasShadow = false  // SwiftUI Capsule provides its own
             panel.isMovableByWindowBackground = true  // drag to reposition
+            // Drop .resizable while in pill mode. Two reasons: (1) AppKit
+            // exposes invisible resize edges on borderless+resizable windows
+            // so dragging near the pill's edge would silently resize it;
+            // (2) macOS Sequoia's drag-to-screen-edge auto-tile feature only
+            // engages on resizable windows — disabling .resizable opts out
+            // of the "snap to half screen" gesture that fights our snap-to-
+            // nearest-corner behavior.
+            panel.styleMask.remove(.resizable)
             panel.orderFront(nil)
         } else {
             // Full panel: restore saved size + saved origin. Keep
@@ -952,6 +960,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             panel.collectionBehavior = []
             panel.hasShadow = true
             panel.isMovableByWindowBackground = true
+            // Restore resizability for the full panel — users can drag edges
+            // and we save the size in positionPanel/loadSavedPanelSize.
+            panel.styleMask.insert(.resizable)
             positionPanel()
             if nav.compactExpanded {
                 NSApp.activate(ignoringOtherApps: true)
