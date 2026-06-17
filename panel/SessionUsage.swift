@@ -78,6 +78,14 @@ final class QuotaProbe {
     // token is cached. nil when the field isn't present.
     private var lastSubscriptionType: String?
 
+    // Surfaced to the UI by PanelController after each probe (both touched only
+    // on the main queue, like cachedToken). lastProbeFailed is true when we had
+    // a token but the request/parse failed — distinct from having no token at
+    // all. usingPlaintextCredentials is true when the token came from the
+    // plaintext credentials file rather than the Keychain.
+    private(set) var lastProbeFailed = false
+    private(set) var usingPlaintextCredentials = false
+
     init() {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.timeoutIntervalForRequest  = 10
@@ -98,6 +106,7 @@ final class QuotaProbe {
             cachedToken = fresh
             token = fresh
         } else {
+            lastProbeFailed = false
             completion(nil)
             return
         }
@@ -129,10 +138,16 @@ final class QuotaProbe {
                     FileHandle.standardError.write(Data(
                         "stack-nudge: /api/oauth/usage returned \(code)\n".utf8))
                 }
-                DispatchQueue.main.async { completion(nil) }
+                DispatchQueue.main.async {
+                    self?.lastProbeFailed = true
+                    completion(nil)
+                }
                 return
             }
-            DispatchQueue.main.async { completion(snapshot) }
+            DispatchQueue.main.async {
+                self?.lastProbeFailed = false
+                completion(snapshot)
+            }
         }.resume()
     }
 
@@ -144,7 +159,11 @@ final class QuotaProbe {
     // the Keychain item ~every 8h, wiping the ACL grant — anthropics/claude-code#22144,
     // closed as not planned) can opt in by writing the file at mode 0600.
     private func readAccessToken() -> String? {
-        if let token = readCredentialsFile() { return token }
+        if let token = readCredentialsFile() {
+            usingPlaintextCredentials = true
+            return token
+        }
+        usingPlaintextCredentials = false
         return readKeychainToken()
     }
 
@@ -450,17 +469,33 @@ struct UsageView: View {
 
     private var emptyState: some View {
         VStack(spacing: 10) {
-            ProgressView()
-                .controlSize(.small)
-            Text("Loading usage…")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            Text("Requires a signed-in Claude Code session, or a Codex session on a ChatGPT plan. The first Claude read may prompt the system keychain.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 280)
-                .fixedSize(horizontal: false, vertical: true)
+            if let error = nav.quotaError {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.title2)
+                    .foregroundStyle(.orange)
+                Text(error)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                Text("StackNudge reads an unofficial Claude usage endpoint; a Claude Code update can change its shape. This clears on its own once the endpoint is reachable and parseable again.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 280)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Loading usage…")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text("Requires a signed-in Claude Code session, or a Codex session on a ChatGPT plan. The first Claude read may prompt the system keychain.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 280)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.vertical, 24)

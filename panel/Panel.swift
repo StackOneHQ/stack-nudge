@@ -219,6 +219,9 @@ struct PanelContentView: View {
 
     private var eventsBody: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if let error = nav.listenerError {
+                listenerErrorBanner(error)
+            }
             if store.events.isEmpty {
                 emptyState
             } else {
@@ -227,6 +230,21 @@ struct PanelContentView: View {
             footer
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func listenerErrorBanner(_ error: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(error)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.12))
     }
 
     private var emptyState: some View {
@@ -1198,10 +1216,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         quotaProbe.fetch { [weak self] snapshot in
             guard let self else { return }
             self.nav.quotaSyncing = false
-            guard let snapshot else { return }
-            self.nav.quota = snapshot
-            self.nav.quotaLastUpdated = Date()
-            self.evaluateQuotaThresholds(snapshot)
+            self.nav.usingPlaintextCredentials = self.quotaProbe.usingPlaintextCredentials
+            if let snapshot {
+                self.nav.quota = snapshot
+                self.nav.quotaError = nil
+                self.nav.quotaLastUpdated = Date()
+                self.evaluateQuotaThresholds(snapshot)
+            } else if self.quotaProbe.lastProbeFailed {
+                self.nav.quotaError = "Quota data unavailable — the usage endpoint may have changed."
+            }
         }
         // Codex (ChatGPT-plan) rate limits — read locally from the newest
         // rollout, no network. Independent of the Anthropic probe above so one
@@ -1638,7 +1661,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                     userCode: response.userCode, verificationURI: response.verificationURI)
                 self.pollGithubSignIn(clientID: clientID,
                                       deviceCode: response.deviceCode,
-                                      interval: response.interval)
+                                      interval: response.interval,
+                                      deadline: Date().addingTimeInterval(TimeInterval(response.expiresIn)))
             }
         }
     }
@@ -1647,9 +1671,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     // One poll per `interval` seconds. Stops if the user cancelled (state left
     // awaitingApproval). On success, stores the token and kicks a PR refresh.
-    private func pollGithubSignIn(clientID: String, deviceCode: String, interval: Int) {
+    private func pollGithubSignIn(clientID: String, deviceCode: String, interval: Int, deadline: Date) {
         DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(max(1, interval))) { [weak self] in
             guard let self, case .awaitingApproval = self.nav.githubSignIn else { return }
+            // Enforce the device code's own expiry (RFC 8628 §3.5) rather than
+            // polling forever if the endpoint never returns expired_token.
+            if Date() >= deadline {
+                self.nav.githubSignIn = .failed("Code expired — try again")
+                return
+            }
             GitHubAuth.poll(clientID: clientID, deviceCode: deviceCode) { result in
                 DispatchQueue.main.async {
                     guard case .awaitingApproval = self.nav.githubSignIn else { return }
@@ -1660,9 +1690,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                         self.nav.githubSignIn = .idle
                         self.refreshPullRequests()
                     case .pending:
-                        self.pollGithubSignIn(clientID: clientID, deviceCode: deviceCode, interval: interval)
+                        self.pollGithubSignIn(clientID: clientID, deviceCode: deviceCode, interval: interval, deadline: deadline)
                     case .slowDown(let slower):
-                        self.pollGithubSignIn(clientID: clientID, deviceCode: deviceCode, interval: slower)
+                        // RFC 8628: back off by at least 5s; honour a larger server interval.
+                        self.pollGithubSignIn(clientID: clientID, deviceCode: deviceCode, interval: max(slower, interval + 5), deadline: deadline)
                     case .expired:
                         self.nav.githubSignIn = .failed("Code expired — try again")
                     case .denied:
@@ -2533,10 +2564,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         let sendApproval = approve && event.hasActionButton
 
         // FIFO path = the source hook is blocking on a permission decision.
-        // Write "allow" to it and we're done — Claude Code skips its UI prompt.
-        if sendApproval, let fifo = event.fifoPath {
+        // Write the decision (allow or deny) and we're done — the agent consumes
+        // it and skips its own UI prompt. Previously only "allow" was written, so
+        // a Deny left the hook blocked until its 550s timeout.
+        if let fifo = event.fifoPath {
             DispatchQueue.global(qos: .userInitiated).async {
-                Self.writeFIFO(fifo, "allow")
+                Self.writeFIFO(fifo, approve ? "allow" : "deny")
             }
             return
         }
@@ -2780,9 +2813,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         listener = EventListener(store: store, socketPath: socketPath)
         do {
             try listener?.start()
+            nav.listenerError = nil
         } catch {
             FileHandle.standardError.write(Data(
                 "stack-nudge-panel: listener failed: \(error)\n".utf8))
+            nav.listenerError =
+                "Event socket failed to start — agent notifications won't arrive. "
+                + "Restart StackNudge to retry. (\(error))"
         }
     }
 }
