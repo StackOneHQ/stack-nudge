@@ -95,48 +95,43 @@ struct PhraseStore {
         try? data.write(to: jsonURL, options: .atomic)
     }
 
-    // Read shipped defaults for a given language by sourcing the bash file
-    // and printing the arrays as JSON. We don't want to maintain two sources
-    // of truth for the defaults — they live in phrases/<lang>.sh.
+    // Read shipped defaults for a given language by parsing the phrase arrays
+    // out of phrases/<lang>.sh as DATA — never sourcing the file. The file lives
+    // under user-writable ~/.stack-nudge/phrases/, so the old `bash -c source`
+    // ran arbitrary shell in this long-lived, entitlement-holding process.
     static func defaults(lang: String) -> [PhrasePool: [String]] {
         let phrasesDir = (NSHomeDirectory() as NSString)
             .appendingPathComponent(".stack-nudge/phrases")
         let path = "\(phrasesDir)/\(lang).sh"
-        guard FileManager.default.fileExists(atPath: path) else { return [:] }
-
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/bin/bash")
-        task.arguments = [
-            "-c",
-            "source \"\(path)\"; printf '%s\\0' \"${TEMPLATES_RESPONSE[@]}\"; printf '\\0'; printf '%s\\0' \"${TEMPLATES_NOTIFICATION[@]}\"",
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return [:] }
+        return [
+            .response:     parseBashArray(named: "TEMPLATES_RESPONSE", in: text),
+            .notification: parseBashArray(named: "TEMPLATES_NOTIFICATION", in: text),
         ]
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        task.standardError  = Pipe()
-        do { try task.run() } catch {
-            FileHandle.standardError.write(Data(
-                "stack-nudge: failed to load phrase defaults for \(lang): \(error)\n".utf8))
-            return [:]
-        }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        task.waitUntilExit()
+    }
 
-        let parts = data.split(separator: 0x00, maxSplits: .max,
-                                omittingEmptySubsequences: false)
-        var responseItems: [String] = []
-        var notificationItems: [String] = []
-        var crossedBoundary = false
-        for part in parts {
-            if part.isEmpty {
-                if !crossedBoundary { crossedBoundary = true }
-                continue
+    // Extract the double-quoted string elements of a `NAME=( "…" "…" )` bash
+    // array literal. Pure text scan — no shell execution. Handles \" and \\
+    // escapes; a literal `)` inside a quoted phrase doesn't end the array.
+    static func parseBashArray(named name: String, in text: String) -> [String] {
+        guard let open = text.range(of: "\(name)=(") else { return [] }
+        var items: [String] = []
+        var current = ""
+        var inString = false
+        var escaped = false
+        for ch in text[open.upperBound...] {
+            if inString {
+                if escaped { current.append(ch); escaped = false }
+                else if ch == "\\" { escaped = true }
+                else if ch == "\"" { items.append(current); current = ""; inString = false }
+                else { current.append(ch) }
+            } else if ch == "\"" {
+                inString = true
+            } else if ch == ")" {
+                break
             }
-            let s = String(data: Data(part), encoding: .utf8) ?? ""
-            guard !s.isEmpty else { continue }
-            if !crossedBoundary { responseItems.append(s) }
-            else                 { notificationItems.append(s) }
         }
-        return [.response: responseItems, .notification: notificationItems]
+        return items
     }
 }
 

@@ -189,42 +189,75 @@ voice_phrase_for() {
     return
   fi
 
-  # shellcheck disable=SC1090
-  source "$lang_file"
+  # Parse the phrase arrays out of the file as DATA — never `source` it. The
+  # file lives in a user-writable install dir, so sourcing ran arbitrary shell
+  # on every hook event. extract_phrase_array does a pure text scan of the
+  # `NAME=( "…" "…" )` literal (handles \" and \\; a `)` inside a quote is safe).
+  extract_phrase_array() {
+    awk -v name="$2" '
+      BEGIN { active=0; instr=0; esc=0; cur=""; opener=name "=(" }
+      {
+        line=$0; i=1; n=length(line)
+        if (!active) {
+          if (substr(line,1,length(opener))==opener) { active=1; i=length(opener)+1 }
+          else next
+        }
+        for (; i<=n; i++) {
+          c=substr(line,i,1)
+          if (instr) {
+            if (esc) { cur=cur c; esc=0 }
+            else if (c=="\\") { esc=1 }
+            else if (c=="\"") { printf "%s%c", cur, 0; cur=""; instr=0 }
+            else { cur=cur c }
+          } else if (c=="\"") { instr=1 }
+          else if (c==")") { active=0; exit }
+        }
+      }
+    ' "$1"
+  }
+  local item
+  TEMPLATES_RESPONSE=()
+  TEMPLATES_NOTIFICATION=()
+  while IFS= read -r -d '' item; do TEMPLATES_RESPONSE+=("$item"); done \
+    < <(extract_phrase_array "$lang_file" TEMPLATES_RESPONSE)
+  while IFS= read -r -d '' item; do TEMPLATES_NOTIFICATION+=("$item"); done \
+    < <(extract_phrase_array "$lang_file" TEMPLATES_NOTIFICATION)
 
   # Layer user-managed phrases from phrases.user.json on top of the shipped
-  # arrays. Each pool can declare disabled defaults (skipped) and custom
-  # additions (appended). Quiet failure if jq isn't installed or the file's
-  # missing — the user just gets the unmodified defaults.
+  # arrays (disabled removals + custom additions). No `eval`: each pool's
+  # current items go in as positional args and the filtered result comes back
+  # NUL-delimited, so a custom phrase containing $(...) or a quote stays inert.
   local user_json="${HOME}/.stack-nudge/phrases.user.json"
   if [[ -f "$user_json" ]] && command -v jq >/dev/null 2>&1; then
-    # filter_pool <jq-path-prefix> <bash-array-name>
-    filter_pool() {
-      local pool="$1" arr="$2"
-      local disabled
+    apply_user_phrases() {
+      local pool="$1"; shift
+      local disabled d skip elem
+      local result=()
       disabled=$(jq -r --arg lang "$lang" --arg pool "$pool" \
                  '.[$lang][$pool].disabled[]?' "$user_json" 2>/dev/null)
-      if [[ -n "$disabled" ]]; then
-        local kept=()
-        local existing
-        eval "existing=(\"\${${arr}[@]}\")"
-        for existing_item in "${existing[@]}"; do
-          local skip=0
+      for elem in "$@"; do
+        skip=0
+        if [[ -n "$disabled" ]]; then
           while IFS= read -r d; do
-            [[ "$existing_item" == "$d" ]] && { skip=1; break; }
+            [[ "$elem" == "$d" ]] && { skip=1; break; }
           done <<< "$disabled"
-          [[ $skip -eq 0 ]] && kept+=("$existing_item")
-        done
-        eval "${arr}=(\"\${kept[@]}\")"
-      fi
-      local extra
-      while IFS= read -r extra; do
-        [[ -n "$extra" ]] && eval "${arr}+=(\"\$extra\")"
+        fi
+        [[ $skip -eq 0 ]] && result+=("$elem")
+      done
+      while IFS= read -r elem; do
+        [[ -n "$elem" ]] && result+=("$elem")
       done < <(jq -r --arg lang "$lang" --arg pool "$pool" \
                '.[$lang][$pool].custom[]?' "$user_json" 2>/dev/null)
+      [[ ${#result[@]} -gt 0 ]] && printf '%s\0' "${result[@]}"
     }
-    filter_pool "response"     TEMPLATES_RESPONSE
-    filter_pool "notification" TEMPLATES_NOTIFICATION
+    local tmp=()
+    while IFS= read -r -d '' item; do tmp+=("$item"); done \
+      < <(apply_user_phrases response "${TEMPLATES_RESPONSE[@]}")
+    TEMPLATES_RESPONSE=("${tmp[@]}")
+    tmp=()
+    while IFS= read -r -d '' item; do tmp+=("$item"); done \
+      < <(apply_user_phrases notification "${TEMPLATES_NOTIFICATION[@]}")
+    TEMPLATES_NOTIFICATION=("${tmp[@]}")
   fi
 
   local templates=()
