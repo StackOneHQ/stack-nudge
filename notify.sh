@@ -276,6 +276,23 @@ agent_supports_decision() {
   esac
 }
 
+# Agent-initiated question (multi-select / open prompt), not a tool
+# permission. Approving in the panel would write "allow" to the FIFO,
+# which CC interprets as "press Enter on the highlighted option" — making
+# it pick a default. By emitting has_action=false, panel Enter falls
+# through to focusing the editor so the user answers in the terminal.
+is_question_event() {
+  [[ "$AGENT" != "claude-code" ]] && return 1
+  command -v jq &>/dev/null || return 1
+  [[ -z "$HOOK_JSON" ]] && return 1
+  local tool_name
+  tool_name=$(printf '%s' "$HOOK_JSON" | jq -r '.tool_name // empty' 2>/dev/null)
+  case "$tool_name" in
+    AskUserQuestion) return 0 ;;
+    *)               return 1 ;;
+  esac
+}
+
 # Bundled voice engine paths. stackvox 0.3.x consolidated the CLI — there
 # is no separate `stackvox-say` console script anymore; speech goes through
 # `stackvox say <text>` as a subcommand.
@@ -550,7 +567,7 @@ notify_macos() {
   # only agents the banner still shows; the user approves in the agent's own UI.
   local has_action="false"
   local fifo_path=""
-  if [[ "${EVENT}" == "permission" ]] && agent_supports_decision; then
+  if [[ "${EVENT}" == "permission" ]] && agent_supports_decision && ! is_question_event; then
     has_action="true"
     fifo_path=$(create_perm_fifo)
   fi

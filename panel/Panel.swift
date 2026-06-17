@@ -296,7 +296,6 @@ struct PanelContentView: View {
     private var footer: some View {
         PageFooter {
             if store.events.isEmpty {
-                if nav.compactMode { FooterHint(label: "Compact", keys: ["M"]) }
                 FooterHint(label: "Hide", keys: ["Esc"])
             } else {
                 if let primary = primaryActionLabel {
@@ -311,7 +310,6 @@ struct PanelContentView: View {
                 FooterHint(label: "Snooze",  keys: ["S"])
                     .opacity(snoozeEnabled ? 1.0 : 0.35)
                 FooterHint(label: dismissLabel, keys: ["⌫"])
-                if nav.compactMode { FooterHint(label: "Compact", keys: ["M"]) }
                 FooterHint(label: "Hide", keys: ["Esc"])
             }
         }
@@ -757,6 +755,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             .removeDuplicates()
             .sink { [weak self] _ in self?.applyCompactAlpha() }
             .store(in: &cancellables)
+        nav.$compactContent
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] _ in self?.applyCompactLayout() }
+            .store(in: &cancellables)
         store.maxEventsPerSession = nav.eventsPerSession
         nav.$eventsPerSession
             .removeDuplicates()
@@ -923,7 +926,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // MARK: - Compact widget layout
 
     private static let compactWidgetSize = NSSize(width: 320, height: 56)
+    private static let compactWidgetUsageSize = NSSize(width: 150, height: 66)
     private static let compactWidgetInset: CGFloat = 14
+
+    private var compactWidgetSizeForMode: NSSize {
+        nav.compactContent == .usage
+            ? Self.compactWidgetUsageSize
+            : Self.compactWidgetSize
+    }
 
     // Apply window size + origin appropriate to the current compact-mode
     // state. Called whenever nav.compactMode or nav.compactExpanded changes
@@ -933,7 +943,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             // Widget: shrink + pin to the chosen corner, float above
             // everything, follow the user across spaces. Transparent
             // window background so the SwiftUI Capsule shows through.
-            let size = Self.compactWidgetSize
+            let size = compactWidgetSizeForMode
             // Lower the minimum content size below the widget dimensions
             // so AppKit doesn't enforce the original 560x260 floor after
             // a system event like screen reconfiguration or lock/unlock.
@@ -953,6 +963,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                                         .fullScreenAuxiliary, .ignoresCycle]
             panel.hasShadow = false  // SwiftUI Capsule provides its own
             panel.isMovableByWindowBackground = true  // drag to reposition
+            // Dropping .resizable kills invisible edge-resize handles and
+            // opts out of macOS Sequoia's drag-to-edge tile gesture.
+            panel.styleMask.remove(.resizable)
             panel.orderFront(nil)
         } else {
             // Full panel: restore saved size + saved origin. Keep
@@ -978,6 +991,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             panel.collectionBehavior = []
             panel.hasShadow = true
             panel.isMovableByWindowBackground = true
+            panel.styleMask.insert(.resizable)
             positionPanel()
             if nav.compactExpanded {
                 NSApp.activate(ignoringOtherApps: true)
@@ -1028,15 +1042,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // The hotkey/M paths call expandFromCompact directly and skip this
         // veto, so a deliberate keystroke still expands instantly.
         expandFromCompactUserGesture()
-    }
-
-    // Called from the "M" keystroke in Events/Sessions/Usage tabs to
-    // collapse back to the pill.
-    private func enterCompactMode() {
-        if nav.compactExpanded {
-            nav.compactExpanded = false
-            applyCompactLayout()
-        }
     }
 
     // Debounced snap: each move during a drag bumps the deadline forward.
@@ -1796,6 +1801,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func postBannerIfNeeded(_ event: NudgeEvent) {
         let config = PanelConfig.load()
 
+        // Mascot/ripple still fire — they're driven from onAppend, not here.
+        if !event.bypassMute,
+           nav.isSessionMuted(event: event, in: sessions.sessions) {
+            return
+        }
+
         if config.activateImmediately, let bundleID = event.bundleID {
             DispatchQueue.global(qos: .userInitiated).async {
                 AppActivator.activate(bundleID: bundleID,
@@ -2378,7 +2389,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 let pid = sessions.selectedPID ?? sessions.sessions.first?.pid
                 if let pid { sessions.startRenaming(pid) }
             case KeyCode.mKey where plain:
-                enterCompactMode()
+                toggleMuteSelectedSession()
             default:
                 return false
             }
@@ -2466,8 +2477,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 case KeyCode.pKey:
                     nav.toggleQuotaTracking()
                     if nav.quotaTrackingEnabled { syncQuotaNow() }
-                case KeyCode.mKey:
-                    enterCompactMode()
                 default:
                     break
                 }
@@ -2490,8 +2499,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 // after the keystroke — otherwise they'd wait for the next
                 // scheduled tick (up to the configured poll interval).
                 if nav.quotaTrackingEnabled { syncQuotaNow() }
-            case KeyCode.mKey:
-                enterCompactMode()
             default:
                 break
             }
@@ -2499,8 +2506,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
 
         // Tickets tab: ↑/↓ move the row selection, →/Enter open the selected
-        // row's ticket/PR link, M enters the widget, Esc hides. Other keys are
-        // swallowed so they don't leak through to the events store.
+        // row's ticket/PR link, Esc hides. Other keys are swallowed so they
+        // don't leak through to the events store.
         if nav.mode == .outcomes {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain else { return false }
@@ -2515,8 +2522,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 nav.activateSelectedOutcome()
             case KeyCode.delete, KeyCode.forwardDelete:
                 nav.dismissSelectedOutcome()
-            case KeyCode.mKey:
-                enterCompactMode()
             default:
                 break
             }
@@ -2552,8 +2557,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             actOnSelected(approve: false)
         case KeyCode.rKey, KeyCode.delete, KeyCode.forwardDelete:
             dismissSelected()
-        case KeyCode.mKey:
-            enterCompactMode()
         default:
             return false
         }
@@ -2662,6 +2665,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func killSelectedSession() {
         guard let pid = sessions.selectedPID else { return }
         sessions.killSession(pid)
+    }
+
+    private func toggleMuteSelectedSession() {
+        guard let pid = sessions.selectedPID,
+              let session = sessions.sessions.first(where: { $0.pid == pid }) else { return }
+        nav.toggleMute(for: session)
     }
 
     // Map a terminal/IDE process name to the launch-services bundle ID so

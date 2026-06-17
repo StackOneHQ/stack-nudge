@@ -111,7 +111,6 @@ struct OutcomesView: View {
                     FooterHint(label: "Open", keys: ["↵"])
                     FooterHint(label: "Remove", keys: ["⌫"])
                 }
-                if nav.compactMode { FooterHint(label: "Compact", keys: ["M"]) }
                 FooterHint(label: "Hide", keys: ["Esc"])
             }
         }

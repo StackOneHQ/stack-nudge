@@ -52,6 +52,7 @@ struct SessionsView: View {
                             activeNudgeCount: nudgeCount(for: session),
                             lastNudgeAt: lastNudgeAt(for: session),
                             transcriptStats: transcriptStats(for: session),
+                            isMuted: nav.isMuted(session),
                             onCommit: { store.commitRename() },
                             onCancel: { store.cancelRename() }
                         )
@@ -82,8 +83,8 @@ struct SessionsView: View {
                 FooterHint(label: "Select",  keys: ["↑", "↓"])
                 FooterHint(label: "Focus",   keys: ["⏎"])
                 FooterHint(label: "Rename",  keys: ["N"])
+                FooterHint(label: "Mute",    keys: ["M"])
                 FooterHint(label: "Kill",    keys: ["⌫"])
-                if nav.compactMode { FooterHint(label: "Compact", keys: ["M"]) }
                 FooterHint(label: "Back",    keys: ["Esc"])
             }
         }
@@ -134,29 +135,34 @@ struct SessionsView: View {
     }
 
     private func matches(event: NudgeEvent, session: Session) -> Bool {
-        guard Agent.canonical(event.agent) == Agent.canonical(session.agent) else {
-            return false
-        }
-        // Strongest disambiguator: notify.sh's walk_session_chain captures
-        // the agent process PID; SessionStore.pid is the same number. Trust
-        // it over projectPath because the event's project path (= shell
-        // $PWD when notify.sh ran) can disagree with the session's project
-        // path (= lsof cwd of the claude process). Zed sessions exhibit
-        // this — claude cwd stays at the workspace root while the user's
-        // shell can cd into a subdirectory.
-        if let eventPID = event.agentPID, eventPID > 0 {
-            return eventPID == session.pid
-        }
-        // Without a PID, fall back to projectPath + terminal-tab
-        // disambiguator. Same path required; tabId narrows when both have it.
-        guard event.projectPath == session.projectPath else { return false }
-        let eventTab = (event.sessionID?.isEmpty == false ? event.sessionID : event.ipcHook)
-        if let sessionTab = session.tabId, let eventTab,
-           !sessionTab.isEmpty, !eventTab.isEmpty {
-            return sessionTab == eventTab
-        }
-        return true
+        sessionMatches(event: event, session: session)
     }
+}
+
+// Top-level so PanelNav can reuse this when gating per-session mute.
+func sessionMatches(event: NudgeEvent, session: Session) -> Bool {
+    guard Agent.canonical(event.agent) == Agent.canonical(session.agent) else {
+        return false
+    }
+    // Strongest disambiguator: notify.sh's walk_session_chain captures
+    // the agent process PID; SessionStore.pid is the same number. Trust
+    // it over projectPath because the event's project path (= shell
+    // $PWD when notify.sh ran) can disagree with the session's project
+    // path (= lsof cwd of the claude process). Zed sessions exhibit
+    // this — claude cwd stays at the workspace root while the user's
+    // shell can cd into a subdirectory.
+    if let eventPID = event.agentPID, eventPID > 0 {
+        return eventPID == session.pid
+    }
+    // Without a PID, fall back to projectPath + terminal-tab
+    // disambiguator. Same path required; tabId narrows when both have it.
+    guard event.projectPath == session.projectPath else { return false }
+    let eventTab = (event.sessionID?.isEmpty == false ? event.sessionID : event.ipcHook)
+    if let sessionTab = session.tabId, let eventTab,
+       !sessionTab.isEmpty, !eventTab.isEmpty {
+        return sessionTab == eventTab
+    }
+    return true
 }
 
 private struct SessionRow: View {
@@ -168,6 +174,7 @@ private struct SessionRow: View {
     let activeNudgeCount: Int
     let lastNudgeAt: Date?
     let transcriptStats: TranscriptStats?
+    let isMuted: Bool
     let onCommit: () -> Void
     let onCancel: () -> Void
 
@@ -251,6 +258,12 @@ private struct SessionRow: View {
                     .truncationMode(.tail)
             }
             agentTag
+            if isMuted {
+                Image(systemName: "speaker.slash.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .help("Muted — press M to unmute")
+            }
             Spacer(minLength: 8)
             Text(statusLabel)
                 .font(.caption2)
