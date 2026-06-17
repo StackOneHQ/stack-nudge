@@ -495,9 +495,6 @@ final class PanelNav: ObservableObject {
     // event types we should wire.
     @Published var unwiredAgents:    [BootstrapAgent] = []
     @Published var dismissedAgents:  Set<String>      = []
-    // Mascot reaction + pill ripple stay unmuted by design — only banner /
-    // sound / voice are suppressed for events from these sessions.
-    @Published var mutedSessions:    Set<String>      = []
     // Transient confirmation state. When the user clicks Set up on the
     // reconciliation banner, `recentlyWiredAgents` holds the agents we
     // just wired so the Settings view can flash a "✓ Wired up X" message
@@ -638,7 +635,6 @@ final class PanelNav: ObservableObject {
         compactAlpha = Self.compactAlphaOptions.min(by: { abs($0 - rawAlpha) < abs($1 - rawAlpha) }) ?? 1.0
         let rawPerSession = Int(config["STACKNUDGE_EVENTS_PER_SESSION"] ?? "") ?? 5
         eventsPerSession = Self.eventsPerSessionOptions.min(by: { abs($0 - rawPerSession) < abs($1 - rawPerSession) }) ?? 5
-        loadMutedSessions()
     }
 
     // MARK: - Agent reconciliation
@@ -689,41 +685,14 @@ final class PanelNav: ObservableObject {
 
     private static let dismissedAgentsPath =
         "\(NSHomeDirectory())/.stack-nudge/dismissed-agents.json"
-    private static let mutedSessionsPath =
-        "\(NSHomeDirectory())/.stack-nudge/muted-sessions.json"
-
-    func loadMutedSessions() {
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: Self.mutedSessionsPath)),
-              let arr  = try? JSONSerialization.jsonObject(with: data) as? [String]
-        else { return }
-        mutedSessions = Set(arr)
-    }
-
-    private func saveMutedSessions() {
-        let arr = Array(mutedSessions).sorted()
-        guard let data = try? JSONSerialization.data(withJSONObject: arr, options: [.prettyPrinted])
-        else { return }
-        let url = URL(fileURLWithPath: Self.mutedSessionsPath)
-        try? FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try? data.write(to: url, options: [.atomic])
-    }
 
     func toggleMute(for session: Session) {
-        guard let key = SessionPersistence.key(for: session) else { return }
-        if mutedSessions.contains(key) {
-            mutedSessions.remove(key)
-        } else {
-            mutedSessions.insert(key)
-        }
-        saveMutedSessions()
+        SessionPersistence.shared.toggleMuted(session)
+        objectWillChange.send()
     }
 
     func isMuted(_ session: Session) -> Bool {
-        guard let key = SessionPersistence.key(for: session) else { return false }
-        return mutedSessions.contains(key)
+        SessionPersistence.shared.isMuted(session)
     }
 
     // Unmatched events fall through unmuted — better to notify on

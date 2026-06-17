@@ -17,16 +17,29 @@ enum Agent {
     }
 }
 
-// Per-session settings that survive app restarts. Today the only thing
-// we keep is the user-chosen display name; `lastSeenAt` exists so a
-// future cleanup pass can evict long-dormant entries without us needing
-// to re-shape the file. We deliberately do NOT store an entry for every
-// session we ever observe — only entries the user has explicitly named.
-// That keeps the file small, sidesteps cleanup for v1, and means an
-// un-renamed session has zero on-disk footprint.
+// Per-session preferences that survive restarts. Only sessions the user
+// has deliberately touched (rename, mute) get an entry; un-touched
+// sessions have zero on-disk footprint. `lastSeenAt` exists for a
+// future dormancy-based eviction pass.
 struct SessionEntry: Codable {
-    var customName: String
+    var customName: String?
+    var muted: Bool
     var lastSeenAt: TimeInterval
+
+    init(customName: String? = nil, muted: Bool = false, lastSeenAt: TimeInterval) {
+        self.customName = customName
+        self.muted = muted
+        self.lastSeenAt = lastSeenAt
+    }
+
+    // Tolerate legacy entries (no `muted` field) so existing sessions.json
+    // files keep working after the schema gained the field.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.customName = try c.decodeIfPresent(String.self, forKey: .customName)
+        self.muted      = (try c.decodeIfPresent(Bool.self, forKey: .muted)) ?? false
+        self.lastSeenAt = try c.decode(TimeInterval.self, forKey: .lastSeenAt)
+    }
 }
 
 // Disk-backed store of session names, keyed by "<agent>::<projectPath>".
@@ -91,13 +104,56 @@ final class SessionPersistence: ObservableObject {
         guard let projectPath else { return }
         let key = Self.key(agent: Agent.canonical(agent), projectPath: projectPath, tabId: tabId)
         let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let now = Date().timeIntervalSince1970
         if trimmed.isEmpty {
-            guard entries.removeValue(forKey: key) != nil else { return }
+            // Clearing the name: keep the entry only if it has other prefs.
+            guard var existing = entries[key] else { return }
+            existing.customName = nil
+            if existing.muted {
+                existing.lastSeenAt = now
+                entries[key] = existing
+            } else {
+                entries.removeValue(forKey: key)
+            }
         } else {
-            entries[key] = SessionEntry(
-                customName: trimmed,
-                lastSeenAt: Date().timeIntervalSince1970
-            )
+            var entry = entries[key] ?? SessionEntry(lastSeenAt: now)
+            entry.customName = trimmed
+            entry.lastSeenAt = now
+            entries[key] = entry
+        }
+        save()
+    }
+
+    // MARK: - Mute
+
+    func isMuted(agent: String, projectPath: String?, tabId: String? = nil) -> Bool {
+        guard let projectPath else { return false }
+        let canon = Agent.canonical(agent)
+        if let tabId, !tabId.isEmpty,
+           entries[Self.key(agent: canon, projectPath: projectPath, tabId: tabId)]?.muted == true {
+            return true
+        }
+        return entries[Self.key(agent: canon, projectPath: projectPath, tabId: nil)]?.muted == true
+    }
+
+    func isMuted(_ session: Session) -> Bool {
+        isMuted(agent: session.agent, projectPath: session.projectPath, tabId: session.tabId)
+    }
+
+    func toggleMuted(_ session: Session) {
+        guard let projectPath = session.projectPath, !projectPath.isEmpty else { return }
+        let key = Self.key(agent: Agent.canonical(session.agent),
+                           projectPath: projectPath, tabId: session.tabId)
+        let now = Date().timeIntervalSince1970
+        var entry = entries[key] ?? SessionEntry(lastSeenAt: now)
+        entry.muted = !entry.muted
+        entry.lastSeenAt = now
+        // Drop entries that hold no surviving preference, matching the
+        // "deliberate user intent only" invariant for the on-disk store.
+        if entry.muted == false, entry.customName?.isEmpty ?? true {
+            entries.removeValue(forKey: key)
+        } else {
+            entries[key] = entry
         }
         save()
     }
@@ -147,17 +203,38 @@ final class SessionPersistence: ObservableObject {
     }
 
     private func load() {
-        guard FileManager.default.fileExists(atPath: url.path),
-              let data = try? Data(contentsOf: url) else { return }
-        do {
-            entries = try JSONDecoder().decode([String: SessionEntry].self, from: data)
-        } catch {
-            // Don't crash — a malformed file shouldn't take down the app.
-            // Logging is enough; the next setCustomName call will rewrite.
-            FileHandle.standardError.write(Data(
-                "stack-nudge: sessions.json decode failed (\(error)); starting fresh\n".utf8))
-            entries = [:]
+        if FileManager.default.fileExists(atPath: url.path),
+           let data = try? Data(contentsOf: url) {
+            do {
+                entries = try JSONDecoder().decode([String: SessionEntry].self, from: data)
+            } catch {
+                // Don't crash — a malformed file shouldn't take down the app.
+                // Logging is enough; the next setCustomName call will rewrite.
+                FileHandle.standardError.write(Data(
+                    "stack-nudge: sessions.json decode failed (\(error)); starting fresh\n".utf8))
+                entries = [:]
+            }
         }
+        migrateLegacyMutedSessions()
+    }
+
+    // Pre-fold mute lived in ~/.stack-nudge/muted-sessions.json with the
+    // same key shape; merge it into the entries dict and delete the file.
+    private func migrateLegacyMutedSessions() {
+        let legacy = url.deletingLastPathComponent()
+            .appendingPathComponent("muted-sessions.json", isDirectory: false)
+        guard FileManager.default.fileExists(atPath: legacy.path),
+              let data = try? Data(contentsOf: legacy),
+              let keys = try? JSONSerialization.jsonObject(with: data) as? [String]
+        else { return }
+        let now = Date().timeIntervalSince1970
+        for key in keys {
+            var entry = entries[key] ?? SessionEntry(lastSeenAt: now)
+            entry.muted = true
+            entries[key] = entry
+        }
+        try? FileManager.default.removeItem(at: legacy)
+        save()
     }
 
     private func save() {
