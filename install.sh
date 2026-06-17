@@ -193,7 +193,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   # BEFORE we re-register the launchd agents, so the unload-then-load below
   # doesn't race with an old instance still hanging on. Matching the exact
   # binary path so we don't reap unrelated processes.
-  pkill -f "Applications/stack-nudge\.app/Contents/MacOS/stack-nudge$" 2>/dev/null || true
+  pkill -f "Applications/StackNudge\.app/Contents/MacOS/stack-nudge$" 2>/dev/null || true
   pkill -f "venv/bin/stackvox serve$"                                  2>/dev/null || true
 
   register_launchd_agent \
