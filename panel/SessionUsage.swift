@@ -280,7 +280,6 @@ struct UsageView: View {
                     FooterHint(label: "Sync now", keys: ["R"])
                 }
                 FooterHint(label: nav.quotaTrackingEnabled ? "Pause" : "Resume", keys: ["P"])
-                if nav.compactMode { FooterHint(label: "Compact", keys: ["M"]) }
                 FooterHint(label: "Hide",    keys: ["Esc"])
             }
         }

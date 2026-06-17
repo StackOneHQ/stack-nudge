@@ -296,7 +296,6 @@ struct PanelContentView: View {
     private var footer: some View {
         PageFooter {
             if store.events.isEmpty {
-                if nav.compactMode { FooterHint(label: "Compact", keys: ["M"]) }
                 FooterHint(label: "Hide", keys: ["Esc"])
             } else {
                 if let primary = primaryActionLabel {
@@ -311,7 +310,6 @@ struct PanelContentView: View {
                 FooterHint(label: "Snooze",  keys: ["S"])
                     .opacity(snoozeEnabled ? 1.0 : 0.35)
                 FooterHint(label: "Dismiss", keys: ["⌫"])
-                if nav.compactMode { FooterHint(label: "Compact", keys: ["M"]) }
                 FooterHint(label: "Hide", keys: ["Esc"])
             }
         }
@@ -1051,15 +1049,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // The hotkey/M paths call expandFromCompact directly and skip this
         // veto, so a deliberate keystroke still expands instantly.
         expandFromCompactUserGesture()
-    }
-
-    // Called from the "M" keystroke in Events/Sessions/Usage tabs to
-    // collapse back to the pill.
-    private func enterCompactMode() {
-        if nav.compactExpanded {
-            nav.compactExpanded = false
-            applyCompactLayout()
-        }
     }
 
     // Debounced snap: each move during a drag bumps the deadline forward.
@@ -1814,6 +1803,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func postBannerIfNeeded(_ event: NudgeEvent) {
         let config = PanelConfig.load()
 
+        // Per-session mute: when the user has silenced a specific session
+        // from the Sessions tab (S key), drop banner + sound + voice for
+        // events tied to that session. Mascot/ripple still fire via the
+        // EventStore.onAppend → nav.reactToEvent path, which lives outside
+        // this function — the visual glance signal is preserved by design.
+        // `bypassMute` (if set on the event) skips this gate, matching
+        // the muteWhenFocused contract below.
+        if !event.bypassMute,
+           nav.isSessionMuted(event: event, in: sessions.sessions) {
+            return
+        }
+
         if config.activateImmediately, let bundleID = event.bundleID {
             DispatchQueue.global(qos: .userInitiated).async {
                 AppActivator.activate(bundleID: bundleID,
@@ -2386,7 +2387,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 let pid = sessions.selectedPID ?? sessions.sessions.first?.pid
                 if let pid { sessions.startRenaming(pid) }
             case KeyCode.mKey where plain:
-                enterCompactMode()
+                toggleMuteSelectedSession()
             default:
                 return false
             }
@@ -2474,8 +2475,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 case KeyCode.pKey:
                     nav.toggleQuotaTracking()
                     if nav.quotaTrackingEnabled { syncQuotaNow() }
-                case KeyCode.mKey:
-                    enterCompactMode()
                 default:
                     break
                 }
@@ -2498,8 +2497,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 // after the keystroke — otherwise they'd wait for the next
                 // scheduled tick (up to the configured poll interval).
                 if nav.quotaTrackingEnabled { syncQuotaNow() }
-            case KeyCode.mKey:
-                enterCompactMode()
             default:
                 break
             }
@@ -2507,8 +2504,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
 
         // Tickets tab: ↑/↓ move the row selection, →/Enter open the selected
-        // row's ticket/PR link, M enters the widget, Esc hides. Other keys are
-        // swallowed so they don't leak through to the events store.
+        // row's ticket/PR link, Esc hides. Other keys are swallowed so they
+        // don't leak through to the events store.
         if nav.mode == .outcomes {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain else { return false }
@@ -2523,8 +2520,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 nav.activateSelectedOutcome()
             case KeyCode.delete, KeyCode.forwardDelete:
                 nav.dismissSelectedOutcome()
-            case KeyCode.mKey:
-                enterCompactMode()
             default:
                 break
             }
@@ -2560,8 +2555,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             actOnSelected(approve: false)
         case KeyCode.rKey, KeyCode.delete, KeyCode.forwardDelete:
             dismissSelected()
-        case KeyCode.mKey:
-            enterCompactMode()
         default:
             return false
         }
@@ -2663,6 +2656,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func killSelectedSession() {
         guard let pid = sessions.selectedPID else { return }
         sessions.killSession(pid)
+    }
+
+    private func toggleMuteSelectedSession() {
+        guard let pid = sessions.selectedPID,
+              let session = sessions.sessions.first(where: { $0.pid == pid }) else { return }
+        nav.toggleMute(for: session)
     }
 
     // Map a terminal/IDE process name to the launch-services bundle ID so

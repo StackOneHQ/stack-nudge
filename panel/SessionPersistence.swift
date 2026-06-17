@@ -131,11 +131,24 @@ final class SessionPersistence: ObservableObject {
 
     // MARK: - I/O
 
-    private static func key(agent: String, projectPath: String, tabId: String?) -> String {
+    // Canonical key shape shared with PanelNav.mutedSessions and any
+    // future per-session preference. Same `(agent, projectPath[, tabId])`
+    // tuple `customName` is stored under, so renaming and muting attach
+    // to the same logical session and survive PID churn / restart.
+    static func key(agent: String, projectPath: String, tabId: String?) -> String {
+        let canon = Agent.canonical(agent)
         if let tabId, !tabId.isEmpty {
-            return "\(agent)::\(projectPath)::\(tabId)"
+            return "\(canon)::\(projectPath)::\(tabId)"
         }
-        return "\(agent)::\(projectPath)"
+        return "\(canon)::\(projectPath)"
+    }
+
+    // Convenience: nil when the session has no projectPath (we can't
+    // build a stable identity without it). Callers should treat nil as
+    // "this session can't be persistently tagged" and no-op.
+    static func key(for session: Session) -> String? {
+        guard let path = session.projectPath, !path.isEmpty else { return nil }
+        return key(agent: session.agent, projectPath: path, tabId: session.tabId)
     }
 
     private func load() {
