@@ -4,6 +4,13 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.20.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.19.2...v1.20.0) (2026-06-17)
+
+
+### Features
+
+* **widget:** mini Usage widget + per-session mute + question-vs-approval split ([#104](https://github.com/StackOneHQ/stack-nudge/issues/104)) ([55e699f](https://github.com/StackOneHQ/stack-nudge/commit/55e699f9a72b66b625f41bddfd8e5c7bc9ebd5ff))
+
 ## [1.19.2](https://github.com/StackOneHQ/stack-nudge/compare/v1.19.1...v1.19.2) (2026-06-17)
 
 
