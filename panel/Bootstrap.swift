@@ -78,6 +78,7 @@ enum Bootstrap {
     static let venvSymlinkPath  = "\(NSHomeDirectory())/.stack-nudge/venv"
     static let configPath       = "\(NSHomeDirectory())/.stack-nudge/config"
     static let phrasesDir       = "\(NSHomeDirectory())/.stack-nudge/phrases"
+    static let userQuitMarker   = "\(NSHomeDirectory())/.stack-nudge/user-quit"
 
     static let launchAgentsDir  = "\(NSHomeDirectory())/Library/LaunchAgents"
     static let appLabel         = "com.stackonehq.stack-nudge"
@@ -138,6 +139,18 @@ enum Bootstrap {
         // Recycle (not rm -rf) so the user can restore from Trash if they
         // somehow notice a regression we don't.
         NSWorkspace.shared.recycle([backup]) { _, _ in }
+    }
+
+    // User-initiated Quit: drop a marker file so notify.sh's ensure_app_running
+    // gate doesn't relaunch us on the next hook event. Cleared by
+    // clearUserQuitMarker() on the next manual app launch.
+    static func userQuit() {
+        _ = try? "".write(toFile: userQuitMarker, atomically: true, encoding: .utf8)
+        NSApp.terminate(nil)
+    }
+
+    static func clearUserQuitMarker() {
+        try? FileManager.default.removeItem(atPath: userQuitMarker)
     }
 
     static func migrateBundleNameIfNeeded() {
