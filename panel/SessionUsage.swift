@@ -86,6 +86,13 @@ final class QuotaProbe {
     private(set) var lastProbeFailed = false
     private(set) var usingPlaintextCredentials = false
 
+    // 429 backoff. While `Date() < retryAfterUntil`, fetch() short-circuits
+    // and returns nil without hitting the network so the same source IP
+    // doesn't keep stoking the rate limit.
+    private var retryAfterUntil: Date?
+    private static let defaultRetryAfter: TimeInterval = 15 * 60
+    private static let maxRetryAfter: TimeInterval = 60 * 60
+
     init() {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.timeoutIntervalForRequest  = 10
@@ -99,6 +106,14 @@ final class QuotaProbe {
     }
 
     private func fetch(retried: Bool, completion: @escaping (QuotaSnapshot?) -> Void) {
+        if let until = retryAfterUntil, until > Date() {
+            // Still inside the 429 backoff window. Don't fire the request —
+            // it would re-trigger the rate limit and reset our cooldown.
+            lastProbeFailed = true
+            completion(nil)
+            return
+        }
+
         let token: String
         if let cached = cachedToken {
             token = cached
@@ -138,17 +153,42 @@ final class QuotaProbe {
                     FileHandle.standardError.write(Data(
                         "stack-nudge: /api/oauth/usage returned \(code)\n".utf8))
                 }
+                let backoff = code == 429
+                    ? Self.parseRetryAfter(http) ?? Self.defaultRetryAfter
+                    : nil
                 DispatchQueue.main.async {
                     self?.lastProbeFailed = true
+                    if let backoff {
+                        self?.retryAfterUntil = Date().addingTimeInterval(backoff)
+                    }
                     completion(nil)
                 }
                 return
             }
             DispatchQueue.main.async {
                 self?.lastProbeFailed = false
+                self?.retryAfterUntil = nil
                 completion(snapshot)
             }
         }.resume()
+    }
+
+    // RFC 7231: Retry-After is either an HTTP-date or a non-negative integer
+    // delta-seconds. Anthropic typically returns the integer form; tolerate
+    // either, and clamp to a max so a misconfigured value can't strand us.
+    private static func parseRetryAfter(_ http: HTTPURLResponse?) -> TimeInterval? {
+        guard let raw = http?.value(forHTTPHeaderField: "Retry-After") else { return nil }
+        if let seconds = TimeInterval(raw.trimmingCharacters(in: .whitespaces)), seconds >= 0 {
+            return min(seconds, maxRetryAfter)
+        }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "GMT")
+        f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        if let date = f.date(from: raw) {
+            return min(max(0, date.timeIntervalSinceNow), maxRetryAfter)
+        }
+        return nil
     }
 
     // MARK: - Token sources
