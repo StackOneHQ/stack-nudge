@@ -33,9 +33,8 @@ struct CompactView: View {
     var body: some View {
         Group {
             if nav.compactContent == .usage {
-                HStack(alignment: .center, spacing: 6) {
+                HStack(alignment: .center, spacing: 4) {
                     gaugeCluster
-                    Spacer(minLength: 0)
                     expandButton
                 }
                 .frame(maxHeight: .infinity)
@@ -115,12 +114,8 @@ struct CompactView: View {
                 )
                 .frame(width: size, height: size)
             }
-            // Force sideText to fill the gauge cluster's height so its
-            // ZStack centers at the same y as the gauge's center digit,
-            // regardless of which child (countdown vs two-line legend)
-            // is currently visible.
             sideText
-                .frame(height: size + 2)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         // Gated on !dragging so we don't fight AppKit's drag handler.
         .scaleEffect(isHovering && !nav.compactDragging ? 1.07 : 1.0)
@@ -140,8 +135,8 @@ struct CompactView: View {
                 .accessibilityHidden(true)
             if let reset = nav.quota?.fiveHour?.resetsAt {
                 Text(Self.shortDuration(until: reset))
-                    .font(.system(size: 9).monospacedDigit())
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: 9, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.secondary)
                     .opacity(show ? 0 : 1)
             }
             hoverLegend
