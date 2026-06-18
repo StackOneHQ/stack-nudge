@@ -157,6 +157,27 @@ enum Bootstrap {
         // write them when the user finishes the wizard.
         retargetLaunchAgentIfNeeded(label: appLabel)
         retargetLaunchAgentIfNeeded(label: daemonLabel)
+        migrateKeepAliveIfNeeded(label: appLabel)
+    }
+
+    // Older installs wrote KeepAlive: true, so launchd respawned the panel
+    // even after an explicit user Quit. Rewrite to the dict form that
+    // restarts on crash only.
+    private static func migrateKeepAliveIfNeeded(label: String) {
+        let fm = FileManager.default
+        let plistPath = "\(launchAgentsDir)/\(label).plist"
+        guard fm.fileExists(atPath: plistPath),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: plistPath)),
+              var plist = (try? PropertyListSerialization.propertyList(
+                  from: data, options: [], format: nil)) as? [String: Any]
+        else { return }
+        guard (plist["KeepAlive"] as? Bool) == true else { return }
+        plist["KeepAlive"] = ["SuccessfulExit": false]
+        guard let updated = try? PropertyListSerialization.data(
+            fromPropertyList: plist, format: .xml, options: 0) else { return }
+        try? updated.write(to: URL(fileURLWithPath: plistPath), options: [.atomic])
+        _ = try? runLaunchctl(["unload", plistPath])
+        _ = try? runLaunchctl(["load",   plistPath])
     }
 
     // Read the on-disk launchd plist for `label`; if its first program-
@@ -668,7 +689,9 @@ enum Bootstrap {
             "Label":             label,
             "ProgramArguments":  programArgs,
             "RunAtLoad":         true,
-            "KeepAlive":         true,
+            // Restart only on crashes (non-zero exit). An explicit user
+            // Quit ends with a successful exit and should actually quit.
+            "KeepAlive":         ["SuccessfulExit": false],
             "StandardOutPath":   logPath,
             "StandardErrorPath": logPath,
         ]

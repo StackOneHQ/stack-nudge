@@ -95,7 +95,7 @@ struct CompactView: View {
     }
 
     private func gaugeClusterBody(size: CGFloat) -> some View {
-        HStack(spacing: 6) {
+        HStack(alignment: .center, spacing: 6) {
             ZStack {
                 if !nav.compactDragging {
                     Circle()
@@ -115,8 +115,12 @@ struct CompactView: View {
                 )
                 .frame(width: size, height: size)
             }
-
+            // Force sideText to fill the gauge cluster's height so its
+            // ZStack centers at the same y as the gauge's center digit,
+            // regardless of which child (countdown vs two-line legend)
+            // is currently visible.
             sideText
+                .frame(height: size + 2)
         }
         // Gated on !dragging so we don't fight AppKit's drag handler.
         .scaleEffect(isHovering && !nav.compactDragging ? 1.07 : 1.0)

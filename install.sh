@@ -203,10 +203,10 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     "${VENV}/bin/stackvox" "serve"
   echo "  Voice daemon registered as launchd agent (starts at login)"
 
-  # Single persistent app — always running, restarts on crash.
+  # Single persistent app — restarts on crash; respects explicit user Quit.
   register_launchd_agent \
     "com.stackonehq.stack-nudge" \
-    "always" \
+    "on_crash" \
     "${INSTALL_DIR}/app.log" \
     "$HOME/Applications/StackNudge.app/Contents/MacOS/stack-nudge"
   echo "  App registered as launchd agent (starts at login)"
