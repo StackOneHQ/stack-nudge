@@ -673,9 +673,13 @@ enum Bootstrap {
         let python = venvURL.appendingPathComponent("bin/python3").path
         let stackvox = venvURL.appendingPathComponent("bin/stackvox").path
         let logPath = "\(installDir)/daemon.log"
+        // Daemon mirrors install.sh's "always" mode — if stackvox serve ever
+        // exits 0 launchd should still bring it back. Only the panel uses the
+        // SuccessfulExit:false form so a user Quit actually quits.
         try writePlist(label: daemonLabel,
                        programArgs: [python, stackvox, "serve"],
                        logPath: logPath,
+                       keepAlive: true,
                        env: stackvoxEnv(venvURL: venvURL))
     }
 
@@ -694,17 +698,20 @@ enum Bootstrap {
 
     // Common plist serialiser: emits the same XML shape install.sh's
     // register_launchd_agent function produces, via PropertyListSerialization.
+    //
+    // `keepAlive` mirrors install.sh's "always" vs "on_crash" modes:
+    //   true                       → restart unconditionally
+    //   ["SuccessfulExit": false]  → restart on crash only (Quit means quit)
     private static func writePlist(label: String,
                                    programArgs: [String],
                                    logPath: String,
+                                   keepAlive: Any = ["SuccessfulExit": false],
                                    env: [String: String] = [:]) throws {
         var plist: [String: Any] = [
             "Label":             label,
             "ProgramArguments":  programArgs,
             "RunAtLoad":         true,
-            // Restart only on crashes (non-zero exit). An explicit user
-            // Quit ends with a successful exit and should actually quit.
-            "KeepAlive":         ["SuccessfulExit": false],
+            "KeepAlive":         keepAlive,
             "StandardOutPath":   logPath,
             "StandardErrorPath": logPath,
         ]

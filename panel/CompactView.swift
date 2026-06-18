@@ -104,12 +104,16 @@ struct CompactView: View {
     }
 
     private func gaugeClusterBody(size: CGFloat) -> some View {
-        HStack(alignment: .center, spacing: 6) {
+        // Halo is 1pt larger than the gauge on each side so the soft blur
+        // bleeds outward rather than clipping at the gauge edge. Shared
+        // constant so the two frames can't drift apart.
+        let haloSize = size + 2
+        return HStack(spacing: 6) {
             ZStack {
                 if !nav.compactDragging {
                     Circle()
                         .fill(urgencyColor.opacity(0.18))
-                        .frame(width: size + 2, height: size + 2)
+                        .frame(width: haloSize, height: haloSize)
                         .blur(radius: 8)
                 }
                 QuotaGauge(

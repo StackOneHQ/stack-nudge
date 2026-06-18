@@ -1239,6 +1239,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self.nav.quotaError = nil
                 self.nav.quotaLastUpdated = Date()
                 self.evaluateQuotaThresholds(snapshot)
+            } else if self.quotaProbe.isRateLimited {
+                self.nav.quotaError = "Rate-limited by Anthropic — retrying shortly."
             } else if self.quotaProbe.lastProbeFailed {
                 self.nav.quotaError = "Quota data unavailable — the usage endpoint may have changed."
             }
