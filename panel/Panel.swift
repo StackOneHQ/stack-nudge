@@ -929,8 +929,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     // MARK: - Compact widget layout
 
-    private static let compactWidgetSize = NSSize(width: 320, height: 56)
-    private static let compactWidgetUsageSize = NSSize(width: 170, height: 66)
+    private static let compactWidgetSize = NSSize(width: 290, height: 56)
+    private static let compactWidgetUsageSize = NSSize(width: 145, height: 66)
     private static let compactWidgetInset: CGFloat = 14
 
     private var compactWidgetSizeForMode: NSSize {

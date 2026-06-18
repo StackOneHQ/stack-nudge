@@ -1,5 +1,12 @@
 import SwiftUI
 
+private struct LegendWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 // Pill-shaped glance widget. Layout left→right:
 //   [gauge]  [7d%, reset-in]  |  [headline: project · tokens · status]
 //   [active count badge]  [expand]
@@ -20,6 +27,9 @@ struct CompactView: View {
     @State private var rippleScale: CGFloat = 0.3
     @State private var rippleOpacity: Double = 0
     @State private var isHovering: Bool = false
+    // Measured intrinsic width of the hover legend, used to reserve a
+    // constant slot for sideText so hovering doesn't bump the expand button.
+    @State private var legendWidth: CGFloat = 0
     // Rotating index into `activeSessions` for the cycling display. Only
     // advances when `shouldCycle` is true (≥2 active sessions and nothing
     // more urgent on screen). Stays bounded by % so a session disappearing
@@ -38,15 +48,15 @@ struct CompactView: View {
                     expandButton
                 }
                 .frame(maxHeight: .infinity)
-                .padding(.horizontal, 4)
+                .padding(.horizontal, 10)
             } else {
                 HStack(spacing: 10) {
                     gaugeCluster
                     separator
                     headline
-                    Spacer(minLength: 4)
                     sessionBadge
                     expandButton
+                    Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 12)
             }
@@ -115,7 +125,6 @@ struct CompactView: View {
                 .frame(width: size, height: size)
             }
             sideText
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
         // Gated on !dragging so we don't fight AppKit's drag handler.
         .scaleEffect(isHovering && !nav.compactDragging ? 1.07 : 1.0)
@@ -126,22 +135,39 @@ struct CompactView: View {
 
     @ViewBuilder
     private var sideText: some View {
-        let show = isHovering && !nav.compactDragging
+        let show = isHovering && !nav.compactDragging && nav.quota != nil
         ZStack(alignment: .center) {
-            // Invisible sizer: reserves the legend's slot height so the
-            // resting countdown centers at the same y as it does on hover.
+            // Invisible width sizer — reserves the legend's horizontal
+            // footprint so hover doesn't widen the cluster and bump the
+            // expand button. Clipped to zero size via .frame so it doesn't
+            // grow the row vertically; only its measured width survives
+            // through the explicit width below.
             hoverLegend
-                .opacity(0)
-                .accessibilityHidden(true)
-            if let reset = nav.quota?.fiveHour?.resetsAt {
+                .fixedSize()
+                .hidden()
+                .background(
+                    GeometryReader { geo in
+                        Color.clear.preference(
+                            key: LegendWidthKey.self,
+                            value: geo.size.width
+                        )
+                    }
+                )
+                .frame(width: 0, height: 0)
+            if show {
+                hoverLegend
+            } else if let reset = nav.quota?.fiveHour?.resetsAt {
                 Text(Self.shortDuration(until: reset))
                     .font(.system(size: 9, weight: .medium).monospacedDigit())
                     .foregroundStyle(.secondary)
-                    .opacity(show ? 0 : 1)
+            } else {
+                Text("—")
+                    .font(.system(size: 9, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.tertiary)
             }
-            hoverLegend
-                .opacity(show ? 1 : 0)
         }
+        .frame(width: legendWidth > 0 ? legendWidth : nil, alignment: .leading)
+        .onPreferenceChange(LegendWidthKey.self) { legendWidth = $0 }
         .animation(.easeInOut(duration: 0.18), value: show)
     }
 
@@ -176,57 +202,12 @@ struct CompactView: View {
 
     @ViewBuilder
     private var headlineText: some View {
-        if let busy = busiestSession {
-            HStack(spacing: 4) {
-                Text(displayName(busy))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                if let stats = transcriptStats(for: busy) {
-                    Text("·")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                    Text(TokenFormat.short(stats.tokens))
-                        .font(.system(size: 10, weight: .medium).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-            }
-        } else if let recent = recentEvent {
-            HStack(spacing: 4) {
-                Text(recent.title)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text("·")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-                // Adaptive: pending count when the queue has built up,
-                // otherwise show age of the latest event so the user can
-                // gauge whether it's fresh.
-                if store.events.count > 1 {
-                    Text("×\(store.events.count)")
-                        .font(.system(size: 10, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .fixedSize()
-                } else {
-                    Text(RelativeTime.string(recent.timestamp, style: .short))
-                        .font(.system(size: 10).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
-        } else if shouldCycle {
-            cyclingActiveSession
-        } else if let active = mostRecentActive {
-            Text(displayName(active))
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-        } else {
+        if activeSessions.isEmpty {
             Text("watching")
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
+        } else {
+            cyclingActiveSession
         }
     }
 
@@ -242,36 +223,18 @@ struct CompactView: View {
     private var cyclingActiveSession: some View {
         let pool = activeSessions
         let session = pool[cycleIndex % max(pool.count, 1)]
-        HStack(spacing: 4) {
-            Text(displayName(session))
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-            Text("·")
-                .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
-            if let stats = transcriptStats(for: session) {
-                Text(TokenFormat.short(stats.tokens))
-                    .font(.system(size: 10, weight: .medium).monospacedDigit())
-                    .foregroundStyle(.secondary)
-            } else {
-                let position = (pool.firstIndex { $0.pid == session.pid } ?? 0) + 1
-                Text("\(position)/\(pool.count)")
-                    .font(.system(size: 10).monospacedDigit())
-                    .foregroundStyle(.tertiary)
+        Text(displayName(session))
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+            .id(session.pid)
+            .transition(.opacity)
+            .onReceive(Timer.publish(every: Self.cyclePeriod, on: .main, in: .common).autoconnect()) { _ in
+                guard activeSessions.count > 1, !nav.compactDragging else { return }
+                withAnimation(.easeInOut(duration: 0.45)) {
+                    cycleIndex = (cycleIndex + 1) % max(activeSessions.count, 1)
+                }
             }
-        }
-        .id(session.pid)
-        .transition(.opacity)
-        .onReceive(Timer.publish(every: Self.cyclePeriod, on: .main, in: .common).autoconnect()) { _ in
-            // Re-check shouldCycle on every tick — pool size can change as
-            // sessions finish or new ones start. Skip during drag so we
-            // don't compete with AppKit's mouse handler.
-            guard shouldCycle, !nav.compactDragging else { return }
-            withAnimation(.easeInOut(duration: 0.45)) {
-                cycleIndex = (cycleIndex + 1) % max(activeSessions.count, 1)
-            }
-        }
     }
 
     // Passive quota-stress signal for the mascot. True when either the 5h
