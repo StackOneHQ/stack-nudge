@@ -197,6 +197,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func quitAction() {
-        NSApp.terminate(nil)
+        Bootstrap.userQuit()
     }
 }

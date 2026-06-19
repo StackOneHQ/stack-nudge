@@ -78,6 +78,7 @@ enum Bootstrap {
     static let venvSymlinkPath  = "\(NSHomeDirectory())/.stack-nudge/venv"
     static let configPath       = "\(NSHomeDirectory())/.stack-nudge/config"
     static let phrasesDir       = "\(NSHomeDirectory())/.stack-nudge/phrases"
+    static let userQuitMarker   = "\(NSHomeDirectory())/.stack-nudge/user-quit"
 
     static let launchAgentsDir  = "\(NSHomeDirectory())/Library/LaunchAgents"
     static let appLabel         = "com.stackonehq.stack-nudge"
@@ -140,6 +141,18 @@ enum Bootstrap {
         NSWorkspace.shared.recycle([backup]) { _, _ in }
     }
 
+    // User-initiated Quit: drop a marker file so notify.sh's ensure_app_running
+    // gate doesn't relaunch us on the next hook event. Cleared by
+    // clearUserQuitMarker() on the next manual app launch.
+    static func userQuit() {
+        _ = try? "".write(toFile: userQuitMarker, atomically: true, encoding: .utf8)
+        NSApp.terminate(nil)
+    }
+
+    static func clearUserQuitMarker() {
+        try? FileManager.default.removeItem(atPath: userQuitMarker)
+    }
+
     static func migrateBundleNameIfNeeded() {
         let fm = FileManager.default
         let runningFromNewPath = Bundle.main.bundleURL.lastPathComponent == "StackNudge.app"
@@ -157,6 +170,27 @@ enum Bootstrap {
         // write them when the user finishes the wizard.
         retargetLaunchAgentIfNeeded(label: appLabel)
         retargetLaunchAgentIfNeeded(label: daemonLabel)
+        migrateKeepAliveIfNeeded(label: appLabel)
+    }
+
+    // Older installs wrote KeepAlive: true, so launchd respawned the panel
+    // even after an explicit user Quit. Rewrite to the dict form that
+    // restarts on crash only.
+    private static func migrateKeepAliveIfNeeded(label: String) {
+        let fm = FileManager.default
+        let plistPath = "\(launchAgentsDir)/\(label).plist"
+        guard fm.fileExists(atPath: plistPath),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: plistPath)),
+              var plist = (try? PropertyListSerialization.propertyList(
+                  from: data, options: [], format: nil)) as? [String: Any]
+        else { return }
+        guard (plist["KeepAlive"] as? Bool) == true else { return }
+        plist["KeepAlive"] = ["SuccessfulExit": false]
+        guard let updated = try? PropertyListSerialization.data(
+            fromPropertyList: plist, format: .xml, options: 0) else { return }
+        try? updated.write(to: URL(fileURLWithPath: plistPath), options: [.atomic])
+        _ = try? runLaunchctl(["unload", plistPath])
+        _ = try? runLaunchctl(["load",   plistPath])
     }
 
     // Read the on-disk launchd plist for `label`; if its first program-
@@ -639,9 +673,13 @@ enum Bootstrap {
         let python = venvURL.appendingPathComponent("bin/python3").path
         let stackvox = venvURL.appendingPathComponent("bin/stackvox").path
         let logPath = "\(installDir)/daemon.log"
+        // Daemon mirrors install.sh's "always" mode — if stackvox serve ever
+        // exits 0 launchd should still bring it back. Only the panel uses the
+        // SuccessfulExit:false form so a user Quit actually quits.
         try writePlist(label: daemonLabel,
                        programArgs: [python, stackvox, "serve"],
                        logPath: logPath,
+                       keepAlive: true,
                        env: stackvoxEnv(venvURL: venvURL))
     }
 
@@ -660,15 +698,20 @@ enum Bootstrap {
 
     // Common plist serialiser: emits the same XML shape install.sh's
     // register_launchd_agent function produces, via PropertyListSerialization.
+    //
+    // `keepAlive` mirrors install.sh's "always" vs "on_crash" modes:
+    //   true                       → restart unconditionally
+    //   ["SuccessfulExit": false]  → restart on crash only (Quit means quit)
     private static func writePlist(label: String,
                                    programArgs: [String],
                                    logPath: String,
+                                   keepAlive: Any = ["SuccessfulExit": false],
                                    env: [String: String] = [:]) throws {
         var plist: [String: Any] = [
             "Label":             label,
             "ProgramArguments":  programArgs,
             "RunAtLoad":         true,
-            "KeepAlive":         true,
+            "KeepAlive":         keepAlive,
             "StandardOutPath":   logPath,
             "StandardErrorPath": logPath,
         ]

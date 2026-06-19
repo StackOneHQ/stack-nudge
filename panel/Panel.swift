@@ -107,7 +107,7 @@ struct PanelContentView: View {
                     hotkeyDisplay: nav.hotkeyDisplay,
                     onInstall: { nav.actions?.runBootstrap() },
                     onGrantPermissions: onGrantPermissions,
-                    onQuit: { NSApp.terminate(nil) }
+                    onQuit: { Bootstrap.userQuit() }
                 )
             } else if nav.mode == .postUpdate {
                 // Full-screen takeover, no tab strip — matches welcome's
@@ -598,6 +598,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // launched, so the safety net has served its purpose — recycle it
         // so Spotlight stops indexing two StackNudge.app entries.
         Bootstrap.cleanupPostUpdateBackup()
+        // We're back up, so any prior user-Quit intent is satisfied. Clear
+        // the marker so notify.sh will relaunch us on the next event after
+        // the *next* Quit.
+        Bootstrap.clearUserQuitMarker()
 
         let size = Self.loadSavedPanelSize()
         let frame = NSRect(origin: .zero, size: size)
@@ -675,7 +679,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             beginUninstall:   { [weak self] in self?.beginUninstallFlow() },
             runUninstall:     { [weak self] in self?.runUninstall() },
             runBootstrap:     { [weak self] in self?.runBootstrap() },
-            quit:             { NSApp.terminate(nil) },
+            quit:             { Bootstrap.userQuit() },
             expandFromCompact: { [weak self] in self?.expandFromCompact() },
             exitCompactMode:   { [weak self] in self?.exitCompactMode() }
         )
@@ -925,8 +929,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     // MARK: - Compact widget layout
 
-    private static let compactWidgetSize = NSSize(width: 320, height: 56)
-    private static let compactWidgetUsageSize = NSSize(width: 150, height: 66)
+    private static let compactWidgetSize = NSSize(width: 290, height: 56)
+    private static let compactWidgetUsageSize = NSSize(width: 145, height: 66)
     private static let compactWidgetInset: CGFloat = 14
 
     private var compactWidgetSizeForMode: NSSize {
@@ -1235,6 +1239,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self.nav.quotaError = nil
                 self.nav.quotaLastUpdated = Date()
                 self.evaluateQuotaThresholds(snapshot)
+            } else if self.quotaProbe.isRateLimited {
+                self.nav.quotaError = "Rate-limited by Anthropic — retrying shortly."
             } else if self.quotaProbe.lastProbeFailed {
                 self.nav.quotaError = "Quota data unavailable — the usage endpoint may have changed."
             }

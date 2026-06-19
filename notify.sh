@@ -312,6 +312,9 @@ nudge_debug() {
 # old bundle is still running with the new hook script — keeps working.
 ensure_app_running() {
   [[ -S "$PANEL_SOCK" ]] && return
+  # User explicitly Quit. Stay quiet until they reopen the app. Marker
+  # is cleared on the next manual launch by Bootstrap.clearUserQuitMarker.
+  [[ -f "$HOME/.stack-nudge/user-quit" ]] && return
   local app_path=""
   if [[ -d "$HOME/Applications/StackNudge.app" ]]; then
     app_path="$HOME/Applications/StackNudge.app"
