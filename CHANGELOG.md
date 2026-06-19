@@ -4,6 +4,13 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.20.1](https://github.com/StackOneHQ/stack-nudge/compare/v1.20.0...v1.20.1) (2026-06-19)
+
+
+### Bug Fixes
+
+* **panel:** honor explicit Quit; align side text with gauge center ([#106](https://github.com/StackOneHQ/stack-nudge/issues/106)) ([d64b1cc](https://github.com/StackOneHQ/stack-nudge/commit/d64b1cccdfdadb8c0facd85e29d1bae54abc3aba))
+
 ## [1.20.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.19.2...v1.20.0) (2026-06-17)
 
 
