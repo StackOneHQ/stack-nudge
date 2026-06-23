@@ -45,6 +45,12 @@
 # Default: true
 #STACKNUDGE_MUTE_WHEN_FOCUSED=false
 
+# Pill widget accent color preset. Also settable from Settings → Widget →
+# "Accent color". Allowed: cyan, violet, mint, rose, system (system follows
+# the macOS accent and matches the banner color).
+# Default: cyan
+#STACKNUDGE_THEME=violet
+
 # Log a debug line (to the launchd log) explaining voice decisions — useful
 # when a notification played silently and you want to know why.
 # Default: false

@@ -83,6 +83,42 @@ enum MascotKind: String, CaseIterable {
     }
 }
 
+// Pill accent color preset. Drives the cyan-tinted surfaces in CompactView
+// (pill border at <75% utilization, gauge tracks, gauge fill under 50%,
+// mascot accents, inner-glow halo, spinner dot, sweat-drop). Urgency
+// colors (.orange ≥75%, .red ≥90%) and the gauge's .yellow 50–75% band
+// are deliberately untouched — they are semantic, not aesthetic.
+//
+// Orange and yellow are excluded from the palette because they collide
+// with the urgency bands and would muddy the at-a-glance read.
+enum AccentTheme: String, CaseIterable {
+    case cyan
+    case violet
+    case mint
+    case rose
+    case system
+
+    var label: String {
+        switch self {
+        case .cyan:   return "Cyan"
+        case .violet: return "Violet"
+        case .mint:   return "Mint"
+        case .rose:   return "Rose"
+        case .system: return "System"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .cyan:   return Color(red: 0.40, green: 0.85, blue: 1.00)
+        case .violet: return Color(red: 0.72, green: 0.55, blue: 1.00)
+        case .mint:   return Color(red: 0.50, green: 0.95, blue: 0.78)
+        case .rose:   return Color(red: 1.00, green: 0.55, blue: 0.78)
+        case .system: return Color.accentColor
+        }
+    }
+}
+
 // In-panel GitHub device-flow sign-in state. `awaitingApproval` carries the
 // one-time code + verification URL to show while we poll in the background.
 enum GithubSignIn: Equatable {
@@ -100,7 +136,7 @@ enum GithubSignIn: Equatable {
 enum SettingsRow: Hashable {
     case update, hotkey
     case banner, muteWhenFocused, pinPanel, keepOpenWhenEmpty, launchAtLogin
-    case widget, widgetCorner, widgetOpacity, widgetContent, mascot
+    case widget, widgetCorner, widgetOpacity, widgetContent, mascot, theme
     case soundEnabled, agentDoneSound, permissionSound
     case voiceEnabled, voice, voiceSpeed, downloadVoiceModel
     case quotaTracking, quotaAlerts, alertThreshold, pollFrequency, contextAlert, showRemaining
@@ -449,6 +485,7 @@ final class PanelNav: ObservableObject {
     @Published var compactCorner: CompactCorner = .topRight
     @Published var compactContent: CompactContent = .sessions
     @Published var mascot:        MascotKind = .robot
+    @Published var theme:         AccentTheme = .cyan
     // Pill window alpha when at rest. 1.0 = fully opaque; lower values
     // let the desktop show through so the widget recedes. Applied
     // window-level so the NSVisualEffectView blur fades with it. Only
@@ -551,7 +588,7 @@ final class PanelNav: ObservableObject {
         if updateAvailable != nil { rows.append(.update) }
         rows += [.hotkey,
                  .banner, .muteWhenFocused, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin,
-                 .widget, .widgetCorner, .widgetOpacity, .widgetContent, .mascot,
+                 .widget, .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme,
                  .soundEnabled, .agentDoneSound, .permissionSound,
                  .voiceEnabled]
         rows += voiceModelCached ? [.voice, .voiceSpeed] : [.downloadVoiceModel]
@@ -631,6 +668,7 @@ final class PanelNav: ObservableObject {
         compactContent = CompactContent(rawValue: config["STACKNUDGE_COMPACT_CONTENT"] ?? "")
             ?? .sessions
         mascot        = MascotKind(rawValue: config["STACKNUDGE_MASCOT"] ?? "") ?? .robot
+        theme         = AccentTheme(rawValue: config["STACKNUDGE_THEME"] ?? "") ?? .cyan
         let rawAlpha = Double(config["STACKNUDGE_COMPACT_ALPHA"] ?? "") ?? 1.0
         compactAlpha = Self.compactAlphaOptions.min(by: { abs($0 - rawAlpha) < abs($1 - rawAlpha) }) ?? 1.0
         let rawPerSession = Int(config["STACKNUDGE_EVENTS_PER_SESSION"] ?? "") ?? 5
@@ -951,6 +989,12 @@ final class PanelNav: ObservableObject {
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
             mascot = list[next]
             ConfigFile.write(key: "STACKNUDGE_MASCOT", value: mascot.rawValue)
+        case .theme:
+            let list = AccentTheme.allCases
+            let idx = list.firstIndex(of: theme) ?? 0
+            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+            theme = list[next]
+            ConfigFile.write(key: "STACKNUDGE_THEME", value: theme.rawValue)
         case .soundEnabled:
             soundEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_SOUND", value: soundEnabled ? "true" : "false")

@@ -7,6 +7,22 @@ private struct LegendWidthKey: PreferenceKey {
     }
 }
 
+// Pill accent color (cyan by default). Read by QuotaGauge + every mascot via
+// `@Environment(\.themeAccent)`; written once at the root of CompactView's
+// body from `nav.theme.color`. Lets a single setting retint pill border,
+// gauge tracks, mascot accents, and the stress sweat-drop in one place
+// without threading a Color parameter through every leaf view's init.
+private struct ThemeAccentKey: EnvironmentKey {
+    static let defaultValue: Color = Color(red: 0.40, green: 0.85, blue: 1.00)
+}
+
+extension EnvironmentValues {
+    var themeAccent: Color {
+        get { self[ThemeAccentKey.self] }
+        set { self[ThemeAccentKey.self] = newValue }
+    }
+}
+
 // Pill-shaped glance widget. Layout left→right:
 //   [gauge]  [7d%, reset-in]  |  [headline: project · tokens · status]
 //   [active count badge]  [expand]
@@ -36,7 +52,6 @@ struct CompactView: View {
     // mid-rotation doesn't crash.
     @State private var cycleIndex: Int = 0
 
-    private static let glowColor = Color(red: 0.4, green: 0.85, blue: 1.0)
     private static let recentEventWindow: TimeInterval = 5 * 60
     private static let cyclePeriod: TimeInterval = 5.0
 
@@ -45,6 +60,7 @@ struct CompactView: View {
             if nav.compactContent == .usage {
                 HStack(alignment: .center, spacing: 4) {
                     gaugeCluster
+                    Spacer(minLength: 0)
                     expandButton
                 }
                 .frame(maxHeight: .infinity)
@@ -55,8 +71,8 @@ struct CompactView: View {
                     separator
                     headline
                     sessionBadge
-                    expandButton
                     Spacer(minLength: 0)
+                    expandButton
                 }
                 .padding(.horizontal, 12)
             }
@@ -71,6 +87,11 @@ struct CompactView: View {
         // cat wink + ear twitch, eye pupil dilate-and-dart, ghost
         // pop-and-yawn). Gated on pill mode inside each mascot.
         .onHover { isHovering = $0 }
+        // Pill border, gauge tracks, mascot accents, and the sweat-drop
+        // stress signal all read this through @Environment(\.themeAccent).
+        // Single write at the root keeps every leaf in sync as the user
+        // cycles the Theme setting.
+        .environment(\.themeAccent, nav.theme.color)
     }
 
     private var mascotHovered: Bool {
@@ -141,22 +162,21 @@ struct CompactView: View {
     private var sideText: some View {
         let show = isHovering && !nav.compactDragging && nav.quota != nil
         ZStack(alignment: .center) {
-            // Invisible width sizer — reserves the legend's horizontal
-            // footprint so hover doesn't widen the cluster and bump the
-            // expand button. Clipped to zero size via .frame so it doesn't
-            // grow the row vertically; only its measured width survives
-            // through the explicit width below.
+            // Invisible width sizers — reserve the slot's horizontal footprint
+            // so the cluster width stays constant across hover and across the
+            // countdown's minute-by-minute changes. Both sizers report to
+            // LegendWidthKey, which reduces with max(), so the slot fits
+            // whichever is widest. Without the countdown sizer, the wide
+            // letters 'h'/'m' in "2h24m" exceed the legend's footprint
+            // ("5h 50%") and the countdown wraps onto a second line.
             hoverLegend
                 .fixedSize()
                 .hidden()
-                .background(
-                    GeometryReader { geo in
-                        Color.clear.preference(
-                            key: LegendWidthKey.self,
-                            value: geo.size.width
-                        )
-                    }
-                )
+                .background(legendWidthReporter)
+                .frame(width: 0, height: 0)
+            countdownSizer
+                .hidden()
+                .background(legendWidthReporter)
                 .frame(width: 0, height: 0)
             if show {
                 hoverLegend
@@ -164,15 +184,37 @@ struct CompactView: View {
                 Text(Self.shortDuration(until: reset))
                     .font(.system(size: 9, weight: .medium).monospacedDigit())
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
             } else {
                 Text("—")
                     .font(.system(size: 9, weight: .medium).monospacedDigit())
                     .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .fixedSize()
             }
         }
         .frame(width: legendWidth > 0 ? legendWidth : nil, alignment: .leading)
         .onPreferenceChange(LegendWidthKey.self) { legendWidth = $0 }
         .animation(.easeInOut(duration: 0.18), value: show)
+    }
+
+    // Worst-case countdown footprint. shortDuration emits "Xh", "XhYm", or
+    // "Ym"; the 5h quota window caps the leading digit, so "0h00m" covers
+    // every shape (digits are monospaced; 'h'/'m' are the widest letters).
+    private var countdownSizer: some View {
+        Text("0h00m")
+            .font(.system(size: 9, weight: .medium).monospacedDigit())
+            .fixedSize()
+    }
+
+    private var legendWidthReporter: some View {
+        GeometryReader { geo in
+            Color.clear.preference(
+                key: LegendWidthKey.self,
+                value: geo.size.width
+            )
+        }
     }
 
     private var hoverLegend: some View {
@@ -342,14 +384,14 @@ struct CompactView: View {
         (anyBusy || (nav.quota?.fiveHour?.utilization ?? 0) >= 75) ? 0.1 : 60
     }
 
-    // Border color tracks 5h quota urgency: cyan under 75%, amber 75–90%,
-    // red 90%+. Pulse rate climbs with severity so red-state pill is
+    // Border color tracks 5h quota urgency: themed accent under 75%, amber
+    // 75–90%, red 90%+. Pulse rate climbs with severity so red-state pill is
     // visibly more urgent than amber.
     private var urgencyColor: Color {
         let pct = nav.quota?.fiveHour?.utilization ?? 0
         if pct >= 90 { return .red }
         if pct >= 75 { return .orange }
-        return Self.glowColor
+        return nav.theme.color
     }
 
     private func pulseAmount(at date: Date) -> Double {
@@ -425,15 +467,6 @@ struct CompactView: View {
         }
     }
 
-    fileprivate static func gaugeColor(pct: Double) -> Color {
-        if pct >= 90 { return .red }
-        if pct >= 75 { return .orange }
-        if pct >= 50 { return .yellow }
-        return Color(red: 0.4, green: 0.85, blue: 1.0)
-    }
-
-
-
     private static func shortDuration(until date: Date) -> String {
         let s = max(0, Int(date.timeIntervalSinceNow))
         if s >= 3600 {
@@ -461,7 +494,8 @@ private struct QuotaGauge: View {
     let paused: Bool
     let showRemaining: Bool
 
-    private static let cyan = Color(red: 0.30, green: 0.92, blue: 1.0)
+    @Environment(\.themeAccent) private var accent
+
     private static let outerLineWidth: CGFloat = 4.0
     private static let innerLineWidth: CGFloat = 4.0
     private static let ringGap: CGFloat = 5.0
@@ -512,7 +546,7 @@ private struct QuotaGauge: View {
     private var outerFill: some View {
         Circle()
             .trim(from: 0, to: max(0, min(1, sevenPct / 100)))
-            .stroke(Self.urgencyColor(for: sevenPct),
+            .stroke(urgencyColor(for: sevenPct),
                     style: StrokeStyle(lineWidth: Self.outerLineWidth, lineCap: .round))
             .rotationEffect(.degrees(-90))
             .padding(Self.outerLineWidth / 2)
@@ -521,7 +555,7 @@ private struct QuotaGauge: View {
     private var innerFill: some View {
         Circle()
             .trim(from: 0, to: max(0, min(1, fivePct / 100)))
-            .stroke(Self.urgencyColor(for: fivePct),
+            .stroke(urgencyColor(for: fivePct),
                     style: StrokeStyle(lineWidth: Self.innerLineWidth, lineCap: .round))
             .rotationEffect(.degrees(-90))
             .padding(Self.outerLineWidth + Self.ringGap)
@@ -531,11 +565,11 @@ private struct QuotaGauge: View {
     // mapped cyan→red across the full 360°, so a nearly-full ring wrapped
     // its red end back into cyan at 12 o'clock — a jarring blue notch.
     // Solid color per band reads cleaner and matches the pill border.
-    private static func urgencyColor(for pct: Double) -> Color {
+    private func urgencyColor(for pct: Double) -> Color {
         if pct >= 90 { return .red }
         if pct >= 75 { return .orange }
         if pct >= 50 { return .yellow }
-        return cyan
+        return accent
     }
 
     private func innerGlow(at date: Date) -> some View {
@@ -545,7 +579,7 @@ private struct QuotaGauge: View {
         return Circle()
             .fill(
                 RadialGradient(
-                    gradient: Gradient(colors: [Self.cyan.opacity(intensity), .clear]),
+                    gradient: Gradient(colors: [accent.opacity(intensity), .clear]),
                     center: .center,
                     startRadius: 0,
                     endRadius: 22
@@ -568,7 +602,7 @@ private struct QuotaGauge: View {
         let t = date.timeIntervalSinceReferenceDate
         let angle = (t * 180).truncatingRemainder(dividingBy: 360)
         return Circle()
-            .fill(Self.cyan)
+            .fill(accent)
             .frame(width: 3, height: 3)
             .offset(y: -15)
             .rotationEffect(.degrees(angle))
@@ -632,7 +666,8 @@ private struct RobotMascot: View {
     @State private var pulse: Double = 0
     @State private var pulseKind: NudgeKind?
 
-    private static let cyan = Color(red: 0.4, green: 0.85, blue: 1.0)
+    @Environment(\.themeAccent) private var accent
+
     private static let outline = Color.secondary.opacity(0.7)
 
     var body: some View {
@@ -742,10 +777,10 @@ private struct RobotMascot: View {
             // Subtle cyan cheek pulse.
             HStack(spacing: 9) {
                 Circle()
-                    .fill(Self.cyan.opacity(0.55 * pulse))
+                    .fill(accent.opacity(0.55 * pulse))
                     .frame(width: 3, height: 3)
                 Circle()
-                    .fill(Self.cyan.opacity(0.55 * pulse))
+                    .fill(accent.opacity(0.55 * pulse))
                     .frame(width: 3, height: 3)
             }
             .offset(y: 4)
@@ -753,10 +788,11 @@ private struct RobotMascot: View {
     }
 
     private var sweatDrop: some View {
-        // Tiny blue teardrop above the right side of the head — passive
-        // quota-stress signal. Only renders when `stressed` is true.
+        // Tiny teardrop above the right side of the head — passive
+        // quota-stress signal. Themed so a non-cyan accent doesn't leave a
+        // jarring blue drop floating over a violet/rose/mint pill.
         Circle()
-            .fill(Color(red: 0.45, green: 0.75, blue: 1.0).opacity(0.85))
+            .fill(accent.opacity(0.85))
             .frame(width: 2.8, height: 2.8)
             .offset(x: 8, y: -4)
     }
@@ -795,7 +831,7 @@ private struct RobotMascot: View {
         switch state {
         case .alert: return .orange.opacity(0.15)
         case .happy: return .green.opacity(0.15)
-        case .busy:  return Self.cyan.opacity(0.18)
+        case .busy:  return accent.opacity(0.18)
         default:     return Color.secondary.opacity(0.10)
         }
     }
@@ -819,7 +855,7 @@ private struct RobotMascot: View {
         switch state {
         case .alert: return .orange
         case .happy: return .green
-        case .busy:  return Self.cyan
+        case .busy:  return accent
         default:     return Self.outline
         }
     }
@@ -848,7 +884,7 @@ private struct RobotMascot: View {
         case .busy:
             // Focused: narrow horizontal slits
             Capsule()
-                .fill(Self.cyan)
+                .fill(accent)
                 .frame(width: 4.5, height: 1.8)
         case .alert:
             // Surprised: bigger round eyes
@@ -866,7 +902,7 @@ private struct RobotMascot: View {
             .frame(width: 4.5, height: 3)
         case .watching:
             Circle()
-                .fill(Self.cyan)
+                .fill(accent)
                 .frame(width: 3.3, height: 3.3)
         case .idle:
             Circle()
@@ -894,7 +930,7 @@ private struct RobotMascot: View {
                 .offset(y: 6)
         case .busy:
             Rectangle()
-                .fill(Self.cyan.opacity(0.5))
+                .fill(accent.opacity(0.5))
                 .frame(width: 4.5, height: 1.2)
                 .offset(y: 6)
         default:
@@ -906,7 +942,7 @@ private struct RobotMascot: View {
                     p.addQuadCurve(to: CGPoint(x: 6, y: 0),
                                    control: CGPoint(x: 3, y: 2.2))
                 }
-                .stroke(Self.cyan, style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
+                .stroke(accent, style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
                 .frame(width: 6, height: 2.2)
                 .offset(y: 6)
                 .transition(.scale.combined(with: .opacity))
@@ -930,7 +966,8 @@ private struct CatMascot: View {
     @State private var pulse: Double = 0
     @State private var pulseKind: NudgeKind?
 
-    private static let cyan = Color(red: 0.4, green: 0.85, blue: 1.0)
+    @Environment(\.themeAccent) private var accent
+
     private static let outline = Color.secondary.opacity(0.7)
 
     var body: some View {
@@ -1015,7 +1052,7 @@ private struct CatMascot: View {
         case .other:
             // Cyan whisker shimmer.
             Capsule()
-                .fill(Self.cyan.opacity(0.5 * pulse))
+                .fill(accent.opacity(0.5 * pulse))
                 .frame(width: 18, height: 1.5)
                 .blur(radius: 1.5)
                 .offset(y: 4.5)
@@ -1087,7 +1124,7 @@ private struct CatMascot: View {
         switch state {
         case .alert: return .orange.opacity(0.18)
         case .happy: return .green.opacity(0.18)
-        case .busy:  return Self.cyan.opacity(0.20)
+        case .busy:  return accent.opacity(0.20)
         default:     return Color.secondary.opacity(0.12)
         }
     }
@@ -1123,7 +1160,7 @@ private struct CatMascot: View {
     private var eyeShape: some View {
         switch state {
         case .busy:
-            Capsule().fill(Self.cyan).frame(width: 1.4, height: 4.5)  // slit
+            Capsule().fill(accent).frame(width: 1.4, height: 4.5)  // slit
         case .alert:
             Circle().fill(Color.orange).frame(width: 4.5, height: 4.5)
         case .happy:
@@ -1135,7 +1172,7 @@ private struct CatMascot: View {
             .stroke(Color.green, style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
             .frame(width: 4.5, height: 3)
         case .watching:
-            Circle().fill(Self.cyan).frame(width: 3.0, height: 3.0)
+            Circle().fill(accent).frame(width: 3.0, height: 3.0)
         case .idle:
             Circle().fill(Self.outline).frame(width: 2.4, height: 2.4)
         }
@@ -1247,7 +1284,8 @@ private struct EyeMascot: View {
     // direction. Set true while dragging, cleared on release.
     @State private var lagging: Bool = false
 
-    private static let cyan = Color(red: 0.4, green: 0.85, blue: 1.0)
+    @Environment(\.themeAccent) private var accent
+
     private static let outline = Color.secondary.opacity(0.7)
 
     var body: some View {
@@ -1335,7 +1373,7 @@ private struct EyeMascot: View {
         case .other:
             // Single cyan tick at the top — small blip.
             Capsule()
-                .fill(Self.cyan.opacity(0.6 * pulse))
+                .fill(accent.opacity(0.6 * pulse))
                 .frame(width: 6, height: 1.5)
                 .offset(y: -10)
         }
@@ -1386,7 +1424,7 @@ private struct EyeMascot: View {
         switch state {
         case .alert: return .red.opacity(0.18)
         case .happy: return .green.opacity(0.14)
-        case .busy:  return Self.cyan.opacity(0.16)
+        case .busy:  return accent.opacity(0.16)
         default:     return Color.secondary.opacity(0.10)
         }
     }
@@ -1428,7 +1466,7 @@ private struct EyeMascot: View {
         switch state {
         case .alert: return .red
         case .happy: return .green
-        case .busy:  return Self.cyan
+        case .busy:  return accent
         default:     return Self.outline
         }
     }
@@ -1446,7 +1484,8 @@ private struct GhostMascot: View {
     @State private var pulse: Double = 0
     @State private var pulseKind: NudgeKind?
 
-    private static let cyan = Color(red: 0.4, green: 0.85, blue: 1.0)
+    @Environment(\.themeAccent) private var accent
+
     private static let outline = Color.secondary.opacity(0.7)
 
     var body: some View {
@@ -1536,7 +1575,7 @@ private struct GhostMascot: View {
         case .other:
             // Soft cyan ring around the body.
             Capsule()
-                .fill(Self.cyan.opacity(0.35 * pulse))
+                .fill(accent.opacity(0.35 * pulse))
                 .frame(width: 22, height: 26)
                 .blur(radius: 4)
         }
@@ -1561,8 +1600,8 @@ private struct GhostMascot: View {
     private var sparkle: some View {
         // Four-point star drawn as two crossed thin capsules.
         ZStack {
-            Capsule().fill(Self.cyan).frame(width: 1.2, height: 4)
-            Capsule().fill(Self.cyan).frame(width: 4, height: 1.2)
+            Capsule().fill(accent).frame(width: 1.2, height: 4)
+            Capsule().fill(accent).frame(width: 4, height: 1.2)
         }
     }
 
@@ -1577,7 +1616,7 @@ private struct GhostMascot: View {
         switch state {
         case .alert: return .orange.opacity(0.18)
         case .happy: return .green.opacity(0.18)
-        case .busy:  return Self.cyan.opacity(0.20)
+        case .busy:  return accent.opacity(0.20)
         default:     return Color.secondary.opacity(0.12)
         }
     }
@@ -1603,7 +1642,7 @@ private struct GhostMascot: View {
     private var eyeShape: some View {
         switch state {
         case .busy:
-            Capsule().fill(Self.cyan).frame(width: 4, height: 1.6)
+            Capsule().fill(accent).frame(width: 4, height: 1.6)
         case .alert:
             Circle().fill(Color.orange).frame(width: 4, height: 4)
         case .happy:
@@ -1615,7 +1654,7 @@ private struct GhostMascot: View {
             .stroke(Color.green, style: StrokeStyle(lineWidth: 1.1, lineCap: .round))
             .frame(width: 4, height: 2.5)
         case .watching:
-            Circle().fill(Self.cyan).frame(width: 3, height: 3)
+            Circle().fill(accent).frame(width: 3, height: 3)
         case .idle:
             Circle().fill(Self.outline).frame(width: 2.4, height: 2.4)
         }
