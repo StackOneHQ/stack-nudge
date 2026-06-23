@@ -58,6 +58,7 @@ struct SettingsView: View {
                             row(.widgetOpacity, label: "Widget opacity", kind: .cycle, value: "\(Int(nav.compactAlpha * 100))%",  enabled: nav.compactMode)
                             row(.widgetContent, label: "Widget type",   kind: .cycle,  value: nav.compactContent.label,           enabled: nav.compactMode)
                             row(.mascot,        label: "Mascot",        kind: .cycle,  value: nav.mascot.label,                   enabled: nav.compactMode)
+                            row(.theme,         label: "Accent color",  kind: .cycle,  value: nav.theme.label,                    enabled: nav.compactMode)
                         }
 
                         section("Sounds") {
