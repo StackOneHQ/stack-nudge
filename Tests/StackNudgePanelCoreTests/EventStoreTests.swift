@@ -26,6 +26,24 @@ final class EventStoreTests: XCTestCase {
         XCTAssertEqual(store.selectedID, event.id)
     }
 
+    func test_selectFirstAndLast_jumpToEnds() {
+        let store = EventStore()
+        let oldest = makeEvent(message: "oldest")
+        let newest = makeEvent(message: "newest")
+        store.append(oldest)
+        store.append(newest)   // newest-first: events == [newest, oldest]
+        store.selectLast()
+        XCTAssertEqual(store.selectedID, oldest.id)   // bottom row
+        store.selectFirst()
+        XCTAssertEqual(store.selectedID, newest.id)   // top row
+    }
+
+    func test_selectFirst_onEmptyStore_clearsSelection() {
+        let store = EventStore()
+        store.selectFirst()
+        XCTAssertNil(store.selectedID)
+    }
+
     func test_append_truncatesPastMaxEvents() {
         // maxEvents is 5; we send 7.
         let store = EventStore()

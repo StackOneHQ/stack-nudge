@@ -128,6 +128,7 @@ struct SettingsView: View {
                     FooterHint(label: "Cancel", keys: ["Esc"])
                 } else {
                     FooterHint(label: "Move",  keys: ["↑", "↓"])
+                    FooterHint(label: "Top/Bottom", keys: ["⌘↑↓"])
                     FooterHint(label: "Cycle", keys: ["←", "→"])
                     FooterHint(label: "Act",   keys: ["⏎"])
                     FooterHint(label: "Back",  keys: ["Esc"])
