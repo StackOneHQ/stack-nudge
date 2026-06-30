@@ -534,6 +534,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private var updateChecker: UpdateChecker?
     private var updater: Updater?
     private let quotaProbe = QuotaProbe()
+    private let claudeCliQuotaProbe = ClaudeCliQuotaProbe()
     private let codexQuotaProbe = CodexQuotaProbe()
     private let antigravityUsageProbe = AntigravityUsageProbe()
     private var quotaTimer: Timer?
@@ -1230,19 +1231,48 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func runQuotaProbe() {
         guard quotaTrackingEnabled else { return }
         nav.quotaSyncing = true
-        quotaProbe.fetch { [weak self] snapshot in
+        // CLI probe first — Claude CLI reads its own keychain, so our process
+        // never triggers the periodic password prompt. Only fall back to the
+        // direct API probe when the CLI invocation failed outright (binary
+        // missing, spawn/timeout error, or unparseable envelope). The CLI's
+        // own soft-fail (rate-limited cold cache, no bucket lines) is treated
+        // as "leave the prior snapshot alone" — NOT a reason to re-prompt
+        // the user via the keychain path.
+        claudeCliQuotaProbe.fetch { [weak self] snapshot in
             guard let self else { return }
-            self.nav.quotaSyncing = false
-            self.nav.usingPlaintextCredentials = self.quotaProbe.usingPlaintextCredentials
             if let snapshot {
+                self.nav.quotaSyncing = false
+                self.nav.usingClaudeCliProbe = true
+                self.nav.usingPlaintextCredentials = false
                 self.nav.quota = snapshot
                 self.nav.quotaError = nil
                 self.nav.quotaLastUpdated = Date()
                 self.evaluateQuotaThresholds(snapshot)
-            } else if self.quotaProbe.isRateLimited {
-                self.nav.quotaError = "Rate-limited by Anthropic — retrying shortly."
-            } else if self.quotaProbe.lastProbeFailed {
-                self.nav.quotaError = "Quota data unavailable — the usage endpoint may have changed."
+                return
+            }
+            if self.claudeCliQuotaProbe.isRateLimited {
+                // Soft-fail: hold the prior snapshot, don't fall back to the
+                // API probe (which would just hit the same upstream limit).
+                self.nav.quotaSyncing = false
+                self.nav.usingClaudeCliProbe = true
+                return
+            }
+            // Hard-fail from the CLI probe → try the API probe.
+            self.quotaProbe.fetch { [weak self] snapshot in
+                guard let self else { return }
+                self.nav.quotaSyncing = false
+                self.nav.usingClaudeCliProbe = false
+                self.nav.usingPlaintextCredentials = self.quotaProbe.usingPlaintextCredentials
+                if let snapshot {
+                    self.nav.quota = snapshot
+                    self.nav.quotaError = nil
+                    self.nav.quotaLastUpdated = Date()
+                    self.evaluateQuotaThresholds(snapshot)
+                } else if self.quotaProbe.isRateLimited {
+                    self.nav.quotaError = "Rate-limited by Anthropic — retrying shortly."
+                } else if self.quotaProbe.lastProbeFailed {
+                    self.nav.quotaError = "Quota data unavailable — the usage endpoint may have changed."
+                }
             }
         }
         // Codex (ChatGPT-plan) rate limits — read locally from the newest

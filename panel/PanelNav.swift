@@ -235,6 +235,10 @@ final class PanelNav: ObservableObject {
     // ~/.claude/.credentials.json rather than the Keychain — any same-user
     // process can read that file. Drives a warning in Settings → Usage.
     @Published var usingPlaintextCredentials: Bool = false
+    // True when quota was sourced via `claude --print /usage` rather than
+    // the direct API probe. Claude CLI reads its own keychain (no prompts
+    // for us). Drives the corresponding status line in Settings → Usage.
+    @Published var usingClaudeCliProbe: Bool = false
     // Set when the event socket failed to bind at startup — the panel is then
     // deaf to every agent notification. Drives the banner at the top of the
     // Events tab so the failure isn't silent. Cleared when the socket binds.
@@ -894,6 +898,7 @@ final class PanelNav: ObservableObject {
             quotaLastUpdated = nil
             quotaError = nil
             usingPlaintextCredentials = false
+            usingClaudeCliProbe = false
         }
     }
 
