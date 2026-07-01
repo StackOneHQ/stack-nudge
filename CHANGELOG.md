@@ -4,6 +4,20 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.21.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.20.3...v1.21.0) (2026-07-01)
+
+
+### Features
+
+* **panel:** jump to top/bottom with cmd+up/down ([#114](https://github.com/StackOneHQ/stack-nudge/issues/114)) ([f0d0082](https://github.com/StackOneHQ/stack-nudge/commit/f0d0082612bc3482d096e16986a1a05970aeb716))
+
+
+### Bug Fixes
+
+* harden phrase pipeline, validate IPC fifo_path, fix 'O'-key orphan ([#103](https://github.com/StackOneHQ/stack-nudge/issues/103)) ([97c443f](https://github.com/StackOneHQ/stack-nudge/commit/97c443f708a567ec7133af01dec31a31266defb6))
+* **tickets:** scroll viewport on cmd+up/down jump ([#117](https://github.com/StackOneHQ/stack-nudge/issues/117)) ([6e22d30](https://github.com/StackOneHQ/stack-nudge/commit/6e22d303bc57c77aa01c3423730a738edce8e9f2))
+* **tickets:** smooth cursor nav ([#113](https://github.com/StackOneHQ/stack-nudge/issues/113)) ([ab68d8c](https://github.com/StackOneHQ/stack-nudge/commit/ab68d8cddde450a29081af304df6c8600f34ea29))
+
 ## [1.20.3](https://github.com/StackOneHQ/stack-nudge/compare/v1.20.2...v1.20.3) (2026-07-01)
 
 
