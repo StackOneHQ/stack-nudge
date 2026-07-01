@@ -347,6 +347,12 @@ final class PanelNav: ObservableObject {
         guard count > 0 else { return }
         outcomeSelectedIndex = min(max(0, outcomeSelectedIndex + delta), count - 1)
     }
+    // ⌘↑/↓ — jump to the first / last Tickets row.
+    func jumpOutcomeSelection(toLast: Bool) {
+        let count = outcomeRowCount()
+        guard count > 0 else { return }
+        outcomeSelectedIndex = toLast ? count - 1 : 0
+    }
 
     // Open the selected row's link: a ticket header → its tracker URL
     // (STACKNUDGE_TICKET_URL); a branch sub-row → its PR. Repo headers don't
@@ -462,6 +468,10 @@ final class PanelNav: ObservableObject {
         guard availableUsageClients.count > 1 else { return }
         usageClientIndex = max(clampedUsageClientIndex - 1, 0)
     }
+
+    // ⌘↑/↓ — jump to the first / last connected client.
+    func selectFirstUsageClient() { guard !availableUsageClients.isEmpty else { return }; usageClientIndex = 0 }
+    func selectLastUsageClient()  { let count = availableUsageClients.count; guard count > 0 else { return }; usageClientIndex = count - 1 }
     // Transient feedback for the "Check for updates…" action row.
     // Set by PanelController around UpdateChecker.check(); cleared
     // back to .idle a few seconds after a terminal result so the
@@ -867,6 +877,10 @@ final class PanelNav: ObservableObject {
         guard rowCount > 0 else { return }
         selectedSettingIndex = (selectedSettingIndex - 1 + rowCount) % rowCount
     }
+
+    // ⌘↑/↓ — jump to the first / last settings row.
+    func selectFirstRow() { guard rowCount > 0 else { return }; selectedSettingIndex = 0 }
+    func selectLastRow()  { guard rowCount > 0 else { return }; selectedSettingIndex = rowCount - 1 }
 
     // MARK: - Cycle / activate
 

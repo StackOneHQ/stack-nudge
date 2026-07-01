@@ -212,6 +212,10 @@ final class EventStore: ObservableObject {
         selectedID = events[max(idx - 1, 0)].id
     }
 
+    // ⌘↑/↓ — jump to the first / last event.
+    func selectFirst() { selectedID = events.first?.id }
+    func selectLast()  { selectedID = events.last?.id }
+
     var selectedEvent: NudgeEvent? {
         events.first { $0.id == selectedID }
     }

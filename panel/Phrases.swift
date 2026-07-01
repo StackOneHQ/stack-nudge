@@ -238,6 +238,10 @@ final class PhrasesViewModel: ObservableObject {
         }
     }
 
+    // ⌘↑/↓ — jump to the first / last navigable row.
+    func selectFirst() { selectedRow = navigableRows.first }
+    func selectLast()  { selectedRow = navigableRows.last }
+
     // Space: toggle a default on/off if a default is selected. No-op on custom.
     func toggleSelected() {
         guard let row = selectedRow, row.isDefault else { return }
@@ -491,6 +495,7 @@ struct PhrasesView: View {
             FooterHint(label: "Add",    keys: ["⏎"], primary: true)
             FooterHint(label: "Toggle", keys: ["␣"])
             FooterHint(label: "Remove", keys: ["⌫"])
+            FooterHint(label: "Top/Bottom", keys: ["⌘↑↓"])
             FooterHint(label: "Back",   keys: ["Esc"])
         }
     }

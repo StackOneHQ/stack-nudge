@@ -303,6 +303,7 @@ struct PanelContentView: View {
                     FooterDivider()
                 }
                 FooterHint(label: "Select",  keys: ["↑", "↓"])
+                FooterHint(label: "Top/Bottom", keys: ["⌘↑↓"])
                 // Snooze is always rendered so the footer never reflows when
                 // selection moves between event types — dimmed when the row
                 // isn't snoozable. The S key is wired to fire only for
@@ -1313,6 +1314,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         scrollView.reflectScrolledClipView(clip)
     }
 
+    // ⌘↑/↓ in a pure-scroll detail pane (no selection to move): jump the clip
+    // view to the very top or bottom.
+    private func scrollDetailToEdge(top: Bool) {
+        guard let scrollView = findScrollView(in: panel.contentView),
+              let doc = scrollView.documentView else { return }
+        let clip = scrollView.contentView
+        let maxY = max(0, doc.frame.height - clip.bounds.height)
+        var origin = clip.bounds.origin
+        origin.y = top ? 0 : maxY
+        clip.scroll(to: origin)
+        scrollView.reflectScrolledClipView(clip)
+    }
+
     private func findScrollView(in view: NSView?) -> NSScrollView? {
         guard let view else { return nil }
         if let sv = view as? NSScrollView { return sv }
@@ -2288,6 +2302,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                     }
                     return true
                 }
+            case KeyCode.upArrow, KeyCode.downArrow:
+                // Cmd+↑/↓ jump the current page to its first / last item (the
+                // scroll follows selection). Returns false for screens with
+                // nothing to jump, so the key passes through untouched.
+                return jumpToEdge(top: event.keyCode == KeyCode.upArrow)
             default:
                 break
             }
@@ -2684,6 +2703,39 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         let pids = sessions.sessions.map(\.pid)
         let idx = sessions.selectedPID.flatMap(pids.firstIndex(of:)) ?? 0
         sessions.selectedPID = pids[max(idx - 1, 0)]
+    }
+
+    // ⌘↑/↓ — jump to the first / last session.
+    private func selectFirstSession() { sessions.selectedPID = sessions.sessions.first?.pid }
+    private func selectLastSession()  { sessions.selectedPID = sessions.sessions.last?.pid }
+
+    // Dispatch ⌘↑/↓ to the current page's "jump to first/last". Selection-driven
+    // pages move their selection (the viewport follows); the Usage detail pane
+    // has no selection, so it scrolls to the edge. Returns false on screens with
+    // nothing to jump so the keystroke passes through.
+    private func jumpToEdge(top: Bool) -> Bool {
+        switch nav.mode {
+        case .events:
+            top ? store.selectFirst() : store.selectLast()
+        case .sessions:
+            guard sessions.renamingPID == nil else { return false }
+            top ? selectFirstSession() : selectLastSession()
+        case .usage:
+            if nav.usageDetailFocused {
+                scrollDetailToEdge(top: top)
+            } else {
+                top ? nav.selectFirstUsageClient() : nav.selectLastUsageClient()
+            }
+        case .outcomes:
+            nav.jumpOutcomeSelection(toLast: !top)
+        case .settings:
+            top ? nav.selectFirstRow() : nav.selectLastRow()
+        case .phrases:
+            top ? phrases.selectFirst() : phrases.selectLast()
+        default:
+            return false  // modal / single-purpose screens have nothing to jump
+        }
+        return true
     }
 
     private func focusSelectedSession() {

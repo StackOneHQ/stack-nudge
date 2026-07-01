@@ -331,10 +331,12 @@ struct UsageView: View {
                 FooterHint(label: footerStatusLabel, keys: [])
                 if nav.usageDetailFocused {
                     FooterHint(label: "Scroll", keys: ["↑↓"])
+                    FooterHint(label: "Top/Bottom", keys: ["⌘↑↓"])
                     FooterHint(label: "Back", keys: ["←"])
                 } else {
                     if nav.availableUsageClients.count > 1 {
                         FooterHint(label: "Switch", keys: ["↑↓"])
+                        FooterHint(label: "Top/Bottom", keys: ["⌘↑↓"])
                     }
                     if !nav.availableUsageClients.isEmpty {
                         FooterHint(label: "Enter", keys: ["→"])

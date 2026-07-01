@@ -110,6 +110,7 @@ struct OutcomesView: View {
                 FooterHint(label: footerStatus(groups), keys: [])
                 if !groups.isEmpty {
                     FooterHint(label: "Select", keys: ["↑↓"])
+                    FooterHint(label: "Top/Bottom", keys: ["⌘↑↓"])
                     FooterHint(label: "Open", keys: ["↵"])
                     FooterHint(label: "Remove", keys: ["⌫"])
                 }

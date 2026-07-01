@@ -81,6 +81,7 @@ struct SessionsView: View {
                 FooterHint(label: "Cancel", keys: ["Esc"])
             } else {
                 FooterHint(label: "Select",  keys: ["↑", "↓"])
+                FooterHint(label: "Top/Bottom", keys: ["⌘↑↓"])
                 FooterHint(label: "Focus",   keys: ["⏎"])
                 FooterHint(label: "Rename",  keys: ["N"])
                 FooterHint(label: "Mute",    keys: ["M"])
