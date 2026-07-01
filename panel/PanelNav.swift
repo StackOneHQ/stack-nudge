@@ -264,7 +264,13 @@ final class PanelNav: ObservableObject {
     // the Tickets tab (OutcomesView) and its tab-strip count re-read the
     // in-memory HandoffLedger and reflect the new session live. The ledger
     // isn't itself observable; this is the single change-signal that drives it.
-    @Published var handoffsRevision: Int = 0
+    @Published var handoffsRevision: Int = 0 { didSet { cachedOutcomeGroups = nil } }
+    // Memoized grouping of the ledger (the expensive part: regex ticket
+    // attribution + branch breakdown + sorts). Invalidated only when the ledger
+    // changes (handoffsRevision) — NOT on selection moves, so holding ↑/↓ on the
+    // Tickets tab doesn't re-derive every keystroke. The hideShipped filter is
+    // applied per call on top, since it reads live outcome/PR state.
+    private var cachedOutcomeGroups: [TicketGroup]?
     // Derived "did it ship?" status per repo+branch, computed off-main by
     // PanelController's outcome pass and read by the Tickets tab. Keyed by
     // `outcomeKey(repoRoot, branch)`. Empty until the first pass completes.
@@ -307,7 +313,13 @@ final class PanelNav: ObservableObject {
     // The groups the Tickets tab renders, after the hide-shipped filter. Single
     // source of truth so the view and the keyboard indexing never disagree.
     func visibleOutcomeGroups() -> [TicketGroup] {
-        let groups = OutcomesView.groups(from: HandoffLedger.shared.all())
+        let groups: [TicketGroup]
+        if let cached = cachedOutcomeGroups {
+            groups = cached
+        } else {
+            groups = OutcomesView.groups(from: HandoffLedger.shared.all())
+            cachedOutcomeGroups = groups
+        }
         guard hideShippedTickets else { return groups }
         return groups.filter { !isShipped($0) }
     }

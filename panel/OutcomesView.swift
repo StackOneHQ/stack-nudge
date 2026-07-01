@@ -85,7 +85,6 @@ struct OutcomesView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(groups) { group in
                                 groupRow(group, selectedRowID: selectedRowID)
-                                    .id(Self.headerID(group))
                             }
                         }
                         .padding(.horizontal, 14)
@@ -97,9 +96,12 @@ struct OutcomesView: View {
                     .scrollIndicators(.visible)
                     .onChange(of: nav.outcomeSelectedIndex) { _ in
                         guard let selectedRowID else { return }
-                        withAnimation(.easeOut(duration: 0.15)) {
-                            proxy.scrollTo(selectedRowID, anchor: .center)
-                        }
+                        // Snap, don't animate. With key-repeat on a long list the
+                        // 0.15s animations piled up, the scroll lagged the
+                        // selection, then settled with an upward snap — the
+                        // "bounce". Instant scroll keeps the selection pinned and
+                        // the viewport tracking it smoothly.
+                        proxy.scrollTo(selectedRowID, anchor: .center)
                     }
                 }
             }
@@ -161,6 +163,16 @@ struct OutcomesView: View {
                         .fixedSize()
                 }
             }
+            .padding(.vertical, 2)
+            // Selection highlight + scroll anchor live on the header ROW, not the
+            // whole group container (which spans all its branches). A
+            // container-wide accent lit up the entire block when a header was
+            // selected — reading as an upward "jump" when crossing from a group's
+            // last branch to the next group's header. A per-row highlight keeps
+            // the selection a small, consistent marker that steps straight down.
+            .background(RoundedRectangle(cornerRadius: 4)
+                .fill(selected ? Color.accentColor.opacity(0.14) : Color.clear))
+            .id(Self.headerID(group))
             Text(detailLine(group))
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
@@ -184,7 +196,7 @@ struct OutcomesView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(RoundedRectangle(cornerRadius: 6)
-            .fill(selected ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.04)))
+            .fill(Color.primary.opacity(0.04)))
         .contentShape(Rectangle())
         .onTapGesture { if linkable { openTicket(group) } }
         .help(linkable ? "Open \(group.label) in your tracker" : "")
