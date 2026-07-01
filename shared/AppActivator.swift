@@ -356,7 +356,11 @@ struct AppActivator {
             repeat with t in tabs of w
               repeat with s in sessions of t
                 try
-                  if (id of s as text) is target then
+                  -- Match on `unique id` (the persistent session GUID that
+                  -- both ITERM_SESSION_ID and our tab enrichment carry);
+                  -- keep `id` as a fallback for iTerm2 versions where the
+                  -- two properties diverge.
+                  if ((unique id of s) as text) is target or ((id of s) as text) is target then
                     tell w to select
                     tell t to select
                     tell s to select
