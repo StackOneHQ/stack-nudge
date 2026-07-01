@@ -94,14 +94,21 @@ struct OutcomesView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .scrollIndicators(.visible)
-                    .onChange(of: nav.outcomeSelectedIndex) { _ in
-                        guard let selectedRowID else { return }
+                    // Watch the resolved row id, not the raw index, and scroll to
+                    // the id onChange hands us. Reading a separately-derived
+                    // `selectedRowID` capture here lagged the viewport one keypress
+                    // behind the selection — invisible when stepping ±1 (the row
+                    // stays near the viewport) but obvious on a ⌘↑/↓ jump, where the
+                    // pane didn't move until the next press. Mirrors the Sessions
+                    // tab's onChange(of: selectedPID) pattern.
+                    .onChange(of: selectedRowID) { newID in
+                        guard let newID else { return }
                         // Snap, don't animate. With key-repeat on a long list the
                         // 0.15s animations piled up, the scroll lagged the
                         // selection, then settled with an upward snap — the
                         // "bounce". Instant scroll keeps the selection pinned and
                         // the viewport tracking it smoothly.
-                        proxy.scrollTo(selectedRowID, anchor: .center)
+                        proxy.scrollTo(newID, anchor: .center)
                     }
                 }
             }
