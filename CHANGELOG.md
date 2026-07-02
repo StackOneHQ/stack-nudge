@@ -4,6 +4,13 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.22.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.21.0...v1.22.0) (2026-07-02)
+
+
+### Features
+
+* **ui:** use StackOne brand mark instead of bell icons ([#118](https://github.com/StackOneHQ/stack-nudge/issues/118)) ([8dfda33](https://github.com/StackOneHQ/stack-nudge/commit/8dfda339a3ac7436eba3e800ee889e9503f582bb))
+
 ## [1.21.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.20.3...v1.21.0) (2026-07-01)
 
 
