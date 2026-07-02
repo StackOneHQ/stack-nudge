@@ -59,18 +59,15 @@ struct FooterDivider: View {
 
 // MARK: - Page-level layout
 
-// Bottom strip every panel page shares: bell icon on the left, hint pills on
-// the right, hairline divider above, subtle tint behind. Pages just fill the
-// hints slot.
+// Bottom strip every panel page shares: hint pills on the right, hairline
+// divider above, subtle tint behind. Pages just fill the hints slot. (The
+// brand mark lives once in the top tab strip; the footer stays icon-free.)
 struct PageFooter<Hints: View>: View {
 
     @ViewBuilder var hints: () -> Hints
 
     var body: some View {
         HStack(spacing: 0) {
-            Image(systemName: "bell.badge.fill")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
             Spacer()
             hints()
         }
