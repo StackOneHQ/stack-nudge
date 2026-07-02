@@ -158,9 +158,7 @@ struct PanelContentView: View {
 
     private var tabStrip: some View {
         HStack(spacing: 4) {
-            Image(systemName: "bell.badge.fill")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+            Image(nsImage: MenuBarController.brandMarkImage(height: 14))
                 .padding(.trailing, 4)
 
             tab(.events,   label: "Events",   count: store.events.count)

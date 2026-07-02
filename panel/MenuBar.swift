@@ -93,13 +93,89 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         super.init()
 
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "bell", accessibilityDescription: "StackNudge")
-            button.image?.isTemplate = true
+            button.image = MenuBarController.brandMarkImage()
         }
 
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
+    }
+
+    // MARK: - Menu bar icon
+
+    // StackOne brand green (#00AF66), taken from the official icon SVG and
+    // pinned to sRGB so the mark renders identically regardless of the display's
+    // colour space.
+    private static let brandGreen = NSColor(srgbRed: 0, green: 0xAF / 255.0, blue: 0x66 / 255.0, alpha: 1)
+
+    // The StackOne interlocking-"S" logomark, reproduced from the official 16×16
+    // icon SVG (stackone-logos.com) as a resolution-independent vector: pixel-exact
+    // to the brand, point-symmetric by construction, crisp at any menu bar height
+    // and on Retina, and with no raster asset to ship. The source places the mark
+    // in y∈[3.5, 12.4744] of a 16-unit box (the top-right / bottom-left corners are
+    // the transparent cut-outs); we map that into the icon rect, flipping y for
+    // AppKit's bottom-left origin. Deliberately a *coloured* (non-template) icon —
+    // the brand green is the point — so it does not tint for light/dark; the
+    // negative space is transparent and shows the menu bar through, reading on both.
+    static func brandMarkImage(height: CGFloat = 15) -> NSImage {
+        let svgTop: CGFloat = 3.5, svgBottom: CGFloat = 12.4744
+        let markSpan = svgBottom - svgTop
+        let aspect = 16.0 / markSpan
+        let size = NSSize(width: (height * aspect).rounded(), height: height)
+        let image = NSImage(size: size, flipped: false) { rect in
+            let width = rect.width, boxHeight = rect.height
+            // Official SVG coords (x∈[0,16], y-down) → icon rect (y-up).
+            func point(_ svgX: CGFloat, _ svgY: CGFloat) -> NSPoint {
+                NSPoint(x: svgX / 16.0 * width, y: (svgBottom - svgY) / markSpan * boxHeight)
+            }
+            brandGreen.set()
+
+            // Upper half: the solid top-left path plus the top-centre fill; their
+            // union is the complete upper block of the mark.
+            let top = NSBezierPath()
+            top.move(to: point(10.6666, 3.5))
+            top.line(to: point(0, 3.5))
+            top.line(to: point(0, 9.48291))
+            top.line(to: point(5.35111, 9.48291))
+            top.line(to: point(5.35111, 6.49199))
+            top.line(to: point(5.35037, 6.36528))
+            top.curve(to: point(8.31328, 3.5), controlPoint1: point(5.34098, 4.78548), controlPoint2: point(6.67026, 3.5))
+            top.close()
+            top.fill()
+
+            let topInner = NSBezierPath()
+            topInner.move(to: point(5.33325, 6.49145))
+            topInner.line(to: point(10.6666, 6.49145))
+            topInner.line(to: point(10.6666, 3.5))
+            topInner.line(to: point(8.11901, 3.5))
+            topInner.curve(to: point(5.33325, 5.06865), controlPoint1: point(6.58047, 3.5), controlPoint2: point(5.33325, 3.5))
+            topInner.close()
+            topInner.fill()
+
+            // Lower half: 180°-symmetric to the upper half.
+            let bottom = NSBezierPath()
+            bottom.move(to: point(5.33325, 12.4741))
+            bottom.line(to: point(15.9999, 12.4741))
+            bottom.line(to: point(15.9999, 6.49121))
+            bottom.line(to: point(10.6488, 6.49121))
+            bottom.line(to: point(10.6488, 9.48212))
+            bottom.line(to: point(10.6496, 9.60883))
+            bottom.curve(to: point(7.68664, 12.4741), controlPoint1: point(10.6589, 11.1886), controlPoint2: point(9.32965, 12.4741))
+            bottom.close()
+            bottom.fill()
+
+            let bottomInner = NSBezierPath()
+            bottomInner.move(to: point(10.6666, 9.48291))
+            bottomInner.line(to: point(5.33325, 9.48291))
+            bottomInner.line(to: point(5.33325, 12.4743))
+            bottomInner.line(to: point(7.88081, 12.4743))
+            bottomInner.curve(to: point(10.6666, 10.9057), controlPoint1: point(9.41933, 12.4743), controlPoint2: point(10.6666, 12.4743))
+            bottomInner.close()
+            bottomInner.fill()
+            return true
+        }
+        image.isTemplate = false
+        return image
     }
 
     func menuWillOpen(_ menu: NSMenu) {
