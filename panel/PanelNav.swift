@@ -134,7 +134,7 @@ enum GithubSignIn: Equatable {
 // change with no renumbering — and the applyCycle switch over this is
 // exhaustive, so the compiler flags any row left unhandled.
 enum SettingsRow: Hashable {
-    case update, hotkey
+    case permissions, update, hotkey
     case banner, muteWhenFocused, pinPanel, keepOpenWhenEmpty, launchAtLogin
     case widget, widgetCorner, widgetOpacity, widgetContent, mascot, theme
     case soundEnabled, agentDoneSound, permissionSound
@@ -203,6 +203,14 @@ final class PanelNav: ObservableObject {
     // tab dot badge and the conditional "Update available" row at the top
     // of the Settings list. Populated by UpdateChecker.
     @Published var updateAvailable: String?
+    // Runtime permissions (Accessibility / Automation / Notifications) that
+    // aren't granted yet — empty means all set. Drives the orange dot on the
+    // Settings tab and the "Permissions needed" banner pinned above the
+    // Settings sections. Both denied and not-yet-determined count as missing:
+    // the app can't fully function without the grant either way. Refreshed on
+    // launch and every Settings.onAppear (see refreshPermissions) so granting
+    // a permission and coming back clears it. Populated by refreshPermissions.
+    @Published var missingPermissions: [SettingsPane] = []
     // Release notes body (markdown) for the available update — shown in the
     // confirmation step. nil before notes have loaded or when fetch failed
     // (e.g. private repo without auth).
@@ -600,17 +608,17 @@ final class PanelNav: ObservableObject {
         "I'd love your input on this.",
     ]
 
-    // +1 when an update is available and the "Update to vX.Y.Z" row is
-    // pinned at the top of the Settings list. All other indices shift down
-    // when the offset is 1.
     // Settings rows in render order — the single source of truth for both the
     // view (Settings.swift looks up indices from this) and keyboard nav
     // (selectedRow indexes into it). The conditionals keep render + dispatch in
-    // sync automatically: the update row appears only when an update is
-    // pending, and Voice collapses to a single Download row until the model is
-    // cached — no hand-maintained indices, no off-by-one to chase.
+    // sync automatically: the permissions row appears only when a grant is
+    // missing and the update row only when an update is pending (both pin to the
+    // top, permissions first), and Voice collapses to a single Download row
+    // until the model is cached — no hand-maintained indices, no off-by-one to
+    // chase.
     var settingsRows: [SettingsRow] {
         var rows: [SettingsRow] = []
+        if !missingPermissions.isEmpty { rows.append(.permissions) }
         if updateAvailable != nil { rows.append(.update) }
         rows += [.hotkey,
                  .banner, .muteWhenFocused, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin,
@@ -789,6 +797,26 @@ final class PanelNav: ObservableObject {
         try? data.write(to: url, options: [.atomic])
     }
 
+    // MARK: - Permissions
+
+    // Probe the three runtime grants and record which aren't set yet.
+    // Notifications is async, so the ordered list is assembled in its callback
+    // (same order the Permissions window renders them). denied and
+    // not-yet-determined both count as missing — the panel can't fully
+    // function without the grant either way.
+    func refreshPermissions() {
+        let accessibility = Permissions.accessibility()
+        let automation    = Permissions.automation()
+        Permissions.notifications { [weak self] notifications in
+            guard let self else { return }
+            var missing: [SettingsPane] = []
+            if notifications != .granted { missing.append(.notifications) }
+            if accessibility != .granted { missing.append(.accessibility) }
+            if automation    != .granted { missing.append(.automation) }
+            if missing != self.missingPermissions { self.missingPermissions = missing }
+        }
+    }
+
     func refreshVoiceModelCached() {
         voiceModelCached = Speaker.voiceModelCached()
     }
@@ -888,6 +916,7 @@ final class PanelNav: ObservableObject {
     // row enters record mode.
     func activate() {
         switch selectedRow {
+        case .permissions: actions?.checkPermissions()
         case .update: actions?.beginUpdate()
         case .hotkey: startRecordingHotkey()
         case .downloadVoiceModel:
@@ -952,6 +981,9 @@ final class PanelNav: ObservableObject {
 
     private func applyCycle(forward: Bool) {
         switch selectedRow {
+        case .permissions:
+            // Nothing to cycle — arrows open the Permissions window, like Enter.
+            actions?.checkPermissions()
         case .update:
             // Nothing to cycle — arrows behave like Enter.
             actions?.beginUpdate()
