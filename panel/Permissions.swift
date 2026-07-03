@@ -146,6 +146,15 @@ enum SettingsPane {
         case .notifications: return nil  // notifications aren't a TCC service
         }
     }
+
+    // Short human label for the Settings "Permissions needed" banner.
+    var title: String {
+        switch self {
+        case .accessibility: return "Accessibility"
+        case .automation:    return "Automation"
+        case .notifications: return "Notifications"
+        }
+    }
 }
 
 struct PermissionsView: View {

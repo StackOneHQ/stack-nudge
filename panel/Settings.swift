@@ -25,8 +25,14 @@ struct SettingsView: View {
                         } else if !nav.recentlyWiredAgents.isEmpty {
                             wiredConfirmationRow(nav.recentlyWiredAgents)
                         }
-                        // Shown only when an update is pending; nav.settingsRows
-                        // puts it first (index 0) so selection lines up.
+                        // Runtime-permission nudge. nav.settingsRows puts
+                        // .permissions ahead of .update, so it renders (and
+                        // keyboard-indexes) above the update row when both are
+                        // present.
+                        if !nav.missingPermissions.isEmpty {
+                            permissionsRow(nav.missingPermissions)
+                        }
+                        // Shown only when an update is pending.
                         if let version = nav.updateAvailable {
                             updateRow(version: version)
                         }
@@ -148,6 +154,10 @@ struct SettingsView: View {
             //  a hook file; old install lacks events added in a recent
             //  StackNudge release).
             nav.refreshUnwiredAgents()
+            // Re-probe grants on every open so the banner/dot clear right
+            // after the user grants a permission in System Settings and
+            // returns to the panel.
+            nav.refreshPermissions()
         }
     }
 
@@ -375,9 +385,46 @@ struct SettingsView: View {
                 .fill(Color.accentColor.opacity(selected ? 0.32 : 0.18))
         )
         .contentShape(Rectangle())
-        .id(0)
+        .id(nav.index(of: .update))
         .onTapGesture {
-            nav.selectedSettingIndex = 0
+            nav.selectedSettingIndex = nav.index(of: .update)
+            nav.activate()
+        }
+    }
+
+    // Runtime-permission nudge pinned above the settings sections when one or
+    // more grants (Accessibility / Automation / Notifications) aren't set.
+    // Keyboard-navigable like the update row — selecting + Enter, or a click,
+    // opens the Permissions window. Orange (not accent) to read as "needs
+    // attention" rather than the update affordance.
+    private func permissionsRow(_ missing: [SettingsPane]) -> some View {
+        let selected = nav.selectedSettingIndex == nav.index(of: .permissions)
+        return HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.body)
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(missing.count == 1 ? "Permission needed" : "Permissions needed")
+                    .font(.subheadline.weight(.medium))
+                Text(missing.map(\.title).joined(separator: ", "))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.orange.opacity(selected ? 0.32 : 0.18))
+        )
+        .contentShape(Rectangle())
+        .id(nav.index(of: .permissions))
+        .onTapGesture {
+            nav.selectedSettingIndex = nav.index(of: .permissions)
             nav.activate()
         }
     }

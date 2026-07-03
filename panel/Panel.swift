@@ -165,7 +165,10 @@ struct PanelContentView: View {
             tab(.sessions, label: "Sessions", count: sessions.sessions.filter { $0.status == .active }.count)
             tab(.usage,    label: "Usage",    count: 0)
             tab(.outcomes, label: "Tickets",  count: ticketGroupCount)
-            tab(.settings, label: "Settings", count: 0, dot: nav.updateAvailable != nil)
+            tab(.settings, label: "Settings", count: 0,
+                dotColor: !nav.missingPermissions.isEmpty ? .orange
+                        : nav.updateAvailable != nil ? .accentColor
+                        : nil)
 
             Spacer()
 
@@ -181,7 +184,7 @@ struct PanelContentView: View {
         .padding(.vertical, 8)
     }
 
-    private func tab(_ mode: PanelMode, label: String, count: Int, dot: Bool = false) -> some View {
+    private func tab(_ mode: PanelMode, label: String, count: Int, dotColor: Color? = nil) -> some View {
         let isActive = nav.mode == mode
         return Button {
             nav.mode = mode
@@ -198,9 +201,9 @@ struct PanelContentView: View {
                             Capsule().fill(Color.primary.opacity(isActive ? 0.18 : 0.10))
                         )
                 }
-                if dot {
+                if let dotColor {
                     Circle()
-                        .fill(Color.accentColor)
+                        .fill(dotColor)
                         .frame(width: 6, height: 6)
                 }
             }
@@ -705,6 +708,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // reconciliation). Surfaces a "Set up X" banner in Settings when
         // any detected agent lacks our notify.sh hook.
         nav.refreshUnwiredAgents()
+        // Probe runtime grants so the Settings tab dot + "Permissions needed"
+        // banner reflect reality from first launch, not just after the user
+        // opens Settings.
+        nav.refreshPermissions()
 
         updateChecker = UpdateChecker(nav: nav)
         updateChecker?.start()

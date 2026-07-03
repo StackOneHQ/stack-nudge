@@ -53,6 +53,23 @@ final class SettingsRowTests: XCTestCase {
         XCTAssertEqual(nav.index(of: .update), 0)
     }
 
+    func test_permissionsRow_prependedWhenMissing() {
+        let nav = PanelNav()
+        XCTAssertFalse(nav.settingsRows.contains(.permissions))
+        nav.missingPermissions = [.accessibility]
+        XCTAssertEqual(nav.settingsRows.first, .permissions)
+        XCTAssertEqual(nav.index(of: .permissions), 0)
+    }
+
+    func test_permissionsRow_sitsAboveUpdate_whenBothPresent() {
+        let nav = PanelNav()
+        nav.missingPermissions = [.notifications]
+        nav.updateAvailable = "1.2.3"
+        XCTAssertEqual(nav.settingsRows.first, .permissions)
+        XCTAssertEqual(nav.index(of: .permissions), 0)
+        XCTAssertEqual(nav.index(of: .update), 1)
+    }
+
     func test_indexRowRoundTrip() {
         let nav = PanelNav()
         for row in nav.settingsRows {
