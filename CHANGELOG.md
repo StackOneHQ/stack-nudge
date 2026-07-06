@@ -4,6 +4,13 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.23.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.22.0...v1.23.0) (2026-07-03)
+
+
+### Features
+
+* **settings:** nudge when runtime permissions aren't all granted ([#120](https://github.com/StackOneHQ/stack-nudge/issues/120)) ([3233f6f](https://github.com/StackOneHQ/stack-nudge/commit/3233f6f5b032e7ac316c33a212e139215ea4814b))
+
 ## [1.22.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.21.0...v1.22.0) (2026-07-02)
 
 
