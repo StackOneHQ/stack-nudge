@@ -4,6 +4,15 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.23.2](https://github.com/StackOneHQ/stack-nudge/compare/v1.23.1...v1.23.2) (2026-07-10)
+
+
+### Bug Fixes
+
+* **sessions:** recognise iTermServer daemon so focus works ([#116](https://github.com/StackOneHQ/stack-nudge/issues/116)) ([0cb2351](https://github.com/StackOneHQ/stack-nudge/commit/0cb2351a6b88b61198be1aa13d422538309a1a3d))
+* **update:** restart the stackvox daemon after an app update ([#124](https://github.com/StackOneHQ/stack-nudge/issues/124)) ([3acab5f](https://github.com/StackOneHQ/stack-nudge/commit/3acab5f3624519754528c50a35b8e40a765a24d9))
+* **voice:** bump bundled stackvox floor to 0.9.0 ([#125](https://github.com/StackOneHQ/stack-nudge/issues/125)) ([9a2918b](https://github.com/StackOneHQ/stack-nudge/commit/9a2918be52e51b3130e601e818b0c795efbe70ec))
+
 ## [1.23.1](https://github.com/StackOneHQ/stack-nudge/compare/v1.23.0...v1.23.1) (2026-07-09)
 
 
