@@ -2748,12 +2748,25 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
               let session = sessions.sessions.first(where: { $0.pid == pid }),
               let bundleID = bundleID(for: session.terminalApp) else { return }
         hidePanel()
+        // session.tabId is the per-tab identity our terminal integrations
+        // captured, but the underlying value differs per terminal — so it
+        // has to reach AppActivator via the parameter that terminal's
+        // activation path reads. VSCode/Cursor/Antigravity store
+        // VSCODE_IPC_HOOK_CLI (→ ipcHook, disambiguates windows for
+        // --reuse-window); iTerm2 stores its session GUID (→ sessionID,
+        // selects the exact pane). Ghostty/Warp/Terminal fall back to
+        // projectPath / AX tab-title and need neither. Without this the
+        // captured tabId was dropped and focus landed on whatever window
+        // the app last had frontmost.
+        let ipcHook = VSCodeIntegration.isVSCodeHosted(session.terminalApp) ? session.tabId : nil
+        let sessionID = session.terminalApp?.contains("iTerm") == true ? session.tabId : nil
         DispatchQueue.global(qos: .userInitiated).async {
             AppActivator.activate(
                 bundleID: bundleID,
                 windowTitle: session.projectName,
-                ipcHook: nil,
+                ipcHook: ipcHook,
                 projectPath: session.projectPath,
+                sessionID: sessionID,
                 sendApproval: false,
                 agent: session.agent
             )
