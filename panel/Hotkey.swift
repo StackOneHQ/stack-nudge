@@ -9,10 +9,12 @@ final class Hotkey {
     private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
     private let onTrigger: () -> Void
+    private let hotKeyIDValue: UInt32
 
-    init?(spec: String, onTrigger: @escaping () -> Void) {
+    init?(spec: String, id: UInt32 = 1, onTrigger: @escaping () -> Void) {
         guard let parsed = Hotkey.parse(spec) else { return nil }
         self.onTrigger = onTrigger
+        self.hotKeyIDValue = id
         guard install(modifiers: parsed.modifiers, keyCode: parsed.keyCode) else {
             return nil
         }
@@ -24,7 +26,7 @@ final class Hotkey {
     }
 
     private func install(modifiers: UInt32, keyCode: UInt32) -> Bool {
-        let hotKeyID = EventHotKeyID(signature: OSType(0x534E4447), id: 1) // 'SNDG'
+        let hotKeyID = EventHotKeyID(signature: OSType(0x534E4447), id: hotKeyIDValue) // 'SNDG'
         let regStatus = RegisterEventHotKey(keyCode, modifiers, hotKeyID,
                                             GetApplicationEventTarget(),
                                             0, &hotKeyRef)
@@ -35,9 +37,23 @@ final class Hotkey {
         let context = Unmanaged.passUnretained(self).toOpaque()
         let installStatus = InstallEventHandler(
             GetApplicationEventTarget(),
-            { _, _, ctx in
+            { _, event, ctx in
                 guard let ctx = ctx else { return noErr }
                 let me = Unmanaged<Hotkey>.fromOpaque(ctx).takeUnretainedValue()
+                // Every handler installed on the app target sees all hotkey
+                // events, so only fire for this instance's own id.
+                var pressed = EventHotKeyID()
+                if let event = event {
+                    GetEventParameter(event, EventParamName(kEventParamDirectObject),
+                                      EventParamType(typeEventHotKeyID), nil,
+                                      MemoryLayout<EventHotKeyID>.size, nil, &pressed)
+                }
+                guard pressed.id == me.hotKeyIDValue else {
+                    // Not ours — pass it down the handler chain so the other
+                    // hotkey still fires. Returning noErr here would mark the
+                    // event handled and swallow it.
+                    return OSStatus(eventNotHandledErr)
+                }
                 DispatchQueue.main.async { me.onTrigger() }
                 return noErr
             },

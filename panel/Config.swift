@@ -5,6 +5,7 @@ import Foundation
 // notify.sh shell-sources it; we just need the subset relevant to the panel.
 struct PanelConfig {
     var hotkeySpec: String = "cmd+opt+n"
+    var speakSelectionHotkeySpec: String = "cmd+opt+s"
     var bannerEnabled: Bool = true
     var soundEnabled: Bool = true
     var activateImmediately: Bool = false
@@ -28,6 +29,7 @@ struct PanelConfig {
                 .trimmingCharacters(in: .whitespaces))
             switch key {
             case "STACKNUDGE_PANEL_HOTKEY":         config.hotkeySpec = value
+            case "STACKNUDGE_SPEAK_HOTKEY":         config.speakSelectionHotkeySpec = value
             case "STACKNUDGE_BANNER":               config.bannerEnabled = value.lowercased() != "false"
             case "STACKNUDGE_SOUND":                config.soundEnabled = value.lowercased() != "false"
             case "STACKNUDGE_ACTIVATE_IMMEDIATELY": config.activateImmediately = value.lowercased() == "true"
