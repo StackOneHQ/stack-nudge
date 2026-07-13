@@ -14,7 +14,7 @@ enum Speaker {
     // shebang pointing at /Users/runner/... that doesn't exist on user
     // machines. Always go through `python3 <script-path>` so the shebang
     // is bypassed and python3's own binary (a real Mach-O) handles loading.
-    static func speak(_ text: String, voice: String? = nil, speed: String? = nil) {
+    static func speak(_ text: String, voice: String? = nil, speed: String? = nil, normalize: Bool = false) {
         let venvBin = "\(NSHomeDirectory())/.stack-nudge/venv/bin"
         let python = "\(venvBin)/python3"
         let stackvox = "\(venvBin)/stackvox"
@@ -41,7 +41,10 @@ enum Speaker {
         let resolvedSpeed = speed ?? config["STACKNUDGE_VOICE_SPEED"] ?? "1.1"
         let say = Process()
         say.executableURL = URL(fileURLWithPath: python)
-        say.arguments = [stackvox, "say", "--voice", resolvedVoice, "--speed", resolvedSpeed, text]
+        var sayArgs = [stackvox, "say", "--voice", resolvedVoice, "--speed", resolvedSpeed]
+        if normalize { sayArgs += ["--normalize", "--no-markdown"] }
+        sayArgs.append(text)
+        say.arguments = sayArgs
         say.environment = env
         say.standardOutput = FileHandle.nullDevice
         say.standardError = FileHandle.nullDevice
@@ -56,6 +59,28 @@ enum Speaker {
             audioLock.unlock()
         } catch {
             // best-effort; stackvox missing → silent fallback
+        }
+    }
+
+    // Tell the daemon to stop the current utterance (and drop its queue) without
+    // shutting it down. Talks to the socket directly so it works regardless of
+    // the installed CLI version; a no-op if the daemon predates `cancel`.
+    static func cancel() {
+        let socketPath = "\(NSHomeDirectory())/.cache/stackvox/daemon.sock"
+        guard FileManager.default.fileExists(atPath: socketPath) else { return }
+        let nc = Process()
+        nc.executableURL = URL(fileURLWithPath: "/usr/bin/nc")
+        nc.arguments = ["-U", "-w", "2", socketPath]
+        let stdin = Pipe()
+        nc.standardInput = stdin
+        nc.standardOutput = FileHandle.nullDevice
+        nc.standardError = FileHandle.nullDevice
+        do {
+            try nc.run()
+            stdin.fileHandleForWriting.write(Data("{\"command\":\"cancel\"}\n".utf8))
+            stdin.fileHandleForWriting.closeFile()
+        } catch {
+            // best-effort
         }
     }
 

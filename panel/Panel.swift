@@ -526,6 +526,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // smaller-radius rect corners poke past the SwiftUI capsule curve.
     private weak var contentBlurView: NSVisualEffectView?
     private var hotkey: Hotkey?
+    private var speakHotkey: Hotkey?
     private let store = EventStore()
     private let sessions = SessionStore()
     let nav = PanelNav()
@@ -647,6 +648,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         let config = PanelConfig.load()
         nav.hotkeyDisplay = config.hotkeySpec
         _ = registerHotkey(spec: config.hotkeySpec)
+        speakHotkey = Hotkey(spec: config.speakSelectionHotkeySpec, id: 2) { SpeakSelection.trigger() }
 
         startListener()
         menuBar = MenuBarController(panelController: self)
