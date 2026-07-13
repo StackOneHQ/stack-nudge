@@ -4,6 +4,18 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.24.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.23.2...v1.24.0) (2026-07-13)
+
+
+### Features
+
+* **voice:** global speak-selection hotkey + Settings row ([#127](https://github.com/StackOneHQ/stack-nudge/issues/127)) ([9d7da6a](https://github.com/StackOneHQ/stack-nudge/commit/9d7da6a34d149d4daf9c727d1a5a0bf9bd5d2b44))
+
+
+### Bug Fixes
+
+* **voice:** bump bundled stackvox floor to 0.10.0 ([#128](https://github.com/StackOneHQ/stack-nudge/issues/128)) ([9585691](https://github.com/StackOneHQ/stack-nudge/commit/95856915eac31736c99d8ff274e431a8cc30ae35))
+
 ## [1.23.2](https://github.com/StackOneHQ/stack-nudge/compare/v1.23.1...v1.23.2) (2026-07-10)
 
 
