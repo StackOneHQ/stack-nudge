@@ -48,9 +48,13 @@ final class Hotkey {
                                       EventParamType(typeEventHotKeyID), nil,
                                       MemoryLayout<EventHotKeyID>.size, nil, &pressed)
                 }
-                if pressed.id == me.hotKeyIDValue {
-                    DispatchQueue.main.async { me.onTrigger() }
+                guard pressed.id == me.hotKeyIDValue else {
+                    // Not ours — pass it down the handler chain so the other
+                    // hotkey still fires. Returning noErr here would mark the
+                    // event handled and swallow it.
+                    return OSStatus(eventNotHandledErr)
                 }
+                DispatchQueue.main.async { me.onTrigger() }
                 return noErr
             },
             1, &eventType, context, &handlerRef
