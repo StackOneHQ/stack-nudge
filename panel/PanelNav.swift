@@ -254,9 +254,9 @@ final class PanelNav: ObservableObject {
     // PostUpdateView (mode = .postUpdate). Cleared on dismiss.
     @Published var postUpdateVersion: String?
     @Published var postUpdateNotes:   String?
-    // Latest /api/oauth/usage snapshot. Driven by the QuotaProbe poller in
-    // PanelController. nil before the first probe completes, or when the
-    // probe failed (e.g. user denied keychain access, 401, 429).
+    // Latest quota snapshot from `claude /usage`. Driven by the CLI probe
+    // poller in PanelController. nil before the first probe completes, or
+    // when the probe failed (no `claude` on PATH, not signed in, parse error).
     @Published var quota:            QuotaSnapshot?
     @Published var quotaLastUpdated: Date?
     // True while a probe is in-flight. Set by PanelController around the
@@ -267,14 +267,6 @@ final class PanelNav: ObservableObject {
     // state so a silently-changed endpoint isn't read as "still loading".
     // Cleared on the next successful probe.
     @Published var quotaError:       String?
-    // True when the Claude token was read from the plaintext
-    // ~/.claude/.credentials.json rather than the Keychain — any same-user
-    // process can read that file. Drives a warning in Settings → Usage.
-    @Published var usingPlaintextCredentials: Bool = false
-    // True when quota was sourced via `claude --print /usage` rather than
-    // the direct API probe. Claude CLI reads its own keychain (no prompts
-    // for us). Drives the corresponding status line in Settings → Usage.
-    @Published var usingClaudeCliProbe: Bool = false
     // Set when the event socket failed to bind at startup — the panel is then
     // deaf to every agent notification. Drives the banner at the top of the
     // Events tab so the failure isn't silent. Cleared when the socket binds.
@@ -987,8 +979,6 @@ final class PanelNav: ObservableObject {
             quota = nil
             quotaLastUpdated = nil
             quotaError = nil
-            usingPlaintextCredentials = false
-            usingClaudeCliProbe = false
         }
     }
 

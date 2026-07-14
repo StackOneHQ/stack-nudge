@@ -573,7 +573,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private var permissionsWC: PermissionsWindowController?
     private var updateChecker: UpdateChecker?
     private var updater: Updater?
-    private let quotaProbe = QuotaProbe()
     private let claudeCliQuotaProbe = ClaudeCliQuotaProbe()
     private let codexQuotaProbe = CodexQuotaProbe()
     private let antigravityUsageProbe = AntigravityUsageProbe()
@@ -1247,7 +1246,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     // MARK: - Quota polling
 
-    // Fires QuotaProbe on a recurring timer. Cadence varies: 60s while the
+    // Fires the quota probes on a recurring timer. Cadence varies: 60s while the
     // panel is visible (keeps the Usage tab feeling alive), longer when
     // hidden (default 5 min, configurable via STACKNUDGE_USAGE_POLL_MIN).
     // Re-evaluating on every tick keeps the timer schedule responsive to
@@ -1282,48 +1281,25 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func runQuotaProbe() {
         guard quotaTrackingEnabled else { return }
         nav.quotaSyncing = true
-        // CLI probe first — Claude CLI reads its own keychain, so our process
-        // never triggers the periodic password prompt. Only fall back to the
-        // direct API probe when the CLI invocation failed outright (binary
-        // missing, spawn/timeout error, or unparseable envelope). The CLI's
-        // own soft-fail (rate-limited cold cache, no bucket lines) is treated
-        // as "leave the prior snapshot alone" — NOT a reason to re-prompt
-        // the user via the keychain path.
+        // Claude quota comes solely from the `claude` CLI (`claude --print
+        // /usage`), which reads its own keychain — our process never touches
+        // the keychain or hits Anthropic's API directly. A soft-fail
+        // (rate-limited cold cache, no bucket lines) holds the prior snapshot
+        // untouched; a hard-fail (no `claude` on PATH, spawn/timeout, or
+        // unparseable envelope) surfaces an error in the Usage tab.
         claudeCliQuotaProbe.fetch { [weak self] snapshot in
             guard let self else { return }
+            self.nav.quotaSyncing = false
             if let snapshot {
-                self.nav.quotaSyncing = false
-                self.nav.usingClaudeCliProbe = true
-                self.nav.usingPlaintextCredentials = false
                 self.nav.quota = snapshot
                 self.nav.quotaError = nil
                 self.nav.quotaLastUpdated = Date()
                 self.evaluateQuotaThresholds(snapshot)
-                return
-            }
-            if self.claudeCliQuotaProbe.isRateLimited {
-                // Soft-fail: hold the prior snapshot, don't fall back to the
-                // API probe (which would just hit the same upstream limit).
-                self.nav.quotaSyncing = false
-                self.nav.usingClaudeCliProbe = true
-                return
-            }
-            // Hard-fail from the CLI probe → try the API probe.
-            self.quotaProbe.fetch { [weak self] snapshot in
-                guard let self else { return }
-                self.nav.quotaSyncing = false
-                self.nav.usingClaudeCliProbe = false
-                self.nav.usingPlaintextCredentials = self.quotaProbe.usingPlaintextCredentials
-                if let snapshot {
-                    self.nav.quota = snapshot
-                    self.nav.quotaError = nil
-                    self.nav.quotaLastUpdated = Date()
-                    self.evaluateQuotaThresholds(snapshot)
-                } else if self.quotaProbe.isRateLimited {
-                    self.nav.quotaError = "Rate-limited by Anthropic — retrying shortly."
-                } else if self.quotaProbe.lastProbeFailed {
-                    self.nav.quotaError = "Quota data unavailable — the usage endpoint may have changed."
-                }
+            } else if self.claudeCliQuotaProbe.isRateLimited {
+                // Soft-fail: leave the prior snapshot in place, no error.
+            } else {
+                // Hard-fail: the CLI couldn't run or its output didn't parse.
+                self.nav.quotaError = "Claude usage unavailable — run `claude /usage` to check your session."
             }
         }
         // Codex (ChatGPT-plan) rate limits — read locally from the newest

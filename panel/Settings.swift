@@ -113,9 +113,6 @@ struct SettingsView: View {
                             row(.pollFrequency, label: "Poll frequency",  kind: .cycle,  value: "\(nav.quotaPollMinutes) min",            enabled: nav.quotaTrackingEnabled)
                             row(.contextAlert,  label: "Context alert at", kind: .cycle, value: contextAlertLabel)
                             row(.showRemaining, label: "Show remaining",   kind: .toggle, value: nav.quotaShowRemaining ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
-                            if nav.quotaTrackingEnabled {
-                                probeSourceLabel
-                            }
                         }
 
                         section("Tickets") {
@@ -397,28 +394,6 @@ struct SettingsView: View {
 
     private var contextAlertLabel: String {
         nav.contextAlertThresholdK == 0 ? "Off" : "\(nav.contextAlertThresholdK)K"
-    }
-
-    // Only surfaced when there's something the user needs to know: the
-    // plaintext-file security tradeoff, or the keychain-rotation prompts.
-    // The CLI probe path (the default) is silent — it's the happy state.
-    @ViewBuilder private var probeSourceLabel: some View {
-        if nav.usingPlaintextCredentials {
-            label("⚠︎ Reading the Claude token from ~/.claude/.credentials.json (plaintext) — any process running as you can read it.",
-                  color: .orange)
-        } else if !nav.usingClaudeCliProbe {
-            label("Reading via macOS Keychain — periodic password prompts are expected when Claude Code rotates its token.",
-                  color: .secondary)
-        }
-    }
-
-    private func label(_ text: String, color: Color) -> some View {
-        Text(text)
-            .font(.caption)
-            .foregroundStyle(color)
-            .padding(.horizontal, 14)
-            .padding(.top, 2)
-            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var checkForUpdatesStatus: String {
