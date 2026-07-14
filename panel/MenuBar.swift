@@ -206,12 +206,66 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(toggle("Mute when focused",   state: mute,   key: "STACKNUDGE_MUTE_WHEN_FOCUSED"))
         menu.addItem(.separator())
 
+        addMuteSection(to: menu)
+        menu.addItem(.separator())
+
         menu.addItem(action("Show panel",         #selector(showPanelAction)))
         menu.addItem(action("Check permissions…", #selector(showPermissionsAction)))
         menu.addItem(action("Open config file…",  #selector(openConfigAction)))
         menu.addItem(.separator())
 
         menu.addItem(action("Quit StackNudge panel", #selector(quitAction), keyEquivalent: "q"))
+    }
+
+    // MARK: - Timed mute
+
+    // Read from the panel's transient nav.muteUntil. The menu rebuilds on
+    // every open, so this is always current: a countdown + Resume while muted,
+    // a duration submenu otherwise.
+    private func addMuteSection(to menu: NSMenu) {
+        guard let panel = panelController else { return }
+        if let until = panel.nav.muteUntil, until > Date() {
+            let info = NSMenuItem(
+                title: "Muted · \(PanelNav.muteRemainingLabel(until: until)) left",
+                action: nil, keyEquivalent: "")
+            info.isEnabled = false
+            menu.addItem(info)
+            menu.addItem(action("Resume notifications", #selector(resumeMuteAction)))
+        } else {
+            let parent = NSMenuItem(title: "Mute notifications", action: nil, keyEquivalent: "")
+            let submenu = NSMenu()
+            for minutes in PanelNav.muteDurationOptions {
+                let item = NSMenuItem(title: "For \(muteDurationLabel(minutes))",
+                                      action: #selector(muteMinutesAction(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = minutes
+                submenu.addItem(item)
+            }
+            parent.submenu = submenu
+            menu.addItem(parent)
+        }
+    }
+
+    private func muteDurationLabel(_ minutes: Int) -> String {
+        minutes % 60 == 0 ? "\(minutes / 60)h" : "\(minutes)m"
+    }
+
+    // Swap the status-bar icon to a muted bell + countdown while muted, and
+    // back to the brand mark when the mute lifts. Driven by PanelController's
+    // countdown timer and its mute/resume calls.
+    func refreshMuteBadge(until: Date?) {
+        guard let button = statusItem.button else { return }
+        if let until, until > Date() {
+            let img = NSImage(systemSymbolName: "bell.slash.fill",
+                              accessibilityDescription: "StackNudge (muted)")
+            img?.isTemplate = true
+            button.image = img
+            button.imagePosition = .imageLeft
+            button.title = " " + PanelNav.muteRemainingLabel(until: until)
+        } else {
+            button.image = MenuBarController.brandMarkImage()
+            button.title = ""
+        }
     }
 
     private func toggle(_ title: String, state: Bool, key: String) -> NSMenuItem {
@@ -258,6 +312,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func speak(_ text: String) {
         Speaker.speak(text)
+    }
+
+    @objc private func muteMinutesAction(_ sender: NSMenuItem) {
+        guard let minutes = sender.representedObject as? Int else { return }
+        panelController?.muteFor(minutes: minutes)
+    }
+
+    @objc private func resumeMuteAction() {
+        panelController?.resumeNotifications()
     }
 
     @objc private func showPanelAction() {

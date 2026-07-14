@@ -135,7 +135,7 @@ enum GithubSignIn: Equatable {
 // exhaustive, so the compiler flags any row left unhandled.
 enum SettingsRow: Hashable {
     case permissions, update, hotkey
-    case banner, muteWhenFocused, pinPanel, keepOpenWhenEmpty, launchAtLogin
+    case banner, muteWhenFocused, mute, muteDuration, pinPanel, keepOpenWhenEmpty, launchAtLogin
     case widget, widgetCorner, widgetOpacity, widgetContent, mascot, theme
     case soundEnabled, agentDoneSound, permissionSound
     case voiceEnabled, voice, voiceSpeed, downloadVoiceModel
@@ -161,6 +161,10 @@ struct SettingsActions {
     // resize happens synchronously before SwiftUI re-renders.
     let expandFromCompact: () -> Void
     let exitCompactMode:   () -> Void
+    // Timed global mute — muteFor takes a duration in minutes. Both are wired
+    // by PanelController, which owns the expiry timer and the menu-bar badge.
+    let muteFor:             (Int) -> Void
+    let resumeNotifications: () -> Void
 }
 
 // Owns the panel's navigation state plus the live values the Settings page
@@ -179,6 +183,27 @@ final class PanelNav: ObservableObject {
     @Published var soundEnabled:    Bool = true
     @Published var voiceEnabled:    Bool = false
     @Published var muteWhenFocused: Bool = true
+    // Timed global mute. When `muteUntil` is a future date, PanelController
+    // suppresses ALL banner/sound/voice output (permission prompts included)
+    // until it passes, then auto-lifts. Deliberately transient — never read
+    // in loadFromConfig and never written to disk, so it resets on relaunch.
+    // `muteTick` is bumped by PanelController's 30s countdown timer purely to
+    // re-render the tab-strip/pill countdown while muted (the SwiftUI views
+    // reference it so a value-less change still refreshes them).
+    @Published var muteUntil: Date?
+    @Published var muteTick: Int = 0
+    // Persistent default duration (minutes) the bell button and menu use.
+    @Published var muteDurationMinutes: Int = 30
+    static let muteDurationOptions: [Int] = [15, 30, 60, 120]
+    var isMuted: Bool {
+        guard let until = muteUntil else { return false }
+        return until > Date()
+    }
+    // "14m" style remainder for the menu-bar badge, tab-strip bell, and menu.
+    static func muteRemainingLabel(until: Date) -> String {
+        let mins = Int(ceil(max(0, until.timeIntervalSinceNow) / 60))
+        return "\(mins)m"
+    }
     @Published var panelPinned:     Bool = true
     // When true, clearing the last event leaves the panel open instead of
     // auto-hiding (STACKNUDGE_KEEP_OPEN_WHEN_EMPTY). Default off = prior behaviour.
@@ -621,7 +646,7 @@ final class PanelNav: ObservableObject {
         if !missingPermissions.isEmpty { rows.append(.permissions) }
         if updateAvailable != nil { rows.append(.update) }
         rows += [.hotkey,
-                 .banner, .muteWhenFocused, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin,
+                 .banner, .muteWhenFocused, .mute, .muteDuration, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin,
                  .widget, .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme,
                  .soundEnabled, .agentDoneSound, .permissionSound,
                  .voiceEnabled]
@@ -669,6 +694,10 @@ final class PanelNav: ObservableObject {
         soundEnabled    = ConfigFile.bool(config, "STACKNUDGE_SOUND",     default: true)
         voiceEnabled    = ConfigFile.bool(config, "STACKNUDGE_VOICE",     default: false)
         muteWhenFocused = ConfigFile.bool(config, "STACKNUDGE_MUTE_WHEN_FOCUSED", default: true)
+        // Persistent default only — the live `muteUntil` is transient and
+        // intentionally left untouched here so config reloads never clear it.
+        let rawMuteDuration = Int(config["STACKNUDGE_MUTE_DURATION_MIN"] ?? "") ?? 30
+        muteDurationMinutes = Self.muteDurationOptions.min(by: { abs($0 - rawMuteDuration) < abs($1 - rawMuteDuration) }) ?? 30
         panelPinned     = ConfigFile.bool(config, "STACKNUDGE_PANEL_PIN", default: true)
         keepOpenWhenEmpty = ConfigFile.bool(config, "STACKNUDGE_KEEP_OPEN_WHEN_EMPTY", default: false)
         // Source of truth for the toggle is the plist's presence on disk
@@ -996,6 +1025,18 @@ final class PanelNav: ObservableObject {
         case .muteWhenFocused:
             muteWhenFocused.toggle()
             ConfigFile.write(key: "STACKNUDGE_MUTE_WHEN_FOCUSED", value: muteWhenFocused ? "true" : "false")
+        case .mute:
+            // Action row: Enter and ←/→ both toggle the timed global mute.
+            // Nothing persists — the controller owns the expiry timer + the
+            // menu-bar badge (muteFor / resumeNotifications). Uses the current
+            // default duration, same as the header bell and the M shortcut.
+            if isMuted { actions?.resumeNotifications() } else { actions?.muteFor(muteDurationMinutes) }
+        case .muteDuration:
+            let list = Self.muteDurationOptions
+            let idx = list.firstIndex(of: muteDurationMinutes) ?? 1
+            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+            muteDurationMinutes = list[next]
+            ConfigFile.write(key: "STACKNUDGE_MUTE_DURATION_MIN", value: String(muteDurationMinutes))
         case .pinPanel:
             panelPinned.toggle()
             ConfigFile.write(key: "STACKNUDGE_PANEL_PIN", value: panelPinned ? "true" : "false")

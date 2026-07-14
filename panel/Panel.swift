@@ -172,6 +172,8 @@ struct PanelContentView: View {
 
             Spacer()
 
+            muteBell
+
             // One combined hint instead of per-tab keycaps — keeps the strip
             // uncluttered while still surfacing the shortcut range.
             HStack(spacing: 2) {
@@ -182,6 +184,32 @@ struct PanelContentView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    // Global-mute toggle in the header. A click mutes for the configured
+    // default duration (or resumes if already muted); the menu bar offers
+    // explicit durations. Reading nav.muteTick establishes the dependency so
+    // the countdown re-renders off the controller's 30s timer.
+    private var muteBell: some View {
+        _ = nav.muteTick
+        let muted = nav.isMuted
+        return Button {
+            if muted { nav.actions?.resumeNotifications() }
+            else { nav.actions?.muteFor(nav.muteDurationMinutes) }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: muted ? "bell.slash.fill" : "bell")
+                    .font(.caption)
+                if muted, let until = nav.muteUntil {
+                    Text(PanelNav.muteRemainingLabel(until: until))
+                        .font(.caption2.monospacedDigit())
+                }
+            }
+            .foregroundStyle(muted ? Color.accentColor : Color.secondary)
+        }
+        .buttonStyle(.plain)
+        .help(muted ? "Muted — click to resume notifications"
+                    : "Mute notifications for \(nav.muteDurationMinutes) min")
     }
 
     private func tab(_ mode: PanelMode, label: String, count: Int, dotColor: Color? = nil) -> some View {
@@ -297,6 +325,10 @@ struct PanelContentView: View {
     private var footer: some View {
         PageFooter {
             if store.events.isEmpty {
+                // Mute is still useful with an empty list — it pre-silences
+                // incoming nudges (e.g. heading into a meeting), so keep the
+                // shortcut discoverable even here.
+                FooterHint(label: muteLabel, keys: ["M"])
                 FooterHint(label: "Hide", keys: ["Esc"])
             } else {
                 if let primary = primaryActionLabel {
@@ -312,10 +344,15 @@ struct PanelContentView: View {
                 FooterHint(label: "Snooze",  keys: ["S"])
                     .opacity(snoozeEnabled ? 1.0 : 0.35)
                 FooterHint(label: dismissLabel, keys: ["⌫"])
+                FooterHint(label: muteLabel, keys: ["M"])
                 FooterHint(label: "Hide", keys: ["Esc"])
             }
         }
     }
+
+    // "Mute" toggles to "Resume" while a timed mute is active — mirrors the
+    // header bell and the menu-bar "Resume notifications" item.
+    private var muteLabel: String { nav.isMuted ? "Resume" : "Mute" }
 
     private var snoozeEnabled: Bool {
         guard let selected = store.selectedEvent else { return false }
@@ -684,7 +721,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             runBootstrap:     { [weak self] in self?.runBootstrap() },
             quit:             { Bootstrap.userQuit() },
             expandFromCompact: { [weak self] in self?.expandFromCompact() },
-            exitCompactMode:   { [weak self] in self?.exitCompactMode() }
+            exitCompactMode:   { [weak self] in self?.exitCompactMode() },
+            muteFor:             { [weak self] minutes in self?.muteFor(minutes: minutes) },
+            resumeNotifications: { [weak self] in self?.resumeNotifications() }
         )
         nav.setHotkey = { [weak self] spec in
             self?.registerHotkey(spec: spec) ?? false
@@ -1854,6 +1893,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     }
 
     private func postBannerIfNeeded(_ event: NudgeEvent) {
+        // Timed global mute swallows every interrupting output — banner,
+        // sound, voice, and the activate-immediately focus jump — for all
+        // events including permission prompts and welcome. The event has
+        // already been appended to the store (onAppend runs before this), so
+        // it still shows in the Events list; only the interruption is muted.
+        if nav.isMuted { return }
+
         let config = PanelConfig.load()
 
         // Mascot/ripple still fire — they're driven from onAppend, not here.
@@ -1999,6 +2045,41 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         let req = UNNotificationRequest(identifier: UUID().uuidString,
                                         content: content, trigger: nil)
         center.add(req, withCompletionHandler: nil)
+    }
+
+    // MARK: - Timed global mute
+
+    // Fires every 30s while muted: refreshes the countdown UI and lifts the
+    // mute once the window passes. Nil when not muted.
+    private var muteTicker: Timer?
+
+    // Suppress all banner/sound/voice output for `minutes`, then auto-lift.
+    // The state (nav.muteUntil) is transient, so a relaunch clears it. Muting
+    // also dismisses any banner already on screen, so it silences an in-flight
+    // nudge rather than only future ones.
+    func muteFor(minutes: Int) {
+        nav.muteUntil = Date().addingTimeInterval(TimeInterval(minutes * 60))
+        nav.muteTick += 1
+        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        muteTicker?.invalidate()
+        muteTicker = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            guard let until = self.nav.muteUntil, until > Date() else {
+                self.resumeNotifications()
+                return
+            }
+            self.nav.muteTick += 1
+            self.menuBar?.refreshMuteBadge(until: until)
+        }
+        menuBar?.refreshMuteBadge(until: nav.muteUntil)
+    }
+
+    func resumeNotifications() {
+        muteTicker?.invalidate()
+        muteTicker = nil
+        nav.muteUntil = nil
+        nav.muteTick += 1
+        menuBar?.refreshMuteBadge(until: nil)
     }
 
     // Snooze: mark the event, schedule a Timer to clear the snooze flag and
@@ -2617,10 +2698,21 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             actOnSelected(approve: false)
         case KeyCode.rKey, KeyCode.delete, KeyCode.forwardDelete:
             dismissSelected()
+        case KeyCode.mKey:
+            toggleGlobalMute()
         default:
             return false
         }
         return true
+    }
+
+    // Events-tab keyboard toggle for the global timed mute — mirrors the
+    // header bell. Mutes for the configured default duration, or resumes if
+    // already muted. (In the Sessions tab, M mutes the selected session; both
+    // read as "M = mute", scoped to the tab.)
+    private func toggleGlobalMute() {
+        if nav.isMuted { resumeNotifications() }
+        else { muteFor(minutes: nav.muteDurationMinutes) }
     }
 
     private func snoozeSelected(for seconds: TimeInterval) {

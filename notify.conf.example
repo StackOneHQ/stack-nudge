@@ -45,6 +45,12 @@
 # Default: true
 #STACKNUDGE_MUTE_WHEN_FOCUSED=false
 
+# Default duration (minutes) for the "Mute notifications" bell in the panel
+# header and menu bar. The mute itself is temporary and resets on relaunch;
+# this only sets how long a one-click mute lasts. Allowed: 15, 30, 60, 120.
+# Default: 30
+#STACKNUDGE_MUTE_DURATION_MIN=30
+
 # Pill widget accent color preset. Also settable from Settings → Widget →
 # "Accent color". Allowed: cyan, violet, mint, rose, system (system follows
 # the macOS accent and matches the banner color).

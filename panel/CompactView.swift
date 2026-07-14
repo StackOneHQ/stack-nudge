@@ -61,6 +61,7 @@ struct CompactView: View {
                 HStack(alignment: .center, spacing: 4) {
                     gaugeCluster
                     Spacer(minLength: 0)
+                    muteIndicator
                     expandButton
                 }
                 .frame(maxHeight: .infinity)
@@ -72,6 +73,7 @@ struct CompactView: View {
                     headline
                     sessionBadge
                     Spacer(minLength: 0)
+                    muteIndicator
                     expandButton
                 }
                 .padding(.horizontal, 12)
@@ -333,6 +335,19 @@ struct CompactView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    // Passive muted signal on the pill — a dimmed bell.slash while a timed
+    // mute is active, nothing otherwise. Reads nav.muteTick so it clears the
+    // instant the mute lifts (the controller's timer bumps it).
+    @ViewBuilder private var muteIndicator: some View {
+        let _ = nav.muteTick
+        if nav.isMuted {
+            Image(systemName: "bell.slash.fill")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .help("Notifications muted")
+        }
     }
 
     private var separator: some View {
