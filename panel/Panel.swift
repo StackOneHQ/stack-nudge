@@ -1296,9 +1296,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self.nav.quotaLastUpdated = Date()
                 self.evaluateQuotaThresholds(snapshot)
             } else if self.claudeCliQuotaProbe.isRateLimited {
-                // Soft-fail: leave the prior snapshot in place, no error.
+                // Soft-fail: hold any prior snapshot. On a cold first probe
+                // (no snapshot yet) surface a rate-limit note so the tab shows
+                // that instead of sitting on a bare "Loading…" spinner until
+                // the backoff clears.
+                if self.nav.quota == nil {
+                    self.nav.quotaError = "Claude usage rate-limited — retrying shortly."
+                }
             } else {
                 // Hard-fail: the CLI couldn't run or its output didn't parse.
+                // Drop any stale snapshot so the Usage tab surfaces the error
+                // state instead of rendering old bars as if they were current.
+                self.nav.quota = nil
+                self.nav.quotaLastUpdated = nil
                 self.nav.quotaError = "Claude usage unavailable — run `claude /usage` to check your session."
             }
         }
@@ -2037,12 +2047,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     // Suppress all banner/sound/voice output for `minutes`, then auto-lift.
     // The state (nav.muteUntil) is transient, so a relaunch clears it. Muting
-    // also dismisses any banner already on screen, so it silences an in-flight
-    // nudge rather than only future ones.
+    // also dismisses any banner already on screen and cuts any in-flight voice
+    // utterance, so it silences an in-flight nudge rather than only future ones.
     func muteFor(minutes: Int) {
         nav.muteUntil = Date().addingTimeInterval(TimeInterval(minutes * 60))
         nav.muteTick += 1
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        Speaker.stopAllAudio()
         muteTicker?.invalidate()
         muteTicker = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             guard let self else { return }
@@ -2078,6 +2089,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                   let current = self.store.events.first(where: { $0.id == event.id })
             else { return }
             self.store.setSnoozedUntil(id: current.id, nil)
+            // Respect an active global mute. The snooze re-fire posts a banner
+            // directly, bypassing postBannerIfNeeded's mute gate, so guard it
+            // here too. The snooze flag is already cleared, so the event stays
+            // visible in the panel — only the banner interruption is dropped.
+            guard !self.nav.isMuted else { return }
             self.postBanner(for: current.with(snoozedUntil: nil))
         }
     }
