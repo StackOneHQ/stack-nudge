@@ -563,6 +563,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // smaller-radius rect corners poke past the SwiftUI capsule curve.
     private weak var contentBlurView: NSVisualEffectView?
     private var hotkey: Hotkey?
+    private var speakHotkey: Hotkey?
     private let store = EventStore()
     private let sessions = SessionStore()
     let nav = PanelNav()
@@ -684,6 +685,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         let config = PanelConfig.load()
         nav.hotkeyDisplay = config.hotkeySpec
         _ = registerHotkey(spec: config.hotkeySpec)
+        nav.speakHotkeyDisplay = config.speakSelectionHotkeySpec
+        _ = registerSpeakHotkey(spec: config.speakSelectionHotkeySpec)
 
         startListener()
         menuBar = MenuBarController(panelController: self)
@@ -727,6 +730,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         )
         nav.setHotkey = { [weak self] spec in
             self?.registerHotkey(spec: spec) ?? false
+        }
+        nav.setSpeakHotkey = { [weak self] spec in
+            self?.registerSpeakHotkey(spec: spec) ?? false
         }
         nav.refreshOutcomes = { [weak self] in self?.refreshOutcomes() }
         nav.refreshPullRequests = { [weak self] in self?.refreshPullRequests() }
@@ -2199,6 +2205,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         return true
     }
 
+    private func registerSpeakHotkey(spec: String) -> Bool {
+        let new = Hotkey(spec: spec, id: 2) { SpeakSelection.trigger() }
+        guard let new else {
+            FileHandle.standardError.write(Data(
+                "stack-nudge-panel: failed to register speak hotkey '\(spec)'\n".utf8))
+            return false
+        }
+        speakHotkey = new  // releasing the old instance unregisters it via deinit
+        return true
+    }
+
 
     // MARK: - Config file watcher
 
@@ -2335,19 +2352,20 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // While recording a hotkey, capture the next combo. Arrow keys / Tab
         // bail out gracefully — otherwise users who entered record mode by
         // mistake would be stuck on row 0 with all their keypresses swallowed.
-        if nav.recordingHotkey {
+        if nav.recordingHotkey || nav.recordingSpeakHotkey {
+            let recordingSpeak = nav.recordingSpeakHotkey
             let plainNav = mods.intersection([.command, .control, .option, .shift]).isEmpty
             if plainNav {
                 switch event.keyCode {
                 case KeyCode.escape:
-                    nav.cancelRecordingHotkey()
+                    if recordingSpeak { nav.cancelRecordingSpeakHotkey() } else { nav.cancelRecordingHotkey() }
                     return true
                 case KeyCode.upArrow:
-                    nav.cancelRecordingHotkey()
+                    if recordingSpeak { nav.cancelRecordingSpeakHotkey() } else { nav.cancelRecordingHotkey() }
                     nav.selectPrevRow()
                     return true
                 case KeyCode.downArrow, KeyCode.tab:
-                    nav.cancelRecordingHotkey()
+                    if recordingSpeak { nav.cancelRecordingSpeakHotkey() } else { nav.cancelRecordingHotkey() }
                     nav.selectNextRow()
                     return true
                 default:
@@ -2359,7 +2377,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             // bare keys, and we don't want to bind plain "n" by accident.
             guard !captured.isEmpty else { return true }
             if let spec = Hotkey.encode(eventModifiers: mods.rawValue, keyCode: event.keyCode) {
-                nav.commitHotkey(spec)
+                if recordingSpeak { nav.commitSpeakHotkey(spec) } else { nav.commitHotkey(spec) }
             }
             return true
         }
@@ -2840,12 +2858,25 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
               let session = sessions.sessions.first(where: { $0.pid == pid }),
               let bundleID = bundleID(for: session.terminalApp) else { return }
         hidePanel()
+        // session.tabId is the per-tab identity our terminal integrations
+        // captured, but the underlying value differs per terminal — so it
+        // has to reach AppActivator via the parameter that terminal's
+        // activation path reads. VSCode/Cursor/Antigravity store
+        // VSCODE_IPC_HOOK_CLI (→ ipcHook, disambiguates windows for
+        // --reuse-window); iTerm2 stores its session GUID (→ sessionID,
+        // selects the exact pane). Ghostty/Warp/Terminal fall back to
+        // projectPath / AX tab-title and need neither. Without this the
+        // captured tabId was dropped and focus landed on whatever window
+        // the app last had frontmost.
+        let ipcHook = VSCodeIntegration.isVSCodeHosted(session.terminalApp) ? session.tabId : nil
+        let sessionID = session.terminalApp?.contains("iTerm") == true ? session.tabId : nil
         DispatchQueue.global(qos: .userInitiated).async {
             AppActivator.activate(
                 bundleID: bundleID,
                 windowTitle: session.projectName,
-                ipcHook: nil,
+                ipcHook: ipcHook,
                 projectPath: session.projectPath,
+                sessionID: sessionID,
                 sendApproval: false,
                 agent: session.agent
             )

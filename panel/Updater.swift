@@ -203,6 +203,7 @@ final class Updater {
         setPhase(.done)
         appendLog("Restarting…")
         try kickstartLaunchd()
+        restartDaemon()          // pick up the stackvox engine the swap just installed
         relaunchInstalledBundle()
         scheduleAutoQuit()
     }
@@ -480,12 +481,12 @@ final class Updater {
 
     // MARK: - Launchd
 
-    private func kickstartLaunchd() throws {
+    private func kickstartLaunchd(_ label: String = Bootstrap.appLabel) throws {
         let uid = getuid()
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
         task.arguments = ["kickstart", "-k",
-                          "gui/\(uid)/\(Bootstrap.appLabel)"]
+                          "gui/\(uid)/\(label)"]
         task.standardOutput = Pipe()
         task.standardError = Pipe()
         try task.run()
@@ -494,7 +495,23 @@ final class Updater {
             // Not fatal — the kickstart can fail if the agent isn't loaded
             // (e.g. fresh dev install). The new bundle is in place; user
             // can hit the hotkey to launch it manually next time.
-            appendLog("launchctl kickstart exited \(task.terminationStatus) (non-fatal)")
+            appendLog("launchctl kickstart \(label) exited \(task.terminationStatus) (non-fatal)")
+        }
+    }
+
+    /// Restart the stackvox TTS daemon so it re-execs the engine the atomic
+    /// swap just placed on disk. The daemon is a long-running `stackvox serve`
+    /// launchd job; without an explicit kickstart it keeps running the
+    /// pre-update engine until the next login or crash, so engine fixes
+    /// (streaming playback, pronunciation, …) silently don't take effect after
+    /// an app update. Non-fatal: launchd KeepAlive brings it back on next login
+    /// regardless, and shell installs that never registered the daemon agent
+    /// simply get a harmless "not loaded" kickstart.
+    private func restartDaemon() {
+        do {
+            try kickstartLaunchd(Bootstrap.daemonLabel)
+        } catch {
+            appendLog("daemon kickstart failed: \(error) (non-fatal)")
         }
     }
 

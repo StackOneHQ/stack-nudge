@@ -446,6 +446,24 @@ final class SessionStore: ObservableObject {
         "iTerm2", "iTerm", "Terminal", "Warp", "WarpTerminal", "ghostty", "Ghostty",
     ]
 
+    // Resolve a raw `ps` process name to the canonical terminal-app name the
+    // rest of the app keys off (bundleID lookup, iTerm enrichment, focus).
+    // Most terminals present with a stable name already in `terminalApps`.
+    // iTerm2 3.5+ is the exception: each session runs under a detached
+    // `iTermServer-<version>` daemon (session restoration) parented to
+    // launchd, not under the iTerm2 app — so the process name is
+    // version-suffixed (e.g. "iTermServer-3.6.11") and never equals "iTerm2",
+    // and the app itself isn't in the parent chain to walk up to. Left
+    // unmapped, those sessions get no terminalApp — which drops their tab
+    // enrichment and makes Enter-to-focus a silent no-op. Map the daemon back
+    // to "iTerm2" so every downstream check (which matches "iTerm2" exactly or
+    // via contains("iTerm")) recognises it.
+    private static func canonicalTerminalApp(_ processName: String) -> String? {
+        if terminalApps.contains(processName) { return processName }
+        if processName.hasPrefix("iTermServer") { return "iTerm2" }
+        return nil
+    }
+
     private static func readProcessTable() -> [Int: ProcessInfo] {
         let output = runProcess("/bin/ps", ["-axww", "-o", "pid=,ppid=,comm="])
         var result: [Int: ProcessInfo] = [:]
@@ -473,9 +491,9 @@ final class SessionStore: ObservableObject {
                   let info = processTable[next]
             else { break }
             let base = (info.command as NSString).lastPathComponent
-            if terminalApps.contains(base) {
+            if let canonical = canonicalTerminalApp(base) {
                 chain.terminalPID = next
-                chain.terminalApp = base
+                chain.terminalApp = canonical
                 return chain
             }
             current = info.parentPID

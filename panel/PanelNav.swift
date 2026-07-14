@@ -138,7 +138,7 @@ enum SettingsRow: Hashable {
     case banner, muteWhenFocused, mute, muteDuration, pinPanel, keepOpenWhenEmpty, launchAtLogin
     case widget, widgetCorner, widgetOpacity, widgetContent, mascot, theme
     case soundEnabled, agentDoneSound, permissionSound
-    case voiceEnabled, voice, voiceSpeed, downloadVoiceModel
+    case voiceEnabled, voice, voiceSpeed, speakHotkey, downloadVoiceModel
     case quotaTracking, quotaAlerts, alertThreshold, pollFrequency, contextAlert, showRemaining
     case githubLinks, hideShipped, disconnectGithub
     case historyPerSession
@@ -179,6 +179,9 @@ final class PanelNav: ObservableObject {
     @Published var hotkeyDisplay:   String = "cmd+opt+n"
     @Published var recordingHotkey: Bool = false
     @Published var hotkeyError:     String?
+    @Published var speakHotkeyDisplay:   String = "cmd+opt+s"
+    @Published var recordingSpeakHotkey: Bool = false
+    @Published var speakHotkeyError:     String?
     @Published var bannerEnabled:   Bool = true
     @Published var soundEnabled:    Bool = true
     @Published var voiceEnabled:    Bool = false
@@ -603,6 +606,7 @@ final class PanelNav: ObservableObject {
     // without owning the Hotkey instance directly. Returns true if the
     // new spec registered successfully.
     var setHotkey: ((String) -> Bool)?
+    var setSpeakHotkey: ((String) -> Bool)?
 
     // Selectable thresholds for the Usage "Alert threshold" cycle row.
     // Sorted ascending so left/right arrows feel intuitive.
@@ -649,7 +653,7 @@ final class PanelNav: ObservableObject {
                  .banner, .muteWhenFocused, .mute, .muteDuration, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin,
                  .widget, .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme,
                  .soundEnabled, .agentDoneSound, .permissionSound,
-                 .voiceEnabled]
+                 .voiceEnabled, .speakHotkey]
         rows += voiceModelCached ? [.voice, .voiceSpeed] : [.downloadVoiceModel]
         rows += [.quotaTracking, .quotaAlerts, .alertThreshold, .pollFrequency, .contextAlert, .showRemaining,
                  .githubLinks, .hideShipped, .disconnectGithub,
@@ -690,6 +694,7 @@ final class PanelNav: ObservableObject {
     func loadFromConfig() {
         let config = ConfigFile.read()
         hotkeyDisplay   = config["STACKNUDGE_PANEL_HOTKEY"]    ?? "cmd+opt+n"
+        speakHotkeyDisplay = config["STACKNUDGE_SPEAK_HOTKEY"] ?? "cmd+opt+s"
         bannerEnabled   = ConfigFile.bool(config, "STACKNUDGE_BANNER",    default: true)
         soundEnabled    = ConfigFile.bool(config, "STACKNUDGE_SOUND",     default: true)
         voiceEnabled    = ConfigFile.bool(config, "STACKNUDGE_VOICE",     default: false)
@@ -948,6 +953,7 @@ final class PanelNav: ObservableObject {
         case .permissions: actions?.checkPermissions()
         case .update: actions?.beginUpdate()
         case .hotkey: startRecordingHotkey()
+        case .speakHotkey: startRecordingSpeakHotkey()
         case .downloadVoiceModel:
             // The pre-download row is an action: Enter triggers (or cancels)
             // the model download.
@@ -1019,6 +1025,8 @@ final class PanelNav: ObservableObject {
         case .hotkey:
             // Cycle on the hotkey row also enters record mode.
             startRecordingHotkey()
+        case .speakHotkey:
+            startRecordingSpeakHotkey()
         case .banner:
             bannerEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_BANNER", value: bannerEnabled ? "true" : "false")
@@ -1200,5 +1208,26 @@ final class PanelNav: ObservableObject {
         hotkeyDisplay = spec
         ConfigFile.write(key: "STACKNUDGE_PANEL_HOTKEY", value: spec)
         recordingHotkey = false
+    }
+
+    func startRecordingSpeakHotkey() {
+        recordingSpeakHotkey = true
+        speakHotkeyError = nil
+    }
+
+    func cancelRecordingSpeakHotkey() {
+        recordingSpeakHotkey = false
+    }
+
+    func commitSpeakHotkey(_ spec: String) {
+        guard let setSpeakHotkey, setSpeakHotkey(spec) else {
+            speakHotkeyError = "‘\(spec)’ is unavailable — already bound by another app"
+            recordingSpeakHotkey = false
+            return
+        }
+        speakHotkeyError = nil
+        speakHotkeyDisplay = spec
+        ConfigFile.write(key: "STACKNUDGE_SPEAK_HOTKEY", value: spec)
+        recordingSpeakHotkey = false
     }
 }

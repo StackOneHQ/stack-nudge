@@ -89,6 +89,15 @@ struct SettingsView: View {
 
                         section("Voice") {
                             row(.voiceEnabled, label: "Voice notifications", kind: .toggle, value: nav.voiceEnabled ? "On" : "Off")
+                            row(.speakHotkey, label: "Read aloud shortcut", kind: .cycle,
+                                value: nav.recordingSpeakHotkey ? "Press combo…" : nav.speakHotkeyDisplay)
+                            if let error = nav.speakHotkeyError {
+                                Text(error)
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                                    .padding(.horizontal, 14)
+                                    .padding(.top, 2)
+                            }
                             if nav.voiceModelCached {
                                 row(.voice,      label: "Voice", kind: .cycle, value: voiceLabel,                              enabled: nav.voiceEnabled)
                                 row(.voiceSpeed, label: "Speed", kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed), enabled: nav.voiceEnabled)
@@ -143,7 +152,7 @@ struct SettingsView: View {
             }
 
             PageFooter {
-                if nav.recordingHotkey {
+                if nav.recordingHotkey || nav.recordingSpeakHotkey {
                     FooterHint(label: "Press a combo with ⌘ / ⇧ / ⌥ / ⌃", keys: [], primary: true)
                     FooterHint(label: "Cancel", keys: ["Esc"])
                 } else {
