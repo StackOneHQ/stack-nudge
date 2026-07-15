@@ -3,6 +3,11 @@ import SwiftUI
 
 enum SettingsKind {
     case toggle, cycle, action
+    // Like .action (acts in place) but renders a bell instead of the
+    // navigation chevron — the chevron would wrongly imply a drill-in.
+    // Trailing reflects mute state: a plain bell when idle, bell.slash +
+    // countdown while muted, matching the header bell / menu-bar glyph.
+    case mute
 }
 
 struct SettingsView: View {
@@ -14,6 +19,13 @@ struct SettingsView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
+                        // Timed-mute status banner — pinned at the very top
+                        // only while a mute is active, so landing in Settings
+                        // mid-mute makes it obvious (and one-click undoable).
+                        // Mouse-only like the reconciliation banner; keyboard
+                        // users toggle mute via the .mute row in Toggles, so
+                        // this isn't part of the settingsRows index.
+                        muteBanner
                         // Reconciliation banner — appears above all other
                         // rows when one or more detected agents lack our
                         // notify.sh hook. Not part of the keyboard index;
@@ -53,6 +65,8 @@ struct SettingsView: View {
                         section("Toggles") {
                             row(.banner,           label: "Banner notifications", kind: .toggle, value: nav.bannerEnabled    ? "On" : "Off")
                             row(.muteWhenFocused,  label: "Mute when focused",    kind: .toggle, value: nav.muteWhenFocused  ? "On" : "Off")
+                            row(.mute,             label: nav.isMuted ? "Resume notifications" : "Mute notifications", kind: .mute, value: muteRowValue)
+                            row(.muteDuration,     label: "Mute duration",        kind: .cycle,  value: "\(nav.muteDurationMinutes) min")
                             row(.pinPanel,         label: "Pin panel",            kind: .toggle, value: nav.panelPinned      ? "On" : "Off")
                             row(.keepOpenWhenEmpty, label: "Keep open when empty", kind: .toggle, value: nav.keepOpenWhenEmpty ? "On" : "Off")
                             row(.launchAtLogin,    label: "Launch at login",      kind: .toggle, value: nav.launchAtLogin    ? "On" : "Off")
@@ -99,9 +113,6 @@ struct SettingsView: View {
                             row(.pollFrequency, label: "Poll frequency",  kind: .cycle,  value: "\(nav.quotaPollMinutes) min",            enabled: nav.quotaTrackingEnabled)
                             row(.contextAlert,  label: "Context alert at", kind: .cycle, value: contextAlertLabel)
                             row(.showRemaining, label: "Show remaining",   kind: .toggle, value: nav.quotaShowRemaining ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
-                            if nav.quotaTrackingEnabled {
-                                probeSourceLabel
-                            }
                         }
 
                         section("Tickets") {
@@ -167,6 +178,59 @@ struct SettingsView: View {
             // after the user grants a permission in System Settings and
             // returns to the panel.
             nav.refreshPermissions()
+        }
+    }
+
+    // Trailing value for the .mute action row: the live countdown while
+    // muted (re-rendered by nav.muteTick every 30s), empty otherwise so the
+    // row reads as a plain "Mute notifications" affordance.
+    private var muteRowValue: String {
+        guard nav.isMuted, let until = nav.muteUntil else { return "" }
+        return PanelNav.muteRemainingLabel(until: until) + " left"
+    }
+
+    // Pinned status banner shown only while a timed mute is active. Accent
+    // tint + bell.slash to match the header bell's muted state; the Resume
+    // button reuses the same resumeNotifications action. nav.muteTick drives
+    // the countdown refresh (bumped by the controller's 30s ticker).
+    @ViewBuilder
+    private var muteBanner: some View {
+        let _ = nav.muteTick
+        if nav.isMuted, let until = nav.muteUntil {
+            HStack(spacing: 10) {
+                Image(systemName: "bell.slash.fill")
+                    .font(.body)
+                    .foregroundStyle(Color.accentColor)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Notifications muted")
+                        .font(.subheadline.weight(.semibold))
+                    Text("\(PanelNav.muteRemainingLabel(until: until)) left · banners, sounds & voice paused")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Button {
+                    nav.actions?.resumeNotifications()
+                } label: {
+                    Text("Resume")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(Color.accentColor)
+                        )
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.12))
+            )
+            .transition(.opacity)
         }
     }
 
@@ -332,28 +396,6 @@ struct SettingsView: View {
         nav.contextAlertThresholdK == 0 ? "Off" : "\(nav.contextAlertThresholdK)K"
     }
 
-    // Only surfaced when there's something the user needs to know: the
-    // plaintext-file security tradeoff, or the keychain-rotation prompts.
-    // The CLI probe path (the default) is silent — it's the happy state.
-    @ViewBuilder private var probeSourceLabel: some View {
-        if nav.usingPlaintextCredentials {
-            label("⚠︎ Reading the Claude token from ~/.claude/.credentials.json (plaintext) — any process running as you can read it.",
-                  color: .orange)
-        } else if !nav.usingClaudeCliProbe {
-            label("Reading via macOS Keychain — periodic password prompts are expected when Claude Code rotates its token.",
-                  color: .secondary)
-        }
-    }
-
-    private func label(_ text: String, color: Color) -> some View {
-        Text(text)
-            .font(.caption)
-            .foregroundStyle(color)
-            .padding(.horizontal, 14)
-            .padding(.top, 2)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-
     private var checkForUpdatesStatus: String {
         switch nav.updateCheckStatus {
         case .idle:             return ""
@@ -494,8 +536,9 @@ struct SettingsView: View {
         .onTapGesture {
             nav.selectedSettingIndex = nav.index(of: id)
             // For actions, single-click is enough. For toggles/cycles a click
-            // on the row also acts so mouse users don't have to keyboard.
-            if kind == .action || kind == .toggle {
+            // on the row also acts so mouse users don't have to keyboard. The
+            // mute row acts in place too, so it clicks like an action.
+            if kind == .action || kind == .toggle || kind == .mute {
                 nav.activate()
             }
         }
@@ -537,6 +580,19 @@ private struct SettingsRowView: View {
             Text(value)
                 .font(.subheadline.monospaced())
                 .foregroundStyle(selected ? Color.primary : .secondary)
+        case .mute:
+            // value is non-empty ("27m left") only while muted, so it doubles
+            // as the muted flag for the glyph/tint — no separate state needed.
+            HStack(spacing: 8) {
+                if !value.isEmpty {
+                    Text(value)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Image(systemName: value.isEmpty ? "bell" : "bell.slash.fill")
+                    .font(.callout)
+                    .foregroundStyle(value.isEmpty ? Color.secondary : Color.accentColor)
+            }
         case .action:
             HStack(spacing: 8) {
                 if !value.isEmpty {

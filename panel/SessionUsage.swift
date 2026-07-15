@@ -1,9 +1,8 @@
 import AppKit
 import Foundation
-import Security
 import SwiftUI
 
-// Quota tier reported by Anthropic's /api/oauth/usage endpoint. Each tier
+// Quota tier surfaced by the `claude` CLI's `/usage` output. Each tier
 // is a percentage of a budget with a known reset time. resetsAt is optional
 // because some tiers (extra_usage, future tiers) don't reset on a cycle.
 struct QuotaTier: Equatable {
@@ -11,8 +10,8 @@ struct QuotaTier: Equatable {
     let resetsAt: Date?
 }
 
-// Snapshot of the user's Claude Code quota at a point in time. Mirrors the
-// shape of the JSON returned by api.anthropic.com/api/oauth/usage.
+// Snapshot of the user's Claude Code quota at a point in time. Built from
+// the `claude --print /usage` output — the same data Claude Code's TUI shows.
 //
 // fiveHour       → "Current session" — the 5-hour rolling window the TUI shows.
 // sevenDay       → "Current week (all models)".
@@ -44,275 +43,14 @@ enum UsageClient: String, CaseIterable, Hashable {
     }
 }
 
-// Reads the Claude Code OAuth token and calls the (unofficial)
-// /api/oauth/usage endpoint to fetch the user's quota state. The endpoint
-// is the exact data source Claude Code's TUI statusline uses, so output
-// matches `/usage` 1:1.
-//
-// Failure paths (no token, denied keychain access, network error, 401, 429)
-// return nil and log to stderr — quota tracking is informational, never a
-// critical path. The caller (PanelController) will just retry on the next
-// poll tick.
-final class QuotaProbe {
-
-    static let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
-    static let keychainService = "Claude Code-credentials"
-
-    private let session: URLSession
-
-    // In-memory cache of the OAuth token. Touched only from the main queue
-    // (fetch is invoked from PanelController's main-thread timer, and the
-    // 401-retry path hops back to main before clearing).
-    //
-    // Why cache: Claude Code rotates this keychain item periodically and
-    // each rotation wipes the trusted-app ACL we got from "Always Allow",
-    // so the next SecItemCopyMatching re-fires the password prompt. Most
-    // rotations happen well before the old token actually expires, so by
-    // holding the token in memory and only re-reading the keychain when
-    // the API rejects it (HTTP 401), we skip the prompts tied to rotations
-    // that didn't invalidate the token we already have.
-    private var cachedToken: String?
-
-    // Subscription tier read from the same claudeAiOauth blob as the token
-    // (e.g. "max", "pro"). Set whenever we read the blob; persists while the
-    // token is cached. nil when the field isn't present.
-    private var lastSubscriptionType: String?
-
-    // Surfaced to the UI by PanelController after each probe (both touched only
-    // on the main queue, like cachedToken). lastProbeFailed is true when we had
-    // a token but the request/parse failed — distinct from having no token at
-    // all and distinct from being rate-limited (see `isRateLimited`).
-    // usingPlaintextCredentials is true when the token came from the plaintext
-    // credentials file rather than the Keychain.
-    private(set) var lastProbeFailed = false
-    private(set) var usingPlaintextCredentials = false
-
-    // 429 backoff. While `Date() < retryAfterUntil`, fetch() short-circuits
-    // and returns nil without hitting the network so the same source IP
-    // doesn't keep stoking the rate limit.
-    private var retryAfterUntil: Date?
-    private static let defaultRetryAfter: TimeInterval = 15 * 60
-    static let maxRetryAfter: TimeInterval = 60 * 60
-
-    // True while we're sitting inside an active 429 backoff window. Kept
-    // separate from `lastProbeFailed` so the UI can surface a "rate-limited"
-    // message that's accurate (the endpoint isn't broken — we're just told
-    // to come back later).
-    var isRateLimited: Bool {
-        guard let until = retryAfterUntil else { return false }
-        return until > Date()
-    }
-
-    init() {
-        let cfg = URLSessionConfiguration.ephemeral
-        cfg.timeoutIntervalForRequest  = 10
-        cfg.timeoutIntervalForResource = 15
-        self.session = URLSession(configuration: cfg)
-    }
-
-    // One-shot probe. Calls completion on the main queue.
-    func fetch(completion: @escaping (QuotaSnapshot?) -> Void) {
-        fetch(retried: false, completion: completion)
-    }
-
-    private func fetch(retried: Bool, completion: @escaping (QuotaSnapshot?) -> Void) {
-        if let until = retryAfterUntil, until > Date() {
-            // Still inside the 429 backoff window. Don't fire the request —
-            // it would re-trigger the rate limit and reset our cooldown.
-            // Not a "failure": `isRateLimited` already covers this state for
-            // the UI; leaving `lastProbeFailed` alone keeps the "endpoint may
-            // have changed" message accurate.
-            completion(nil)
-            return
-        }
-
-        let token: String
-        if let cached = cachedToken {
-            token = cached
-        } else if let fresh = readAccessToken() {
-            cachedToken = fresh
-            token = fresh
-        } else {
-            lastProbeFailed = false
-            completion(nil)
-            return
-        }
-
-        var request = URLRequest(url: Self.endpoint)
-        request.setValue("Bearer \(token)",       forHTTPHeaderField: "Authorization")
-        request.setValue("oauth-2025-04-20",      forHTTPHeaderField: "anthropic-beta")
-        request.setValue("application/json",      forHTTPHeaderField: "Content-Type")
-        request.setValue("stack-nudge",           forHTTPHeaderField: "User-Agent")
-
-        session.dataTask(with: request) { [weak self] data, response, _ in
-            let http = response as? HTTPURLResponse
-            let code = http?.statusCode
-
-            // 401 = the token we used is no longer valid (Claude Code rotated
-            // and the old token has actually expired, not just been replaced).
-            // Drop the cache and re-read the keychain exactly once.
-            if code == 401, !retried {
-                DispatchQueue.main.async {
-                    self?.cachedToken = nil
-                    self?.fetch(retried: true, completion: completion)
-                }
-                return
-            }
-
-            guard let data, code == 200,
-                  let snapshot = Self.parse(data, planType: self?.lastSubscriptionType ?? nil) else {
-                if let code, code != 200 {
-                    FileHandle.standardError.write(Data(
-                        "stack-nudge: /api/oauth/usage returned \(code)\n".utf8))
-                }
-                let backoff = code == 429
-                    ? Self.parseRetryAfter(http) ?? Self.defaultRetryAfter
-                    : nil
-                DispatchQueue.main.async {
-                    // A real 429 isn't a parse/shape failure either — it's
-                    // the server telling us to slow down. Only flag
-                    // `lastProbeFailed` for the genuine "something broke"
-                    // codes (non-200, non-429).
-                    self?.lastProbeFailed = code != 429
-                    if let backoff {
-                        self?.retryAfterUntil = Date().addingTimeInterval(backoff)
-                    }
-                    completion(nil)
-                }
-                return
-            }
-            DispatchQueue.main.async {
-                self?.lastProbeFailed = false
-                self?.retryAfterUntil = nil
-                completion(snapshot)
-            }
-        }.resume()
-    }
-
-    private static func parseRetryAfter(_ http: HTTPURLResponse?) -> TimeInterval? {
-        parseRetryAfter(http?.value(forHTTPHeaderField: "Retry-After"))
-    }
-
-    // RFC 7231: Retry-After is either an HTTP-date or a non-negative integer
-    // delta-seconds. Anthropic typically returns the integer form; tolerate
-    // either, and clamp to a max so a misconfigured value can't strand us.
-    // Exposed `internal` so the unit tests can exercise the parser directly
-    // without having to construct an HTTPURLResponse.
-    static func parseRetryAfter(_ raw: String?) -> TimeInterval? {
-        guard let raw else { return nil }
-        let trimmed = raw.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return nil }
-        if let seconds = TimeInterval(trimmed), seconds >= 0 {
-            return min(seconds, maxRetryAfter)
-        }
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(identifier: "GMT")
-        f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
-        if let date = f.date(from: trimmed) {
-            return min(max(0, date.timeIntervalSinceNow), maxRetryAfter)
-        }
-        return nil
-    }
-
-    // MARK: - Token sources
-
-    // Prefer ~/.claude/.credentials.json when present. Claude Code itself
-    // reads this file before falling back to the Keychain, and users who
-    // want to avoid the periodic Keychain prompt (caused by Claude rotating
-    // the Keychain item ~every 8h, wiping the ACL grant — anthropics/claude-code#22144,
-    // closed as not planned) can opt in by writing the file at mode 0600.
-    private func readAccessToken() -> String? {
-        if let token = readCredentialsFile() {
-            usingPlaintextCredentials = true
-            return token
-        }
-        usingPlaintextCredentials = false
-        return readKeychainToken()
-    }
-
-    private func readCredentialsFile() -> String? {
-        let path = "\(NSHomeDirectory())/.claude/.credentials.json"
-        guard FileManager.default.fileExists(atPath: path),
-              let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
-              let blob = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let oauth = blob["claudeAiOauth"] as? [String: Any] else {
-            return nil
-        }
-        lastSubscriptionType = oauth["subscriptionType"] as? String
-        guard let token = oauth["accessToken"] as? String, !token.isEmpty else { return nil }
-        return token
-    }
-
-    private func readKeychainToken() -> String? {
-        let query: [String: Any] = [
-            kSecClass as String:            kSecClassGenericPassword,
-            kSecAttrService as String:      Self.keychainService,
-            kSecReturnData as String:       true,
-            kSecMatchLimit as String:       kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else {
-            if status != errSecItemNotFound {
-                FileHandle.standardError.write(Data(
-                    "stack-nudge: keychain read failed (OSStatus \(status))\n".utf8))
-            }
-            return nil
-        }
-        guard let blob = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let oauth = blob["claudeAiOauth"] as? [String: Any] else {
-            return nil
-        }
-        lastSubscriptionType = oauth["subscriptionType"] as? String
-        guard let token = oauth["accessToken"] as? String, !token.isEmpty else { return nil }
-        return token
-    }
-
-    // MARK: - Parsing
-
-    private static let iso: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
-    private static let isoNoFrac: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime]
-        return f
-    }()
-
-    private static func parse(_ data: Data, planType: String?) -> QuotaSnapshot? {
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-
-        return QuotaSnapshot(
-            fiveHour:       tier(json["five_hour"]),
-            sevenDay:       tier(json["seven_day"]),
-            sevenDayOpus:   tier(json["seven_day_opus"]),
-            sevenDaySonnet: tier(json["seven_day_sonnet"]),
-            planType:       planType
-        )
-    }
-
-    private static func tier(_ raw: Any?) -> QuotaTier? {
-        guard let dict = raw as? [String: Any],
-              let utilization = dict["utilization"] as? Double else { return nil }
-        let resetsAt: Date? = (dict["resets_at"] as? String).flatMap {
-            iso.date(from: $0) ?? isoNoFrac.date(from: $0)
-        }
-        return QuotaTier(utilization: utilization, resetsAt: resetsAt)
-    }
-}
-
 // MARK: - Usage tab UI
 
 // Renders the current QuotaSnapshot as labelled progress bars. One bar per
 // non-nil tier; an "Extra usage" row when the user's plan has top-up enabled.
 // Empty state covers two cases:
 //   1. Probe hasn't returned yet (loading) — show a spinner.
-//   2. Probe failed (no token / denied keychain / 401 / 429) — instructional
-//      copy pointing the user at `claude /usage` and the in-app settings.
+//   2. Probe failed (no `claude` CLI on PATH, not signed in, or unparseable
+//      output) — instructional copy pointing the user at `claude /usage`.
 struct UsageView: View {
 
     @ObservedObject var nav: PanelNav
@@ -542,7 +280,7 @@ struct UsageView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                Text("StackNudge reads an unofficial Claude usage endpoint; a Claude Code update can change its shape. This clears on its own once the endpoint is reachable and parseable again.")
+                Text("StackNudge reads your usage by running `claude /usage`. This clears on its own once the CLI is on PATH, signed in, and its output is parseable again.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
@@ -554,7 +292,7 @@ struct UsageView: View {
                 Text("Loading usage…")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                Text("Requires a signed-in Claude Code session, or a Codex session on a ChatGPT plan. The first Claude read may prompt the system keychain.")
+                Text("Requires the `claude` CLI signed in (Claude reads usage via `claude /usage`), or a Codex session on a ChatGPT plan.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)

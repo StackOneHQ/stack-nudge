@@ -172,6 +172,8 @@ struct PanelContentView: View {
 
             Spacer()
 
+            muteBell
+
             // One combined hint instead of per-tab keycaps — keeps the strip
             // uncluttered while still surfacing the shortcut range.
             HStack(spacing: 2) {
@@ -182,6 +184,32 @@ struct PanelContentView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    // Global-mute toggle in the header. A click mutes for the configured
+    // default duration (or resumes if already muted); the menu bar offers
+    // explicit durations. Reading nav.muteTick establishes the dependency so
+    // the countdown re-renders off the controller's 30s timer.
+    private var muteBell: some View {
+        _ = nav.muteTick
+        let muted = nav.isMuted
+        return Button {
+            if muted { nav.actions?.resumeNotifications() }
+            else { nav.actions?.muteFor(nav.muteDurationMinutes) }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: muted ? "bell.slash.fill" : "bell")
+                    .font(.caption)
+                if muted, let until = nav.muteUntil {
+                    Text(PanelNav.muteRemainingLabel(until: until))
+                        .font(.caption2.monospacedDigit())
+                }
+            }
+            .foregroundStyle(muted ? Color.accentColor : Color.secondary)
+        }
+        .buttonStyle(.plain)
+        .help(muted ? "Muted — click to resume notifications"
+                    : "Mute notifications for \(nav.muteDurationMinutes) min")
     }
 
     private func tab(_ mode: PanelMode, label: String, count: Int, dotColor: Color? = nil) -> some View {
@@ -297,6 +325,10 @@ struct PanelContentView: View {
     private var footer: some View {
         PageFooter {
             if store.events.isEmpty {
+                // Mute is still useful with an empty list — it pre-silences
+                // incoming nudges (e.g. heading into a meeting), so keep the
+                // shortcut discoverable even here.
+                FooterHint(label: muteLabel, keys: ["M"])
                 FooterHint(label: "Hide", keys: ["Esc"])
             } else {
                 if let primary = primaryActionLabel {
@@ -312,10 +344,15 @@ struct PanelContentView: View {
                 FooterHint(label: "Snooze",  keys: ["S"])
                     .opacity(snoozeEnabled ? 1.0 : 0.35)
                 FooterHint(label: dismissLabel, keys: ["⌫"])
+                FooterHint(label: muteLabel, keys: ["M"])
                 FooterHint(label: "Hide", keys: ["Esc"])
             }
         }
     }
+
+    // "Mute" toggles to "Resume" while a timed mute is active — mirrors the
+    // header bell and the menu-bar "Resume notifications" item.
+    private var muteLabel: String { nav.isMuted ? "Resume" : "Mute" }
 
     private var snoozeEnabled: Bool {
         guard let selected = store.selectedEvent else { return false }
@@ -536,7 +573,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private var permissionsWC: PermissionsWindowController?
     private var updateChecker: UpdateChecker?
     private var updater: Updater?
-    private let quotaProbe = QuotaProbe()
     private let claudeCliQuotaProbe = ClaudeCliQuotaProbe()
     private let codexQuotaProbe = CodexQuotaProbe()
     private let antigravityUsageProbe = AntigravityUsageProbe()
@@ -687,7 +723,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             runBootstrap:     { [weak self] in self?.runBootstrap() },
             quit:             { Bootstrap.userQuit() },
             expandFromCompact: { [weak self] in self?.expandFromCompact() },
-            exitCompactMode:   { [weak self] in self?.exitCompactMode() }
+            exitCompactMode:   { [weak self] in self?.exitCompactMode() },
+            muteFor:             { [weak self] minutes in self?.muteFor(minutes: minutes) },
+            resumeNotifications: { [weak self] in self?.resumeNotifications() }
         )
         nav.setHotkey = { [weak self] spec in
             self?.registerHotkey(spec: spec) ?? false
@@ -1208,7 +1246,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     // MARK: - Quota polling
 
-    // Fires QuotaProbe on a recurring timer. Cadence varies: 60s while the
+    // Fires the quota probes on a recurring timer. Cadence varies: 60s while the
     // panel is visible (keeps the Usage tab feeling alive), longer when
     // hidden (default 5 min, configurable via STACKNUDGE_USAGE_POLL_MIN).
     // Re-evaluating on every tick keeps the timer schedule responsive to
@@ -1243,48 +1281,35 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func runQuotaProbe() {
         guard quotaTrackingEnabled else { return }
         nav.quotaSyncing = true
-        // CLI probe first — Claude CLI reads its own keychain, so our process
-        // never triggers the periodic password prompt. Only fall back to the
-        // direct API probe when the CLI invocation failed outright (binary
-        // missing, spawn/timeout error, or unparseable envelope). The CLI's
-        // own soft-fail (rate-limited cold cache, no bucket lines) is treated
-        // as "leave the prior snapshot alone" — NOT a reason to re-prompt
-        // the user via the keychain path.
+        // Claude quota comes solely from the `claude` CLI (`claude --print
+        // /usage`), which reads its own keychain — our process never touches
+        // the keychain or hits Anthropic's API directly. A soft-fail
+        // (rate-limited cold cache, no bucket lines) holds the prior snapshot
+        // untouched; a hard-fail (no `claude` on PATH, spawn/timeout, or
+        // unparseable envelope) surfaces an error in the Usage tab.
         claudeCliQuotaProbe.fetch { [weak self] snapshot in
             guard let self else { return }
+            self.nav.quotaSyncing = false
             if let snapshot {
-                self.nav.quotaSyncing = false
-                self.nav.usingClaudeCliProbe = true
-                self.nav.usingPlaintextCredentials = false
                 self.nav.quota = snapshot
                 self.nav.quotaError = nil
                 self.nav.quotaLastUpdated = Date()
                 self.evaluateQuotaThresholds(snapshot)
-                return
-            }
-            if self.claudeCliQuotaProbe.isRateLimited {
-                // Soft-fail: hold the prior snapshot, don't fall back to the
-                // API probe (which would just hit the same upstream limit).
-                self.nav.quotaSyncing = false
-                self.nav.usingClaudeCliProbe = true
-                return
-            }
-            // Hard-fail from the CLI probe → try the API probe.
-            self.quotaProbe.fetch { [weak self] snapshot in
-                guard let self else { return }
-                self.nav.quotaSyncing = false
-                self.nav.usingClaudeCliProbe = false
-                self.nav.usingPlaintextCredentials = self.quotaProbe.usingPlaintextCredentials
-                if let snapshot {
-                    self.nav.quota = snapshot
-                    self.nav.quotaError = nil
-                    self.nav.quotaLastUpdated = Date()
-                    self.evaluateQuotaThresholds(snapshot)
-                } else if self.quotaProbe.isRateLimited {
-                    self.nav.quotaError = "Rate-limited by Anthropic — retrying shortly."
-                } else if self.quotaProbe.lastProbeFailed {
-                    self.nav.quotaError = "Quota data unavailable — the usage endpoint may have changed."
+            } else if self.claudeCliQuotaProbe.isRateLimited {
+                // Soft-fail: hold any prior snapshot. On a cold first probe
+                // (no snapshot yet) surface a rate-limit note so the tab shows
+                // that instead of sitting on a bare "Loading…" spinner until
+                // the backoff clears.
+                if self.nav.quota == nil {
+                    self.nav.quotaError = "Claude usage rate-limited — retrying shortly."
                 }
+            } else {
+                // Hard-fail: the CLI couldn't run or its output didn't parse.
+                // Drop any stale snapshot so the Usage tab surfaces the error
+                // state instead of rendering old bars as if they were current.
+                self.nav.quota = nil
+                self.nav.quotaLastUpdated = nil
+                self.nav.quotaError = "Claude usage unavailable — run `claude /usage` to check your session."
             }
         }
         // Codex (ChatGPT-plan) rate limits — read locally from the newest
@@ -1860,6 +1885,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     }
 
     private func postBannerIfNeeded(_ event: NudgeEvent) {
+        // Timed global mute swallows every interrupting output — banner,
+        // sound, voice, and the activate-immediately focus jump — for all
+        // events including permission prompts and welcome. The event has
+        // already been appended to the store (onAppend runs before this), so
+        // it still shows in the Events list; only the interruption is muted.
+        if nav.isMuted { return }
+
         let config = PanelConfig.load()
 
         // Mascot/ripple still fire — they're driven from onAppend, not here.
@@ -2007,6 +2039,42 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         center.add(req, withCompletionHandler: nil)
     }
 
+    // MARK: - Timed global mute
+
+    // Fires every 30s while muted: refreshes the countdown UI and lifts the
+    // mute once the window passes. Nil when not muted.
+    private var muteTicker: Timer?
+
+    // Suppress all banner/sound/voice output for `minutes`, then auto-lift.
+    // The state (nav.muteUntil) is transient, so a relaunch clears it. Muting
+    // also dismisses any banner already on screen and cuts any in-flight voice
+    // utterance, so it silences an in-flight nudge rather than only future ones.
+    func muteFor(minutes: Int) {
+        nav.muteUntil = Date().addingTimeInterval(TimeInterval(minutes * 60))
+        nav.muteTick += 1
+        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        Speaker.stopAllAudio()
+        muteTicker?.invalidate()
+        muteTicker = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            guard let until = self.nav.muteUntil, until > Date() else {
+                self.resumeNotifications()
+                return
+            }
+            self.nav.muteTick += 1
+            self.menuBar?.refreshMuteBadge(until: until)
+        }
+        menuBar?.refreshMuteBadge(until: nav.muteUntil)
+    }
+
+    func resumeNotifications() {
+        muteTicker?.invalidate()
+        muteTicker = nil
+        nav.muteUntil = nil
+        nav.muteTick += 1
+        menuBar?.refreshMuteBadge(until: nil)
+    }
+
     // Snooze: mark the event, schedule a Timer to clear the snooze flag and
     // re-post a fresh banner after `seconds`. The hook stays blocked on the
     // FIFO the whole time. If the event is removed (resolved or dismissed)
@@ -2021,6 +2089,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                   let current = self.store.events.first(where: { $0.id == event.id })
             else { return }
             self.store.setSnoozedUntil(id: current.id, nil)
+            // Respect an active global mute. The snooze re-fire posts a banner
+            // directly, bypassing postBannerIfNeeded's mute gate, so guard it
+            // here too. The snooze flag is already cleared, so the event stays
+            // visible in the panel — only the banner interruption is dropped.
+            guard !self.nav.isMuted else { return }
             self.postBanner(for: current.with(snoozedUntil: nil))
         }
     }
@@ -2635,10 +2708,21 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             actOnSelected(approve: false)
         case KeyCode.rKey, KeyCode.delete, KeyCode.forwardDelete:
             dismissSelected()
+        case KeyCode.mKey:
+            toggleGlobalMute()
         default:
             return false
         }
         return true
+    }
+
+    // Events-tab keyboard toggle for the global timed mute — mirrors the
+    // header bell. Mutes for the configured default duration, or resumes if
+    // already muted. (In the Sessions tab, M mutes the selected session; both
+    // read as "M = mute", scoped to the tab.)
+    private func toggleGlobalMute() {
+        if nav.isMuted { resumeNotifications() }
+        else { muteFor(minutes: nav.muteDurationMinutes) }
     }
 
     private func snoozeSelected(for seconds: TimeInterval) {

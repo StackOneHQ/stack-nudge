@@ -130,11 +130,11 @@ Add that to your shell profile.
 
 ### Keyboard-native panel (macOS)
 
-If you'd rather not click banners with the mouse, stack-nudge runs a small floating panel that you summon with a hotkey. It has four tabs — **Events**, **Sessions**, **Usage**, and **Settings** — and is fully keyboard-driven.
+If you'd rather not click banners with the mouse, stack-nudge runs a small floating panel that you summon with a hotkey. It has five tabs — **Events**, **Sessions**, **Usage**, **Tickets**, and **Settings** — and is fully keyboard-driven.
 
 The panel is installed and registered as a launchd agent by `./install.sh` — no opt-in needed. To run quietly without macOS banners, toggle **Settings → Banner notifications** off (panel-only mode).
 
-Default hotkey is `cmd+opt+n`. Hit it from anywhere to summon the panel; hit it again while focused to hide. Switch tabs with `Cmd+1` (Events), `Cmd+2` (Sessions), `Cmd+3` (Usage), `Cmd+4` (Settings) — or click them. Banner and panel can run together, alone, or both off — the sound and voice still fire as passive signals.
+Default hotkey is `cmd+opt+n`. Hit it from anywhere to summon the panel; hit it again while focused to hide. Switch tabs with `Cmd+1` (Events), `Cmd+2` (Sessions), `Cmd+3` (Usage), `Cmd+4` (Tickets), `Cmd+5` (Settings) — or click them. Banner and panel can run together, alone, or both off — the sound and voice still fire as passive signals.
 
 #### Events tab
 
@@ -145,10 +145,13 @@ Recent nudges in chronological order. Each shows agent, message, project name, t
 | `↑ ↓` | Move selection |
 | `⏎` | Approve permission / focus source editor |
 | `O` | Focus source editor without approving |
+| `M` | Mute all notifications for the configured duration (press again to resume) |
 | `⌫` | Dismiss the selected nudge locally |
 | `Esc` | Hide the panel |
 
 When you press `⏎` on a permission event in a VS Code / Cursor terminal pane, stack-nudge walks the editor's accessibility tree to focus the right pane (matched by the agent name in the tab title) before sending Enter — so the approval keystroke lands in the agent's terminal, not whatever was last focused. Falls back gracefully if the pane can't be found.
+
+**Mute for a while.** Press `M` (or use the bell button in the panel header, or the menu-bar **Mute notifications** submenu) to silence *everything* — banner, sound, voice, and the focus jump — for a set duration, **including permission prompts**. Events keep flowing into the panel while muted; only the interruptions are suppressed. A live countdown shows on the header bell and the menu-bar icon (the compact widget just shows a muted-bell glyph), and the mute lifts itself when the timer runs out (or immediately if you press `M` / **Resume** again). The default duration is configurable (`STACKNUDGE_MUTE_DURATION_MIN`, one of 15 / 30 / 60 / 120, default 30) and can be cycled in Settings. Mute is in-memory only — it resets on relaunch.
 
 #### Sessions tab
 
@@ -181,7 +184,7 @@ Reachable from the tab strip or `Cmd+3`. Renders your Claude Code subscription q
 
 Bars are color-coded: green below 50%, yellow 50–80%, red 80%+. Reset times shown per tier.
 
-Data is fetched from the same endpoint Claude Code's own statusline uses (`/api/oauth/usage`), reading your OAuth token from the macOS Keychain. **The first time stack-nudge polls you'll see a keychain dialog — click "Always Allow"** to grant access (one-time, per release).
+Numbers come straight from the `claude` CLI — stack-nudge shells out to `claude --print /usage` and parses the result. Because the CLI reads its *own* keychain grant, **stack-nudge never touches your keychain or calls the Anthropic API, so there's no password prompt**. If `claude` isn't on your `PATH` or you're signed out, the tab shows *"Claude usage unavailable — run `claude /usage` to check your session"* rather than falling back to any other source. (Codex and Antigravity usage are read from their own local files, unaffected.)
 
 Polls every 60 seconds while the panel is visible, or every 5 minutes by default in the background (configurable via Settings → Usage → "Poll frequency"). On the Usage tab: `r` triggers a manual sync, `p` pauses/resumes the poller.
 
@@ -204,7 +207,7 @@ Independent of quota: stack-nudge can also fire a banner when an individual Clau
 
 #### Settings tab
 
-Reachable from the tab strip or `Cmd+4`. Keyboard-driven rows for hotkey, behavior toggles (banner, mute when focused, pin panel, launch at login), widget (corner, mascot picker, opacity), sound picks (with preview-on-cycle), voice notifications + picker + speed (with preview-on-cycle using a random conversational phrase), usage config (quota tracking + alerts + threshold + poll frequency + context alert threshold + show-remaining), and action rows (edit phrases, check permissions, open config file, view release notes, check for updates, uninstall, quit).
+Reachable from the tab strip or `Cmd+5`. Keyboard-driven rows for hotkey, behavior toggles (banner, mute when focused, a Mute/Resume action row with mute duration, pin panel, launch at login), widget (corner, mascot picker, opacity), sound picks (with preview-on-cycle), voice notifications + picker + speed (with preview-on-cycle using a random conversational phrase), usage config (quota tracking + alerts + threshold + poll frequency + context alert threshold + show-remaining), and action rows (edit phrases, check permissions, open config file, view release notes, check for updates, uninstall, quit).
 
 | Key | Action |
 |-----|--------|
@@ -239,6 +242,7 @@ When the panel daemon is running, a bell icon appears in your menu bar. The same
 | `Hotkey · …` | Shows your current hotkey (info only) |
 | `Show banners` | Toggles macOS banner notifications. Enabling fires a confirmation banner. |
 | `Voice notifications` | Toggles spoken notifications. Enabling speaks *"Voice notifications enabled"*. |
+| `Mute notifications ▸` | Submenu (For 15m / 30m / 1h / 2h) to silence all nudges for a set time. While muted the item becomes `Resume notifications` and the menu-bar icon shows a `bell.slash` + countdown. |
 | `Show panel` | Brings the floating panel up (handy when no events are queued) |
 | `Check permissions…` | Opens the permissions checker (see below) |
 | `Open config file…` | Opens `~/.stack-nudge/config` in your default editor |
@@ -336,7 +340,7 @@ Open the panel (`⌘⌥N`), go to **Settings → Uninstall stack-nudge…**, con
 - `~/.stack-nudge/` (config, `notify.sh`, phrases)
 - Moves `stack-nudge.app` to Trash and quits
 
-Settings (config, the cached Kokoro voice model in `~/.cache/huggingface/`, your macOS keychain entry for Claude Code) are not touched.
+Settings (config, the cached Kokoro voice model in `~/.cache/huggingface/`) are not touched. stack-nudge never creates its own keychain entries, so there's nothing of ours to clean up there.
 
 ### Linux / Windows / fallback
 
