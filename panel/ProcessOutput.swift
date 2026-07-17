@@ -64,12 +64,13 @@ enum ProcessOutput {
             .first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
-    // Resolve the `claude` CLI. Same minimal-PATH rationale as gh(); the
-    // ~/.claude/local fallback covers users who installed via the curl-bash
-    // installer rather than Homebrew.
+    // Resolve the `claude` CLI. Same minimal-PATH rationale as gh(). The
+    // native installer (current default) symlinks into ~/.local/bin; the
+    // ~/.claude/local fallback covers the older curl-bash/migration installer.
     static func claude() -> String? {
         let home = NSHomeDirectory()
         return [
+            "\(home)/.local/bin/claude",
             "/opt/homebrew/bin/claude",
             "/usr/local/bin/claude",
             "\(home)/.claude/local/claude",
