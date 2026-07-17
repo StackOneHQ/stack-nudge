@@ -834,6 +834,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             .dropFirst()
             .sink { [weak self] _ in self?.applyCompactLayout() }
             .store(in: &cancellables)
+        nav.$compactSnap
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] snap in self?.handleSnapModeChange(snap) }
+            .store(in: &cancellables)
         nav.$compactAlpha
             .removeDuplicates()
             .sink { [weak self] _ in self?.applyCompactAlpha() }
@@ -908,7 +913,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self.nav.compactDragging = false
                 if self.compactMovedSinceMouseDown {
                     self.compactMovedSinceMouseDown = false
-                    self.snapCompactToNearestCorner()
+                    if self.nav.compactSnap {
+                        self.snapCompactToNearestCorner()
+                    } else {
+                        self.persistCompactFreePosition()
+                    }
                 }
             default: break
             }
@@ -1033,7 +1042,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             panel.contentMinSize = size
             var frame = panel.frame
             frame.size = size
-            frame.origin = compactCornerOrigin(for: size)
+            frame.origin = nav.compactSnap
+                ? compactCornerOrigin(for: size)
+                : compactFreeOrigin(for: size)
             ignoringProgrammaticMove = true
             panel.setFrame(frame, display: true, animate: false)
             ignoringProgrammaticMove = false
@@ -1147,13 +1158,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         let visible = activeScreen().visibleFrame
         let size = panel.frame.size
         let center = NSPoint(x: panel.frame.midX, y: panel.frame.midY)
-        let corner: CompactCorner
-        switch (center.x < visible.midX, center.y < visible.midY) {
-        case (true,  false): corner = .topLeft
-        case (false, false): corner = .topRight
-        case (true,  true):  corner = .bottomLeft
-        case (false, true):  corner = .bottomRight
-        }
+        let corner = CompactPlacement.nearestCorner(toCenter: center, in: visible)
         // Animate from the released position to the target corner FIRST.
         // Persist the corner only after the animation finishes — otherwise
         // updating nav.compactCorner mid-animation fires the Combine sink,
@@ -1181,8 +1186,63 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
     }
 
+    // Free-placement drop: clamp the released origin into the active screen,
+    // settle the window there if the clamp moved it, and persist. No snap
+    // animation — the pill stays where the user let go.
+    private func persistCompactFreePosition() {
+        guard nav.compactMode, !nav.compactExpanded else { return }
+        let visible = activeScreen().visibleFrame
+        let clamped = CompactPlacement.clamp(origin: panel.frame.origin,
+                                             size: panel.frame.size,
+                                             into: visible,
+                                             inset: Self.compactWidgetInset)
+        if clamped != panel.frame.origin {
+            ignoringProgrammaticMove = true
+            panel.setFrame(NSRect(origin: clamped, size: panel.frame.size),
+                           display: true, animate: false)
+            ignoringProgrammaticMove = false
+        }
+        nav.setCompactFreeOrigin(clamped)
+    }
+
+    // Re-enabling snap: pick the corner nearest the pill's last floating spot
+    // (its saved free origin, since the panel is expanded in Settings when the
+    // toggle flips and its live frame isn't the pill's), persist that corner,
+    // then re-lay-out so the pill lands there when it next collapses. Turning
+    // snap off does nothing visible — the pill keeps its current spot until the
+    // next drag.
+    private func handleSnapModeChange(_ snap: Bool) {
+        if snap {
+            let size = compactWidgetSizeForMode
+            let visible = activeScreen().visibleFrame
+            let origin = nav.compactFreeOrigin
+                ?? cornerOrigin(for: size, corner: nav.compactCorner)
+            let center = NSPoint(x: origin.x + size.width / 2,
+                                 y: origin.y + size.height / 2)
+            let corner = CompactPlacement.nearestCorner(toCenter: center, in: visible)
+            if nav.compactCorner != corner {
+                nav.compactCorner = corner
+                ConfigFile.write(key: "STACKNUDGE_COMPACT_CORNER",
+                                 value: corner.rawValue)
+            }
+        }
+        applyCompactLayout()
+    }
+
     private func compactCornerOrigin(for size: NSSize) -> NSPoint {
         cornerOrigin(for: size, corner: nav.compactCorner)
+    }
+
+    // Origin for free-placement mode: the saved free position clamped into the
+    // active screen (so a display change can't strand the pill), falling back
+    // to the current corner the first time free mode is entered.
+    private func compactFreeOrigin(for size: NSSize) -> NSPoint {
+        let visible = activeScreen().visibleFrame
+        let saved = nav.compactFreeOrigin
+            ?? cornerOrigin(for: size, corner: nav.compactCorner)
+        return CompactPlacement.clamp(origin: saved, size: size,
+                                      into: visible,
+                                      inset: Self.compactWidgetInset)
     }
 
     private func cornerOrigin(for size: NSSize, corner: CompactCorner) -> NSPoint {
