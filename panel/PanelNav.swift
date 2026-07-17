@@ -146,7 +146,7 @@ enum SettingsRow: Hashable {
     case wireAgents, dismissAgents
     case permissions, update, hotkey
     case banner, muteWhenFocused, mute, muteDuration, pinPanel, keepOpenWhenEmpty, launchAtLogin
-    case widget, widgetCorner, widgetOpacity, widgetContent, mascot, theme
+    case widget, snapToCorners, widgetCorner, widgetOpacity, widgetContent, mascot, theme
     case soundEnabled, agentDoneSound, permissionSound
     case voiceEnabled, voice, voiceSpeed, speakHotkey, downloadVoiceModel
     case quotaTracking, quotaAlerts, alertThreshold, pollFrequency, contextAlert, showRemaining
@@ -736,6 +736,16 @@ final class PanelNav: ObservableObject {
     // the controller's compact-aware code; just don't expose a toggle.
     @Published var compactMode:   Bool = true
     @Published var compactCorner: CompactCorner = .topRight
+    // When true (default), releasing a drag snaps the pill to the nearest
+    // screen corner (STACKNUDGE_COMPACT_CORNER is the source of truth). When
+    // false, the pill stays where it is dropped and its absolute origin is
+    // persisted in STACKNUDGE_COMPACT_POS.
+    @Published var compactSnap: Bool = true
+    // The pill's last free-placement origin (absolute screen coords). Only
+    // meaningful while compactSnap is false; nil until the user first drops
+    // the pill in free mode. Written through setCompactFreeOrigin so the
+    // config key stays in sync.
+    @Published private(set) var compactFreeOrigin: CGPoint?
     @Published var compactContent: CompactContent = .sessions
     @Published var mascot:        MascotKind = .robot
     @Published var theme:         AccentTheme = .cyan
@@ -845,7 +855,7 @@ final class PanelNav: ObservableObject {
         if updateAvailable != nil { rows.append(.update) }
         rows += [.hotkey,
                  .banner, .muteWhenFocused, .mute, .muteDuration, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin,
-                 .widget, .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme,
+                 .widget, .snapToCorners, .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme,
                  .soundEnabled, .agentDoneSound, .permissionSound,
                  .voiceEnabled, .speakHotkey]
         rows += voiceModelCached ? [.voice, .voiceSpeed] : [.downloadVoiceModel]
@@ -927,6 +937,8 @@ final class PanelNav: ObservableObject {
         compactMode   = ConfigFile.bool(config, "STACKNUDGE_COMPACT_MODE", default: true)
         compactCorner = CompactCorner(rawValue: config["STACKNUDGE_COMPACT_CORNER"] ?? "")
             ?? .topRight
+        compactSnap   = ConfigFile.bool(config, "STACKNUDGE_COMPACT_SNAP", default: true)
+        compactFreeOrigin = CompactPlacement.parsePosition(config["STACKNUDGE_COMPACT_POS"])
         compactContent = CompactContent(rawValue: config["STACKNUDGE_COMPACT_CONTENT"] ?? "")
             ?? .sessions
         mascot        = MascotKind(rawValue: config["STACKNUDGE_MASCOT"] ?? "") ?? .robot
@@ -1238,6 +1250,14 @@ final class PanelNav: ObservableObject {
                          value: keepOpenWhenEmpty ? "true" : "false")
     }
 
+    // Persist a new free-placement origin for the pill. Called by
+    // PanelController after a free-mode drop (already clamped to screen).
+    func setCompactFreeOrigin(_ p: CGPoint) {
+        compactFreeOrigin = p
+        ConfigFile.write(key: "STACKNUDGE_COMPACT_POS",
+                         value: CompactPlacement.formatPosition(p))
+    }
+
     // Settings "GitHub PR links" toggle. Persists STACKNUDGE_GITHUB; on enable
     // kicks an immediate PR fetch so chips appear without waiting for the next
     // tab visit, on disable drops cached PR state so chips revert to the local
@@ -1317,6 +1337,10 @@ final class PanelNav: ObservableObject {
             ConfigFile.write(key: "STACKNUDGE_COMPACT_MODE",
                              value: compactMode ? "true" : "false")
             compactExpanded = compactMode
+        case .snapToCorners:
+            compactSnap.toggle()
+            ConfigFile.write(key: "STACKNUDGE_COMPACT_SNAP",
+                             value: compactSnap ? "true" : "false")
         case .widgetCorner:
             let list = CompactCorner.allCases
             let idx = list.firstIndex(of: compactCorner) ?? 0
