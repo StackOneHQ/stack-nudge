@@ -107,6 +107,12 @@ final class CodexQuotaProbe {
               let used = (dict["used_percent"] as? NSNumber)?.doubleValue else { return nil }
         let resetsAt = (dict["resets_at"] as? NSNumber)
             .map { Date(timeIntervalSince1970: $0.doubleValue) }
+        // A window whose reset time has already passed has since rolled over;
+        // the captured used_percent is stale and no longer reflects the current
+        // window. Drop it so the Usage tab doesn't show old numbers with a
+        // "resets N days ago" (happens when Codex hasn't run recently and the
+        // newest rollout is older than its own rate-limit window).
+        if let resetsAt, resetsAt < Date() { return nil }
         return QuotaTier(utilization: used, resetsAt: resetsAt)
     }
 }
