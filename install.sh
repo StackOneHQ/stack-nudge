@@ -89,7 +89,7 @@ find_python() {
 echo ""
 echo "# STAGE: venv"
 echo "Setting up voice engine..."
-STACKVOX_SPEC="stackvox>=0.10.0"
+STACKVOX_SPEC="stackvox>=0.11.0"
 PYTHON=$(find_python)
 if [[ -z "$PYTHON" ]]; then
   echo ""
