@@ -4,6 +4,13 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.25.1](https://github.com/StackOneHQ/stack-nudge/compare/v1.25.0...v1.25.1) (2026-07-17)
+
+
+### Bug Fixes
+
+* **usage:** locate claude in ~/.local/bin; drop stale codex tiers ([#132](https://github.com/StackOneHQ/stack-nudge/issues/132)) ([6468b9f](https://github.com/StackOneHQ/stack-nudge/commit/6468b9f504162118cb041a5f17d11accd85d05c0))
+
 ## [1.25.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.24.0...v1.25.0) (2026-07-15)
 
 
