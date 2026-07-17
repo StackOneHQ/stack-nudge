@@ -35,6 +35,12 @@ enum CompactPlacement {
         return CGPoint(x: x, y: y)
     }
 
+    // Index of the first frame that contains `point`, or nil if the point is
+    // on no frame. Used to find which screen a free-placed pill lives on.
+    static func frameIndex(containing point: CGPoint, in frames: [CGRect]) -> Int? {
+        frames.firstIndex { $0.contains(point) }
+    }
+
     // Parse a persisted "x,y" string into a point. Returns nil for missing or
     // malformed input so callers can fall back to a corner origin.
     static func parsePosition(_ raw: String?) -> CGPoint? {

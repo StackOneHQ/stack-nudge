@@ -25,6 +25,28 @@ final class CompactPlacementTests: XCTestCase {
         XCTAssertEqual(CompactPlacement.nearestCorner(toCenter: CGPoint(x: 2900, y: 100), in: shifted), .bottomRight)
     }
 
+    // MARK: - frameIndex(containing:in:)
+
+    func test_frameIndex_findsContainingFrame() {
+        let frames = [CGRect(x: 0, y: 0, width: 100, height: 100),
+                      CGRect(x: 200, y: 0, width: 100, height: 100)]
+        XCTAssertEqual(CompactPlacement.frameIndex(containing: CGPoint(x: 50, y: 50), in: frames), 0)
+        XCTAssertEqual(CompactPlacement.frameIndex(containing: CGPoint(x: 250, y: 50), in: frames), 1)
+    }
+
+    func test_frameIndex_nilWhenPointOnNoFrame() {
+        let frames = [CGRect(x: 0, y: 0, width: 100, height: 100)]
+        XCTAssertNil(CompactPlacement.frameIndex(containing: CGPoint(x: 500, y: 500), in: frames))
+        XCTAssertNil(CompactPlacement.frameIndex(containing: CGPoint(x: 50, y: 50), in: []))
+    }
+
+    func test_frameIndex_returnsFirstMatchWhenFramesOverlap() {
+        let frames = [CGRect(x: 0, y: 0, width: 100, height: 100),
+                      CGRect(x: 50, y: 50, width: 100, height: 100)]
+        // (60,60) is inside both; expect the first.
+        XCTAssertEqual(CompactPlacement.frameIndex(containing: CGPoint(x: 60, y: 60), in: frames), 0)
+    }
+
     // MARK: - clamp
 
     func test_clamp_insideFrame_isUnchanged() {

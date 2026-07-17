@@ -1044,7 +1044,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             frame.size = size
             frame.origin = nav.compactSnap
                 ? compactCornerOrigin(for: size)
-                : compactFreeOrigin(for: size)
+                : resolvedFreeOrigin(for: size)
             ignoringProgrammaticMove = true
             panel.setFrame(frame, display: true, animate: false)
             ignoringProgrammaticMove = false
@@ -1191,7 +1191,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // animation — the pill stays where the user let go.
     private func persistCompactFreePosition() {
         guard nav.compactMode, !nav.compactExpanded else { return }
-        let visible = activeScreen().visibleFrame
+        let visible = screenForFreeOrigin(panel.frame.origin, size: panel.frame.size).visibleFrame
         let clamped = CompactPlacement.clamp(origin: panel.frame.origin,
                                              size: panel.frame.size,
                                              into: visible,
@@ -1205,18 +1205,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         nav.setCompactFreeOrigin(clamped)
     }
 
-    // Re-enabling snap: pick the corner nearest the pill's last floating spot
-    // (its saved free origin, since the panel is expanded in Settings when the
-    // toggle flips and its live frame isn't the pill's), persist that corner,
-    // then re-lay-out so the pill lands there when it next collapses. Turning
-    // snap off does nothing visible — the pill keeps its current spot until the
-    // next drag.
+    // Snap toggled. On ENABLE: pick the corner nearest the pill's last floating
+    // spot (its saved free origin — the panel is expanded in Settings when the
+    // toggle flips, so its live frame isn't the pill's) and persist it, so the
+    // pill lands there on next collapse. On DISABLE: pin the free origin to the
+    // pill's current resting corner so it stays put instead of jumping to a
+    // stale free spot. Either way, re-lay-out.
     private func handleSnapModeChange(_ snap: Bool) {
+        let size = compactWidgetSizeForMode
         if snap {
-            let size = compactWidgetSizeForMode
-            let visible = activeScreen().visibleFrame
             let origin = nav.compactFreeOrigin
                 ?? cornerOrigin(for: size, corner: nav.compactCorner)
+            let visible = screenForFreeOrigin(origin, size: size).visibleFrame
             let center = NSPoint(x: origin.x + size.width / 2,
                                  y: origin.y + size.height / 2)
             let corner = CompactPlacement.nearestCorner(toCenter: center, in: visible)
@@ -1225,8 +1225,24 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 ConfigFile.write(key: "STACKNUDGE_COMPACT_CORNER",
                                  value: corner.rawValue)
             }
+        } else {
+            nav.setCompactFreeOrigin(cornerOrigin(for: size, corner: nav.compactCorner))
         }
         applyCompactLayout()
+    }
+
+    // The screen a free-placed pill at `origin` lives on — the one containing
+    // the pill's centre — so it stays on its own display regardless of where
+    // the cursor is. Falls back to the cursor's screen when the centre is on
+    // no connected screen (e.g. a monitor was unplugged).
+    private func screenForFreeOrigin(_ origin: NSPoint, size: NSSize) -> NSScreen {
+        let center = NSPoint(x: origin.x + size.width / 2,
+                             y: origin.y + size.height / 2)
+        if let idx = CompactPlacement.frameIndex(containing: center,
+                                                 in: NSScreen.screens.map(\.frame)) {
+            return NSScreen.screens[idx]
+        }
+        return activeScreen()
     }
 
     private func compactCornerOrigin(for size: NSSize) -> NSPoint {
@@ -1234,12 +1250,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     }
 
     // Origin for free-placement mode: the saved free position clamped into the
-    // active screen (so a display change can't strand the pill), falling back
-    // to the current corner the first time free mode is entered.
-    private func compactFreeOrigin(for size: NSSize) -> NSPoint {
-        let visible = activeScreen().visibleFrame
+    // screen that contains it (so it stays on its own display, and a resolution
+    // change can't strand it), falling back to the current corner the first
+    // time free mode is entered.
+    private func resolvedFreeOrigin(for size: NSSize) -> NSPoint {
         let saved = nav.compactFreeOrigin
             ?? cornerOrigin(for: size, corner: nav.compactCorner)
+        let visible = screenForFreeOrigin(saved, size: size).visibleFrame
         return CompactPlacement.clamp(origin: saved, size: size,
                                       into: visible,
                                       inset: Self.compactWidgetInset)
@@ -3312,11 +3329,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             queue: .main
         ) { [weak self] _ in
             guard let self, let panel = self.panel as NSWindow? else { return }
-            // Compact widget: don't persist the moved origin (the corner
-            // is the source of truth). The actual snap fires from the
-            // mouse-up event monitor. Here we just record that movement
-            // happened during the current mouse-down so the monitor
-            // knows whether to snap.
+            // Compact widget: don't persist the moved origin here. Persistence
+            // happens on mouse-up — the corner (snap on) or the free origin
+            // (snap off). Here we just record that movement happened during the
+            // current mouse-down so the mouse-up monitor knows whether to act.
             if self.ignoringProgrammaticMove { return }
             if self.nav.compactMode, !self.nav.compactExpanded {
                 self.compactMovedSinceMouseDown = true
