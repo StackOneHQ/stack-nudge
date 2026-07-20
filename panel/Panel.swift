@@ -333,7 +333,6 @@ struct PanelContentView: View {
             } else {
                 if let primary = primaryActionLabel {
                     FooterHint(label: primary, keys: ["⏎"], primary: true)
-                    FooterDivider()
                 }
                 FooterHint(label: "Select",  keys: ["↑", "↓"])
                 FooterHint(label: "Top/Bottom", keys: ["⌘↑↓"])
