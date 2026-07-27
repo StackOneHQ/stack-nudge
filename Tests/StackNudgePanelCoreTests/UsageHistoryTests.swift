@@ -309,7 +309,7 @@ final class UsageHistoryTests: XCTestCase {
         XCTAssertEqual(second.bytesParsed, 0)
 
         // Totals survive the skip — the entries came from cache, not a re-read.
-        XCTAssertEqual(store.series(now: now).total(for: .outputTokens), 100)
+        XCTAssertEqual(store.series(source: .claude, now: now).total(for: .outputTokens), 100)
     }
 
     // An appended line must be picked up without re-reading what came before.
@@ -323,15 +323,15 @@ final class UsageHistoryTests: XCTestCase {
         let store = UsageHistoryStore()
         store.refresh(source: .claude, root: dir, now: now)
         let firstBytes = store.lastRefreshStats.bytesParsed
-        XCTAssertEqual(store.series(now: now).total(for: .outputTokens), 100)
+        XCTAssertEqual(store.series(source: .claude, now: now).total(for: .outputTokens), 100)
 
         let secondLine = claudeLine(at: now.addingTimeInterval(-600), output: 250)
         try? (firstLine + "\n" + secondLine + "\n").write(toFile: path, atomically: true, encoding: .utf8)
 
         store.refresh(source: .claude, root: dir, now: now)
         let appendBytes = store.lastRefreshStats.bytesParsed
-        XCTAssertEqual(store.series(now: now).total(for: .outputTokens), 350)
-        XCTAssertEqual(store.series(now: now).total(for: .turns), 2)
+        XCTAssertEqual(store.series(source: .claude, now: now).total(for: .outputTokens), 350)
+        XCTAssertEqual(store.series(source: .claude, now: now).total(for: .turns), 2)
 
         // Only the appended region was read, not the whole file again. Compare
         // against the file's own size rather than against `firstBytes`: the two
@@ -357,12 +357,12 @@ final class UsageHistoryTests: XCTestCase {
         try? (complete + "\n" + pending).write(toFile: path, atomically: true, encoding: .utf8)
         let store = UsageHistoryStore()
         store.refresh(source: .claude, root: dir, now: now)
-        XCTAssertEqual(store.series(now: now).total(for: .outputTokens), 100)
+        XCTAssertEqual(store.series(source: .claude, now: now).total(for: .outputTokens), 100)
 
         try? (complete + "\n" + pending + "\n").write(toFile: path, atomically: true, encoding: .utf8)
         store.refresh(source: .claude, root: dir, now: now)
-        XCTAssertEqual(store.series(now: now).total(for: .outputTokens), 500)
-        XCTAssertEqual(store.series(now: now).total(for: .turns), 2)
+        XCTAssertEqual(store.series(source: .claude, now: now).total(for: .outputTokens), 500)
+        XCTAssertEqual(store.series(source: .claude, now: now).total(for: .turns), 2)
     }
 
     // A truncated or replaced file must be re-read from the start rather than
@@ -378,14 +378,14 @@ final class UsageHistoryTests: XCTestCase {
 
         let store = UsageHistoryStore()
         store.refresh(source: .claude, root: dir, now: now)
-        XCTAssertEqual(store.series(now: now).total(for: .turns), 3)
+        XCTAssertEqual(store.series(source: .claude, now: now).total(for: .turns), 3)
 
         // Replace with a single, shorter entry.
         let replacement = claudeLine(at: now.addingTimeInterval(-300), output: 7)
         try? (replacement + "\n").write(toFile: path, atomically: true, encoding: .utf8)
         store.refresh(source: .claude, root: dir, now: now)
-        XCTAssertEqual(store.series(now: now).total(for: .turns), 1)
-        XCTAssertEqual(store.series(now: now).total(for: .outputTokens), 7)
+        XCTAssertEqual(store.series(source: .claude, now: now).total(for: .turns), 1)
+        XCTAssertEqual(store.series(source: .claude, now: now).total(for: .outputTokens), 7)
     }
 
     // Entries that age past the retained window must not accumulate forever.
@@ -479,8 +479,8 @@ final class UsageHistoryTests: XCTestCase {
         store.refresh(source: .claude, root: dir, now: now)
         let afterRefresh = store.lastRefreshStats
 
-        XCTAssertEqual(store.series(now: now, window: .twentyFourHours).total(for: .outputTokens), 600)
-        XCTAssertEqual(store.series(now: now, window: .sixHours).total(for: .outputTokens), 100)
+        XCTAssertEqual(store.series(source: .claude, now: now, window: .twentyFourHours).total(for: .outputTokens), 600)
+        XCTAssertEqual(store.series(source: .claude, now: now, window: .sixHours).total(for: .outputTokens), 100)
         // Stats untouched: no refresh happened, so no files were read.
         XCTAssertEqual(store.lastRefreshStats, afterRefresh)
     }
