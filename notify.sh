@@ -732,7 +732,15 @@ case "$OS" in
         # Fired once by install.sh so the user sees what a notification
         # looks like and macOS prompts for notification permission while
         # they're still in the install terminal, not mid-work later.
-        notify_macos "stack-nudge" "You're all set. Press ⌘⌥N to open the panel." "$SOUND_STOP" ""
+        #
+        # The banner keeps the ⌘⌥ glyphs; the spoken variant spells them out.
+        # stackvox's --normalize doesn't expand modifier glyphs, so leaving the
+        # voice text to default to the banner text made the engine read the
+        # shortcut as nothing. Passing "" here did NOT opt out of speech — the
+        # ${4:-$message} default treats empty as unset and falls back to the
+        # glyph text, which is exactly what went wrong.
+        notify_macos "stack-nudge" "You're all set. Press ⌘⌥N to open the panel." "$SOUND_STOP" \
+          "You're all set. Press command option N to open the panel."
         ;;
       *)
         voice_msg=$(voice_phrase_for stop)
