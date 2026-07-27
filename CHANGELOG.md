@@ -4,6 +4,18 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.26.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.25.3...v1.26.0) (2026-07-27)
+
+
+### Features
+
+* **panel:** usage history graph pane ([#139](https://github.com/StackOneHQ/stack-nudge/issues/139)) ([34e2eda](https://github.com/StackOneHQ/stack-nudge/commit/34e2eda80e21b58591b83e517b91b4b5e1f3f2d2))
+
+
+### Bug Fixes
+
+* **voice:** speak the welcome shortcut as words ([#141](https://github.com/StackOneHQ/stack-nudge/issues/141)) ([d0904ba](https://github.com/StackOneHQ/stack-nudge/commit/d0904ba5083f83f7574c98ebb584a00c5750b481))
+
 ## [1.25.3](https://github.com/StackOneHQ/stack-nudge/compare/v1.25.2...v1.25.3) (2026-07-27)
 
 
