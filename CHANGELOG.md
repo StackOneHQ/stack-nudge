@@ -4,6 +4,13 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.25.3](https://github.com/StackOneHQ/stack-nudge/compare/v1.25.2...v1.25.3) (2026-07-27)
+
+
+### Bug Fixes
+
+* **panel:** keyboard-navigate the unwired-agents banner ([#137](https://github.com/StackOneHQ/stack-nudge/issues/137)) ([caf7f5b](https://github.com/StackOneHQ/stack-nudge/commit/caf7f5bad60f12198245d55e74ced4cc9fb22835))
+
 ## [1.25.2](https://github.com/StackOneHQ/stack-nudge/compare/v1.25.1...v1.25.2) (2026-07-20)
 
 
