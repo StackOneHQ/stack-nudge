@@ -31,6 +31,7 @@ private enum KeyCode {
     static let nKey:      UInt16 = 45
     static let pKey:      UInt16 = 35
     static let mKey:      UInt16 = 46
+    static let wKey:      UInt16 = 13
 }
 
 // Floating, non-activating panel. Shown via global hotkey; receives key
@@ -1329,7 +1330,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     }
 
     // Public hook for the Usage tab's "Sync now" keystroke.
-    func syncQuotaNow() { runQuotaProbe() }
+    // R in the Usage tab. Re-probes the live quota and re-reads the transcript
+    // history — the graph is derived from files that may have grown since the
+    // last scan, and the freshness window would otherwise skip it.
+    func syncQuotaNow() {
+        runQuotaProbe()
+        nav.refreshUsageSeries(force: true)
+    }
 
     // MARK: - Usage tab detail scrolling
 
@@ -2616,12 +2623,24 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 switch event.keyCode {
                 case KeyCode.escape:
                     hidePanel()
+                case KeyCode.rightArrow:
+                    // Step forward through the carousel; a no-op on the last
+                    // pane rather than wrapping, so → is a safe key to lean on.
+                    nav.advanceUsagePane()
                 case KeyCode.leftArrow:
-                    nav.usageDetailFocused = false
+                    // Walk back through the carousel, then out to the client
+                    // list — one more press of the same key the user came in on.
+                    if !nav.retreatUsagePane() { nav.usageDetailFocused = false }
                 case KeyCode.upArrow:
-                    scrollDetailBy(-40)
+                    // The history pane doesn't scroll, so ↑/↓ are free there.
+                    if nav.usagePane == .history { nav.cycleUsageMetric(forward: false) }
+                    else { scrollDetailBy(-40) }
                 case KeyCode.downArrow:
-                    scrollDetailBy(40)
+                    if nav.usagePane == .history { nav.cycleUsageMetric(forward: true) }
+                    else { scrollDetailBy(40) }
+                case KeyCode.wKey where nav.usagePane == .history:
+                    // Re-buckets cached entries; no rescan, so it lands instantly.
+                    nav.cycleUsageWindow()
                 case KeyCode.rKey:
                     syncQuotaNow()
                 case KeyCode.pKey:
@@ -2640,6 +2659,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             case KeyCode.downArrow:
                 nav.selectNextUsageClient()
             case KeyCode.rightArrow, KeyCode.returnKey, KeyCode.numpadEnter:
+                // Entering always lands on the first carousel pane, so → from
+                // the client list is a predictable two-press path to the graph.
+                nav.usagePane = .quota
                 nav.usageDetailFocused = true
             case KeyCode.rKey:
                 syncQuotaNow()
@@ -2828,6 +2850,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             top ? selectFirstSession() : selectLastSession()
         case .usage:
             if nav.usageDetailFocused {
+                // Nothing to jump to on the history pane — let the keystroke
+                // through rather than inventing a behaviour for it.
+                guard nav.usagePane != .history else { return false }
                 scrollDetailToEdge(top: top)
             } else {
                 top ? nav.selectFirstUsageClient() : nav.selectLastUsageClient()

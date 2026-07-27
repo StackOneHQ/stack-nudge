@@ -465,6 +465,27 @@ final class PanelNav: ObservableObject {
     // When true, keyboard focus is inside the Usage detail pane: ↑/↓ scroll it
     // rather than switching client. →/Enter steps in; ←/Esc steps back out.
     @Published var usageDetailFocused: Bool = false
+    // Which pane of the detail carousel is showing. While the detail holds
+    // focus, → steps forward through the panes and ← steps back — stepping back
+    // off the first pane hands focus to the client list, so the carousel reads
+    // as one more press of the same key rather than a separate focus level.
+    @Published var usagePane: UsagePane = .quota
+    // Series metric the history pane plots. ↑/↓ cycle it (that pane has nothing
+    // to scroll, unlike the quota pane).
+    @Published var usageMetric: UsageMetric = .outputTokens
+    // Window the history pane covers. W cycles it. Narrower windows are a
+    // re-bucket of the same cached entries, so switching costs no I/O.
+    @Published var usageWindow: UsageWindow = .widest
+    // Long-lived parse cache. Owned per-nav rather than global so nothing leaks
+    // between instances, and so tests can drive a clean one.
+    private let usageStore = UsageHistoryStore()
+    // Replayed transcript history for the selected client, keyed so switching
+    // client doesn't show another client's numbers while a scan is in flight.
+    @Published var usageSeries: UsageSeries?
+    @Published var usageSeriesClient: UsageClient?
+    @Published var usageSeriesLoading: Bool = false
+    private var usageSeriesScannedAt: Date?
+    private var usageSeriesScanning = false
 
     // Connected clients that currently have quota to show, in display order.
     var availableUsageClients: [UsageClient] {
@@ -503,6 +524,115 @@ final class PanelNav: ObservableObject {
     // ⌘↑/↓ — jump to the first / last connected client.
     func selectFirstUsageClient() { guard !availableUsageClients.isEmpty else { return }; usageClientIndex = 0 }
     func selectLastUsageClient()  { let count = availableUsageClients.count; guard count > 0 else { return }; usageClientIndex = count - 1 }
+
+    // MARK: - Usage detail carousel
+
+    var selectedUsageClient: UsageClient? {
+        let clients = availableUsageClients
+        guard !clients.isEmpty else { return nil }
+        return clients[clampedUsageClientIndex]
+    }
+
+    // The cached series, but only when it belongs to the client on screen — a
+    // scan that finished for a previous selection must not render under a new one.
+    func usageSeries(for client: UsageClient) -> UsageSeries? {
+        guard usageSeriesClient == client else { return nil }
+        return usageSeries
+    }
+
+    // → while the detail holds focus. Returns false when already on the last
+    // pane so the caller knows the keystroke had nothing to do.
+    @discardableResult
+    func advanceUsagePane() -> Bool {
+        let panes = UsagePane.allCases
+        guard let index = panes.firstIndex(of: usagePane), index + 1 < panes.count else { return false }
+        usagePane = panes[index + 1]
+        if usagePane == .history { refreshUsageSeries() }
+        return true
+    }
+
+    // ← while the detail holds focus. Returns false on the first pane, which is
+    // the caller's signal to hand focus back to the client list.
+    @discardableResult
+    func retreatUsagePane() -> Bool {
+        let panes = UsagePane.allCases
+        guard let index = panes.firstIndex(of: usagePane), index > 0 else { return false }
+        usagePane = panes[index - 1]
+        return true
+    }
+
+    func cycleUsageMetric(forward: Bool) {
+        let metrics = UsageMetric.allCases
+        let index = metrics.firstIndex(of: usageMetric) ?? 0
+        let next = forward ? (index + 1) % metrics.count
+                           : (index - 1 + metrics.count) % metrics.count
+        usageMetric = metrics[next]
+    }
+
+    // W on the history pane. Re-buckets the cached entries for the new window
+    // rather than re-reading anything, so this is synchronous and instant — the
+    // store always retains the widest window for exactly this reason.
+    func cycleUsageWindow() {
+        let windows = UsageWindow.allCases
+        let index = windows.firstIndex(of: usageWindow) ?? 0
+        usageWindow = windows[(index + 1) % windows.count]
+        guard let client = selectedUsageClient,
+              let source = client.historySource,
+              usageSeries(for: client) != nil
+        else { return }
+        usageSeries = usageStore.series(source: source, window: usageWindow)
+    }
+
+    // Replay the selected client's transcripts on a background queue. The store
+    // skips files that haven't changed and resumes mid-file for those that have,
+    // so a repeat call costs the directory walk (~94 ms) rather than a full parse
+    // (~1050 ms). The freshness gate is therefore short — just enough to stop key
+    // repeat from queueing work. `force` is the R key, which always re-reads.
+    func refreshUsageSeries(force: Bool = false) {
+        guard let client = selectedUsageClient, let source = client.historySource else {
+            usageSeries = nil
+            usageSeriesClient = selectedUsageClient
+            return
+        }
+        guard !usageSeriesScanning else { return }
+        if !force,
+           usageSeriesClient == client,
+           let scannedAt = usageSeriesScannedAt,
+           Date().timeIntervalSince(scannedAt) < Self.usageSeriesFreshness {
+            return
+        }
+
+        // Only show the spinner on a first read; a warm re-read lands fast enough
+        // that flashing a loading state would just be a flicker.
+        let isFirstRead = usageSeries == nil || usageSeriesClient != client
+        usageSeriesScanning = true
+        usageSeriesLoading = isFirstRead
+        let store = usageStore
+
+        DispatchQueue.global(qos: .utility).async {
+            // Only the I/O happens off-main. Bucketing is deliberately left to the
+            // completion below rather than done here against a captured window:
+            // pressing W during an in-flight scan would otherwise have its
+            // re-bucket silently reverted by this completion, leaving the header
+            // claiming one window while the chart showed another.
+            store.refresh(source: source, retaining: .widest)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                // Pure computation over entries already in memory (~1 ms), so
+                // running it on main is cheaper than the risk of a stale window.
+                self.usageSeries = store.series(source: source, window: self.usageWindow)
+                self.usageSeriesClient = client
+                self.usageSeriesScannedAt = Date()
+                self.usageSeriesLoading = false
+                self.usageSeriesScanning = false
+            }
+        }
+    }
+
+    // Short enough that the graph feels live, long enough that holding a key
+    // down doesn't queue redundant walks. The incremental store is what makes
+    // this affordable — it was 60s when every refresh meant a full re-parse.
+    private static let usageSeriesFreshness: TimeInterval = 5
     // Transient feedback for the "Check for updates…" action row.
     // Set by PanelController around UpdateChecker.check(); cleared
     // back to .idle a few seconds after a terminal result so the
