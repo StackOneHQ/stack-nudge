@@ -17,6 +17,7 @@ help:
 	@echo "  make reload     rebuild + replace installed app + bounce the daemon"
 	@echo "  make dev        watch sources; auto-reload on change (ctrl-c to stop)"
 	@echo "  make test       run swift test (needs full Xcode for XCTest)"
+	@echo "  make typecheck-tests  compile-check the test sources (no Xcode needed)"
 	@echo "  make clean      remove build/ and .build/"
 
 .PHONY: build
@@ -44,6 +45,13 @@ test:
 		exit 1; \
 	fi
 	@swift test
+
+# Compile-check the XCTest sources without Xcode. Catches the breakage `make
+# test` can't reach on a Command Line Tools-only machine — a production API
+# change leaving a test call site uncompilable. Does not run assertions.
+.PHONY: typecheck-tests
+typecheck-tests:
+	@./scripts/typecheck-tests.sh
 
 # One-shot dev cycle: rebuild, reinstall the app, refresh notify.sh in
 # ~/.stack-nudge so hook-side changes propagate, kickstart the daemon.

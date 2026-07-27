@@ -45,6 +45,19 @@ Tests live in `Tests/StackNudgePanelCoreTests/` and cover the pure-logic surface
 sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 ```
 
+Without Xcode the test sources are the one part of the repo that never gets
+compiled locally, so an API change that breaks a test call site stays invisible
+until CI fails on a build error. To catch that without installing Xcode:
+
+```bash
+make typecheck-tests   # compile-check the test sources; no XCTest required
+```
+
+It compiles the tests in-module against the real panel types, swapping XCTest for
+the stand-ins in `scripts/xctest-shim.swift`. It does **not** run assertions —
+`make test` and CI remain the authority on whether the tests pass. Run it after
+any change that tightens a signature (a new required parameter, a renamed case).
+
 CI runs the suite on every push and PR — `swift test` is one of the required checks.
 
 ## Source layout
