@@ -28,10 +28,12 @@ struct SettingsView: View {
                         muteBanner
                         // Reconciliation banner — appears above all other
                         // rows when one or more detected agents lack our
-                        // notify.sh hook. Not part of the keyboard index;
-                        // mouse-only at v1. After Set up is clicked, the
-                        // success state takes over the slot for a few
-                        // seconds before disappearing.
+                        // notify.sh hook. Its two buttons are keyboard-indexed
+                        // (.wireAgents / .dismissAgents, pinned ahead of
+                        // .permissions to match this render order). After Set
+                        // up is actioned, the success state takes over the slot
+                        // for a few seconds before disappearing — that state is
+                        // inert, so it isn't indexed.
                         if !nav.unwiredAgents.isEmpty {
                             unwiredAgentsRow(nav.unwiredAgents)
                         } else if !nav.recentlyWiredAgents.isEmpty {
@@ -155,7 +157,13 @@ struct SettingsView: View {
                 } else {
                     FooterHint(label: "Move",  keys: ["↑", "↓"])
                     FooterHint(label: "Top/Bottom", keys: ["⌘↑↓"])
+                    // Always rendered so the footer doesn't reflow as selection
+                    // moves, dimmed on the rows where ←/→ do nothing (the
+                    // banner's buttons and the action rows) — same treatment
+                    // the events page gives its Snooze hint. Enter acts on
+                    // every row, so "Act" never dims.
                     FooterHint(label: "Cycle", keys: ["←", "→"])
+                        .opacity(nav.selectedRowRespondsToArrows ? 1.0 : 0.35)
                     FooterHint(label: "Act",   keys: ["⏎"])
                     FooterHint(label: "Back",  keys: ["Esc"])
                 }
@@ -264,12 +272,18 @@ struct SettingsView: View {
     }
 
     // Reconciliation banner. Shown above all other settings rows when one
-    // or more detected agents lack a notify.sh hook entry. Two click
-    // targets: "Set up" (wire every unwired agent) and "Not now" (dismiss
-    // for this/future launches until the agent's state changes again).
-    // Not part of the keyboard-indexed nav at v1 — mouse-only.
+    // or more detected agents lack a notify.sh hook entry. Two targets:
+    // "Set up" (wire every unwired agent) and "Not now" (dismiss for
+    // this/future launches until the agent's state changes again). Each takes
+    // a keyboard index of its own, so ↑/↓ steps through them and Enter acts;
+    // clicking routes through the same nav methods and syncs the selection so
+    // mouse and keyboard don't disagree about what's focused.
     @ViewBuilder
     private func unwiredAgentsRow(_ agents: [BootstrapAgent]) -> some View {
+        let setUpIndex   = nav.index(of: .wireAgents)
+        let dismissIndex = nav.index(of: .dismissAgents)
+        let setUpSelected   = nav.selectedSettingIndex == setUpIndex
+        let dismissSelected = nav.selectedSettingIndex == dismissIndex
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "sparkle")
                 .font(.body)
@@ -289,7 +303,8 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 8) {
                     Button {
-                        for agent in agents { nav.wireSingleAgent(agent) }
+                        nav.selectedSettingIndex = setUpIndex
+                        nav.wireAllUnwiredAgents()
                     } label: {
                         Text("Set up")
                             .font(.caption.weight(.semibold))
@@ -299,17 +314,33 @@ struct SettingsView: View {
                                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                                     .fill(Color.accentColor)
                             )
+                            // Already accent-filled, so it can't deepen its own
+                            // fill the way the plain rows do — a ring reads as
+                            // focus without restating the fill.
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .strokeBorder(Color.primary.opacity(setUpSelected ? 0.7 : 0), lineWidth: 2)
+                            )
                             .foregroundStyle(.white)
                     }
                     .buttonStyle(.plain)
+                    .id(setUpIndex)
                     Button {
-                        for agent in agents { nav.dismissUnwiredAgent(agent) }
+                        nav.selectedSettingIndex = dismissIndex
+                        nav.dismissAllUnwiredAgents()
                     } label: {
                         Text("Not now")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(dismissSelected ? Color.accentColor.opacity(0.22) : Color.clear)
+                            )
                     }
                     .buttonStyle(.plain)
+                    .id(dismissIndex)
                 }
                 .padding(.top, 2)
             }

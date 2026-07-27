@@ -134,6 +134,9 @@ enum GithubSignIn: Equatable {
 // change with no renumbering — and the applyCycle switch over this is
 // exhaustive, so the compiler flags any row left unhandled.
 enum SettingsRow: Hashable {
+    // One slot per button in the agent-reconciliation banner, so both are
+    // keyboard-reachable rather than mouse-only.
+    case wireAgents, dismissAgents
     case permissions, update, hotkey
     case banner, muteWhenFocused, mute, muteDuration, pinPanel, keepOpenWhenEmpty, launchAtLogin
     case widget, widgetCorner, widgetOpacity, widgetContent, mascot, theme
@@ -639,6 +642,9 @@ final class PanelNav: ObservableObject {
     // chase.
     var settingsRows: [SettingsRow] {
         var rows: [SettingsRow] = []
+        // The reconciliation banner renders above the permissions and update
+        // rows, so it indexes above them too — Set up first, then Not now.
+        if !unwiredAgents.isEmpty { rows += [.wireAgents, .dismissAgents] }
         if !missingPermissions.isEmpty { rows.append(.permissions) }
         if updateAvailable != nil { rows.append(.update) }
         rows += [.hotkey,
@@ -779,6 +785,27 @@ final class PanelNav: ObservableObject {
         dismissedAgents.insert(agent.rawValue)
         saveDismissedAgents()
         refreshUnwiredAgents()
+    }
+
+    // Keyboard/click entry points for the banner's two buttons, wiring or
+    // dismissing every agent the banner lists. Both snapshot `unwiredAgents`
+    // first: wireSingleAgent and dismissUnwiredAgent each re-run
+    // refreshUnwiredAgents, which rewrites the array mid-loop.
+    func wireAllUnwiredAgents() {
+        for agent in unwiredAgents { wireSingleAgent(agent) }
+        resetSelectionIfBannerCleared()
+    }
+
+    func dismissAllUnwiredAgents() {
+        for agent in unwiredAgents { dismissUnwiredAgent(agent) }
+        resetSelectionIfBannerCleared()
+    }
+
+    // Both banner rows vanish the instant it's actioned, so a stale index would
+    // leave the keyboard highlight on whichever row slid up into that slot.
+    // Selection stays put if a wire failed and the banner is still showing.
+    private func resetSelectionIfBannerCleared() {
+        if unwiredAgents.isEmpty { selectedSettingIndex = 0 }
     }
 
     private static let dismissedAgentsPath =
@@ -942,6 +969,8 @@ final class PanelNav: ObservableObject {
     // row enters record mode.
     func activate() {
         switch selectedRow {
+        case .wireAgents:    wireAllUnwiredAgents()
+        case .dismissAgents: dismissAllUnwiredAgents()
         case .permissions: actions?.checkPermissions()
         case .update: actions?.beginUpdate()
         case .hotkey: startRecordingHotkey()
@@ -965,6 +994,30 @@ final class PanelNav: ObservableObject {
 
     func cycleForward()  { applyCycle(forward: true) }
     func cycleBackward() { applyCycle(forward: false) }
+
+    // Whether ←/→ do anything on the selected row — mirrors applyCycle's no-op
+    // branch so the Settings footer can dim the Cycle hint instead of
+    // advertising a key the row ignores. Exhaustive over SettingsRow for the
+    // same reason applyCycle is: a new row can't silently inherit a wrong hint.
+    var selectedRowRespondsToArrows: Bool {
+        switch selectedRow {
+        case .wireAgents, .dismissAgents,
+             .disconnectGithub, .editPhrases, .checkPermissions, .openConfig,
+             .releaseNotes, .checkUpdates, .uninstall, .quit, .none:
+            return false
+        case .permissions, .update, .hotkey, .speakHotkey,
+             .banner, .muteWhenFocused, .mute, .muteDuration, .pinPanel,
+             .keepOpenWhenEmpty, .launchAtLogin,
+             .widget, .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme,
+             .soundEnabled, .agentDoneSound, .permissionSound,
+             .voiceEnabled, .voice, .voiceSpeed, .downloadVoiceModel,
+             .quotaTracking, .quotaAlerts, .alertThreshold, .pollFrequency,
+             .contextAlert, .showRemaining,
+             .githubLinks, .hideShipped,
+             .historyPerSession:
+            return true
+        }
+    }
 
     // Shared by Settings row 11 and the Usage tab's 'p' keystroke. On
     // pause, drop the cached snapshot so the Usage tab doesn't sit on
@@ -1157,8 +1210,12 @@ final class PanelNav: ObservableObject {
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
             eventsPerSession = list[next]
             ConfigFile.write(key: "STACKNUDGE_EVENTS_PER_SESSION", value: String(eventsPerSession))
-        // Action rows have nothing to cycle.
-        case .disconnectGithub, .editPhrases, .checkPermissions, .openConfig,
+        // Action rows have nothing to cycle. The two banner rows deliberately
+        // ignore arrows even though .permissions/.update act on them: Set up
+        // rewrites agent hook configs and Not now persists a dismissal, so
+        // neither should fire on an arrow-key graze. Enter/Space only.
+        case .wireAgents, .dismissAgents,
+             .disconnectGithub, .editPhrases, .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .none:
             break
         }
