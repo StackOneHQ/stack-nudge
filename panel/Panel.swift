@@ -149,12 +149,15 @@ struct PanelContentView: View {
         }
     }
 
-    // Distinct ticket/branch groups in the ledger — the badge on the Tickets
-    // tab. Reads nav.handoffsRevision so the count refreshes when a Stop adds
-    // a session while the panel is open.
+    // The badge on the Tickets tab. Counts exactly the groups that tab renders,
+    // via nav's memoized rollup. Re-reading the ledger here meant sorting every
+    // record and building a set on each render of *any* tab (this sits above the
+    // mode switch), and it keyed by `ticket ?? branch` while the tab groups by
+    // `ticket ?? repoRoot`, so the badge over-counted. Reads nav.handoffsRevision
+    // so the count refreshes when a Stop adds a session while the panel is open.
     private var ticketGroupCount: Int {
         _ = nav.handoffsRevision
-        return Set(HandoffLedger.shared.all().map { $0.ticket ?? $0.branch ?? "—" }).count
+        return nav.visibleOutcomeGroups().count
     }
 
     private var tabStrip: some View {
