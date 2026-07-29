@@ -206,4 +206,59 @@ final class OutcomesViewTests: XCTestCase {
         let groups = OutcomesView.groups(from: [record(id: "a", ticket: "ENG-1")])
         XCTAssertEqual(groups.first?.diff.isEmpty, true)
     }
+
+    // MARK: - selectedRow (keyboard selection to scroll anchor)
+
+    // Two groups, the first with two branches, so the flat row order is
+    // header(ENG-1), ENG-1/a, ENG-1/b, header(ENG-2), ENG-2/a.
+    private func twoGroups() -> [TicketGroup] {
+        OutcomesView.groups(from: [
+            record(id: "a", branch: "ENG-1/a", ticket: "ENG-1", tokens: 200, updated: 2),
+            record(id: "b", branch: "ENG-1/b", ticket: "ENG-1", tokens: 100, updated: 2),
+            record(id: "c", branch: "ENG-2/a", ticket: "ENG-2", tokens: 50,  updated: 1),
+        ])
+    }
+
+    func test_selectedRow_walksHeadersThenTheirBranches() {
+        let groups = twoGroups()
+        let ids = (0..<5).map { OutcomesView.selectedRow(groups, index: $0)?.rowID }
+        XCTAssertEqual(ids, [
+            "g:t:ENG-1",
+            "b:" + PanelNav.outcomeKey("/work/stack-nudge", "ENG-1/a"),
+            "b:" + PanelNav.outcomeKey("/work/stack-nudge", "ENG-1/b"),
+            "g:t:ENG-2",
+            "b:" + PanelNav.outcomeKey("/work/stack-nudge", "ENG-2/a"),
+        ])
+    }
+
+    func test_selectedRow_clampsOutOfRangeToFirstAndLastRow() {
+        let groups = twoGroups()
+        XCTAssertEqual(OutcomesView.selectedRow(groups, index: -3)?.rowID, "g:t:ENG-1")
+        XCTAssertEqual(OutcomesView.selectedRow(groups, index: 99)?.rowID,
+                       "b:" + PanelNav.outcomeKey("/work/stack-nudge", "ENG-2/a"))
+    }
+
+    // The group anchor is what the lazy scroll can resolve before a group has
+    // been built, so a branch sub-row must report its *own* group, not the first.
+    func test_selectedRow_groupAnchorIsTheContainingGroup() {
+        let groups = twoGroups()
+        XCTAssertEqual(OutcomesView.selectedRow(groups, index: 0)?.groupAnchor, "ga:t:ENG-1")
+        XCTAssertEqual(OutcomesView.selectedRow(groups, index: 2)?.groupAnchor, "ga:t:ENG-1")
+        XCTAssertEqual(OutcomesView.selectedRow(groups, index: 3)?.groupAnchor, "ga:t:ENG-2")
+        XCTAssertEqual(OutcomesView.selectedRow(groups, index: 4)?.groupAnchor, "ga:t:ENG-2")
+        XCTAssertEqual(OutcomesView.selectedRow(groups, index: 99)?.groupAnchor, "ga:t:ENG-2")
+    }
+
+    func test_selectedRow_groupWithNoBranches_clampsToItsHeader() {
+        let group = TicketGroup(id: "t:ENG-1", label: "ENG-1", kind: .ticket, repos: [],
+                                sessionCount: 1, totalTokens: 0, agents: [],
+                                diff: DiffStat(filesChanged: 0, insertions: 0, deletions: 0),
+                                branches: [])
+        XCTAssertEqual(OutcomesView.selectedRow([group], index: 0)?.rowID, "g:t:ENG-1")
+        XCTAssertEqual(OutcomesView.selectedRow([group], index: 7)?.rowID, "g:t:ENG-1")
+    }
+
+    func test_selectedRow_nilWhenNothingToSelect() {
+        XCTAssertNil(OutcomesView.selectedRow([], index: 0))
+    }
 }

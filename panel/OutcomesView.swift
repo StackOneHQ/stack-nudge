@@ -27,6 +27,14 @@ struct BranchBreakdown: Identifiable, Equatable {
     let diff: DiffStat
 }
 
+// Where the keyboard selection should scroll to. Two anchors because the list is
+// lazy: `groupAnchor` is on the LazyVStack's direct child (resolvable before that
+// group has been built), `rowID` is the precise header / branch row inside it.
+struct OutcomeRowTarget: Equatable {
+    let groupAnchor: String
+    let rowID: String
+}
+
 // How a group is keyed. Ticket groups carry a real Linear/Jira key and deep-link
 // to the tracker; repo groups are the bucket for unticketed work, gathering every
 // branch that ran in a repo so loose work-streams nest under the repo instead of
@@ -72,7 +80,7 @@ struct OutcomesView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             let groups = nav.visibleOutcomeGroups()
-            let selectedRowID = Self.selectedRowID(groups, index: nav.outcomeSelectedIndex)
+            let target = Self.selectedRow(groups, index: nav.outcomeSelectedIndex)
             if nav.githubLinkingEnabled, !nav.githubSignedIn {
                 connectGithubCard
                 Divider().opacity(0.4)
@@ -82,9 +90,14 @@ struct OutcomesView: View {
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 8) {
+                        // Lazy, like the Sessions and Events lists. A plain VStack
+                        // built every group *and* every branch sub-row on every
+                        // render; on a 90-day ledger that's a few hundred rows
+                        // rebuilt per arrow keypress, since the selection index
+                        // is published state this view reads.
+                        LazyVStack(alignment: .leading, spacing: 8) {
                             ForEach(groups) { group in
-                                groupRow(group, selectedRowID: selectedRowID)
+                                groupRow(group, selectedRowID: target?.rowID)
                             }
                         }
                         .padding(.horizontal, 14)
@@ -94,21 +107,32 @@ struct OutcomesView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .scrollIndicators(.visible)
-                    // Watch the resolved row id, not the raw index, and scroll to
-                    // the id onChange hands us. Reading a separately-derived
-                    // `selectedRowID` capture here lagged the viewport one keypress
-                    // behind the selection — invisible when stepping ±1 (the row
-                    // stays near the viewport) but obvious on a ⌘↑/↓ jump, where the
-                    // pane didn't move until the next press. Mirrors the Sessions
+                    // Watch the resolved target, not the raw index, and scroll to
+                    // what onChange hands us. Reading a separately-derived
+                    // capture here lagged the viewport one keypress behind the
+                    // selection; invisible when stepping ±1 (the row stays near
+                    // the viewport) but obvious on a ⌘↑/↓ jump, where the pane
+                    // didn't move until the next press. Mirrors the Sessions
                     // tab's onChange(of: selectedPID) pattern.
-                    .onChange(of: selectedRowID) { newID in
-                        guard let newID else { return }
+                    .onChange(of: target) { newTarget in
+                        guard let newTarget else { return }
+                        // Two hops, because the list is lazy: a row's own anchor
+                        // sits *inside* its group's body, and scrollTo cannot
+                        // resolve an id in a child the LazyVStack hasn't built yet
+                        // (measured: it moves nothing at all). The group anchor is
+                        // on the stack's direct child, so it resolves unrealized;
+                        // that hop builds the group, then the precise row anchor
+                        // resolves on the next tick.
+                        //
                         // Snap, don't animate. With key-repeat on a long list the
                         // 0.15s animations piled up, the scroll lagged the
-                        // selection, then settled with an upward snap — the
+                        // selection, then settled with an upward snap: the
                         // "bounce". Instant scroll keeps the selection pinned and
                         // the viewport tracking it smoothly.
-                        proxy.scrollTo(newID, anchor: .center)
+                        proxy.scrollTo(newTarget.groupAnchor, anchor: .center)
+                        DispatchQueue.main.async {
+                            proxy.scrollTo(newTarget.rowID, anchor: .center)
+                        }
                     }
                 }
             }
@@ -206,6 +230,10 @@ struct OutcomesView: View {
         .background(RoundedRectangle(cornerRadius: 6)
             .fill(Color.primary.opacity(0.04)))
         .contentShape(Rectangle())
+        // Coarse scroll anchor on the lazy stack's direct child, so it resolves
+        // before this group has been built. The precise per-row anchors below it
+        // only exist once it has; see the two-hop scroll in `body`.
+        .id(Self.groupAnchorID(group))
         .onTapGesture { if linkable { openTicket(group) } }
         .help(linkable ? "Open \(group.label) in your tracker" : "")
     }
@@ -246,14 +274,32 @@ struct OutcomesView: View {
         "b:\(PanelNav.outcomeKey(branch.repoRoot, branch.branch))"
     }
 
-    private static func selectedRowID(_ groups: [TicketGroup], index: Int) -> String? {
-        var ids: [String] = []
+    // Coarse anchor for the whole group card, distinct from headerID: that one is
+    // on the header row inside the card (a card-wide selection highlight read as
+    // an upward jump), which makes it invisible to a lazy scroll.
+    static func groupAnchorID(_ group: TicketGroup) -> String { "ga:\(group.id)" }
+
+    // Walks the flat row order (header, then that group's branch sub-rows) to the
+    // requested index. Deliberately allocation-free: materialising the whole id
+    // list meant building a string per row on every render, and the caller only
+    // ever wants one of them. Out-of-range clamps to the first / last row, and an
+    // empty ledger yields nil.
+    static func selectedRow(_ groups: [TicketGroup], index: Int) -> OutcomeRowTarget? {
+        guard let last = groups.last else { return nil }
+        var remaining = max(0, index)
         for group in groups {
-            ids.append(headerID(group))
-            ids.append(contentsOf: group.branches.map(branchID))
+            if remaining == 0 { return target(group, headerID(group)) }
+            remaining -= 1
+            if remaining < group.branches.count {
+                return target(group, branchID(group.branches[remaining]))
+            }
+            remaining -= group.branches.count
         }
-        guard !ids.isEmpty else { return nil }
-        return ids[min(max(0, index), ids.count - 1)]
+        return target(last, last.branches.last.map(branchID) ?? headerID(last))
+    }
+
+    private static func target(_ group: TicketGroup, _ rowID: String) -> OutcomeRowTarget {
+        OutcomeRowTarget(groupAnchor: groupAnchorID(group), rowID: rowID)
     }
 
     // "3 sessions · 218K tokens · 23 files · +1.8k/−400 · Claude, Codex" —
