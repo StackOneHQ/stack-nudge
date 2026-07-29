@@ -261,4 +261,50 @@ final class OutcomesViewTests: XCTestCase {
     func test_selectedRow_nilWhenNothingToSelect() {
         XCTAssertNil(OutcomesView.selectedRow([], index: 0))
     }
+
+    // MARK: - emptyReason
+
+    func test_emptyReason_isNoSessionsOnAnUntouchedLedger() {
+        XCTAssertEqual(OutcomesView.emptyReason(totalGroups: 0, drops: [:]), .noSessions)
+    }
+
+    func test_emptyReason_reportsFilteredGroupsBeforeDrops() {
+        // Groups exist but none are visible, so hide-shipped is the explanation
+        // even when unrelated drops have also been counted.
+        XCTAssertEqual(
+            OutcomesView.emptyReason(totalGroups: 3, drops: [.notAGitRepo: 2]),
+            .allShipped(hidden: 3))
+    }
+
+    func test_emptyReason_reportsTheDominantDropReasonAndTotalCount() {
+        let reason = OutcomesView.emptyReason(
+            totalGroups: 0, drops: [.notAGitRepo: 2, .missingSessionID: 7])
+        XCTAssertEqual(reason, .allDropped(count: 9, reason: .missingSessionID))
+    }
+
+    func test_emptyReason_ignoresZeroedDropCounts() {
+        XCTAssertEqual(OutcomesView.emptyReason(totalGroups: 0, drops: [.missingSessionID: 0]),
+                       .noSessions)
+    }
+
+    // The actionable case names the remedy; the expected one (no repo) doesn't
+    // pretend something is broken.
+    func test_emptyReasonDetail_includesTheRemedyOnlyWhenThereIsOne() {
+        let broken = OutcomesView.EmptyReason.allDropped(count: 1, reason: .missingSessionID)
+        XCTAssertTrue(broken.detail.contains("notify.sh"))
+        let expected = OutcomesView.EmptyReason.allDropped(count: 1, reason: .notAGitRepo)
+        XCTAssertTrue(expected.detail.contains("git repo"))
+        XCTAssertFalse(expected.detail.contains("notify.sh"))
+    }
+
+    func test_emptyReasonTitle_singularAndPlural() {
+        XCTAssertEqual(OutcomesView.EmptyReason.allDropped(count: 1, reason: .notAGitRepo).title,
+                       "1 turn wasn't recorded")
+        XCTAssertEqual(OutcomesView.EmptyReason.allDropped(count: 4, reason: .notAGitRepo).title,
+                       "4 turns weren't recorded")
+        XCTAssertEqual(OutcomesView.EmptyReason.allShipped(hidden: 1).title,
+                       "1 shipped ticket hidden")
+        XCTAssertEqual(OutcomesView.EmptyReason.allShipped(hidden: 2).title,
+                       "2 shipped tickets hidden")
+    }
 }

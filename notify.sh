@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 # stack-nudge: Cross-platform notifications for AI coding agent hooks
+#
+# The installed copy at ~/.stack-nudge/notify.sh is what agent hooks actually
+# invoke, and it is only written by install.sh / the first-launch wizard; app
+# updates swap the .app bundle alone. The stamp below is how the app spots a copy
+# older than itself and replaces it (Bootstrap.refreshNotifyScriptIfNeeded);
+# release-please rewrites it in step with panel/Info.plist. Don't hand-edit it.
+# stack-nudge-version: 1.26.0 # x-release-please-version
+#
 # Usage: notify.sh <agent> <event>
 #   agent: claude-code | cursor | gemini | codex | <any name>
 #   event: stop | permission
@@ -445,6 +453,14 @@ post_to_panel() {
   walk_session_chain
   detect_iterm_tab_name
 
+  # Cap what the exec carries: env and argv share ARG_MAX (1 MiB on macOS), and a
+  # PermissionRequest payload can hold a whole file's contents in tool_input.
+  # Overflowing it fails the python3 exec, which would lose the event entirely.
+  # The fields read from it are a few hundred bytes deep in a Stop payload, so a
+  # 32 KiB cap never bites for the events that need them.
+  local hook_json="$HOOK_JSON"
+  (( ${#hook_json} > 32768 )) && hook_json=""
+
   NUDGE_AGENT="$AGENT" \
   NUDGE_EVENT="$EVENT" \
   NUDGE_TITLE="$1" \
@@ -466,12 +482,32 @@ post_to_panel() {
   NUDGE_TERM_PROGRAM="${TERM_PROGRAM:-}" \
   NUDGE_SESSION_ID="${TERM_SESSION_ID:-${ITERM_SESSION_ID:-}}" \
   NUDGE_ITERM_TAB_NAME="${ITERM_TAB_NAME:-}" \
-  NUDGE_CLAUDE_SESSION_ID="$(command -v jq &>/dev/null && [[ -n "$HOOK_JSON" ]] && printf '%s' "$HOOK_JSON" | jq -r '.session_id // empty' 2>/dev/null || true)" \
-  NUDGE_TRANSCRIPT_PATH="$(command -v jq &>/dev/null && [[ -n "$HOOK_JSON" ]] && printf '%s' "$HOOK_JSON" | jq -r '.transcript_path // empty' 2>/dev/null || true)" \
+  NUDGE_HOOK_JSON="$hook_json" \
   python3 - <<'PY' 2>/dev/null
 import json, os, socket, time
 
 env = os.environ
+
+# session_id / transcript_path come straight out of the hook JSON. Parsed here
+# rather than with jq upstream: only macOS 15+ ships /usr/bin/jq, and the old
+# `command -v jq && … || true` form degraded to an empty string when it was
+# absent, which the panel can't distinguish from "no session". Missing
+# claude_session_id silently drops the whole handoff record
+# (PanelController.captureHandoff), leaving the Tickets tab empty. python3 is
+# already required to reach the socket at all, so parsing here adds no dependency.
+def hook_field(name):
+    raw = env.get("NUDGE_HOOK_JSON") or ""
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    value = parsed.get(name)
+    return value if isinstance(value, str) and value else None
+
 out = {
     "agent":             env["NUDGE_AGENT"],
     "event":             env["NUDGE_EVENT"],
@@ -496,8 +532,8 @@ optional = {
     "term_program":  env.get("NUDGE_TERM_PROGRAM"),
     "session_id":    env.get("NUDGE_SESSION_ID"),
     "iterm_tab_name": env.get("NUDGE_ITERM_TAB_NAME"),
-    "claude_session_id": env.get("NUDGE_CLAUDE_SESSION_ID"),
-    "transcript_path":   env.get("NUDGE_TRANSCRIPT_PATH"),
+    "claude_session_id": hook_field("session_id"),
+    "transcript_path":   hook_field("transcript_path"),
     "voice_message": env.get("NUDGE_VOICE_MESSAGE"),
     "sound_name":    env.get("NUDGE_SOUND"),
 }

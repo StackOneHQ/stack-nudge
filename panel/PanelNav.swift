@@ -334,6 +334,12 @@ final class PanelNav: ObservableObject {
     // Wired by PanelController — start/cancel the device-flow sign-in.
     var startGithubSignIn:  (() -> Void)?
     var cancelGithubSignIn: (() -> Void)?
+    // Stop events that reached us but produced no ledger row, counted by reason
+    // (PanelController.captureHandoff). Lets the Tickets empty state say which
+    // link in the chain broke instead of implying no work has happened: the
+    // difference between "you haven't finished a turn yet" and "every turn was
+    // dropped because the hook payload is missing a session id".
+    @Published var handoffDrops: [HandoffDropReason: Int] = [:]
 
     static func outcomeKey(_ repoRoot: String?, _ branch: String?) -> String {
         "\(repoRoot ?? "")\n\(branch ?? "")"
@@ -347,15 +353,23 @@ final class PanelNav: ObservableObject {
     // The groups the Tickets tab renders, after the hide-shipped filter. Single
     // source of truth so the view and the keyboard indexing never disagree.
     func visibleOutcomeGroups() -> [TicketGroup] {
-        let groups: [TicketGroup]
-        if let cached = cachedOutcomeGroups {
-            groups = cached
-        } else {
-            groups = OutcomesView.groups(from: HandoffLedger.shared.all())
-            cachedOutcomeGroups = groups
-        }
+        let groups = allOutcomeGroups()
         guard hideShippedTickets else { return groups }
         return groups.filter { !isShipped($0) }
+    }
+
+    // Every group in the ledger, filter aside, as against the tab-strip badge's
+    // `visibleOutcomeGroups().count`. The empty state reads this to tell "nothing
+    // was ever recorded" from "hide-shipped removed them all".
+    func totalOutcomeGroupCount() -> Int {
+        allOutcomeGroups().count
+    }
+
+    private func allOutcomeGroups() -> [TicketGroup] {
+        if let cached = cachedOutcomeGroups { return cached }
+        let groups = OutcomesView.groups(from: HandoffLedger.shared.all())
+        cachedOutcomeGroups = groups
+        return groups
     }
 
     // "Shipped" = every branch in the group reads merged (PR state preferred,

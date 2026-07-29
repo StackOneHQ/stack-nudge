@@ -11,6 +11,10 @@
         {
           "type": "generic",
           "path": "panel/Info.plist"
+        },
+        {
+          "type": "generic",
+          "path": "notify.sh"
         }
       ]
     }

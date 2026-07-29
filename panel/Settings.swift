@@ -14,6 +14,11 @@ struct SettingsView: View {
 
     @ObservedObject var nav: PanelNav
 
+    // Hook-script freshness, sampled on appear (two small file reads) rather than
+    // recomputed every render. Surfaced in aboutFooter.
+    @State private var installedHookVersion: String?
+    @State private var hookScriptStale = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollViewReader { proxy in
@@ -186,6 +191,10 @@ struct SettingsView: View {
             // after the user grants a permission in System Settings and
             // returns to the panel.
             nav.refreshPermissions()
+            installedHookVersion = Bootstrap.installedNotifyVersion()
+            hookScriptStale = Bootstrap.needsNotifyRefresh(
+                installed: installedHookVersion,
+                bundled: Bootstrap.bundledNotifyVersion())
         }
     }
 
@@ -520,6 +529,17 @@ struct SettingsView: View {
             Text("StackNudge v\(version)")
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.tertiary)
+            // The app rewrites a stale hook script at launch, so a mismatch that
+            // survives to here means the rewrite failed (read-only dotdir, wrong
+            // owner) and hook payloads may be missing fields the panel needs.
+            // Read on appear, not per render, to keep this off the render path.
+            if hookScriptStale {
+                Text("Hook script \(installedHookVersion.map { "v\($0)" } ?? "unstamped") is out of date; reinstall to refresh")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Button {
                 if let url = URL(string: "https://github.com/StackOneHQ/stack-nudge") {
                     NSWorkspace.shared.open(url)
