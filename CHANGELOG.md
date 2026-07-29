@@ -4,6 +4,14 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.26.1](https://github.com/StackOneHQ/stack-nudge/compare/v1.26.0...v1.26.1) (2026-07-29)
+
+
+### Bug Fixes
+
+* **panel:** count the Tickets badge as rendered groups, and cut the tab's refresh cost ([#143](https://github.com/StackOneHQ/stack-nudge/issues/143)) ([ce2d0b7](https://github.com/StackOneHQ/stack-nudge/commit/ce2d0b78a5630c7ab60111dfe7d856064397da5b))
+* **panel:** refresh a stale hook script so handoffs record ([#144](https://github.com/StackOneHQ/stack-nudge/issues/144)) ([20ad229](https://github.com/StackOneHQ/stack-nudge/commit/20ad22908b50752457b6a293ad5f93fda6f8de9b))
+
 ## [1.26.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.25.3...v1.26.0) (2026-07-27)
 
 
