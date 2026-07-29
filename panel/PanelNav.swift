@@ -315,7 +315,10 @@ final class PanelNav: ObservableObject {
     // outcome when present — a PR reporting MERGED closes the squash gap. Keyed
     // by `outcomeKey`. Empty when the feature is off or `gh` is absent.
     @Published var pullRequestByBranch: [String: PullRequestInfo] = [:]
+    // Rate-limited: safe to call on every appearance of the tab, may be deferred.
     var refreshPullRequests: (() -> Void)?
+    // Same fetch, bypassing the rate limit. For explicit user actions only.
+    var refreshPullRequestsNow: (() -> Void)?
     // Mirror of STACKNUDGE_GITHUB; gates the PR fetch. Off by default — local
     // git tracking stays fully functional without a GitHub token.
     @Published var githubLinkingEnabled: Bool = false
@@ -1180,7 +1183,7 @@ final class PanelNav: ObservableObject {
         ConfigFile.write(key: "STACKNUDGE_GITHUB",
                          value: githubLinkingEnabled ? "true" : "false")
         if githubLinkingEnabled {
-            if githubSignedIn { refreshPullRequests?() } else { startGithubSignIn?() }
+            if githubSignedIn { refreshPullRequestsNow?() } else { startGithubSignIn?() }
         } else {
             pullRequestByBranch = [:]
             githubSignIn = .idle

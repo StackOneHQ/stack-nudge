@@ -580,6 +580,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private let codexQuotaProbe = CodexQuotaProbe()
     private let antigravityUsageProbe = AntigravityUsageProbe()
     private var quotaTimer: Timer?
+    // Last outcome derived per repo+branch, alongside the git values it was
+    // derived from, so refreshOutcomes can skip re-deriving what hasn't moved.
+    // Main-thread only (see refreshOutcomes for the snapshot/write-back).
+    private var outcomeCache: [String: (inputs: OutcomeInputs, status: OutcomeStatus)] = [:]
+    // Both Tickets-tab refreshes are requested on every appearance of the tab, so
+    // they are gated. Outcomes are local git and cheap once warm; the PR fetch is
+    // network against a rate-limited API, hence the wider window.
+    private lazy var outcomeGate = RefreshGate(interval: 30) { [weak self] in
+        self?.performRefreshOutcomes()
+    }
+    private lazy var pullRequestGate = RefreshGate(interval: 120) { [weak self] in
+        self?.performRefreshPullRequests()
+    }
     private struct TranscriptRefreshKey: Equatable {
         let pid: Int
         let agent: String
@@ -738,6 +751,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
         nav.refreshOutcomes = { [weak self] in self?.refreshOutcomes() }
         nav.refreshPullRequests = { [weak self] in self?.refreshPullRequests() }
+        nav.refreshPullRequestsNow = { [weak self] in self?.refreshPullRequestsNow() }
         nav.startGithubSignIn = { [weak self] in self?.startGithubSignIn() }
         nav.cancelGithubSignIn = { [weak self] in self?.cancelGithubSignIn() }
 
@@ -1672,53 +1686,110 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // off-main (git is slow), then publish to nav for the Tickets tab. Uses the
     // newest record per branch (ledger is newest-first) for the headCommit /
     // uncommitted-at-Stop inputs to the derivation.
-    func refreshOutcomes() {
-        var pairs: [(repo: String, branch: String, head: String?, files: Int)] = []
+    //
+    // Grouped by repo so each repo loads its refs once (one `for-each-ref`)
+    // instead of every branch resolving its own tips and re-walking the base
+    // candidates. What remains per branch is at most a `merge-base`, and the
+    // cache below skips even that when nothing the derivation reads has moved.
+    func refreshOutcomes() { outcomeGate.request() }
+
+    private func performRefreshOutcomes() {
+        var repoOrder: [String] = []
+        var branchesByRepo: [String: [(branch: String, head: String?, files: Int)]] = [:]
         var seen = Set<String>()
         for record in HandoffLedger.shared.all() {
             guard let repo = record.repoRoot, let branch = record.branch else { continue }
-            if seen.insert(PanelNav.outcomeKey(repo, branch)).inserted {
-                pairs.append((repo, branch, record.headCommit, record.filesChanged ?? 0))
-            }
+            guard seen.insert(PanelNav.outcomeKey(repo, branch)).inserted else { continue }
+            if branchesByRepo[repo] == nil { repoOrder.append(repo) }
+            branchesByRepo[repo, default: []]
+                .append((branch, record.headCommit, record.filesChanged ?? 0))
         }
-        guard !pairs.isEmpty else { return }
+        guard !repoOrder.isEmpty else { return }
+        // Snapshot on main, use off-main, write back on main: keeps the cache
+        // single-writer without a lock. Rebuilt rather than mutated, so branches
+        // that leave the ledger don't accumulate.
+        let cache = outcomeCache
         DispatchQueue.global(qos: .utility).async { [weak self] in
             var result: [String: OutcomeStatus] = [:]
-            for pair in pairs {
-                result[PanelNav.outcomeKey(pair.repo, pair.branch)] = OutcomeWatcher.derive(
-                    branch: pair.branch, headCommit: pair.head, filesChangedAtStop: pair.files
-                ) { Self.gitValue(pair.repo, $0) }
+            var nextCache: [String: (inputs: OutcomeInputs, status: OutcomeStatus)] = [:]
+            for repoRoot in repoOrder {
+                let refs = OutcomeWatcher.loadRefs { Self.gitValue(repoRoot, $0) }
+                for entry in branchesByRepo[repoRoot] ?? [] {
+                    let key = PanelNav.outcomeKey(repoRoot, entry.branch)
+                    let inputs = OutcomeWatcher.inputs(
+                        branch: entry.branch, refs: refs,
+                        headCommit: entry.head, filesChangedAtStop: entry.files)
+                    // Every value the ladder reads is in the key, so an unchanged
+                    // entry cannot have changed status. A pull, push, commit or
+                    // branch delete moves one of them and invalidates it.
+                    if let hit = cache[key], hit.inputs == inputs {
+                        result[key] = hit.status
+                        nextCache[key] = hit
+                        continue
+                    }
+                    let status = OutcomeWatcher.derive(
+                        branch: entry.branch, refs: refs, headCommit: entry.head,
+                        filesChangedAtStop: entry.files) { Self.gitValue(repoRoot, $0) }
+                    result[key] = status
+                    nextCache[key] = (inputs, status)
+                }
             }
-            DispatchQueue.main.async { self?.nav.outcomeByBranch = result }
+            DispatchQueue.main.async {
+                self?.outcomeCache = nextCache
+                self?.nav.outcomeByBranch = result
+            }
         }
     }
 
     // Opt-in (STACKNUDGE_GITHUB): fetch the PR + CI state for each distinct
     // repo+branch via the GitHub GraphQL API with our stored token, off-main,
-    // publishing incrementally so chips appear as each branch resolves. A PR's
-    // MERGED state is what closes the squash gap the local OutcomeWatcher can't
-    // see. No-op when disabled or not signed in.
-    func refreshPullRequests() {
+    // publishing per repo so chips appear as the work resolves. A PR's MERGED
+    // state is what closes the squash gap the local OutcomeWatcher can't see.
+    // No-op when disabled or not signed in.
+    //
+    // Grouped by repo rather than walked branch-by-branch: the old shape spawned
+    // two `git remote get-url` processes and issued one blocking GraphQL request
+    // *per branch*, then wrote a single dictionary key back on main each time. At
+    // 249 branches across 37 repos that was ~500 subprocesses, 249 round-trips,
+    // and 249 whole-panel re-renders for one refresh. Per repo it's one slug
+    // resolution, one batched query per 25 branches, and one publish.
+    func refreshPullRequests() { pullRequestGate.request() }
+
+    // Explicit user action (enabling the feature, completing sign-in): skip the
+    // window so the chips appear straight away.
+    func refreshPullRequestsNow() { pullRequestGate.force() }
+
+    private func performRefreshPullRequests() {
         guard nav.githubLinkingEnabled, let token = GitHubAuth.token() else { return }
-        var pairs: [(repo: String, branch: String)] = []
+        // Ledger order is newest-first, so repoOrder puts the most recently active
+        // repo first and its chips resolve first.
+        var repoOrder: [String] = []
+        var branchesByRepo: [String: [String]] = [:]
         var seen = Set<String>()
         for record in HandoffLedger.shared.all() {
             guard let repo = record.repoRoot, let branch = record.branch else { continue }
-            if seen.insert(PanelNav.outcomeKey(repo, branch)).inserted {
-                pairs.append((repo, branch))
-            }
+            guard seen.insert(PanelNav.outcomeKey(repo, branch)).inserted else { continue }
+            if branchesByRepo[repo] == nil { repoOrder.append(repo) }
+            branchesByRepo[repo, default: []].append(branch)
         }
-        guard !pairs.isEmpty else { return }
+        guard !repoOrder.isEmpty else { return }
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            for pair in pairs {
-                guard let slug = Self.repoSlug(forRepo: pair.repo) else { continue }
-                let info = GitHubAPI.pullRequest(owner: slug.owner, repo: slug.repo,
-                                                 branch: pair.branch) { body in
+            for repoRoot in repoOrder {
+                guard let branches = branchesByRepo[repoRoot],
+                      let slug = Self.repoSlug(forRepo: repoRoot)
+                else { continue }
+                let byBranch = GitHubAPI.pullRequests(
+                    owner: slug.owner, repo: slug.repo, branches: branches
+                ) { body in
                     Self.graphQLPOST(body, token: token)
                 }
-                guard let info else { continue }
-                let key = PanelNav.outcomeKey(pair.repo, pair.branch)
-                DispatchQueue.main.async { self?.nav.pullRequestByBranch[key] = info }
+                guard !byBranch.isEmpty else { continue }
+                let keyed = Dictionary(uniqueKeysWithValues: byBranch.map {
+                    (PanelNav.outcomeKey(repoRoot, $0.key), $0.value)
+                })
+                DispatchQueue.main.async {
+                    self?.nav.pullRequestByBranch.merge(keyed) { _, new in new }
+                }
             }
         }
     }
@@ -1801,7 +1872,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                         GitHubAuth.store(token: token)
                         self.nav.githubSignedIn = true
                         self.nav.githubSignIn = .idle
-                        self.refreshPullRequests()
+                        self.refreshPullRequestsNow()
                     case .pending:
                         self.pollGithubSignIn(clientID: clientID, deviceCode: deviceCode, interval: interval, deadline: deadline)
                     case .slowDown(let slower):

@@ -45,44 +45,93 @@ enum GitHubAPI {
         return (String(parts[0]), String(parts[1]))
     }
 
-    // GraphQL request body (JSON string) for the newest PR on `branch`.
-    static func query(owner: String, repo: String, branch: String) -> String {
-        let graphql = """
-        query($owner:String!,$repo:String!,$branch:String!){\
-        repository(owner:$owner,name:$repo){\
-        pullRequests(headRefName:$branch,first:1,orderBy:{field:CREATED_AT,direction:DESC}){\
+    // Branches per batched request. GraphQL is charged by query complexity rather
+    // than by request, so the ceiling here is about keeping any one failed
+    // round-trip cheap to lose, not about cost.
+    static let maxBranchesPerQuery = 25
+
+    // Split a repo's branches into batch-sized groups, order preserved.
+    static func branchChunks(_ branches: [String]) -> [[String]] {
+        guard !branches.isEmpty else { return [] }
+        return stride(from: 0, to: branches.count, by: maxBranchesPerQuery).map {
+            Array(branches[$0..<min($0 + maxBranchesPerQuery, branches.count)])
+        }
+    }
+
+    // One round-trip for many branches in the same repo: the same pullRequests
+    // field aliased once per branch (b0, b1, …), each branch name passed as its
+    // own variable so a name with quotes or braces can't break the query. Index
+    // aliases rather than branch-derived ones because a GraphQL alias must match
+    // /[_A-Za-z][_0-9A-Za-z]*/ and branch names routinely don't (`ENG-1/x`).
+    static func batchQuery(owner: String, repo: String, branches: [String]) -> String {
+        let selection = """
         nodes{number url state isDraft \
-        commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}}
+        commits(last:1){nodes{commit{statusCheckRollup{state}}}}}
         """
-        let body: [String: Any] = [
-            "query": graphql,
-            "variables": ["owner": owner, "repo": repo, "branch": branch],
-        ]
+        let declarations = branches.indices.map { ",$b\($0):String!" }.joined()
+        let fields = branches.indices.map { index in
+            "b\(index):pullRequests(headRefName:$b\(index),first:1,"
+                + "orderBy:{field:CREATED_AT,direction:DESC}){\(selection)}"
+        }.joined()
+        let graphql = "query($owner:String!,$repo:String!\(declarations))"
+            + "{repository(owner:$owner,name:$repo){\(fields)}}"
+
+        var variables: [String: Any] = ["owner": owner, "repo": repo]
+        for (index, branch) in branches.enumerated() { variables["b\(index)"] = branch }
+        let body: [String: Any] = ["query": graphql, "variables": variables]
         let data = (try? JSONSerialization.data(withJSONObject: body)) ?? Data()
         return String(data: data, encoding: .utf8) ?? ""
     }
 
-    // Fetch a branch's PR via the injected runner (`run(graphQLBody) -> json?`).
-    static func pullRequest(owner: String, repo: String, branch: String,
-                            run: (String) -> String?) -> PullRequestInfo? {
-        guard let response = run(query(owner: owner, repo: repo, branch: branch)) else { return nil }
-        return parse(response)
+    // Fetch every branch's newest PR through the injected runner
+    // (`run(graphQLBody) -> json?`), batching to keep the round-trip count down.
+    // Returns branch -> info for the branches that have a PR; a branch with none,
+    // or a chunk whose request failed, is simply absent. Requests are issued
+    // serially on purpose: GitHub's secondary rate limits penalise concurrency.
+    static func pullRequests(owner: String, repo: String, branches: [String],
+                             run: (String) -> String?) -> [String: PullRequestInfo] {
+        var result: [String: PullRequestInfo] = [:]
+        for chunk in branchChunks(branches) {
+            guard let response = run(batchQuery(owner: owner, repo: repo, branches: chunk))
+            else { continue }
+            result.merge(parse(response, branches: chunk)) { _, new in new }
+        }
+        return result
     }
 
-    static func parse(_ json: String) -> PullRequestInfo? {
+    // Unpack an aliased batch response. `branches` must be the same slice, in the
+    // same order, that built the query: the b<index> aliases are what map a
+    // response field back to its branch.
+    static func parse(_ json: String, branches: [String]) -> [String: PullRequestInfo] {
         guard let data = json.data(using: .utf8),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        // GraphQL returns HTTP 200 with {"data":null,"errors":[…]} on failures
-        // (bad token, rate limit, field errors). Surface them instead of
-        // silently treating the response as "no PR found".
+        else { return [:] }
+        // GraphQL returns HTTP 200 with {"errors":[…]} on failures (unreadable
+        // repo, rate limit, field errors). Surface them instead of silently
+        // treating the response as "no PR found", but keep reading: GraphQL can
+        // report an error for one field and still return data for the others, and
+        // a batch covers up to maxBranchesPerQuery branches. Bailing out here
+        // would throw away every good node because of one bad one, which the
+        // per-branch queries this replaced could never do. A wholesale failure
+        // (unreadable repo) nulls `repository` and falls out below anyway.
         if let errors = root["errors"] as? [[String: Any]], !errors.isEmpty {
             let messages = errors.compactMap { $0["message"] as? String }.joined(separator: "; ")
             FileHandle.standardError.write(Data("stack-nudge: GitHub GraphQL errors: \(messages)\n".utf8))
-            return nil
         }
-        guard let node = firstPRNode(root),
-              let number = node["number"] as? Int,
+        guard let repository = (root["data"] as? [String: Any])?["repository"] as? [String: Any]
+        else { return [:] }
+        var result: [String: PullRequestInfo] = [:]
+        for (index, branch) in branches.enumerated() {
+            guard let node = firstPRNode(repository, alias: "b\(index)"),
+                  let info = info(fromNode: node)
+            else { continue }
+            result[branch] = info
+        }
+        return result
+    }
+
+    static func info(fromNode node: [String: Any]) -> PullRequestInfo? {
+        guard let number = node["number"] as? Int,
               let url = node["url"] as? String,
               let stateRaw = node["state"] as? String,
               let state = PRState(rawValue: stateRaw)
@@ -95,10 +144,8 @@ enum GitHubAPI {
             ci: ciStatus(fromNode: node))
     }
 
-    private static func firstPRNode(_ root: [String: Any]) -> [String: Any]? {
-        let data = root["data"] as? [String: Any]
-        let repository = data?["repository"] as? [String: Any]
-        let pullRequests = repository?["pullRequests"] as? [String: Any]
+    private static func firstPRNode(_ repository: [String: Any], alias: String) -> [String: Any]? {
+        let pullRequests = repository[alias] as? [String: Any]
         let nodes = pullRequests?["nodes"] as? [[String: Any]]
         return nodes?.first
     }
