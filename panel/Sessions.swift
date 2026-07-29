@@ -1,6 +1,16 @@
 import AppKit
 import SwiftUI
 
+// A session's slice of the event store: how many nudges match it and when the
+// newest one fired. `.empty` is what unselected rows get: they don't render the
+// nudge line, so they never scan the event list.
+struct NudgeSummary: Equatable {
+    let count: Int
+    let lastAt: Date?
+
+    static let empty = NudgeSummary(count: 0, lastAt: nil)
+}
+
 struct SessionsView: View {
 
     @ObservedObject var store: SessionStore
@@ -44,13 +54,20 @@ struct SessionsView: View {
             ScrollView {
                 LazyVStack(spacing: 2) {
                     ForEach(store.sessions) { session in
+                        let selected = store.selectedPID == session.pid
+                        // Only the selected row renders the nudge line, so only
+                        // the selected row pays for the event scan. Every row
+                        // scanning the list (twice: once for the count, once for
+                        // the timestamp) also made every row's inputs change
+                        // whenever any nudge arrived, forcing a rebuild.
+                        let nudges = selected ? nudgeSummary(for: session) : .empty
                         SessionRow(
                             session: session,
-                            selected: store.selectedPID == session.pid,
+                            selected: selected,
                             isEditing: store.renamingPID == session.pid,
                             renameBuffer: $store.renameBuffer,
-                            activeNudgeCount: nudgeCount(for: session),
-                            lastNudgeAt: lastNudgeAt(for: session),
+                            activeNudgeCount: nudges.count,
+                            lastNudgeAt: nudges.lastAt,
                             transcriptStats: transcriptStats(for: session),
                             isMuted: nav.isMuted(session),
                             onCommit: { store.commitRename() },
@@ -92,18 +109,19 @@ struct SessionsView: View {
     }
 
     // Count of currently-active (undismissed, unsnoozed-or-elapsed-snooze)
-    // nudges that match this session's (agent, projectPath). The plan
-    // deliberately scopes this to "in the store right now" — lifetime
-    // totals across restarts would be fuzzy and aren't asked for.
-    private func nudgeCount(for session: Session) -> Int {
-        events.events.filter { matches(event: $0, session: session) }.count
-    }
-
-    private func lastNudgeAt(for session: Session) -> Date? {
-        events.events
-            .filter { matches(event: $0, session: session) }
-            .map(\.timestamp)
-            .max()
+    // nudges that match this session's (agent, projectPath), plus when the most
+    // recent one fired. The plan deliberately scopes this to "in the store right
+    // now"; lifetime totals across restarts would be fuzzy and aren't asked for.
+    // One pass: count and newest-timestamp come off the same walk.
+    private func nudgeSummary(for session: Session) -> NudgeSummary {
+        var count = 0
+        var lastAt: Date?
+        for event in events.events where matches(event: event, session: session) {
+            count += 1
+            if let current = lastAt, current >= event.timestamp { continue }
+            lastAt = event.timestamp
+        }
+        return NudgeSummary(count: count, lastAt: lastAt)
     }
 
     // Find the most recent NudgeEvent matching this session that carries a
@@ -126,8 +144,9 @@ struct SessionsView: View {
         }
         // Fallback for sessions whose sidecar isn't readable (e.g. pre-2.1
         // Claude Code): infer from the most recent matching event that
-        // carried a claudeSessionID. events array is newest-first.
-        guard let id = events.events
+        // carried a claudeSessionID. events array is newest-first. Lazy so the
+        // walk stops at the first hit instead of filtering the whole list.
+        guard let id = events.events.lazy
             .filter({ matches(event: $0, session: session) })
             .compactMap(\.claudeSessionID)
             .first
