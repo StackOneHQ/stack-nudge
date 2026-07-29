@@ -233,6 +233,13 @@ Opt-in GitHub linking adds real **PR + CI status** (so even squash-merged work r
 | `STACKNUDGE_TICKET_URL` | Deep-link template for ticket rows, e.g. `https://linear.app/acme/issue/{key}` — `{key}` is replaced with the ticket |
 | `STACKNUDGE_HIDE_SHIPPED` | `true` to drop groups once their PR reads merged, keeping the tab on in-flight work |
 
+**Nothing showing up?** A session is recorded when an agent's turn ends *inside a git repo*, and only if the hook payload carries a session id. The tab's empty state names which of those failed; `~/.stack-nudge/app.log` has a line per dropped turn. The usual cause is an installed hook script older than the app, since updates swap the `.app` alone: the app repairs that on launch, and Settings warns in the footer if the rewrite couldn't be applied. To fix it by hand:
+
+```bash
+grep -c stack-nudge-version ~/.stack-nudge/notify.sh   # 0 means the script predates v1.26
+./install.sh                                            # or reinstall from the app
+```
+
 ### Menu bar (macOS)
 
 When the panel daemon is running, a bell icon appears in your menu bar. The same items you can reach from the in-panel Settings tab are mirrored here for one-click access without summoning the panel:
@@ -282,6 +289,8 @@ stack-nudge polls GitHub Releases on launch and every 6 hours. When a newer rele
 4. Atomic-swaps `~/Applications/stack-nudge.app` with the new bundle (keeps the old as `.app.old` for safety)
 5. Runs `launchctl kickstart -k` — the current process dies, launchd brings up the new bundle
 6. The new bundle's first launch shows a welcome-style "Updated to vX.Y.Z" screen with the release notes
+
+Because the swap replaces only the bundle, the hook script the agents invoke (`~/.stack-nudge/notify.sh`) would otherwise stay at whatever version first installed it. Each launch compares its `stack-nudge-version` stamp against the bundled script's and rewrites it when they differ, so payload fields added by a release reach the panel without a reinstall.
 
 No source clone, no swiftc rebuild on the user's machine — the new bundle is the already-signed-and-notarized artifact from CI. Updates are fast and don't disturb the user's Xcode CLT or Python install (or lack thereof).
 

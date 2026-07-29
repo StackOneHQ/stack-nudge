@@ -658,6 +658,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // the marker so notify.sh will relaunch us on the next event after
         // the *next* Quit.
         Bootstrap.clearUserQuitMarker()
+        // Updates swap the .app but never the installed hook script, so a
+        // self-updating machine can run a current panel against a notify.sh from
+        // any earlier release, one that omits payload fields we now depend on.
+        // Repair it here, while we know the bundle we shipped with.
+        Bootstrap.refreshNotifyScriptIfNeeded()
 
         let size = Self.loadSavedPanelSize()
         let frame = NSRect(origin: .zero, size: size)
@@ -1626,14 +1631,20 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // for the per-ticket usage rollup. Non-git directories are skipped — there's
     // nothing to attribute to a repo/ticket.
     private func captureHandoff(for event: NudgeEvent) {
-        guard event.kind == .stop,
-              let sessionID = event.claudeSessionID,
-              let cwd = event.projectPath, !cwd.isEmpty
-        else { return }
+        guard event.kind == .stop else { return }
+        guard let sessionID = event.claudeSessionID else {
+            return dropHandoff(.missingSessionID, agent: event.agent)
+        }
+        guard let cwd = event.projectPath, !cwd.isEmpty else {
+            return dropHandoff(.missingProjectPath, agent: event.agent)
+        }
         let agent = Agent.canonical(event.agent)
         let transcriptPath = event.transcriptPath
-        DispatchQueue.global(qos: .utility).async {
-            guard let repoRoot = Self.gitValue(cwd, ["rev-parse", "--show-toplevel"]) else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let repoRoot = Self.gitValue(cwd, ["rev-parse", "--show-toplevel"]) else {
+                DispatchQueue.main.async { self?.dropHandoff(.notAGitRepo, agent: agent) }
+                return
+            }
             let branch = Self.gitValue(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])
             // Only consider the subject of a commit *unique to this branch*
             // (base..HEAD). The absolute last commit may already be on main —
@@ -1680,6 +1691,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self?.refreshOutcomes()
             }
         }
+    }
+
+    // Account for a Stop that produced no ledger row: one stderr line (launchd
+    // redirects it to ~/.stack-nudge/app.log) plus a counter the Tickets empty
+    // state reads, so a broken payload is visible in the UI instead of looking
+    // like an idle machine. Main-thread only, like the ledger itself.
+    private func dropHandoff(_ reason: HandoffDropReason, agent: String) {
+        nav.handoffDrops[reason, default: 0] += 1
+        // Working outside a repo is the expected skip, so it stays quiet rather
+        // than filling app.log for anyone running an agent in a scratch directory.
+        guard reason != .notAGitRepo else { return }
+        FileHandle.standardError.write(Data(
+            "stack-nudge: dropped \(agent) handoff: \(reason.summary)\n".utf8))
     }
 
     // Recompute "did it ship?" for every distinct repo+branch in the ledger,

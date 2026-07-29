@@ -91,6 +91,139 @@ enum Bootstrap {
         pattern: #"(?:^|/|")\.?(?:tinynudge|stack-nudge)/notify\.sh"#
     )
 
+    // MARK: Managed-script freshness
+
+    // notify.sh carries `# stack-nudge-version: <x.y.z>`, bumped by
+    // release-please alongside panel/Info.plist.
+    static let notifyVersionPattern = #"^#\s*stack-nudge-version:\s*([0-9]+\.[0-9]+\.[0-9]+)"#
+
+    // Read the stamp out of a script's text. Pure so the matrix of shapes
+    // (stamped, unstamped, malformed) is testable without touching disk.
+    // Scans only the header: the stamp is a top-of-file comment, and a later
+    // line mentioning the key in prose must not win.
+    static func notifyVersion(inScript script: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: notifyVersionPattern,
+                                                  options: [.anchorsMatchLines])
+        else { return nil }
+        let header = script.split(separator: "\n", maxSplits: 40,
+                                  omittingEmptySubsequences: false)
+            .prefix(40).joined(separator: "\n")
+        let range = NSRange(header.startIndex..<header.endIndex, in: header)
+        guard let match = regex.firstMatch(in: header, range: range),
+              let captured = Range(match.range(at: 1), in: header)
+        else { return nil }
+        return String(header[captured])
+    }
+
+    // Stamp of the hook script the agents actually invoke, nil when it's missing
+    // or predates stamping.
+    static func installedNotifyVersion() -> String? {
+        guard let script = try? String(contentsOfFile: notifyPath, encoding: .utf8)
+        else { return nil }
+        return notifyVersion(inScript: script)
+    }
+
+    // The hook script this bundle ships, nil on a build that didn't bundle it.
+    static func bundledNotifyScript() -> String? {
+        guard let url = Bundle.main.url(forResource: "notify.sh", withExtension: nil)
+        else { return nil }
+        return try? String(contentsOf: url, encoding: .utf8)
+    }
+
+    // Stamp of the script this bundle ships, nil on an unstamped local build.
+    static func bundledNotifyVersion() -> String? {
+        bundledNotifyScript().flatMap { notifyVersion(inScript: $0) }
+    }
+
+    // Whether the installed script should be replaced by the bundled one.
+    //
+    // Compares the two scripts' own stamps rather than the installed stamp
+    // against CFBundleShortVersionString: same source of truth on both sides, so
+    // a dev build whose Info.plist and script disagree can't trigger a pointless
+    // rewrite. nil `installed` means a copy from before stamping existed (every
+    // install that predates v1.26.x), which is exactly the drift to repair. nil
+    // `bundled` means we can't tell (an unstamped local build), so leave the
+    // user's file alone.
+    static func needsNotifyRefresh(installed: String?, bundled: String?) -> Bool {
+        guard let bundled else { return false }
+        return installed != bundled
+    }
+
+    // Replace ~/.stack-nudge/notify.sh when the bundle ships a different version.
+    //
+    // Exists because the hook script is half of the wire protocol with the panel
+    // (it builds the socket payload) but is not part of the .app that updates
+    // swap, so a self-updating install pins whatever version first installed it.
+    // A stale script silently omits newer payload fields: a pre-1.12 copy sends
+    // no claude_session_id, which drops every handoff record and leaves the
+    // Tickets tab permanently empty.
+    //
+    // Returns the version it wrote, or nil when nothing needed doing. Cheap
+    // enough for every launch: one small read, and a write only on drift.
+    @discardableResult
+    static func refreshNotifyScriptIfNeeded() -> String? {
+        refreshNotifyScript(bundled: bundledNotifyScript(), installedPath: notifyPath)
+    }
+
+    // The decision plus the write, with both sides injected so the whole path is
+    // testable (Bundle.main in a test process ships no Resources/notify.sh).
+    // Skips a machine with no installed script at all: that's a pre-install or
+    // mid-uninstall state, and planting one there would wire nothing up anyway.
+    @discardableResult
+    static func refreshNotifyScript(bundled bundledScript: String?,
+                                    installedPath: String) -> String? {
+        guard FileManager.default.fileExists(atPath: installedPath),
+              let bundledScript
+        else { return nil }
+        let bundled = notifyVersion(inScript: bundledScript)
+        let installed = (try? String(contentsOfFile: installedPath, encoding: .utf8))
+            .flatMap { notifyVersion(inScript: $0) }
+        guard needsNotifyRefresh(installed: installed, bundled: bundled) else { return nil }
+        do {
+            try writeNotifyScript(bundledScript, to: installedPath)
+            log("refreshed notify.sh: \(installed ?? "unstamped") -> \(bundled ?? "unstamped")")
+            return bundled
+        } catch {
+            log("failed to refresh notify.sh: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    // Write the hook script and make it executable, swapping it in atomically:
+    // agents are live while the app runs, and a hook firing during a
+    // remove-then-copy would find no script at all. Written to a sibling temp
+    // path so the replace is a same-volume rename.
+    // `to:` is injectable for tests only; every caller writes the real path.
+    static func writeNotifyScript(_ script: String, to path: String = notifyPath) throws {
+        let fm = FileManager.default
+        let dest = URL(fileURLWithPath: path)
+        let temp = dest.deletingLastPathComponent()
+            .appendingPathComponent(".notify.sh.\(UUID().uuidString)")
+        do {
+            try script.write(to: temp, atomically: false, encoding: .utf8)
+            if fm.fileExists(atPath: dest.path) {
+                _ = try fm.replaceItemAt(dest, withItemAt: temp)
+            } else {
+                try fm.moveItem(at: temp, to: dest)
+            }
+            // After the swap, not before: replaceItemAt deliberately carries the
+            // *original* file's attributes over to the replacement, so a mode set
+            // on the temp file is discarded. A copy that arrived non-executable
+            // (0644 from a hand-edit or an odd umask) would otherwise stay that
+            // way and every hook would fail with "permission denied".
+            _ = chmod(dest.path, 0o755)
+        } catch {
+            try? fm.removeItem(at: temp)
+            throw BootstrapError.writeFailed(path, underlying: error)
+        }
+    }
+
+    // Diagnostics go to stderr, which launchd redirects to
+    // ~/.stack-nudge/app.log (see writePanelPlist).
+    private static func log(_ message: String) {
+        FileHandle.standardError.write(Data("stack-nudge: \(message)\n".utf8))
+    }
+
     // MARK: Detection
 
     // First-launch detection. Returns true when any of the install
@@ -302,8 +435,10 @@ enum Bootstrap {
                                withIntermediateDirectories: true)
 
         progress("Copying notify.sh…")
-        try copyBundledResource(named: "notify.sh", to: notifyPath)
-        _ = chmod(notifyPath, 0o755)
+        guard let notifyURL = Bundle.main.url(forResource: "notify.sh", withExtension: nil),
+              let notifyScript = try? String(contentsOf: notifyURL, encoding: .utf8)
+        else { throw BootstrapError.bundleResourceMissing("notify.sh") }
+        try writeNotifyScript(notifyScript)
 
         progress("Copying phrase pools…")
         // Wipe then recopy so reinstalls pick up new phrases.

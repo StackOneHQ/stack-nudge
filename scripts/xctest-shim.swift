@@ -21,6 +21,9 @@ class XCTestCase {
     @MainActor func tearDown() {}
     @MainActor func setUpWithError() throws {}
     @MainActor func tearDownWithError() throws {}
+    // Real XCTest runs these after the test; nothing to run here, and the block
+    // is deliberately discarded rather than invoked so the type-check stays inert.
+    func addTeardownBlock(_ block: @escaping () throws -> Void) {}
 }
 
 func XCTAssertEqual<T: Equatable>(_ a: @autoclosure () throws -> T,
@@ -61,6 +64,15 @@ func XCTAssertLessThanOrEqual<T: Comparable>(_ a: @autoclosure () throws -> T,
                                              file: StaticString = #filePath, line: UInt = #line) {}
 func XCTFail(_ message: @autoclosure () -> String = "",
              file: StaticString = #filePath, line: UInt = #line) {}
+// The expression is `throws`, so the stand-in has to accept a throwing closure
+// (and the trailing error handler) to type-check the same call sites XCTest does.
+func XCTAssertThrowsError<T>(_ e: @autoclosure () throws -> T,
+                             _ message: @autoclosure () -> String = "",
+                             file: StaticString = #filePath, line: UInt = #line,
+                             _ errorHandler: (Error) -> Void = { _ in }) {}
+func XCTAssertNoThrow<T>(_ e: @autoclosure () throws -> T,
+                         _ message: @autoclosure () -> String = "",
+                         file: StaticString = #filePath, line: UInt = #line) {}
 func XCTUnwrap<T>(_ e: @autoclosure () throws -> T?,
                   _ message: @autoclosure () -> String = "",
                   file: StaticString = #filePath, line: UInt = #line) throws -> T {

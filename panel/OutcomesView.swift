@@ -674,14 +674,16 @@ struct OutcomesView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "tag")
+        let reason = Self.emptyReason(totalGroups: nav.totalOutcomeGroupCount(),
+                                      drops: nav.handoffDrops)
+        return VStack(spacing: 10) {
+            Image(systemName: reason.symbol)
                 .font(.title2)
                 .foregroundStyle(.secondary)
-            Text("No tracked sessions yet")
+            Text(reason.title)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            Text("When an agent finishes a turn inside a git repo, stack-nudge records the session here — grouped by its Linear/Jira ticket, or the branch when there's no ticket.")
+            Text(reason.detail)
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
@@ -690,5 +692,64 @@ struct OutcomesView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.vertical, 24)
+    }
+
+    // MARK: - Empty state (pure, testable)
+
+    // Why the list is empty. Three states that used to render one string, which
+    // made a filtered-away list and a broken capture path indistinguishable from
+    // a machine that simply hasn't finished a turn yet.
+    enum EmptyReason: Equatable {
+        case noSessions
+        // Ledger has groups, but the hide-shipped filter removed all of them.
+        case allShipped(hidden: Int)
+        // Stops arrived and every one was dropped before it reached the ledger.
+        case allDropped(count: Int, reason: HandoffDropReason)
+
+        var symbol: String {
+            switch self {
+            case .noSessions:  return "tag"
+            case .allShipped:  return "checkmark.seal"
+            case .allDropped:  return "exclamationmark.triangle"
+            }
+        }
+
+        var title: String {
+            switch self {
+            case .noSessions:
+                return "No tracked sessions yet"
+            case .allShipped(let hidden):
+                return hidden == 1 ? "1 shipped ticket hidden" : "\(hidden) shipped tickets hidden"
+            case .allDropped(let count, _):
+                return count == 1 ? "1 turn wasn't recorded" : "\(count) turns weren't recorded"
+            }
+        }
+
+        var detail: String {
+            switch self {
+            case .noSessions:
+                return "When an agent finishes a turn inside a git repo, stack-nudge records the session here, grouped by its Linear/Jira ticket, or the branch when there's no ticket."
+            case .allShipped:
+                return "Everything tracked has merged. Turn off Hide shipped in Settings to see it."
+            case .allDropped(_, let reason):
+                let remedy = reason.remedy.map { " \($0)" } ?? ""
+                return "Turns ended but \(reason.summary), so there was nothing to attribute.\(remedy)"
+            }
+        }
+    }
+
+    // Priority: an all-filtered list is the least alarming explanation and takes
+    // precedence, then drops (the actionable fault), then a genuinely idle ledger.
+    // Reports the highest-count drop reason, since a mixed bag is dominated by
+    // whichever link is actually broken.
+    static func emptyReason(totalGroups: Int,
+                            drops: [HandoffDropReason: Int]) -> EmptyReason {
+        if totalGroups > 0 { return .allShipped(hidden: totalGroups) }
+        let ranked = drops.filter { $0.value > 0 }
+            .sorted { ($0.value, $0.key.rawValue) > ($1.value, $1.key.rawValue) }
+        if let worst = ranked.first {
+            return .allDropped(count: ranked.reduce(0) { $0 + $1.value }, reason: worst.key)
+        }
+        return .noSessions
     }
 }

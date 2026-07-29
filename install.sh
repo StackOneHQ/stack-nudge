@@ -221,9 +221,20 @@ fi
 
 # Copy notify.sh and the phrase pools (sourced by notify.sh at runtime
 # based on the configured voice's language) to the shared install dir.
-cp "$SCRIPT_DIR/notify.sh" "$INSTALL_DIR/notify.sh"
-chmod +x "$INSTALL_DIR/notify.sh"
+#
+# Written via a temp file + mv so the swap is atomic: on a reinstall the agents
+# are usually live, and a hook firing between rm and cp would find no script.
+cp "$SCRIPT_DIR/notify.sh" "$INSTALL_DIR/.notify.sh.new"
+chmod +x "$INSTALL_DIR/.notify.sh.new"
+mv -f "$INSTALL_DIR/.notify.sh.new" "$INSTALL_DIR/notify.sh"
 echo "  Installed notify.sh    -> $INSTALL_DIR/notify.sh"
+
+# jq is optional: the socket payload is parsed by python3, but the permission
+# banner's "what needs approval" detail still reads the hook JSON with jq.
+if ! command -v jq >/dev/null 2>&1; then
+  echo "  ! jq not found; permission banners will omit the tool/command detail."
+  echo "    Install it with: brew install jq"
+fi
 
 if [[ -d "$SCRIPT_DIR/phrases" ]]; then
   rm -rf "$INSTALL_DIR/phrases"
