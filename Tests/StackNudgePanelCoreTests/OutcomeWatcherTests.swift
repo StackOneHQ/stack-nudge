@@ -104,7 +104,11 @@ final class OutcomeWatcherTests: XCTestCase {
         XCTAssertEqual(repo.remoteTip("ENG-1/x"), "ccc")
         XCTAssertEqual(repo.shaByRef["upstream/main"], "ddd")
         XCTAssertNil(repo.remoteTip("nope"))
-        XCTAssertNil(repo.tip("origin/ENG-1/x"))  // remotes aren't local tips
+        // tip() is a plain ref lookup, mirroring the `rev-parse <ref>` it replaced,
+        // so a remote ref resolves through it too (as it does in real git). The
+        // ladder simply never asks for one that way; it goes via remoteTip.
+        XCTAssertEqual(repo.tip("origin/ENG-1/x"), "ccc")
+        XCTAssertNil(repo.remoteTip("origin/ENG-1/x"))
     }
 
     // A detached session records its branch as literally "HEAD", so HEAD has to be
