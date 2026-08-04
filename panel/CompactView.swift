@@ -313,7 +313,7 @@ struct CompactView: View {
 
     @ViewBuilder
     private var sessionBadge: some View {
-        let activeCount = sessions.sessions.filter { $0.status == .active }.count
+        let activeCount = sessions.liveSessions.count
         if activeCount > 0 {
             HStack(spacing: 3) {
                 Circle()
@@ -432,19 +432,19 @@ struct CompactView: View {
     }
 
     private var busiestSession: Session? {
-        sessions.sessions.first { $0.status == .active && $0.liveStatus == "busy" }
+        sessions.liveSessions.first { $0.liveStatus == "busy" }
     }
 
     private var mostRecentActive: Session? {
-        sessions.sessions.first { $0.status == .active }
+        sessions.liveSessions.first
     }
 
     // Stable, PID-sorted list of every currently-active session. Drives
-    // the pill's rotation when ≥2 are alive at the same time.
+    // the pill's rotation when ≥2 are alive at the same time. Dormant
+    // sessions are excluded — rotating through a week-old idle tab tells
+    // the user nothing and pushes the sessions they care about off-screen.
     private var activeSessions: [Session] {
-        sessions.sessions
-            .filter { $0.status == .active }
-            .sorted { $0.pid < $1.pid }
+        sessions.liveSessions.sorted { $0.pid < $1.pid }
     }
 
     // Rotate sessions only when nothing more important is on screen and
@@ -469,9 +469,7 @@ struct CompactView: View {
     }
 
     private func displayName(_ s: Session) -> String {
-        if let custom = s.customName, !custom.isEmpty { return custom }
-        if let name = s.liveTitle, !name.isEmpty, name != "main-agent" { return name }
-        return s.projectName ?? "session"
+        SessionLabel.displayName(for: s, fallback: "session")
     }
 
     private func glyph(for e: NudgeEvent) -> String {

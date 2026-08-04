@@ -227,7 +227,10 @@ private struct SessionRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(rowBackground)
         .padding(.horizontal, 6)
-        .opacity(isActive ? 1.0 : 0.6)
+        // Dormant sessions get the same recede as finished ones: the process
+        // is still there to focus or kill, but it hasn't done anything for a
+        // day, so it shouldn't read as live work.
+        .opacity(isActive && !session.isDormant() ? 1.0 : 0.6)
     }
 
     // Background composes the selection tint with a 3pt accent bar in the
@@ -395,15 +398,7 @@ private struct SessionRow: View {
     private var isActive: Bool { session.status == .active }
 
     private var displayName: String {
-        if let custom = session.customName, !custom.isEmpty { return custom }
-        // Prefer a user-set Claude session name when it's not the default
-        // ("main-agent" is what Claude Code assigns by default; treat it
-        // as not meaningful and fall through to project name).
-        if let liveTitle = session.liveTitle,
-           !liveTitle.isEmpty, liveTitle != "main-agent" {
-            return liveTitle
-        }
-        return session.projectName ?? "(no project)"
+        SessionLabel.displayName(for: session, fallback: "(no project)")
     }
 
     // Full cwd with $HOME replaced by ~ for compactness. Falls back to
@@ -415,7 +410,7 @@ private struct SessionRow: View {
 
     private var glyph: String {
         switch session.status {
-        case .active:   return "circle.fill"
+        case .active:   return session.isDormant() ? "circle.dotted" : "circle.fill"
         case .finished: return "circle"
         }
     }
@@ -423,6 +418,7 @@ private struct SessionRow: View {
     private var glyphColor: Color {
         switch session.status {
         case .finished: return .secondary
+        case .active where session.isDormant(): return .secondary
         case .active:
             // For claude sessions we get a live busy/idle signal from the
             // ~/.claude/sessions/<pid>.json sidecar; reflect it in the dot
@@ -444,11 +440,13 @@ private struct SessionRow: View {
     private var statusLabel: String {
         switch session.status {
         case .active:
-            // Lead with claude's live status (busy / idle). Append "last
+            // Lead with claude's live status (busy / idle), or "dormant" once
+            // there's been no activity for a day — at that point "idle" reads
+            // as "waiting on me right now", which it isn't. Append "last
             // activity Nm ago" from the sidecar's updatedAt when available
             // — more useful than process elapsed time, which only tells
             // you how long ago the process was spawned.
-            let head = session.liveStatus ?? "active"
+            let head = session.isDormant() ? "dormant" : (session.liveStatus ?? "active")
             if let updated = session.lastActivityAt {
                 return "\(head) · \(RelativeTime.string(updated))"
             }

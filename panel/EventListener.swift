@@ -168,6 +168,7 @@ private struct NudgeEventDTO: Decodable {
     let iterm_tab_name: String?
     let fifo_path: String?
     let voice_message: String?
+    let voice_template: String?
     let sound_name: String?
     let bypass_mute: Bool?
     // Claude Code's session UUID (distinct from session_id, which is the
@@ -213,6 +214,7 @@ private struct NudgeEventDTO: Decodable {
             itermTabName: iterm_tab_name,
             fifoPath: Self.validatedFifoPath(fifo_path),
             voiceMessage: voice_message,
+            voiceTemplate: voice_template,
             soundName: sound_name,
             bypassMute: bypass_mute ?? false,
             claudeSessionID: claude_session_id,
