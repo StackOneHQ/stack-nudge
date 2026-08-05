@@ -3,7 +3,14 @@
 
 .DEFAULT_GOAL := help
 
-APP := $(HOME)/Applications/stack-nudge.app
+# Bundle name must match what build.sh emits and install.sh installs
+# (build/StackNudge.app -> ~/Applications/StackNudge.app). It used to read
+# `stack-nudge.app` here, so `make reload` removed a path that didn't exist
+# and then died on `cp -R build/stack-nudge.app` under `set -e` — and `make
+# dev` swallowed that with `|| true`, so the watch loop silently reloaded
+# nothing for the whole session.
+BUILT_APP := build/StackNudge.app
+APP := $(HOME)/Applications/StackNudge.app
 APP_LABEL := com.stackonehq.stack-nudge
 BUILD_LOG := /tmp/stack-nudge-dev.log
 WATCH_DIRS := panel shared notify.sh phrases
@@ -11,7 +18,7 @@ WATCH_DIRS := panel shared notify.sh phrases
 .PHONY: help
 help:
 	@echo "stack-nudge targets:"
-	@echo "  make build      build stack-nudge.app into build/"
+	@echo "  make build      build StackNudge.app into build/"
 	@echo "  make install    full install (build + copy + register hooks + launchd)"
 	@echo "  make uninstall  remove app, hooks, launchd agents, ~/.stack-nudge/"
 	@echo "  make reload     rebuild + replace installed app + bounce the daemon"
@@ -66,7 +73,7 @@ reload:
 		exit 1; \
 	fi; \
 	rm -rf "$(APP)"; \
-	cp -R build/stack-nudge.app "$(APP)"; \
+	cp -R "$(BUILT_APP)" "$(APP)"; \
 	if [ -d "$$HOME/.stack-nudge" ]; then \
 		cp notify.sh "$$HOME/.stack-nudge/notify.sh"; \
 		if [ -d phrases ]; then \

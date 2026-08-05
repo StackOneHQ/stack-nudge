@@ -175,9 +175,20 @@ repo_name_expanded() {
 # TEMPLATES_NOTIFICATION for permission events) and format it with the
 # repo name. Phrase files live next to notify.sh in phrases/<lang>.sh
 # so they're co-located with the script wherever it's installed.
+#
+# Results come back in two globals rather than on stdout: the app needs the
+# chosen template with its %s intact so it can substitute the session's name
+# (which lives in the app's own store, invisible from here), and it has to be
+# the *same* pick as the substituted phrase, which a second function couldn't
+# guarantee because the pool is sampled at random. VOICE_PHRASE stays the
+# fallback for un-renamed sessions and for an app older than this field.
+VOICE_PHRASE=""
+VOICE_TEMPLATE=""
 voice_phrase_for() {
   local event="$1"
   local lang repo
+  VOICE_PHRASE=""
+  VOICE_TEMPLATE=""
 
   if [[ -x "$STACKVOX" ]]; then
     lang=$(voice_to_lang "$VOICE_NAME")
@@ -193,7 +204,7 @@ voice_phrase_for() {
   local lang_file="$phrases_dir/$lang.sh"
   [[ -f "$lang_file" ]] || lang_file="$phrases_dir/en.sh"
   if [[ ! -f "$lang_file" ]]; then
-    echo "$repo"
+    VOICE_PHRASE="$repo"
     return
   fi
 
@@ -275,16 +286,17 @@ voice_phrase_for() {
   esac
 
   if [[ ${#templates[@]} -eq 0 ]]; then
-    echo "$repo"
+    VOICE_PHRASE="$repo"
     return
   fi
 
   local template="${templates[$((RANDOM % ${#templates[@]}))]}"
+  VOICE_TEMPLATE="$template"
   # Substitute the repo name into the %s placeholder ourselves rather than
   # letting the phrase be a printf format string — a phrase (especially a
   # user-supplied one from phrases.user.json) with stray % tokens would
   # otherwise corrupt or truncate the spoken output.
-  printf '%s' "${template//%s/$repo}"
+  VOICE_PHRASE="${template//%s/$repo}"
 }
 
 PANEL_SOCK="${HOME}/.stack-nudge/panel.sock"
@@ -446,6 +458,9 @@ walk_session_chain() {
 # we have ~15 fields.
 # Args: title message bundle_id window_title has_action(true|false)
 #       fifo_path voice_message sound_name bypass_mute(true|false)
+# The matching voice template rides along from the VOICE_TEMPLATE global that
+# voice_phrase_for sets, alongside the other globals read here ($AGENT, $PWD,
+# the session chain) rather than being threaded through as a tenth positional.
 post_to_panel() {
   ensure_app_running
   [[ ! -S "$PANEL_SOCK" ]] && return
@@ -472,6 +487,7 @@ post_to_panel() {
   NUDGE_HAS_ACTION="$5" \
   NUDGE_FIFO="${6:-}" \
   NUDGE_VOICE_MESSAGE="${7:-}" \
+  NUDGE_VOICE_TEMPLATE="${VOICE_TEMPLATE:-}" \
   NUDGE_SOUND="${8:-}" \
   NUDGE_BYPASS_MUTE="${9:-false}" \
   NUDGE_SOCK="$PANEL_SOCK" \
@@ -535,6 +551,7 @@ optional = {
     "claude_session_id": hook_field("session_id"),
     "transcript_path":   hook_field("transcript_path"),
     "voice_message": env.get("NUDGE_VOICE_MESSAGE"),
+    "voice_template": env.get("NUDGE_VOICE_TEMPLATE"),
     "sound_name":    env.get("NUDGE_SOUND"),
 }
 for key, value in optional.items():
@@ -761,8 +778,10 @@ case "$OS" in
         # pool, formatted with the repo name — same shape as
         # stackone-say-hooks.
         ctx=$(permission_context)
-        voice_msg=$(voice_phrase_for permission)
-        notify_macos "$TITLE" "${ctx:-Waiting for your approval}" "$SOUND_PERMISSION" "$voice_msg"
+        # Called plainly, not in a command substitution: the results come back
+        # in globals and a subshell would drop VOICE_TEMPLATE.
+        voice_phrase_for permission
+        notify_macos "$TITLE" "${ctx:-Waiting for your approval}" "$SOUND_PERMISSION" "$VOICE_PHRASE"
         ;;
       welcome)
         # Fired once by install.sh so the user sees what a notification
@@ -779,8 +798,8 @@ case "$OS" in
           "You're all set. Press command option N to open the panel."
         ;;
       *)
-        voice_msg=$(voice_phrase_for stop)
-        notify_macos "$TITLE" "Done" "$SOUND_STOP" "$voice_msg"
+        voice_phrase_for stop
+        notify_macos "$TITLE" "Done" "$SOUND_STOP" "$VOICE_PHRASE"
         ;;
     esac
     ;;

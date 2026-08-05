@@ -50,6 +50,11 @@ struct NudgeEvent: Identifiable, Equatable {
     // `message` — the banner shows the tool / file context, the voice
     // speaks a conversational sentence).
     let voiceMessage: String?
+    // Same phrase with its `%s` placeholder still in place, so the app can
+    // substitute the session's name (which only the app knows) instead of the
+    // cwd basename the hook substituted into voiceMessage. nil from an older
+    // installed notify.sh, in which case voiceMessage is all we have.
+    let voiceTemplate: String?
     // Name of a /System/Library/Sounds/*.aiff chime to play. Picked by
     // notify.sh based on event kind (Glass for stop, Ping for permission)
     // and overridable via STACKNUDGE_SOUND_STOP / STACKNUDGE_SOUND_PERMISSION.
@@ -75,6 +80,7 @@ struct NudgeEvent: Identifiable, Equatable {
          itermTabName: String? = nil,
          fifoPath: String? = nil,
          voiceMessage: String? = nil,
+         voiceTemplate: String? = nil,
          soundName: String? = nil,
          bypassMute: Bool = false,
          claudeSessionID: String? = nil,
@@ -101,6 +107,7 @@ struct NudgeEvent: Identifiable, Equatable {
         self.itermTabName = itermTabName
         self.fifoPath = fifoPath
         self.voiceMessage = voiceMessage
+        self.voiceTemplate = voiceTemplate
         self.soundName = soundName
         self.bypassMute = bypassMute
         self.claudeSessionID = claudeSessionID
@@ -122,6 +129,7 @@ struct NudgeEvent: Identifiable, Equatable {
             itermTabName: itermTabName,
             fifoPath: fifoPath,
             voiceMessage: voiceMessage,
+            voiceTemplate: voiceTemplate,
             soundName: soundName,
             bypassMute: bypassMute,
             claudeSessionID: claudeSessionID,

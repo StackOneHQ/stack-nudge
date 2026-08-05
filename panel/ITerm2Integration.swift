@@ -122,6 +122,14 @@ final class ITerm2Integration: TerminalIntegration {
         // Pipe-delimited output is cheaper to parse than JSON from
         // AppleScript and avoids quoting headaches. Pane TTYs never
         // contain "|", so the delimiter is unambiguous.
+        //
+        // `autoName` in preference to the `name` property: `name` is the
+        // composed session title, which appends the running job, so every
+        // agent tab read as "✳ Some task (claude)". autoName is the label
+        // without that suffix. It is *not* a signal of user intent — a manual
+        // rename, an OSC title escape and the profile name all write the same
+        // variable — which is why this feeds the pane's meta row only and not
+        // the session label used in notifications. See SessionLabel.
         let script = """
         tell application "iTerm2"
             if not running then return ""
@@ -133,6 +141,9 @@ final class ITerm2Integration: TerminalIntegration {
                             set ttyPath to tty of s
                             set sessionId to unique id of s
                             set sessionName to name of s
+                            try
+                                tell s to set sessionName to (get variable named "autoName")
+                            end try
                             set output to output & ttyPath & "|" & sessionId & "|" & sessionName & linefeed
                         end try
                     end repeat

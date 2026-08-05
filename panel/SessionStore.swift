@@ -32,8 +32,27 @@ struct Session: Identifiable, Equatable {
     // + AntigravityLocalServer). They drive the busy/idle dot, the status line,
     // and the busy-first sort; nil for agents that expose no live state.
     var liveTitle: String?            // session name (Claude sidecar; "main-agent" = default)
+    // Where liveTitle came from. Claude Code 2.1+ auto-derives a name for
+    // every session ("stackone-89") and stamps nameSource: "derived"; only a
+    // name the user chose carries intent. nil for agents/versions that don't
+    // report a source — treated as user-set so older Claude Code keeps
+    // behaving as it did. See SessionLabel.
+    var liveTitleSource: String?
     var liveStatus: String?           // "busy" | "idle" | other
     var lastActivityAt: Date?         // last-activity timestamp
+
+    // A session whose process is alive but which hasn't done anything for a
+    // day. These pile up when tabs are left open for weeks: still focusable,
+    // so hiding them would be wrong, but they shouldn't crowd the top of the
+    // list or count towards "how many agents are working". Only claimable
+    // when we have a live-activity signal at all — no signal means we can't
+    // tell dormant from busy, so we don't guess.
+    static let dormantAfter: TimeInterval = 24 * 60 * 60
+
+    func isDormant(asOf now: Date = Date()) -> Bool {
+        guard status == .active, let lastActivityAt else { return false }
+        return now.timeIntervalSince(lastActivityAt) > Self.dormantAfter
+    }
 }
 
 // Decoded shape of ~/.claude/sessions/<pid>.json. Only the fields we
@@ -42,6 +61,7 @@ struct Session: Identifiable, Equatable {
 private struct ClaudeSessionSidecar: Decodable {
     let sessionId: String?
     let name: String?
+    let nameSource: String?
     let status: String?
     let updatedAt: Double?
 }
@@ -180,9 +200,45 @@ final class SessionStore: ObservableObject {
     }
 
     private func merge(_ found: [Session]) {
-        let foundByPID = Dictionary(uniqueKeysWithValues: found.map { ($0.pid, $0) })
-        let now = Date()
-        let cutoff = now.addingTimeInterval(-30) // hide finished sessions after 30s
+        // Seed names from disk before reconciling, so a session that keeps its
+        // (agent, projectPath[, tabId]) identity keeps its name across process
+        // churn and restarts. noteSeen only writes once per key per launch.
+        let seeded = found.map { session -> Session in
+            guard let persisted = persistence.customName(
+                agent: session.agent,
+                projectPath: session.projectPath,
+                tabId: session.tabId
+            ) else { return session }
+            persistence.noteSeen(
+                agent: session.agent,
+                projectPath: session.projectPath,
+                tabId: session.tabId
+            )
+            var copy = session
+            copy.customName = persisted
+            return copy
+        }
+
+        sessions = Self.reconcile(previous: sessions, found: seeded, now: Date())
+
+        if let sel = selectedPID, !sessions.contains(where: { $0.pid == sel }) {
+            selectedPID = sessions.first?.pid
+        } else if selectedPID == nil {
+            selectedPID = sessions.first?.pid
+        }
+    }
+
+    // How long a session stays visible after its process exits, so the user
+    // gets to see that it finished rather than having the row vanish.
+    static let finishedRetention: TimeInterval = 30
+
+    // The pure half of merge: previous list + fresh snapshot -> next list.
+    // Sessions still running are refreshed from the snapshot, ones that just
+    // disappeared are marked finished, and ones that finished more than
+    // `finishedRetention` ago are dropped.
+    static func reconcile(previous: [Session], found: [Session], now: Date) -> [Session] {
+        let foundByPID = Dictionary(found.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
+        let cutoff = now.addingTimeInterval(-finishedRetention)
 
         var next: [Session] = []
 
@@ -190,10 +246,13 @@ final class SessionStore: ObservableObject {
         // persists. We also re-apply the freshly-enriched tabId/tabName
         // from the live snapshot — a tab rename or pane move should
         // propagate without waiting for the session to restart.
-        for var existing in sessions {
+        for var existing in previous {
             if let live = foundByPID[existing.pid] {
                 existing = live.with(
-                    customName: existing.customName,
+                    // In-memory name wins: it's what the user just typed. The
+                    // snapshot's name is the one seeded from disk, so it acts
+                    // as the fallback.
+                    customName: existing.customName ?? live.customName,
                     status: .active,
                     tabId: live.tabId,
                     tabName: live.tabName
@@ -212,36 +271,19 @@ final class SessionStore: ObservableObject {
             }
         }
 
-        // Add genuinely new sessions, seeding customName from persistence
-        // so a renamed (agent, projectPath[, tabId]) keeps its name across
-        // restarts and across process churn within a single launch.
         let knownPIDs = Set(next.map(\.pid))
-        for var session in found where !knownPIDs.contains(session.pid) {
-            if let persisted = persistence.customName(
-                agent: session.agent,
-                projectPath: session.projectPath,
-                tabId: session.tabId
-            ) {
-                session.customName = persisted
-                persistence.noteSeen(
-                    agent: session.agent,
-                    projectPath: session.projectPath,
-                    tabId: session.tabId
-                )
-            }
-            next.append(session)
-        }
+        next.append(contentsOf: found.filter { !knownPIDs.contains($0.pid) })
 
-        // Sort: active first, busy above non-busy within active, then by
-        // most-recent lastActivityAt (or process pid as tiebreaker so
-        // ordering stays stable when sidecar timestamps are absent).
-        // Distant past for sessions with no updatedAt sinks them below
-        // any timestamped session.
+        // Sort in tiers — live, dormant, finished — then busy above non-busy
+        // within a tier, then by most-recent lastActivityAt (or process pid as
+        // tiebreaker so ordering stays stable when sidecar timestamps are
+        // absent). Distant past for sessions with no updatedAt sinks them
+        // below any timestamped session.
         let distantPast = Date.distantPast
         next.sort { lhs, rhs in
-            let lActive = lhs.status == .active
-            let rActive = rhs.status == .active
-            if lActive != rActive { return lActive && !rActive }
+            let lRank = sortRank(lhs, now: now)
+            let rRank = sortRank(rhs, now: now)
+            if lRank != rRank { return lRank < rRank }
 
             let lBusy = lhs.liveStatus == "busy"
             let rBusy = rhs.liveStatus == "busy"
@@ -253,38 +295,50 @@ final class SessionStore: ObservableObject {
             return lhs.pid < rhs.pid
         }
 
-        sessions = next
+        return next
+    }
 
-        if let sel = selectedPID, !sessions.contains(where: { $0.pid == sel }) {
-            selectedPID = sessions.first?.pid
-        } else if selectedPID == nil {
-            selectedPID = sessions.first?.pid
+    private static func sortRank(_ session: Session, now: Date) -> Int {
+        switch session.status {
+        case .finished: return 2
+        case .active:   return session.isDormant(asOf: now) ? 1 : 0
         }
+    }
+
+    // Sessions that are alive *and* have done something recently. This is what
+    // the tab badge and the mascot pill count: a day-old idle tab is still a
+    // session, but reporting it as one of "6 agents working" is noise.
+    var liveSessions: [Session] {
+        let now = Date()
+        return sessions.filter { $0.status == .active && !$0.isDormant(asOf: now) }
     }
 
     // MARK: - Discovery
 
-    // Parse ps output as `pid etime <full args>`. Agent detection is done on
-    // args because `comm` is truncated by ps and node-hosted agents (gemini,
+    // Parse ps output as `pid etime tty <full args>`. Agent detection is done
+    // on args because `comm` is truncated by ps and node-hosted agents (gemini,
     // codex when installed via npm) show comm as "node" with the script
-    // path in args.
+    // path in args. tty comes along because it's the version-proof way to tell
+    // an interactive session from agent infrastructure (see below).
     private static func discover() -> [Session] {
-        let lines = runProcess("/bin/ps", ["-axo", "pid=,etime=,args="])
+        let lines = runProcess("/bin/ps", ["-axo", "pid=,etime=,tty=,args="])
             .split(separator: "\n")
 
-        var candidates: [(pid: Int, elapsed: String, agent: String)] = []
+        var candidates: [(pid: Int, elapsed: String, hasTTY: Bool, agent: String)] = []
         for raw in lines {
             let line = String(raw).trimmingCharacters(in: .whitespaces)
-            // pid (digits) <ws> etime <ws> args...
-            let parts = line.split(separator: " ", maxSplits: 2,
+            // pid (digits) <ws> etime <ws> tty <ws> args...
+            let parts = line.split(separator: " ", maxSplits: 3,
                                    omittingEmptySubsequences: true)
-            guard parts.count >= 3 else { continue }
+            guard parts.count >= 4 else { continue }
             guard let pid = Int(parts[0]) else { continue }
             let etime = String(parts[1])
-            let args = String(parts[2])
+            let tty = String(parts[2])
+            let args = String(parts[3])
 
             guard let agent = detectAgent(args: args) else { continue }
-            candidates.append((pid: pid, elapsed: etime, agent: agent))
+            candidates.append((pid: pid, elapsed: etime,
+                               hasTTY: tty != "??" && !tty.isEmpty, agent: agent))
         }
 
         let pids = candidates.map(\.pid)
@@ -293,11 +347,19 @@ final class SessionStore: ObservableObject {
 
         var found: [Session] = []
         for candidate in candidates {
-            let cwd = cwdByPID[candidate.pid]
-            let chain = walkParentChain(from: candidate.pid, processTable: processTable)
             let sidecar = (candidate.agent == "claude")
                 ? readClaudeSidecar(pid: candidate.pid)
                 : nil
+            // An interactive agent always owns a pty. A `claude` process with
+            // neither a controlling terminal nor a session sidecar is
+            // infrastructure, not a session: it can't be focused, it can't be
+            // meaningfully killed, and it outlives the session it belongs to,
+            // so it showed up as a row the finished-session prune could never
+            // reach. The subcommand denylist in detectAgent catches the ones
+            // we know by name; this catches whatever 2.2 invents next.
+            if candidate.agent == "claude", !candidate.hasTTY, sidecar == nil { continue }
+            let cwd = cwdByPID[candidate.pid]
+            let chain = walkParentChain(from: candidate.pid, processTable: processTable)
             found.append(Session(
                 id: candidate.pid,
                 pid: candidate.pid,
@@ -313,6 +375,7 @@ final class SessionStore: ObservableObject {
                 tabName: nil,
                 claudeSessionID: sidecar?.sessionId,
                 liveTitle:      sidecar?.name,
+                liveTitleSource: sidecar?.nameSource,
                 liveStatus:    sidecar?.status,
                 lastActivityAt: sidecar?.updatedAt.map { Date(timeIntervalSince1970: $0 / 1000) }
             ))
@@ -341,12 +404,28 @@ final class SessionStore: ObservableObject {
         }
     }
 
-    private static func detectAgent(args: String) -> String? {
-        // First token of args is the executable path.
-        let firstToken = args.split(separator: " ", maxSplits: 1).first.map(String.init) ?? ""
-        let baseName = (firstToken as NSString).lastPathComponent
+    // Claude Code 2.1+ runs a process tree around each session, and every part
+    // of it is an executable called `claude`: one long-lived `claude daemon
+    // run` under launchd, plus per-session `bg-pty-host` / `bg-spare` hosts.
+    // None of them is a session the user can focus, and the daemon never
+    // exits, so left undetected they accumulated as permanent rows. The pty
+    // host is the nastiest: it inherits the project cwd, so it read as a real
+    // session in that project which had already ended.
+    private static let claudeInfraSubcommands: Set<String> = [
+        "daemon", "bg-pty-host", "bg-spare",
+    ]
+    private static let claudeInfraFlags: Set<String> = [
+        "--bg-pty-host", "--bg-spare",
+    ]
 
-        if baseName == "claude" { return "claude" }
+    static func detectAgent(args: String) -> String? {
+        let tokens = args.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        // First token of args is the executable path.
+        let baseName = ((tokens.first ?? "") as NSString).lastPathComponent
+
+        if baseName == "claude" {
+            return isClaudeInfrastructure(tokens: tokens) ? nil : "claude"
+        }
         if baseName == "gemini" { return "gemini" }
         if baseName == "codex"  { return "codex"  }
         if baseName == "agy"    { return "agy"    }
@@ -364,6 +443,19 @@ final class SessionStore: ObservableObject {
             }
         }
         return nil
+    }
+
+    // True for the helper processes above. Scans past leading flags to the
+    // first positional argument, which is the subcommand; anything after that
+    // belongs to the subcommand, so a session resumed as
+    // `claude --resume <uuid>` can't be mistaken for one.
+    private static func isClaudeInfrastructure(tokens: [String]) -> Bool {
+        for token in tokens.dropFirst() {
+            if claudeInfraFlags.contains(token) { return true }
+            if token.hasPrefix("-") { continue }
+            return claudeInfraSubcommands.contains(token)
+        }
+        return false
     }
 
     // Walk ~/.claude/sessions/ and recycle any <pid>.json whose PID is no
@@ -506,8 +598,16 @@ final class SessionStore: ObservableObject {
         // plumbing lives in one place — keeps stderr-swallow + failure
         // semantics consistent across SessionStore and the terminal
         // integrations.
-        ProcessOutput.read(path, args)
+        //
+        // Time-bounded: scan() latches `isScanning` for the duration and only
+        // clears it in the completion, so a single subprocess that never
+        // returns (lsof on an unresponsive network mount is the realistic
+        // one) froze the pane permanently — no new sessions, and no pruning
+        // of the ones that ended. A timeout turns that into one skipped scan.
+        ProcessOutput.read(path, args, timeout: subprocessTimeout) ?? ""
     }
+
+    private static let subprocessTimeout: TimeInterval = 2.0
 }
 
 private extension Session {
@@ -532,6 +632,7 @@ private extension Session {
             // from the previous poll.
             claudeSessionID: self.claudeSessionID,
             liveTitle:      self.liveTitle,
+            liveTitleSource: self.liveTitleSource,
             liveStatus:    self.liveStatus,
             lastActivityAt: self.lastActivityAt
         )

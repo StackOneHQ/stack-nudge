@@ -79,6 +79,13 @@ struct PanelContentView: View {
     @ObservedObject var nav: PanelNav
     @ObservedObject var phrases: PhrasesViewModel
 
+    // The disk-backed name store. Observed here (rather than inside EventRow)
+    // so resolving a nudge's session label stays a render-time lookup that
+    // reacts to a rename, while each row's inputs stay down to the resolved
+    // string — handing every row the whole session array would rebuild all of
+    // them on every 3s poll.
+    @EnvironmentObject private var persistence: SessionPersistence
+
     let onGrantPermissions: () -> Void
 
     var body: some View {
@@ -166,7 +173,7 @@ struct PanelContentView: View {
                 .padding(.trailing, 4)
 
             tab(.events,   label: "Events",   count: store.events.count)
-            tab(.sessions, label: "Sessions", count: sessions.sessions.filter { $0.status == .active }.count)
+            tab(.sessions, label: "Sessions", count: sessions.liveSessions.count)
             tab(.usage,    label: "Usage",    count: 0)
             tab(.outcomes, label: "Tickets",  count: ticketGroupCount)
             tab(.settings, label: "Settings", count: 0,
@@ -299,7 +306,12 @@ struct PanelContentView: View {
                 LazyVStack(spacing: 2) {
                     ForEach(store.events) { event in
                         EventRow(event: event,
-                                 selected: store.selectedID == event.id)
+                                 selected: store.selectedID == event.id,
+                                 sessionLabel: SessionLabel.displayName(
+                                     for: event,
+                                     in: sessions.sessions,
+                                     persistence: persistence
+                                 ))
                             .id(event.id)
                             .contentShape(Rectangle())
                             .onTapGesture { store.selectedID = event.id }
@@ -381,11 +393,10 @@ struct EventRow: View {
 
     let event: NudgeEvent
     let selected: Bool
-
-    // The disk-backed name store. Observed so a rename in the Sessions
-    // tab immediately re-renders any visible event for the same
-    // (agent, projectPath) — render-time lookup, not ingest-time snapshot.
-    @EnvironmentObject private var persistence: SessionPersistence
+    // Resolved by the parent (see PanelContentView.persistence) so a rename
+    // still re-renders the row without every row observing the whole session
+    // list. nil when we know neither a name nor a project for this event.
+    let sessionLabel: String?
 
 
     var body: some View {
@@ -475,31 +486,8 @@ struct EventRow: View {
         return until > Date()
     }
 
-    // Show the user-chosen session name when one is set, otherwise the
-    // project folder's basename. Lookup is keyed by (agent, projectPath,
-    // tabId) — iTerm contributes its session id, VSCode/Cursor
-    // contribute the IPC hook path. Falls back to (agent, projectPath)
-    // transparently for events without a tab-scoped id and for
-    // pre-Stage-2 persistence entries.
-    private var sessionLabel: String? {
-        if let custom = persistence.customName(
-            agent: event.agent,
-            projectPath: event.projectPath,
-            tabId: tabIdentifier
-        ) {
-            return custom
-        }
-        guard let project = event.projectPath else { return nil }
-        return (project as NSString).lastPathComponent
-    }
-
-    // First non-empty of [iTerm session id, VSCode IPC hook]. Each
-    // terminal contributes whatever it has; the lookup layer doesn't
-    // care which one fired as long as it's stable per tab/window.
     private var tabIdentifier: String? {
-        if let sid = event.sessionID, !sid.isEmpty { return sid }
-        if let hook = event.ipcHook, !hook.isEmpty { return hook }
-        return nil
+        SessionLabel.tabIdentifier(for: event)
     }
 
     // iTerm2 tab/session label shown next to the session chip, but only
@@ -1965,12 +1953,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func labelForClaudeSession(id: String) -> String {
         guard let session = sessions.sessions.first(where: { $0.claudeSessionID == id })
         else { return "a session" }
-        if let custom = session.customName, !custom.isEmpty { return custom }
-        if let name = session.liveTitle,
-           !name.isEmpty, name != "main-agent" {
-            return name
-        }
-        return session.projectName ?? "a session"
+        return SessionLabel.displayName(for: session, fallback: "a session")
     }
 
     private func postContextBanner(tokens: Int, model: String?, sessionLabel: String) {
@@ -2034,12 +2017,24 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         if config.soundEnabled, !config.voiceEnabled, let sound = event.soundName {
             Speaker.playSound(named: sound)
         }
-        if config.voiceEnabled, let phrase = event.voiceMessage, !phrase.isEmpty {
+        if config.voiceEnabled, let phrase = voicePhrase(for: event), !phrase.isEmpty {
             Speaker.speak(phrase, voice: config.voiceName, speed: config.voiceSpeed)
         }
 
         guard config.bannerEnabled else { return }
         postBanner(for: event)
+    }
+
+    // Speech says the session's name when it has one. The hook picks the
+    // phrase but can't resolve names (they live in the app), so it sends the
+    // template with its %s intact alongside the cwd-substituted string; we
+    // fill in the resolved label and fall back to the hook's own version
+    // when there's no name to say, or when an older installed notify.sh
+    // didn't send a template at all.
+    private func voicePhrase(for event: NudgeEvent) -> String? {
+        VoicePhrase.spoken(template: event.voiceTemplate,
+                           label: sessionLabel(for: event))
+            ?? event.voiceMessage
     }
 
     // Returns true if the event's source editor window appears to be the
@@ -2109,24 +2104,23 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // identifier is a fresh UUID each time (macOS replaces by identifier);
     // event.id stays in userInfo so click handlers can find the source.
     // Banner title with session label appended when we can resolve one.
-    // Default project name is suppressed (already implied by the title);
-    // only meaningful custom/claudeName labels are shown.
+    // Default project name is suppressed (already implied by the title); only
+    // a name someone actually chose is shown.
+    //
+    // This used to join event to session on Claude's session UUID alone, so a
+    // rename never reached the banner for any other agent, and it accepted
+    // Claude Code's auto-derived name — which 2.1+ gives every session, so
+    // every banner read "Claude Code — stackone-89" whether or not anything
+    // had been renamed. SessionLabel handles both.
     private func bannerTitle(for event: NudgeEvent) -> String {
-        guard let id = event.claudeSessionID else { return event.title }
-        guard let session = sessions.sessions.first(where: { $0.claudeSessionID == id })
-        else { return event.title }
-        let custom = session.customName?.trimmingCharacters(in: .whitespaces)
-        let claude = session.liveTitle?.trimmingCharacters(in: .whitespaces)
-        let label: String?
-        if let custom, !custom.isEmpty {
-            label = custom
-        } else if let claude, !claude.isEmpty, claude != "main-agent" {
-            label = claude
-        } else {
-            label = nil
-        }
-        guard let label else { return event.title }
+        guard let label = sessionLabel(for: event) else { return event.title }
         return "\(event.title) — \(label)"
+    }
+
+    private func sessionLabel(for event: NudgeEvent) -> String? {
+        SessionLabel.chosenName(for: event,
+                                in: sessions.sessions,
+                                persistence: SessionPersistence.shared)
     }
 
     private func postBanner(for event: NudgeEvent) {
