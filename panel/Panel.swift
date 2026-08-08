@@ -2860,28 +2860,37 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // A blocking permission opened via 'O' (approve:false, "Open editor")
         // must stay in the panel so the user can still resolve it (Dismiss →
         // deny); removing it would orphan the hook for ~550s with no recovery
-        // path. Approvals — and any event without a pending FIFO — are removed
-        // as before. Stay on the panel if other events remain; otherwise close
-        // so the system frontmost reverts naturally and the approval keystroke
-        // lands in the target app's key window (see comment above re: hiding).
+        // path. Approvals — and any event without a pending FIFO — are removed.
         if sendApproval || event.fifoPath == nil {
             store.remove(id: event.id)
-            if store.events.isEmpty { hidePanel() }
         }
 
         // Approve a blocking permission by writing "allow" to its FIFO; the agent
-        // then skips its own prompt. Deny is the Dismiss gesture (see
-        // dismissSelected), NOT this path — so 'O' (approve:false, "Open editor")
-        // falls through to focusing the editor without resolving the decision.
+        // then skips its own prompt. This path doesn't hand focus to the editor,
+        // so keep the panel up while other prompts remain (lets the user triage
+        // a queue of approvals), closing only once the list empties. Deny is the
+        // Dismiss gesture (see dismissSelected), NOT this path.
         if sendApproval, let fifo = event.fifoPath {
+            if store.events.isEmpty { hidePanel() }
             DispatchQueue.global(qos: .userInitiated).async {
                 Self.writeFIFO(fifo, "allow")
             }
             return
         }
 
+        // Every remaining path hands focus to the source app — either jumping
+        // to the editor ('O' / a stop event) or sending the approval keystroke
+        // into its key window. Hide the panel first, unconditionally: our panel
+        // is floating, pinned, and joins all spaces, so leaving it up keeps
+        // StackNudge frontmost and the jump silently appears not to happen when
+        // other events are still listed. Matches focusSelectedSession and the
+        // banner-click path. The 0.15s settle lets our deactivation land before
+        // the target is raised (without it an approval keystroke can hit our
+        // own process instead of the target's key window).
         guard let bundleID = event.bundleID else { return }
+        hidePanel()
         DispatchQueue.global(qos: .userInitiated).async {
+            Thread.sleep(forTimeInterval: 0.15)
             AppActivator.activate(
                 bundleID: bundleID,
                 windowTitle: event.windowTitle,
@@ -2979,6 +2988,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         let ipcHook = VSCodeIntegration.isVSCodeHosted(session.terminalApp) ? session.tabId : nil
         let sessionID = session.terminalApp?.contains("iTerm") == true ? session.tabId : nil
         DispatchQueue.global(qos: .userInitiated).async {
+            // Settle after hidePanel() above so StackNudge has resigned
+            // frontmost before we raise the target — mirrors actOnSelected
+            // and the banner-click path.
+            Thread.sleep(forTimeInterval: 0.15)
             AppActivator.activate(
                 bundleID: bundleID,
                 windowTitle: session.projectName,

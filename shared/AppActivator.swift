@@ -66,12 +66,14 @@ struct AppActivator {
                 delay 0.4
                 do shell script "\(envPrefix)'\(escapedCLI)' --reuse-window '\(escapedPath)'"
             """)?.executeAndReturnError(&err)
+            logScriptError(err, "editor-reuse-window")
 
             // Step 2: set frontmost (requires Automation for System Events)
             var err2: NSDictionary?
             NSAppleScript(source: """
                 tell application "System Events" to set frontmost of process "\(procName)" to true
             """)?.executeAndReturnError(&err2)
+            logScriptError(err2, "editor-set-frontmost")
 
             // Step 2.5: AX-raise the specific window. --reuse-window routes
             // the open request to the right window's IPC server (when
@@ -111,6 +113,7 @@ struct AppActivator {
                         end tell
                     end tell
                 """)?.executeAndReturnError(&err3)
+                logScriptError(err3, "editor-send-enter")
             }
             return
         }
@@ -177,6 +180,7 @@ struct AppActivator {
                     end tell
                 end tell
             """)?.executeAndReturnError(&err)
+            logScriptError(err, "approve-keystroke")
         }
     }
 
@@ -332,6 +336,7 @@ struct AppActivator {
         """
         var err: NSDictionary?
         NSAppleScript(source: script)?.executeAndReturnError(&err)
+        logScriptError(err, "ghostty-tab")
     }
 
     // MARK: - iTerm2 (AppleScript bridge)
@@ -375,8 +380,27 @@ struct AppActivator {
         """
         var err: NSDictionary?
         let result = NSAppleScript(source: script)?.executeAndReturnError(&err)
-        guard err == nil else { return false }
+        guard err == nil else {
+            logScriptError(err, "iterm2-session")
+            return false
+        }
         return result?.stringValue == "matched"
+    }
+
+    // MARK: - Diagnostics
+
+    // AppleScript failures here are almost always a missing Automation grant:
+    // macOS wipes the grant whenever the app's cdhash changes (every ad-hoc
+    // rebuild), and the call then silently no-ops so focus never moves — the
+    // exact "Open editor did nothing" symptom. Swallowing the error dict hides
+    // it; surface it to stderr when panel debugging is on so the next
+    // occurrence is diagnosable. No-op unless STACKNUDGE_PANEL_DEBUG is set.
+    private static func logScriptError(_ err: NSDictionary?, _ context: String) {
+        guard let err,
+              ProcessInfo.processInfo.environment["STACKNUDGE_PANEL_DEBUG"] != nil
+        else { return }
+        FileHandle.standardError.write(Data(
+            "AppActivator[\(context)]: AppleScript error: \(err)\n".utf8))
     }
 
     // MARK: - AX tab switching (standalone terminal apps)
