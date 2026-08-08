@@ -4,6 +4,13 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.26.3](https://github.com/StackOneHQ/stack-nudge/compare/v1.26.2...v1.26.3) (2026-08-08)
+
+
+### Bug Fixes
+
+* **panel:** hand focus to the source app on every open-editor path ([#148](https://github.com/StackOneHQ/stack-nudge/issues/148)) ([09ea677](https://github.com/StackOneHQ/stack-nudge/commit/09ea6775ef104abc1130956a13fd5bd94ac259ce))
+
 ## [1.26.2](https://github.com/StackOneHQ/stack-nudge/compare/v1.26.1...v1.26.2) (2026-08-05)
 
 
