@@ -69,6 +69,25 @@ struct TicketGroup: Identifiable, Equatable {
 // for unticketed work), shows the branches beneath each group, and deep-links
 // each ticket row to its tracker when STACKNUDGE_TICKET_URL is
 // set. Pure read over data the ledger already holds; no capture, no network.
+
+// The Outcomes tab: a two-pane carousel over one dataset. Lands on the Insights
+// overview (the aggregate); → carousels into the per-ticket list, ← back (key
+// handling lives in PanelController.keyDown, mode == .outcomes). Resets to the
+// overview each time the tab opens.
+struct OutcomesTabView: View {
+    @ObservedObject var nav: PanelNav
+
+    var body: some View {
+        Group {
+            switch nav.outcomesPane {
+            case .overview: InsightsView(nav: nav)
+            case .tickets:  OutcomesView(nav: nav)
+            }
+        }
+        .onAppear { nav.outcomesPane = .overview }
+    }
+}
+
 struct OutcomesView: View {
 
     @ObservedObject var nav: PanelNav
@@ -88,6 +107,14 @@ struct OutcomesView: View {
             if groups.isEmpty {
                 emptyState
             } else {
+                // Count lives in the content (like the Overview pane), not the
+                // footer, so the footer stays within the panel width.
+                HStack {
+                    Text(countSummary(groups)).font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 10)
                 ScrollViewReader { proxy in
                     ScrollView {
                         // Lazy, like the Sessions and Events lists. A plain VStack
@@ -138,13 +165,12 @@ struct OutcomesView: View {
             }
 
             PageFooter {
-                FooterHint(label: footerStatus(groups), keys: [])
                 if !groups.isEmpty {
                     FooterHint(label: "Select", keys: ["↑↓"])
-                    FooterHint(label: "Top/Bottom", keys: ["⌘↑↓"])
                     FooterHint(label: "Open", keys: ["↵"])
                     FooterHint(label: "Remove", keys: ["⌫"])
                 }
+                FooterHint(label: "Overview", keys: ["←"])
                 FooterHint(label: "Hide", keys: ["Esc"])
             }
         }
@@ -339,14 +365,7 @@ struct OutcomesView: View {
     // how a squash-merged branch finally reads as "merged". Open → at least
     // pushed; closed-not-merged falls back to the local truth.
     private func effectiveStatus(for branch: BranchBreakdown) -> OutcomeStatus? {
-        if let pr = prInfo(for: branch) {
-            switch pr.state {
-            case .merged: return .merged
-            case .open:   return .pushed
-            case .closed: return outcome(for: branch)
-            }
-        }
-        return outcome(for: branch)
+        OutcomeWatcher.effective(local: outcome(for: branch), pr: prInfo(for: branch))
     }
 
     // Counts of each non-clean status across the group's branches (PR state
@@ -596,7 +615,7 @@ struct OutcomesView: View {
 
     // MARK: - Footer + empty state
 
-    private func footerStatus(_ groups: [TicketGroup]) -> String {
+    private func countSummary(_ groups: [TicketGroup]) -> String {
         guard !groups.isEmpty else { return "No tracked sessions" }
         let sessions = groups.reduce(0) { $0 + $1.sessionCount }
         let groupWord = groups.count == 1 ? "group" : "groups"

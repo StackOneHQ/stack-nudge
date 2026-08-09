@@ -11,6 +11,21 @@ enum TokenFormat {
     }
 }
 
+// Display form of a model id: drop the redundant "claude-" vendor prefix and any
+// trailing "-YYYYMMDD" date stamp. "claude-haiku-4-5-20251001" → "haiku-4-5",
+// "claude-opus-5" → "opus-5". A non-claude id (e.g. "gpt-5-codex") keeps its name,
+// minus a trailing date stamp.
+enum ModelName {
+    static func short(_ id: String) -> String {
+        var name = id.hasPrefix("claude-") ? String(id.dropFirst("claude-".count)) : id
+        if let dash = name.range(of: "-2", options: .backwards),
+           name[dash.lowerBound...].dropFirst().allSatisfy(\.isNumber) {
+            name = String(name[..<dash.lowerBound])
+        }
+        return name
+    }
+}
+
 // Shared relative-time strings ("5m ago", "in 3 days") with per-style cached
 // formatters (these were re-created in CompactView / Sessions / SessionUsage /
 // Panel). Formatters are reused on the main thread, matching prior usage.

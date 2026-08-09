@@ -133,7 +133,7 @@ struct PanelContentView: View {
                 case .events:   eventsBody
                 case .sessions: SessionsView(store: sessions, events: store, nav: nav)
                 case .usage:    UsageView(nav: nav)
-                case .outcomes: OutcomesView(nav: nav)
+                case .outcomes: OutcomesTabView(nav: nav)
                 case .settings: SettingsView(nav: nav)
                 case .phrases:  PhrasesView(model: phrases) { nav.mode = .settings }
                 case .updateConfirm:
@@ -175,7 +175,7 @@ struct PanelContentView: View {
             tab(.events,   label: "Events",   count: store.events.count)
             tab(.sessions, label: "Sessions", count: sessions.liveSessions.count)
             tab(.usage,    label: "Usage",    count: 0)
-            tab(.outcomes, label: "Tickets",  count: ticketGroupCount)
+            tab(.outcomes, label: "Outcomes", count: ticketGroupCount)
             tab(.settings, label: "Settings", count: 0,
                 dotColor: !nav.missingPermissions.isEmpty ? .orange
                         : nav.updateAvailable != nil ? .accentColor
@@ -2769,20 +2769,42 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return true
         }
 
-        // Tickets tab: ↑/↓ move the row selection, →/Enter open the selected
-        // row's ticket/PR link, Esc hides. Other keys are swallowed so they
-        // don't leak through to the events store.
+        // Outcomes tab: a two-pane carousel. The Overview pane (Insights) is a
+        // scroll page — ↑/↓ scroll, ⌘↑/↓ jump (see jumpToEdge), W cycles the
+        // window, → steps into the Tickets list, and ticket rows open on click.
+        // The Tickets pane is a list — ↑/↓ move the selection, ⏎ opens the row,
+        // ⌫ dismisses, ← steps back to the Overview. Other plain keys are
+        // swallowed so they don't leak through to the events store.
         if nav.mode == .outcomes {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain else { return false }
+            if nav.outcomesPane == .overview {
+                switch event.keyCode {
+                case KeyCode.escape:
+                    hidePanel()
+                case KeyCode.upArrow:
+                    scrollDetailBy(-40)
+                case KeyCode.downArrow:
+                    scrollDetailBy(40)
+                case KeyCode.rightArrow:
+                    nav.outcomesPane = .tickets
+                case KeyCode.wKey:
+                    nav.cycleInsightsWindow()
+                default:
+                    break
+                }
+                return true
+            }
             switch event.keyCode {
             case KeyCode.escape:
                 hidePanel()
+            case KeyCode.leftArrow:
+                nav.outcomesPane = .overview
             case KeyCode.upArrow:
                 nav.moveOutcomeSelection(-1)
             case KeyCode.downArrow:
                 nav.moveOutcomeSelection(1)
-            case KeyCode.rightArrow, KeyCode.returnKey, KeyCode.numpadEnter:
+            case KeyCode.returnKey, KeyCode.numpadEnter:
                 nav.activateSelectedOutcome()
             case KeyCode.delete, KeyCode.forwardDelete:
                 nav.dismissSelectedOutcome()
@@ -2959,7 +2981,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 top ? nav.selectFirstUsageClient() : nav.selectLastUsageClient()
             }
         case .outcomes:
-            nav.jumpOutcomeSelection(toLast: !top)
+            // Overview pane scrolls; the tickets list jumps its selection.
+            if nav.outcomesPane == .overview { scrollDetailToEdge(top: top) }
+            else { nav.jumpOutcomeSelection(toLast: !top) }
         case .settings:
             top ? nav.selectFirstRow() : nav.selectLastRow()
         case .phrases:

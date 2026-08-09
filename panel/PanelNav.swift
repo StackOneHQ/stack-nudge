@@ -28,6 +28,13 @@ enum PanelMode {
     case uninstall
 }
 
+// The two panes of the Outcomes tab, carousel-ordered: the Insights aggregate,
+// then the per-ticket list.
+enum OutcomesPane {
+    case overview
+    case tickets
+}
+
 // Action callbacks the controller wires into nav so settings rows like
 // "Check permissions" / "Open config" / "Quit" can fire effects without the
 // SwiftUI view needing to know about windows or app-level state.
@@ -296,6 +303,42 @@ final class PanelNav: ObservableObject {
     // in-memory HandoffLedger and reflect the new session live. The ledger
     // isn't itself observable; this is the single change-signal that drives it.
     @Published var handoffsRevision: Int = 0 { didSet { cachedOutcomeGroups = nil } }
+    // Trailing window the Insights tab summarises over. Cycled by `W`; the view
+    // recomputes the (cheap, in-memory) rollup whenever this or the outcome maps
+    // change, so no separate cache is needed.
+    // Which pane of the Outcomes tab is showing. The tab lands on .overview (the
+    // Insights aggregate); → carousels into .tickets (the per-ticket list), ←
+    // back. Reset to .overview each time the tab opens (see OutcomesTabView).
+    @Published var outcomesPane: OutcomesPane = .overview
+
+    @Published var insightsWindow: InsightsWindow = .week
+    func cycleInsightsWindow() {
+        let all = InsightsWindow.allCases
+        guard let idx = all.firstIndex(of: insightsWindow) else { return }
+        insightsWindow = all[(idx + 1) % all.count]
+    }
+    // The current Insights rollup. Computed here (not only in the view) so it's
+    // a single source the view reads.
+    func insightsSummary() -> InsightsSummary {
+        Insights.summarize(
+            records: HandoffLedger.shared.all(),
+            outcomeByBranch: outcomeByBranch,
+            pullRequestByBranch: pullRequestByBranch,
+            now: Date(),
+            window: insightsWindow.seconds)
+    }
+
+    // Open a top-ticket row (on click): its tracker link when it's a ticket and
+    // STACKNUDGE_TICKET_URL is set, else its PR. Mirrors activateSelectedOutcome.
+    func openInsightTicket(_ ticket: TicketSpend) {
+        if ticket.isTicket,
+           let template = ConfigFile.read()["STACKNUDGE_TICKET_URL"], template.contains("{key}"),
+           let url = URL(string: template.replacingOccurrences(of: "{key}", with: ticket.label)) {
+            NSWorkspace.shared.open(url)
+            return
+        }
+        if let prURL = ticket.prURL, let url = URL(string: prURL) { NSWorkspace.shared.open(url) }
+    }
     // Memoized grouping of the ledger (the expensive part: regex ticket
     // attribution + branch breakdown + sorts). Invalidated only when the ledger
     // changes (handoffsRevision) — NOT on selection moves, so holding ↑/↓ on the

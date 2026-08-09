@@ -346,21 +346,9 @@ private struct SessionRow: View {
         // the model ID. Showing the model name keeps the row honest.
         let tokens = "\(TokenFormat.short(stats.tokens)) tokens"
         if let model = stats.model {
-            return "\(tokens) · \(Self.shortModel(model))"
+            return "\(tokens) · \(ModelName.short(model))"
         }
         return tokens
-    }
-
-    // Strip the date suffix Anthropic appends to model IDs
-    // (e.g. "claude-opus-4-7-20250606" → "opus-4-7") and the
-    // redundant "claude-" prefix.
-    private static func shortModel(_ id: String) -> String {
-        var s = id.hasPrefix("claude-") ? String(id.dropFirst("claude-".count)) : id
-        if let dash = s.range(of: "-2", options: .backwards),
-           s[dash.lowerBound...].dropFirst().allSatisfy(\.isNumber) {
-            s = String(s[..<dash.lowerBound])
-        }
-        return s
     }
 
 

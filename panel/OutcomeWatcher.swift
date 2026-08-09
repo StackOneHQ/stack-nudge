@@ -31,6 +31,21 @@ struct OutcomeInputs: Equatable {
 // needsReview > clean.
 enum OutcomeWatcher {
 
+    // The user-facing "did it ship?" status: a known PR state supersedes the
+    // local git heuristic, because a squash-merged branch only reads as `.merged`
+    // through its PR (its commits never land on the base by ancestry). Open means
+    // at least pushed; closed-not-merged falls back to the local truth. This is
+    // the single definition the Tickets tab (OutcomesView) and the Insights
+    // rollup both read, so the two cannot drift.
+    static func effective(local: OutcomeStatus?, pr: PullRequestInfo?) -> OutcomeStatus? {
+        guard let pr else { return local }
+        switch pr.state {
+        case .merged: return .merged
+        case .open:   return .pushed
+        case .closed: return local
+        }
+    }
+
     // Local default branch first — it's the one the user keeps pulled, and in a
     // fork workflow `origin/main` (the fork) can lag the real mainline. Falls
     // back to the fork's, then the upstream's, default branch.

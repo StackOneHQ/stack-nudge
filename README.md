@@ -130,11 +130,11 @@ Add that to your shell profile.
 
 ### Keyboard-native panel (macOS)
 
-If you'd rather not click banners with the mouse, stack-nudge runs a small floating panel that you summon with a hotkey. It has five tabs — **Events**, **Sessions**, **Usage**, **Tickets**, and **Settings** — and is fully keyboard-driven.
+If you'd rather not click banners with the mouse, stack-nudge runs a small floating panel that you summon with a hotkey. It has five tabs (**Events**, **Sessions**, **Usage**, **Outcomes**, and **Settings**) and is fully keyboard-driven.
 
 The panel is installed and registered as a launchd agent by `./install.sh` — no opt-in needed. To run quietly without macOS banners, toggle **Settings → Banner notifications** off (panel-only mode).
 
-Default hotkey is `cmd+opt+n`. Hit it from anywhere to summon the panel; hit it again while focused to hide. Switch tabs with `Cmd+1` (Events), `Cmd+2` (Sessions), `Cmd+3` (Usage), `Cmd+4` (Tickets), `Cmd+5` (Settings) — or click them. Banner and panel can run together, alone, or both off — the sound and voice still fire as passive signals.
+Default hotkey is `cmd+opt+n`. Hit it from anywhere to summon the panel; hit it again while focused to hide. Switch tabs with `Cmd+1` (Events), `Cmd+2` (Sessions), `Cmd+3` (Usage), `Cmd+4` (Outcomes), `Cmd+5` (Settings), or click them. Banner and panel can run together, alone, or both off; the sound and voice still fire as passive signals.
 
 #### Events tab
 
@@ -220,9 +220,26 @@ The hotkey row records live: press `⏎` on it, press the new combo, and stack-n
 
 All Settings choices persist to `~/.stack-nudge/config` (a `KEY=value` text file). You don't need to edit it directly — Settings is the source of truth — but it's there for backup/sync or scripted setup.
 
-### Tickets (usage → outcomes)
+### Outcomes (usage → shipped)
 
-The **Tickets** tab (`⌘4`) rolls every captured agent session up **by ticket** — derived from your branch naming (`eng-123/…` → `ENG-123`), falling back to the branch when there's no ticket — and shows the tokens spent, files changed, and the live git outcome: *needs-review → committed → pushed → merged*. Select rows with `↑ ↓`, open the ticket or PR with `⏎`, dismiss one with `⌫`.
+The **Outcomes** tab (`⌘4`) is two views of one dataset. It opens on the **Overview** (the aggregate); press `→` to carousel into the per-ticket **Tickets** list, `←` to step back.
+
+#### Overview
+
+The spend-to-outcome picture over a trailing window, so you see not just *what* your agents did but *what share of it shipped*.
+
+- **Shipped share**: the headline. Of the effort spent in the window, how much sits on work that merged or pushed, versus in-flight, versus **abandoned** (committed / needs-review work that's gone quiet for over 14 days).
+- **Spend bar**: one bar partitioning tokens across those three buckets, coloured shipped (green) / in-flight (blue) / abandoned (orange).
+- **Top tickets by spend**: the heaviest tickets (or unticketed repos) in the window, each with its dominant outcome. Click a row to open the ticket (when `STACKNUDGE_TICKET_URL` is set) or its PR.
+- **Agents**: the token mix per agent alongside each agent's **shipped share**, so you can see whose work actually merges. Plus the model mix.
+
+The Overview is a scroll page: `↑ ↓` scroll, `⌘↑ ⌘↓` jump to top/bottom, `W` cycles the trailing window (24h / 7d / 30d / 90d; 90d is the ledger's own retention ceiling). Because "abandoned" needs 14 days of quiet, it only appears on the 30d and 90d windows. It's token-only today; per-model dollar cost and reclaimed-time are planned follow-ups.
+
+#### Tickets
+
+Every captured agent session rolled up **by ticket**, derived from your branch naming (`eng-123/…` → `ENG-123`), falling back to the branch when there's no ticket. Shows the tokens spent, files changed, and the live git outcome: *needs-review → committed → pushed → merged*. `↑ ↓` select rows, `⏎` opens the ticket or PR, `⌫` dismisses one, `←` steps back to the Overview.
+
+The two panes agree by construction: both read the same per-branch outcome and PR state, so a squash-merged branch reads as shipped in each.
 
 Opt-in GitHub linking adds real **PR + CI status** (so even squash-merged work reads as *merged*). Turn it on in Settings → Tickets → **GitHub PR links**, then sign in via the in-panel device flow (no `gh` needed). Config keys (all optional; the toggles in Settings write the same file):
 
@@ -230,10 +247,10 @@ Opt-in GitHub linking adds real **PR + CI status** (so even squash-merged work r
 |-----|--------------|
 | `STACKNUDGE_GITHUB` | `true` to enable GitHub PR/CI linking (off by default) |
 | `STACKNUDGE_GITHUB_CLIENT_ID` | Override the embedded OAuth app Client ID (rarely needed) |
-| `STACKNUDGE_TICKET_URL` | Deep-link template for ticket rows, e.g. `https://linear.app/acme/issue/{key}` — `{key}` is replaced with the ticket |
-| `STACKNUDGE_HIDE_SHIPPED` | `true` to drop groups once their PR reads merged, keeping the tab on in-flight work |
+| `STACKNUDGE_TICKET_URL` | Deep-link template for ticket rows, e.g. `https://linear.app/acme/issue/{key}`; `{key}` is replaced with the ticket |
+| `STACKNUDGE_HIDE_SHIPPED` | `true` to drop groups once their PR reads merged, keeping the list on in-flight work |
 
-**Nothing showing up?** A session is recorded when an agent's turn ends *inside a git repo*, and only if the hook payload carries a session id. The tab's empty state names which of those failed; `~/.stack-nudge/app.log` has a line per dropped turn. The usual cause is an installed hook script older than the app, since updates swap the `.app` alone: the app repairs that on launch, and Settings warns in the footer if the rewrite couldn't be applied. To fix it by hand:
+**Nothing showing up?** A session is recorded when an agent's turn ends *inside a git repo*, and only if the hook payload carries a session id. The Tickets empty state names which of those failed; `~/.stack-nudge/app.log` has a line per dropped turn. The usual cause is an installed hook script older than the app, since updates swap the `.app` alone: the app repairs that on launch, and Settings warns in the footer if the rewrite couldn't be applied. To fix it by hand:
 
 ```bash
 grep -c stack-nudge-version ~/.stack-nudge/notify.sh   # 0 means the script predates v1.26
