@@ -17,7 +17,7 @@
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.26.3</string> <!-- x-release-please-version -->
+    <string>1.27.0</string> <!-- x-release-please-version -->
     <key>LSUIElement</key>
     <true/>
     <key>NSPrincipalClass</key>
