@@ -1,6 +1,46 @@
 import AppKit
 import SwiftUI
 
+// Left-to-right flow that wraps to the next row when it runs out of width, so a
+// row of variable-width pills stays tidy instead of overflowing or compressing
+// its children (which makes their text wrap mid-word). macOS 13+ `Layout`.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+    var rowSpacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var rowWidth: CGFloat = 0, rowHeight: CGFloat = 0
+        var totalWidth: CGFloat = 0, totalHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if rowWidth > 0, rowWidth + spacing + size.width > maxWidth {
+                totalWidth = max(totalWidth, rowWidth)
+                totalHeight += rowHeight + rowSpacing
+                rowWidth = 0; rowHeight = 0
+            }
+            rowWidth += (rowWidth > 0 ? spacing : 0) + size.width
+            rowHeight = max(rowHeight, size.height)
+        }
+        totalWidth = max(totalWidth, rowWidth)
+        totalHeight += rowHeight
+        return CGSize(width: min(totalWidth, maxWidth), height: totalHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY, rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                x = bounds.minX; y += rowHeight + rowSpacing; rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+    }
+}
+
 // MARK: - Footer hint pieces
 
 // A keycap-shaped pill — used for inline shortcut hints throughout the UI.
