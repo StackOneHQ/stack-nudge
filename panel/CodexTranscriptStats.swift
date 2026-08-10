@@ -61,6 +61,36 @@ enum CodexTranscriptReader {
         return TranscriptStats(tokens: tokens, model: model)
     }
 
+    // Locate the rollout file for a Codex session id. Codex's Stop hook may send
+    // `transcript_path: null`, but the rollout filename embeds the session id
+    // (`rollout-<timestamp>-<session_id>.jsonl` under
+    // ~/.codex/sessions/YYYY/MM/DD/), so we can derive the path and still read
+    // token/model stats. Walks the date tree newest-first (the just-stopped
+    // session's rollout is recent) and returns the first match. Disk I/O — call
+    // off the main thread.
+    static func rolloutPath(forSessionID sessionID: String,
+                            root: String = "\(NSHomeDirectory())/.codex/sessions") -> String? {
+        guard !sessionID.isEmpty else { return nil }
+        let fileManager = FileManager.default
+        let suffix = "-\(sessionID).jsonl"
+        func namesDescending(_ path: String) -> [String] {
+            ((try? fileManager.contentsOfDirectory(atPath: path)) ?? []).sorted(by: >)
+        }
+        for year in namesDescending(root) {
+            let yearPath = "\(root)/\(year)"
+            for month in namesDescending(yearPath) {
+                let monthPath = "\(yearPath)/\(month)"
+                for day in namesDescending(monthPath) {
+                    let dayPath = "\(monthPath)/\(day)"
+                    if let match = namesDescending(dayPath).first(where: { $0.hasSuffix(suffix) }) {
+                        return "\(dayPath)/\(match)"
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
     // Codex stamps the active model on turn_context lines; session_meta carries
     // it for the session as a whole. Nesting has shifted across Codex versions,
     // so probe the few known shapes defensively and ignore anything else.

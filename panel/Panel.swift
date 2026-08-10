@@ -1627,12 +1627,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return dropHandoff(.missingProjectPath, agent: event.agent)
         }
         let agent = Agent.canonical(event.agent)
-        let transcriptPath = event.transcriptPath
+        let providedTranscriptPath = event.transcriptPath
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let repoRoot = Self.gitValue(cwd, ["rev-parse", "--show-toplevel"]) else {
                 DispatchQueue.main.async { self?.dropHandoff(.notAGitRepo, agent: agent) }
                 return
             }
+            // Codex's Stop hook may omit transcript_path; derive the rollout from
+            // the session id (its filename embeds it) so codex records carry
+            // token/model stats rather than landing token-less.
+            let transcriptPath = providedTranscriptPath
+                ?? (agent == "codex" ? CodexTranscriptReader.rolloutPath(forSessionID: sessionID) : nil)
             let branch = Self.gitValue(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])
             // Only consider the subject of a commit *unique to this branch*
             // (base..HEAD). The absolute last commit may already be on main —
