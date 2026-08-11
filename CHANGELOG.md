@@ -4,6 +4,18 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.28.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.27.0...v1.28.0) (2026-08-11)
+
+
+### Features
+
+* **panel:** capture codex sessions in the outcomes tab ([#153](https://github.com/StackOneHQ/stack-nudge/issues/153)) ([5591894](https://github.com/StackOneHQ/stack-nudge/commit/5591894c2d143452ad86e1d58ebbec94f33d5ac2))
+
+
+### Bug Fixes
+
+* **panel:** stop the tickets list flickering at ticket boundaries ([#152](https://github.com/StackOneHQ/stack-nudge/issues/152)) ([adf32cb](https://github.com/StackOneHQ/stack-nudge/commit/adf32cb643ccb3b4ad749b29f5b9a94bff56b66f))
+
 ## [1.27.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.26.3...v1.27.0) (2026-08-10)
 
 
