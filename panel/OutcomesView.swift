@@ -95,6 +95,9 @@ struct OutcomesView: View {
     // STACKNUDGE_TICKET_URL template, e.g. "https://linear.app/acme/issue/{key}".
     // Loaded once on appear; unset → ticket rows render without a link.
     @State private var ticketURLTemplate: String?
+    // Previous selection index, to tell a ±1 step from a ⌘↑/↓ jump in the
+    // scroll-follow below (a jump needs the group-anchor hop; a step doesn't).
+    @State private var lastOutcomeIndex = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -143,22 +146,26 @@ struct OutcomesView: View {
                     // tab's onChange(of: selectedPID) pattern.
                     .onChange(of: target) { newTarget in
                         guard let newTarget else { return }
-                        // Two hops, because the list is lazy: a row's own anchor
-                        // sits *inside* its group's body, and scrollTo cannot
-                        // resolve an id in a child the LazyVStack hasn't built yet
-                        // (measured: it moves nothing at all). The group anchor is
-                        // on the stack's direct child, so it resolves unrealized;
-                        // that hop builds the group, then the precise row anchor
-                        // resolves on the next tick.
-                        //
-                        // Snap, don't animate. With key-repeat on a long list the
-                        // 0.15s animations piled up, the scroll lagged the
-                        // selection, then settled with an upward snap: the
-                        // "bounce". Instant scroll keeps the selection pinned and
-                        // the viewport tracking it smoothly.
-                        proxy.scrollTo(newTarget.groupAnchor, anchor: .center)
-                        DispatchQueue.main.async {
+                        // A ±1 step lands in a group the LazyVStack has already
+                        // built (it renders a buffer past the viewport), so the row
+                        // anchor resolves directly — one hop, which avoids the
+                        // center-group-then-center-row double move that flickers at
+                        // ticket boundaries. Only a ⌘↑/↓ jump can land in an
+                        // off-screen, unbuilt group; there the group anchor (a
+                        // direct child of the stack, so it resolves unrealized) is
+                        // hopped first to build the group, then the row anchor
+                        // resolves on the next tick. Instant scroll (no animation)
+                        // either way, so key-repeat doesn't pile up and bounce.
+                        let index = nav.outcomeSelectedIndex
+                        let isStep = abs(index - lastOutcomeIndex) <= 1
+                        lastOutcomeIndex = index
+                        if isStep {
                             proxy.scrollTo(newTarget.rowID, anchor: .center)
+                        } else {
+                            proxy.scrollTo(newTarget.groupAnchor, anchor: .center)
+                            DispatchQueue.main.async {
+                                proxy.scrollTo(newTarget.rowID, anchor: .center)
+                            }
                         }
                     }
                 }
@@ -178,6 +185,7 @@ struct OutcomesView: View {
         .onAppear {
             ticketURLTemplate = ConfigFile.read()["STACKNUDGE_TICKET_URL"]
             nav.outcomeSelectedIndex = 0
+            lastOutcomeIndex = 0
             nav.refreshOutcomes?()
             nav.refreshPullRequests?()
         }
