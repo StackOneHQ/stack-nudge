@@ -158,6 +158,50 @@ final class BootstrapTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: path))
     }
 
+    // A stamp-only version bump (which release-please does on every release) must
+    // NOT rewrite the script: rewriting would reset Codex's hook-trust hash and
+    // silently disable codex capture until the user re-trusts via /hooks.
+    func test_refreshNotifyScript_skipsAStampOnlyBump() throws {
+        let dir = try temporaryDirectory()
+        let path = dir.appendingPathComponent("notify.sh").path
+        let installed = "#!/usr/bin/env bash\n# stack-nudge-version: 1.26.0\necho same\n"
+        try installed.write(toFile: path, atomically: true, encoding: .utf8)
+        let bundled = "#!/usr/bin/env bash\n# stack-nudge-version: 1.27.0\necho same\n"
+
+        XCTAssertNil(Bootstrap.refreshNotifyScript(bundled: bundled, installedPath: path))
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), installed)
+    }
+
+    func test_refreshNotifyScript_rewritesOnALogicChange() throws {
+        let dir = try temporaryDirectory()
+        let path = dir.appendingPathComponent("notify.sh").path
+        try "#!/usr/bin/env bash\n# stack-nudge-version: 1.26.0\necho old\n"
+            .write(toFile: path, atomically: true, encoding: .utf8)
+        let bundled = "#!/usr/bin/env bash\n# stack-nudge-version: 1.27.0\necho new\n"
+
+        XCTAssertEqual(Bootstrap.refreshNotifyScript(bundled: bundled, installedPath: path), "1.27.0")
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), bundled)
+    }
+
+    func test_notifyScriptOutdated_falseForAStampOnlyDifference_trueForALogicChange() throws {
+        let dir = try temporaryDirectory()
+        let path = dir.appendingPathComponent("notify.sh").path
+        try "#!/usr/bin/env bash\n# stack-nudge-version: 1.26.0\necho same\n"
+            .write(toFile: path, atomically: true, encoding: .utf8)
+        XCTAssertFalse(Bootstrap.notifyScriptOutdated(
+            bundled: "#!/usr/bin/env bash\n# stack-nudge-version: 1.27.0\necho same\n", installedPath: path))
+        XCTAssertTrue(Bootstrap.notifyScriptOutdated(
+            bundled: "#!/usr/bin/env bash\n# stack-nudge-version: 1.27.0\necho changed\n", installedPath: path))
+    }
+
+    func test_functionalContent_neutralisesTheVersionStamp() {
+        let v1 = "#!/usr/bin/env bash\n# stack-nudge-version: 1.26.0 # x-release-please-version\necho hi\n"
+        let v2 = "#!/usr/bin/env bash\n# stack-nudge-version: 9.9.9 # x-release-please-version\necho hi\n"
+        XCTAssertEqual(Bootstrap.functionalContent(v1), Bootstrap.functionalContent(v2))
+        let changed = "#!/usr/bin/env bash\n# stack-nudge-version: 1.26.0\necho DIFFERENT\n"
+        XCTAssertNotEqual(Bootstrap.functionalContent(v1), Bootstrap.functionalContent(changed))
+    }
+
     // MARK: - Helpers
 
     private func temporaryDirectory() throws -> URL {

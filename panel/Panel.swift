@@ -649,8 +649,16 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // Updates swap the .app but never the installed hook script, so a
         // self-updating machine can run a current panel against a notify.sh from
         // any earlier release, one that omits payload fields we now depend on.
-        // Repair it here, while we know the bundle we shipped with.
-        Bootstrap.refreshNotifyScriptIfNeeded()
+        // Repair it here, while we know the bundle we shipped with. A rewrite
+        // resets Codex's hook-trust hash (Codex silently skips a changed hook
+        // until re-trusted, and there's no trust API for us to call), so when one
+        // happens and Codex is wired, nudge the user to re-trust via /hooks.
+        if Bootstrap.refreshNotifyScriptIfNeeded() != nil,
+           FileManager.default.fileExists(atPath: "\(NSHomeDirectory())/.codex/hooks.json") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+                self?.postCodexRetrustBanner()
+            }
+        }
 
         let size = Self.loadSavedPanelSize()
         let frame = NSRect(origin: .zero, size: size)
@@ -1959,6 +1967,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         guard let session = sessions.sessions.first(where: { $0.claudeSessionID == id })
         else { return "a session" }
         return SessionLabel.displayName(for: session, fallback: "a session")
+    }
+
+    // Fired once after a notify.sh rewrite when Codex is wired: the rewrite
+    // reset Codex's hook trust, so its sessions won't be captured until the user
+    // re-trusts. We can't do it for them (Codex has no trust API, only /hooks).
+    private func postCodexRetrustBanner() {
+        let content = UNMutableNotificationContent()
+        content.title = "Codex hooks need re-trusting"
+        content.body = "This update changed notify.sh. Run /hooks in Codex to re-trust its hooks, or Codex sessions won't be captured."
+        content.categoryIdentifier = "STOP"
+        let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
     }
 
     private func postContextBanner(tokens: Int, model: String?, sessionLabel: String) {

@@ -172,13 +172,12 @@ enum Bootstrap {
     @discardableResult
     static func refreshNotifyScript(bundled bundledScript: String?,
                                     installedPath: String) -> String? {
-        guard FileManager.default.fileExists(atPath: installedPath),
-              let bundledScript
+        guard let bundledScript,
+              notifyScriptOutdated(bundled: bundledScript, installedPath: installedPath)
         else { return nil }
-        let bundled = notifyVersion(inScript: bundledScript)
         let installed = (try? String(contentsOfFile: installedPath, encoding: .utf8))
             .flatMap { notifyVersion(inScript: $0) }
-        guard needsNotifyRefresh(installed: installed, bundled: bundled) else { return nil }
+        let bundled = notifyVersion(inScript: bundledScript)
         do {
             try writeNotifyScript(bundledScript, to: installedPath)
             log("refreshed notify.sh: \(installed ?? "unstamped") -> \(bundled ?? "unstamped")")
@@ -187,6 +186,35 @@ enum Bootstrap {
             log("failed to refresh notify.sh: \(error.localizedDescription)")
             return nil
         }
+    }
+
+    // Whether the refresh above would actually rewrite the installed script.
+    // Two gates: the stamp must differ (a matching stamp means "same protocol,
+    // leave local tweaks alone"), AND the logic must have genuinely changed. The
+    // second gate is why a stamp-only release (release-please bumps the stamp on
+    // every version) does NOT rewrite: rewriting would reset Codex's hook-trust
+    // hash, silently disabling codex capture until the user re-trusts via /hooks.
+    // Shared with the Settings "hook script stale" footer so the two agree.
+    static func notifyScriptOutdated(bundled bundledScript: String?,
+                                     installedPath: String) -> Bool {
+        guard let bundledScript,
+              let installedScript = try? String(contentsOfFile: installedPath, encoding: .utf8)
+        else { return false }
+        guard needsNotifyRefresh(installed: notifyVersion(inScript: installedScript),
+                                 bundled: notifyVersion(inScript: bundledScript))
+        else { return false }
+        return functionalContent(bundledScript) != functionalContent(installedScript)
+    }
+
+    // notify.sh with the release-please version-stamp line neutralised and
+    // trailing newlines trimmed, so two copies that differ only by their version
+    // (or a stray trailing newline) compare equal.
+    static func functionalContent(_ script: String) -> String {
+        script
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.contains("stack-nudge-version:") ? "" : String($0) }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .newlines)
     }
 
     // Write the hook script and make it executable, swapping it in atomically:
