@@ -192,9 +192,9 @@ struct SettingsView: View {
             // returns to the panel.
             nav.refreshPermissions()
             installedHookVersion = Bootstrap.installedNotifyVersion()
-            hookScriptStale = Bootstrap.needsNotifyRefresh(
-                installed: installedHookVersion,
-                bundled: Bootstrap.bundledNotifyVersion())
+            hookScriptStale = Bootstrap.notifyScriptOutdated(
+                bundled: Bootstrap.bundledNotifyScript(),
+                installedPath: Bootstrap.notifyPath)
         }
     }
 

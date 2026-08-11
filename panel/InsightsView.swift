@@ -13,6 +13,11 @@ import SwiftUI
 struct InsightsView: View {
     @ObservedObject var nav: PanelNav
 
+    // Whether Codex hooks are wired (stack-nudge wrote ~/.codex/hooks.json). Used
+    // only to hint, when Codex is present but absent from the rollup, that its
+    // hooks likely need trusting. Read once on appear (a single fileExists).
+    @State private var codexWired = false
+
     var body: some View {
         _ = nav.handoffsRevision   // re-run when a Stop adds a ledger row
         let summary = nav.insightsSummary()
@@ -35,6 +40,12 @@ struct InsightsView: View {
                         if !summary.topTickets.isEmpty { topTicketsSection(summary) }
                         if !summary.tokensByAgent.isEmpty { agentSection(summary) }
                         if !summary.tokensByModel.isEmpty { modelSection(summary.tokensByModel) }
+                        // Codex present on the machine but nothing captured ⇒ its
+                        // hooks probably aren't trusted (Codex skips untrusted
+                        // hooks and we can't trust them for you).
+                        if codexWired, summary.totalTokens > 0, summary.tokensByAgent["codex"] == nil {
+                            codexHint
+                        }
                     }
                 }
                 .padding(14)
@@ -52,11 +63,23 @@ struct InsightsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
+            codexWired = FileManager.default.fileExists(
+                atPath: "\(NSHomeDirectory())/.codex/hooks.json")
             // Populate the outcome/PR maps the same way the Tickets tab does, so
             // opening Insights first (without Tickets) still resolves shipped state.
             nav.refreshOutcomes?()
             nav.refreshPullRequests?()
         }
+    }
+
+    private var codexHint: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "info.circle").font(.caption2).foregroundStyle(.tertiary)
+            Text("Codex is set up but not captured. Trust its hooks with /hooks in Codex so its sessions land here.")
+                .font(.caption2).foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, 4)
     }
 
     // MARK: - Sections

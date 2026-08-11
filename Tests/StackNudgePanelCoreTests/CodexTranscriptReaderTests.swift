@@ -20,6 +20,41 @@ final class CodexTranscriptReaderTests: XCTestCase {
         return path
     }
 
+    // Build a fake ~/.codex/sessions tree with one rollout for `sessionID` under
+    // YYYY/MM/DD, returning the root to pass to rolloutPath(forSessionID:root:).
+    private func writeSessionsTree(sessionID: String, day: String = "2026/08/10") -> (root: String, path: String) {
+        let root = NSTemporaryDirectory() + "codex-sessions-\(UUID().uuidString)"
+        let dayDir = "\(root)/\(day)"
+        try? FileManager.default.createDirectory(atPath: dayDir, withIntermediateDirectories: true)
+        let path = "\(dayDir)/rollout-2026-08-10T12-05-45-\(sessionID).jsonl"
+        try? "{}\n".write(toFile: path, atomically: true, encoding: .utf8)
+        return (root, path)
+    }
+
+    func test_rolloutPath_findsRolloutBySessionIdSuffix() {
+        let sid = "019feb59-9aec-7480-b180-7e8b1cb64117"
+        let tree = writeSessionsTree(sessionID: sid)
+        XCTAssertEqual(CodexTranscriptReader.rolloutPath(forSessionID: sid, root: tree.root), tree.path)
+    }
+
+    func test_rolloutPath_nilWhenNoMatchOrEmptyId() {
+        let tree = writeSessionsTree(sessionID: "aaaa")
+        XCTAssertNil(CodexTranscriptReader.rolloutPath(forSessionID: "bbbb", root: tree.root))
+        XCTAssertNil(CodexTranscriptReader.rolloutPath(forSessionID: "", root: tree.root))
+    }
+
+    func test_rolloutPath_walksNewestDayFirst() {
+        let sid = "dup"
+        let root = NSTemporaryDirectory() + "codex-sessions-\(UUID().uuidString)"
+        for day in ["2026/08/09", "2026/08/10"] {
+            let dayDir = "\(root)/\(day)"
+            try? FileManager.default.createDirectory(atPath: dayDir, withIntermediateDirectories: true)
+            try? "{}\n".write(toFile: "\(dayDir)/rollout-x-\(sid).jsonl", atomically: true, encoding: .utf8)
+        }
+        XCTAssertEqual(CodexTranscriptReader.rolloutPath(forSessionID: sid, root: root),
+                       "\(root)/2026/08/10/rollout-x-\(sid).jsonl")
+    }
+
     func test_read_usesContextOccupancyFromLatestTokenCount() {
         let path = writeRollout([
             #"{"type":"session_meta","payload":{"id":"s1","model":"gpt-5-codex"}}"#,
