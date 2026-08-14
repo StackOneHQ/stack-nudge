@@ -4,6 +4,13 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.28.1](https://github.com/StackOneHQ/stack-nudge/compare/v1.28.0...v1.28.1) (2026-08-14)
+
+
+### Bug Fixes
+
+* **panel:** quota poll cadence, stale reset times, and unlabelled permission banners ([#155](https://github.com/StackOneHQ/stack-nudge/issues/155)) ([29e2ef5](https://github.com/StackOneHQ/stack-nudge/commit/29e2ef5ca4808721e9450f961c92d65e3125a746))
+
 ## [1.28.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.27.0...v1.28.0) (2026-08-11)
 
 
