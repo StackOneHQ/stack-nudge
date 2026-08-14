@@ -16,11 +16,9 @@ import Foundation
 //   3. the cwd basename, which nobody chose, so callers that need a name
 //      rather than a label ask for `chosenName` and get nil here.
 //
-// Which to call: anything the user reads on screen — the Events row, the
-// Sessions row, the banner title — wants `displayName`, because a banner that
-// omits the project tells you nothing about which session is asking. Only speech
-// wants `chosenName`: the hook already baked the cwd into its phrase, so nil
-// there means "nothing better to say" rather than "no label".
+// Which to call: on-screen surfaces (Events row, Sessions row, banner title) want
+// `displayName`. Only speech wants `chosenName` — the hook already baked the cwd
+// into its phrase, so nil there means "nothing better to say", not "no label".
 //
 // Deliberately excluded: the terminal tab name. On iTerm2 a manual rename,
 // an OSC title escape and the profile name all write the same `autoName`

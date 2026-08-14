@@ -819,17 +819,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             .removeDuplicates()
             .sink { [weak self] _ in self?.applyCompactLayout() }
             .store(in: &cancellables)
-        // Poll cadence follows the usage surface wherever it changes, not only at
-        // the call sites that remember to say so. Settings → "Pin panel" expands
-        // the pill straight from PanelNav, and the hotkey collapse and focus-loss
-        // collapse both flip these flags without going through showPanel/
-        // hidePanel — each of those otherwise left the poller on the wrong
-        // cadence, and the pin case reproduced the original stale-on-open bug via
-        // a different door. Deferred one turn so the @Published value has settled
-        // before usageSurfaceDidChange reads it back.
+        // Cadence follows these flags wherever they flip, not just at the call
+        // sites that remember to say so — Settings → "Pin panel" expands the pill
+        // straight from PanelNav, and the hotkey and focus-loss collapses go
+        // through neither showPanel nor hidePanel. Deferred a turn so the
+        // @Published value has settled before usageSurfaceDidChange reads it back.
         Publishers.Merge(nav.$compactMode.dropFirst(), nav.$compactExpanded.dropFirst())
-            .sink { [weak self] _ in
-                DispatchQueue.main.async { self?.usageSurfaceDidChange() }
+            .sink { _ in
+                DispatchQueue.main.async { [weak self] in self?.usageSurfaceDidChange() }
             }
             .store(in: &cancellables)
         nav.$compactCorner
@@ -1091,8 +1088,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // applies layout synchronously (so the panel is resized before SwiftUI
     // re-renders the full content into the still-compact frame), then
     // brings the window forward.
-    // No usageSurfaceDidChange() here — the $compactExpanded subscription covers
-    // every flip of this flag, including the ones PanelNav makes directly.
+    // Cadence follows via the $compactExpanded subscription.
     private func expandFromCompact() {
         nav.compactExpanded = true
         applyCompactLayout()
@@ -1299,17 +1295,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         scheduleNextQuotaPoll()
     }
 
-    // In compact mode the widget pill IS the panel window: applyCompactLayout()
-    // ends with orderFront and hidePanel() only collapses it, so panel.isVisible
-    // never goes false. Keying the cadence off that alone pinned every widget
-    // user to the 60s visible interval and made Settings → Poll frequency a
-    // no-op — ~1,440 `claude --print /usage` spawns a day against 288 at the
-    // default, which is enough to earn the CLI's own rate limiting. A collapsed
-    // pill is a background surface; its countdown re-renders off other published
-    // state, so a slower probe doesn't freeze it.
-    //
-    // Static and parameterised because PanelController is AppKit-bound and can't
-    // be reached from the test target.
+    // In compact mode the pill IS the panel window and is never ordered out, so
+    // `panel.isVisible` alone pinned every widget user to the 60s interval and
+    // made Settings → Poll frequency a no-op. A collapsed pill counts as
+    // background. Static so the test target can reach it.
     static func quotaPollInterval(visible: Bool,
                                   compactMode: Bool,
                                   compactExpanded: Bool,
@@ -1333,17 +1322,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
     }
 
-    // Called whenever the usage surface is shown or hidden. Without this the
-    // cadence only changed on the *next* tick, so summoning the panel could show
-    // data a full hidden interval old and leave it that way for another one.
+    // Re-times the poller when the usage surface appears or goes away, and syncs
+    // on open. Without it the cadence only changed on the next tick, so summoning
+    // the panel could show data a full hidden interval old.
     private func usageSurfaceDidChange() {
         let showingUsage = panel.isVisible && (!nav.compactMode || nav.compactExpanded)
-        // `quotaSyncing` guards the case where two entry points fire in the same
-        // run loop pass: the probe is async, so quotaLastUpdated hasn't moved yet
-        // and both would see the same stale timestamp.
-        // Claude's own timestamp, not the shared one: Codex and Antigravity are
-        // local reads that succeed every tick and would otherwise mask a stale or
-        // failing Claude probe behind a fresh-looking `quotaLastUpdated`.
+        // Claude's own timestamp, not the shared one — Codex and Antigravity are
+        // local reads that succeed every tick and would mask a failing probe.
+        // `quotaSyncing` covers two entry points firing in the same run loop pass,
+        // before an in-flight probe has moved the timestamp.
         if showingUsage, !nav.quotaSyncing {
             let age = nav.quotaClaudeLastUpdated.map { Date().timeIntervalSince($0) }
             if age == nil || age! >= Self.quotaPollVisibleInterval {
@@ -2187,19 +2174,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // for the initial fire and by the snooze timer for re-fires. Request
     // identifier is a fresh UUID each time (macOS replaces by identifier);
     // event.id stays in userInfo so click handlers can find the source.
-    // Banner title with the session label appended: a chosen name when one
-    // exists, else the project folder.
-    //
-    // Two prior rounds of this were too narrow. It first joined event to session
-    // on Claude's session UUID alone, so a rename never reached the banner for any
-    // other agent, and it accepted Claude Code's auto-derived name — which 2.1+
-    // gives every session, so every banner read "Claude Code — stackone-89"
-    // whether or not anything had been renamed. Routing through SessionLabel fixed
-    // both, but via `chosenName`, which is nil unless a human renamed the session
-    // — so the common case (nobody renamed anything) posted a bare "Claude Code"
-    // with no clue which project was asking. The banner is the one surface read
-    // with no surrounding context, so it takes `displayName`, the same label the
-    // Events row shows.
+    // Chosen name when one exists, else the project folder. Was `chosenName`,
+    // which is nil unless a human renamed the session — so the common case posted
+    // a bare "Claude Code" with no clue which project was asking. The banner is
+    // read with no surrounding context, so it takes the same label as the Events
+    // row.
     private func bannerTitle(for event: NudgeEvent) -> String {
         guard let label = SessionLabel.displayName(for: event,
                                                    in: sessions.sessions,
@@ -3200,8 +3179,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
         panel.orderOut(nil)
         NSApp.hide(nil)
-        // Explicit here: the non-compact path changes visibility without touching
-        // the compact flags, so no subscription fires.
+        // Explicit: this path changes visibility without touching the flags.
         usageSurfaceDidChange()
     }
 

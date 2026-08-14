@@ -2,11 +2,9 @@ import XCTest
 
 @testable import StackNudgePanelCore
 
-// QuotaReset is the single place that decides how long is left on a quota tier.
-// The behaviour that matters most is the boundary: a deadline that has already
-// passed must read as "unknown" on every surface, because the only way to see one
-// is a snapshot the probe couldn't refresh. The widget's old formatter floored at
-// "1m", so a held-over snapshot showed a live one-minute countdown indefinitely.
+// The boundary is what matters: a deadline that has passed must read as unknown
+// on every surface. The widget's old formatter floored at "1m", so a held-over
+// snapshot showed a live one-minute countdown indefinitely.
 final class QuotaResetTests: XCTestCase {
 
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
@@ -29,8 +27,7 @@ final class QuotaResetTests: XCTestCase {
         XCTAssertEqual(QuotaReset.shortLabel(until: ahead(14 * 60), now: now), "14m")
     }
 
-    // Under a minute still rounds up to "1m" — it really is about to reset, which
-    // is the one case the old floor got right.
+    // Sub-minute rounds up to "1m" — it really is about to reset.
     func testShortLabelSubMinuteRoundsUp() {
         XCTAssertEqual(QuotaReset.shortLabel(until: ahead(20), now: now), "1m")
     }

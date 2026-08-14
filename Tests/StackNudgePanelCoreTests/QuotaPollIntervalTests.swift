@@ -2,11 +2,9 @@ import XCTest
 
 @testable import StackNudgePanelCore
 
-// The poll cadence used to key off `panel.isVisible` alone. In compact mode the
-// widget pill IS the panel window and is never ordered out, so that stayed true
-// forever: every widget user polled the `claude` CLI every 60 seconds and
-// Settings → Poll frequency did nothing. These pin the collapsed-widget case,
-// which is the one that regressed.
+// Cadence used to key off `panel.isVisible` alone, but the widget pill IS the
+// panel window and is never ordered out — so every widget user polled every 60s
+// and Settings → Poll frequency did nothing. The collapsed case is the regression.
 final class QuotaPollIntervalTests: XCTestCase {
 
     private let hidden: TimeInterval = 300  // 5 min, the shipped default

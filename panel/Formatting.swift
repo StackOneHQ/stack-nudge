@@ -26,27 +26,19 @@ enum ModelName {
     }
 }
 
-// How long until a quota tier resets, rendered for whichever surface is asking.
+// How long until a quota tier resets.
 //
-// Every accessor returns nil once the deadline has passed. That guard lives here
-// rather than at each call site because it used to live at none of them: the
-// widget's countdown floored at "1m" (`max(1, seconds / 60)`), so an expired or
-// held-over snapshot read as a live one-minute countdown forever, and the Usage
-// tab rendered "Resets 11 months ago" verbatim. A past reset means the snapshot
-// is stale, not that the reset is imminent, so the honest answer is "we don't
-// know" and callers fall back to their own empty state.
-//
-// `now` is injected so the boundary behaviour is testable without freezing the
-// clock.
+// Every accessor returns nil once the deadline has passed. A past reset means the
+// snapshot is stale, not that the reset is imminent — the widget's old formatter
+// floored at "1m" and showed a held-over snapshot as a live countdown forever.
 enum QuotaReset {
 
-    // Seconds remaining, or nil once the deadline has passed.
     static func remaining(until date: Date, now: Date = Date()) -> TimeInterval? {
         let seconds = date.timeIntervalSince(now)
         return seconds > 0 ? seconds : nil
     }
 
-    // Compact countdown for the widget pill: "2h24m", "2h", "14m".
+    // Widget pill: "2h24m", "2h", "14m".
     static func shortLabel(until date: Date, now: Date = Date()) -> String? {
         guard let remaining = remaining(until: date, now: now) else { return nil }
         let seconds = Int(remaining)
@@ -55,12 +47,10 @@ enum QuotaReset {
             let minutes = (seconds % 3600) / 60
             return minutes > 0 ? "\(hours)h\(minutes)m" : "\(hours)h"
         }
-        // Anything under a minute still reads as "1m" rather than "0m" — it is
-        // genuinely about to reset, which is the one case the old floor got right.
-        return "\(max(1, seconds / 60))m"
+        return "\(max(1, seconds / 60))m"  // sub-minute is genuinely about to reset
     }
 
-    // Prose form for the Usage tab and banners: "in 2 hours".
+    // Usage tab and banners: "in 2 hours".
     static func relativeLabel(until date: Date, now: Date = Date()) -> String? {
         guard remaining(until: date, now: now) != nil else { return nil }
         return RelativeTime.string(date, style: .full, relativeTo: now)
@@ -81,9 +71,8 @@ enum RelativeTime {
         return formatter
     }
 
-    // `relativeTo` defaults to now; callers that inject a clock (QuotaReset, and
-    // tests through it) pass their own so the rendered string agrees with the
-    // decision that produced it.
+    // Callers that inject a clock pass `relativeTo` so the rendered string agrees
+    // with the decision that produced it.
     static func string(_ date: Date,
                        style: RelativeDateTimeFormatter.UnitsStyle = .abbreviated,
                        relativeTo reference: Date = Date()) -> String {

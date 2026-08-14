@@ -268,16 +268,12 @@ final class PanelNav: ObservableObject {
     // poller in PanelController. nil before the first probe completes, or
     // when the probe failed (no `claude` on PATH, not signed in, parse error).
     @Published var quota:            QuotaSnapshot?
-    // Freshness of *any* client's quota — Claude, Codex and Antigravity all
-    // stamp it — so the Usage tab's "Updated Xm ago" describes the pane as a
-    // whole.
+    // Any client's quota — all three stamp it — so "Updated Xm ago" describes the
+    // pane as a whole.
     @Published var quotaLastUpdated: Date?
-    // Freshness of the Claude probe alone. Separate because Codex and
-    // Antigravity are cheap local reads that succeed on every tick, so they keep
-    // `quotaLastUpdated` looking fresh even while the `claude` shell-out is
-    // failing or rate-limited. Gating the sync-on-open check on the shared
-    // timestamp let a Codex user open the panel to stale Claude bars and get no
-    // re-probe — the exact refresh that check exists to guarantee.
+    // The Claude probe alone. Codex and Antigravity are local reads that succeed
+    // on every tick, so they keep the shared timestamp looking fresh while the
+    // `claude` shell-out is failing; the sync-on-open check needs this one.
     @Published var quotaClaudeLastUpdated: Date?
     // True while a probe is in-flight. Set by PanelController around the
     // fetch call so the UI can swap the footer status to "Syncing…".

@@ -478,9 +478,7 @@ struct UsageView: View {
             }
             ProgressView(value: min(tier.utilization, 100), total: 100)
                 .tint(barColor(tier.utilization))
-            // Hidden rather than rendered as "Resets 11 months ago" when the
-            // deadline has passed — that only happens on a stale snapshot, and a
-            // silent row beats a confidently wrong one.
+            // Hidden rather than "Resets 11 months ago" on a stale snapshot.
             if let resets = tier.resetsAt, let label = QuotaReset.relativeLabel(until: resets) {
                 Text("Resets \(label)")
                     .font(.caption2)

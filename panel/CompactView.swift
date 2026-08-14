@@ -202,9 +202,8 @@ struct CompactView: View {
         .animation(.easeInOut(duration: 0.18), value: show)
     }
 
-    // Worst-case countdown footprint. QuotaReset.shortLabel emits "Xh", "XhYm",
-    // or "Ym"; the 5h quota window caps the leading digit, so "0h00m" covers
-    // every shape (digits are monospaced; 'h'/'m' are the widest letters).
+    // Worst-case countdown footprint: shortLabel emits "Xh"/"XhYm"/"Ym" and the
+    // 5h window caps the leading digit, so "0h00m" covers every shape.
     private var countdownSizer: some View {
         Text("0h00m")
             .font(.system(size: 9, weight: .medium).monospacedDigit())

@@ -151,10 +151,8 @@ final class ClaudeCliQuotaProbeTests: XCTestCase {
     // MARK: - parseResetsAt
 
     func testParseResetsAtWithTimezone() {
-        // 6:50pm in Europe/London. `now` is pinned near the reset: these used to
-        // pass no clock and lean on the real date, which only worked because they
-        // assert components rather than the year — and stopped being safe once
-        // the parser started rejecting implausibly distant results.
+        // `now` pinned near the reset: these used to lean on the real clock, which
+        // stopped being safe once the parser began rejecting distant results.
         let parsed = ClaudeCliQuotaProbe.parseResetsAt(
             "Jun 30 at 6:50pm (Europe/London)",
             now: Self.london(year: 2026, month: 6, day: 29, hour: 12))
@@ -199,10 +197,8 @@ final class ClaudeCliQuotaProbeTests: XCTestCase {
         XCTAssertGreaterThan(parsed!, now)
     }
 
-    // The mirror direction: a late-December deadline read just after midnight on
-    // Jan 1 must resolve to the year that just ended, not the one ahead. Without
-    // this the `year - 1` candidate is unpinned — deleting it from the search
-    // leaves every other test in this file green while a December reset reads a
+    // Mirror direction. Without this the `year - 1` candidate is unpinned:
+    // deleting it leaves every other test green while a December reset reads a
     // year into the future.
     func testParseResetsAtRollsBackAYearJustAfterNewYear() {
         let now = Self.london(year: 2027, month: 1, day: 1, hour: 0)
@@ -212,22 +208,17 @@ final class ClaudeCliQuotaProbeTests: XCTestCase {
         XCTAssertLessThan(parsed!, now)
     }
 
-    // "Nearest of the candidates that parsed" is only sound while the correct
-    // year parses. If it ever doesn't, a neighbour wins by ~365 days, and a
-    // future-dated wrong answer isn't caught by the past-guard downstream — the
-    // Usage tab would state "Resets in 12 months" as fact. Anything outside the
-    // plausible window is dropped instead.
+    // A neighbour winning by ~365 days is future-dated, so the past-guard
+    // downstream never catches it — the Usage tab would state "Resets in 12
+    // months" as fact. Out-of-window results are dropped instead.
     func testParseResetsAtRejectsImplausiblyDistantResult() {
-        // A wall clock that exists in no year adjacent to `now` would be the real
-        // route in; simulate the outcome directly by reading a mid-year date from
-        // a `now` half a year away, so every candidate is months out.
+        // Every candidate is months out from this `now`.
         let now = Self.london(year: 2026, month: 1, day: 15, hour: 12)
         XCTAssertNil(ClaudeCliQuotaProbe.parseResetsAt("Jul 15 at 3am (Europe/London)", now: now))
     }
 
-    // ...while a reset inside the plausible window still resolves, including one
-    // that has already passed (a held-over snapshot), which the display layer
-    // rather than the parser is responsible for hiding.
+    // An elapsed reset inside the window still parses — hiding it is the display
+    // layer's job, not the parser's.
     func testParseResetsAtKeepsRecentlyElapsedReset() {
         let now = Self.london(year: 2026, month: 6, day: 10, hour: 12)
         let parsed = ClaudeCliQuotaProbe.parseResetsAt("Jun 3 at 3am (Europe/London)", now: now)
