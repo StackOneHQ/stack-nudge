@@ -819,6 +819,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             .removeDuplicates()
             .sink { [weak self] _ in self?.applyCompactLayout() }
             .store(in: &cancellables)
+        // Poll cadence follows the usage surface wherever it changes, not only at
+        // the call sites that remember to say so. Settings → "Pin panel" expands
+        // the pill straight from PanelNav, and the hotkey collapse and focus-loss
+        // collapse both flip these flags without going through showPanel/
+        // hidePanel — each of those otherwise left the poller on the wrong
+        // cadence, and the pin case reproduced the original stale-on-open bug via
+        // a different door. Deferred one turn so the @Published value has settled
+        // before usageSurfaceDidChange reads it back.
+        Publishers.Merge(nav.$compactMode.dropFirst(), nav.$compactExpanded.dropFirst())
+            .sink { [weak self] _ in
+                DispatchQueue.main.async { self?.usageSurfaceDidChange() }
+            }
+            .store(in: &cancellables)
         nav.$compactCorner
             .removeDuplicates()
             .dropFirst()
@@ -1078,10 +1091,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // applies layout synchronously (so the panel is resized before SwiftUI
     // re-renders the full content into the still-compact frame), then
     // brings the window forward.
+    // No usageSurfaceDidChange() here — the $compactExpanded subscription covers
+    // every flip of this flag, including the ones PanelNav makes directly.
     private func expandFromCompact() {
         nav.compactExpanded = true
         applyCompactLayout()
-        usageSurfaceDidChange()
     }
 
     // Applies the user-configured widget opacity to the window. Only takes
@@ -1327,8 +1341,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // `quotaSyncing` guards the case where two entry points fire in the same
         // run loop pass: the probe is async, so quotaLastUpdated hasn't moved yet
         // and both would see the same stale timestamp.
+        // Claude's own timestamp, not the shared one: Codex and Antigravity are
+        // local reads that succeed every tick and would otherwise mask a stale or
+        // failing Claude probe behind a fresh-looking `quotaLastUpdated`.
         if showingUsage, !nav.quotaSyncing {
-            let age = nav.quotaLastUpdated.map { Date().timeIntervalSince($0) }
+            let age = nav.quotaClaudeLastUpdated.map { Date().timeIntervalSince($0) }
             if age == nil || age! >= Self.quotaPollVisibleInterval {
                 runQuotaProbe()
             }
@@ -1352,6 +1369,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self.nav.quota = snapshot
                 self.nav.quotaError = nil
                 self.nav.quotaLastUpdated = Date()
+                self.nav.quotaClaudeLastUpdated = Date()
                 self.evaluateQuotaThresholds(snapshot)
             } else if self.claudeCliQuotaProbe.isRateLimited {
                 // Soft-fail: hold any prior snapshot. On a cold first probe
@@ -1367,6 +1385,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 // state instead of rendering old bars as if they were current.
                 self.nav.quota = nil
                 self.nav.quotaLastUpdated = nil
+                self.nav.quotaClaudeLastUpdated = nil
                 self.nav.quotaError = "Claude usage unavailable — run `claude /usage` to check your session."
             }
         }
@@ -3175,13 +3194,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         if nav.compactMode {
             if nav.compactExpanded {
                 nav.compactExpanded = false
-                applyCompactLayout()
-                usageSurfaceDidChange()
+                applyCompactLayout()  // cadence follows via the $compactExpanded sink
             }
             return
         }
         panel.orderOut(nil)
         NSApp.hide(nil)
+        // Explicit here: the non-compact path changes visibility without touching
+        // the compact flags, so no subscription fires.
         usageSurfaceDidChange()
     }
 

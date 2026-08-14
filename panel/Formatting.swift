@@ -63,7 +63,7 @@ enum QuotaReset {
     // Prose form for the Usage tab and banners: "in 2 hours".
     static func relativeLabel(until date: Date, now: Date = Date()) -> String? {
         guard remaining(until: date, now: now) != nil else { return nil }
-        return RelativeTime.string(date, style: .full)
+        return RelativeTime.string(date, style: .full, relativeTo: now)
     }
 }
 
@@ -81,14 +81,18 @@ enum RelativeTime {
         return formatter
     }
 
+    // `relativeTo` defaults to now; callers that inject a clock (QuotaReset, and
+    // tests through it) pass their own so the rendered string agrees with the
+    // decision that produced it.
     static func string(_ date: Date,
-                       style: RelativeDateTimeFormatter.UnitsStyle = .abbreviated) -> String {
+                       style: RelativeDateTimeFormatter.UnitsStyle = .abbreviated,
+                       relativeTo reference: Date = Date()) -> String {
         let formatter: RelativeDateTimeFormatter
         switch style {
         case .short: formatter = shortStyle
         case .full:  formatter = full
         default:     formatter = abbreviated
         }
-        return formatter.localizedString(for: date, relativeTo: Date())
+        return formatter.localizedString(for: date, relativeTo: reference)
     }
 }

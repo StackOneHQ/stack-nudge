@@ -205,6 +205,16 @@ final class ClaudeCliQuotaProbe {
     // Usage tab, a stuck "1m" on the widget. So try the neighbouring years too
     // and keep whichever candidate lands nearest `now`, which handles the Dec→Jan
     // and Jan→Dec directions without special-casing either.
+    //
+    // The candidate is then range-checked, because "nearest of the ones that
+    // parsed" is only sound while the correct year actually parses. If it ever
+    // doesn't, a neighbouring year wins by default and lands ~365 days out — and
+    // a future-dated wrong answer isn't caught by the past-guard downstream, so
+    // the Usage tab would state "Resets in 12 months" with total confidence. The
+    // widest real window is 7 days, so anything beyond `plausibleWindow` means we
+    // guessed wrong and nil (no reset line) is the honest answer.
+    static let plausibleWindow: TimeInterval = 60 * 24 * 3600  // 60 days
+
     static func parseResetsAt(_ raw: String, now: Date = Date()) -> Date? {
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
         var dateTimeStr = trimmed
@@ -237,6 +247,7 @@ final class ClaudeCliQuotaProbe {
                 break
             }
         }
+        guard let best, abs(best.timeIntervalSince(now)) <= plausibleWindow else { return nil }
         return best
     }
 }

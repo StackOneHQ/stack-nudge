@@ -58,8 +58,14 @@ permission_context() {
   [[ -z "$tool_name" ]] && return
   case "$tool_name" in
     Bash)
-      printf '%s' "$HOOK_JSON" | jq -r '.tool_input.command // empty' 2>/dev/null \
-        | head -1 | cut -c1-60
+      # Truncation happens in jq, which counts characters. `cut -c` counts bytes
+      # under a non-UTF-8 locale (and hooks inherit whatever environment spawned
+      # them — this script never forces one), so it could slice a multibyte
+      # character in half. The stray byte survives python3's surrogateescape into
+      # the socket JSON, and EventListener then fails to decode the line and drops
+      # the whole event silently: no banner, no panel row, no log.
+      printf '%s' "$HOOK_JSON" | jq -r '(.tool_input.command // empty) | .[0:60]' 2>/dev/null \
+        | head -1
       ;;
     Write|Edit|MultiEdit)
       local file
@@ -82,9 +88,12 @@ permission_context() {
       # The agent is asking the user something directly. Without this case the
       # banner body read a bare "AskUserQuestion" — the tool name and nothing
       # else. Surface the first question instead, trimmed like the Bash case.
+      # Truncated in jq (character-wise) rather than `cut -c` (byte-wise under a
+      # non-UTF-8 locale) — see the Bash case above for why a split multibyte
+      # character costs the entire notification.
       local question
       question=$(printf '%s' "$HOOK_JSON" \
-        | jq -r '.tool_input.questions[0].question // empty' 2>/dev/null | head -1 | cut -c1-60)
+        | jq -r '(.tool_input.questions[0].question // empty) | .[0:60]' 2>/dev/null | head -1)
       if [[ -n "$question" ]]; then echo "$question"; else echo "Needs your input"; fi
       ;;
     *)
