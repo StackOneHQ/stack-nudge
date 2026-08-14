@@ -182,8 +182,9 @@ struct CompactView: View {
                 .frame(width: 0, height: 0)
             if show {
                 hoverLegend
-            } else if let reset = nav.quota?.fiveHour?.resetsAt {
-                Text(Self.shortDuration(until: reset))
+            } else if let reset = nav.quota?.fiveHour?.resetsAt,
+                      let countdown = QuotaReset.shortLabel(until: reset) {
+                Text(countdown)
                     .font(.system(size: 9, weight: .medium).monospacedDigit())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -201,9 +202,8 @@ struct CompactView: View {
         .animation(.easeInOut(duration: 0.18), value: show)
     }
 
-    // Worst-case countdown footprint. shortDuration emits "Xh", "XhYm", or
-    // "Ym"; the 5h quota window caps the leading digit, so "0h00m" covers
-    // every shape (digits are monospaced; 'h'/'m' are the widest letters).
+    // Worst-case countdown footprint: shortLabel emits "Xh"/"XhYm"/"Ym" and the
+    // 5h window caps the leading digit, so "0h00m" covers every shape.
     private var countdownSizer: some View {
         Text("0h00m")
             .font(.system(size: 9, weight: .medium).monospacedDigit())
@@ -478,16 +478,6 @@ struct CompactView: View {
         case .stop:       return "checkmark.circle.fill"
         case .other:      return "bell.fill"
         }
-    }
-
-    private static func shortDuration(until date: Date) -> String {
-        let s = max(0, Int(date.timeIntervalSinceNow))
-        if s >= 3600 {
-            let h = s / 3600
-            let m = (s % 3600) / 60
-            return m > 0 ? "\(h)h\(m)m" : "\(h)h"
-        }
-        return "\(max(1, s / 60))m"
     }
 }
 

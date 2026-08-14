@@ -151,8 +151,11 @@ final class ClaudeCliQuotaProbeTests: XCTestCase {
     // MARK: - parseResetsAt
 
     func testParseResetsAtWithTimezone() {
-        // 6:50pm in Europe/London on a date in the current year.
-        let parsed = ClaudeCliQuotaProbe.parseResetsAt("Jun 30 at 6:50pm (Europe/London)")
+        // `now` pinned near the reset: these used to lean on the real clock, which
+        // stopped being safe once the parser began rejecting distant results.
+        let parsed = ClaudeCliQuotaProbe.parseResetsAt(
+            "Jun 30 at 6:50pm (Europe/London)",
+            now: Self.london(year: 2026, month: 6, day: 29, hour: 12))
         XCTAssertNotNil(parsed)
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "Europe/London")!
@@ -165,7 +168,9 @@ final class ClaudeCliQuotaProbeTests: XCTestCase {
 
     func testParseResetsAtBareHour() {
         // "3am" — no minutes — uses the alternate format.
-        let parsed = ClaudeCliQuotaProbe.parseResetsAt("Jul 4 at 3am (Europe/London)")
+        let parsed = ClaudeCliQuotaProbe.parseResetsAt(
+            "Jul 4 at 3am (Europe/London)",
+            now: Self.london(year: 2026, month: 7, day: 2, hour: 12))
         XCTAssertNotNil(parsed)
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "Europe/London")!
@@ -179,6 +184,67 @@ final class ClaudeCliQuotaProbeTests: XCTestCase {
     func testParseResetsAtMalformed() {
         XCTAssertNil(ClaudeCliQuotaProbe.parseResetsAt("nonsense"))
         XCTAssertNil(ClaudeCliQuotaProbe.parseResetsAt(""))
+    }
+
+    // The CLI omits the year, so a January reset read on New Year's Eve used to
+    // splice in the *current* year and land ~12 months in the past.
+    func testParseResetsAtRollsIntoNextYearAcrossNewYear() {
+        let now = Self.london(year: 2026, month: 12, day: 31, hour: 23)
+        let parsed = ClaudeCliQuotaProbe.parseResetsAt("Jan 1 at 3am (Europe/London)", now: now)
+        XCTAssertNotNil(parsed)
+        XCTAssertEqual(Self.londonCalendar.component(.year, from: parsed!), 2027)
+        // And it must be ahead of now, not behind it.
+        XCTAssertGreaterThan(parsed!, now)
+    }
+
+    // Mirror direction. Without this the `year - 1` candidate is unpinned:
+    // deleting it leaves every other test green while a December reset reads a
+    // year into the future.
+    func testParseResetsAtRollsBackAYearJustAfterNewYear() {
+        let now = Self.london(year: 2027, month: 1, day: 1, hour: 0)
+        let parsed = ClaudeCliQuotaProbe.parseResetsAt("Dec 31 at 11pm (Europe/London)", now: now)
+        XCTAssertNotNil(parsed)
+        XCTAssertEqual(Self.londonCalendar.component(.year, from: parsed!), 2026)
+        XCTAssertLessThan(parsed!, now)
+    }
+
+    // A neighbour winning by ~365 days is future-dated, so the past-guard
+    // downstream never catches it — the Usage tab would state "Resets in 12
+    // months" as fact. Out-of-window results are dropped instead.
+    func testParseResetsAtRejectsImplausiblyDistantResult() {
+        // Every candidate is months out from this `now`.
+        let now = Self.london(year: 2026, month: 1, day: 15, hour: 12)
+        XCTAssertNil(ClaudeCliQuotaProbe.parseResetsAt("Jul 15 at 3am (Europe/London)", now: now))
+    }
+
+    // An elapsed reset inside the window still parses — hiding it is the display
+    // layer's job, not the parser's.
+    func testParseResetsAtKeepsRecentlyElapsedReset() {
+        let now = Self.london(year: 2026, month: 6, day: 10, hour: 12)
+        let parsed = ClaudeCliQuotaProbe.parseResetsAt("Jun 3 at 3am (Europe/London)", now: now)
+        XCTAssertNotNil(parsed)
+        XCTAssertLessThan(parsed!, now)
+    }
+
+    // The ordinary case must keep resolving to the year it's read in.
+    func testParseResetsAtKeepsCurrentYearMidYear() {
+        let now = Self.london(year: 2026, month: 6, day: 1, hour: 12)
+        let parsed = ClaudeCliQuotaProbe.parseResetsAt("Jun 3 at 3am (Europe/London)", now: now)
+        XCTAssertNotNil(parsed)
+        XCTAssertEqual(Self.londonCalendar.component(.year, from: parsed!), 2026)
+        XCTAssertGreaterThan(parsed!, now)
+    }
+
+    private static let londonCalendar: Calendar = {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "Europe/London")!
+        return cal
+    }()
+
+    private static func london(year: Int, month: Int, day: Int, hour: Int) -> Date {
+        var comps = DateComponents()
+        comps.year = year; comps.month = month; comps.day = day; comps.hour = hour
+        return londonCalendar.date(from: comps)!
     }
 
     // MARK: - Session cleanup

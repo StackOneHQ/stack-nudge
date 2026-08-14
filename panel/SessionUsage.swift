@@ -478,8 +478,9 @@ struct UsageView: View {
             }
             ProgressView(value: min(tier.utilization, 100), total: 100)
                 .tint(barColor(tier.utilization))
-            if let resets = tier.resetsAt {
-                Text("Resets \(RelativeTime.string(resets, style: .full))")
+            // Hidden rather than "Resets 11 months ago" on a stale snapshot.
+            if let resets = tier.resetsAt, let label = QuotaReset.relativeLabel(until: resets) {
+                Text("Resets \(label)")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }

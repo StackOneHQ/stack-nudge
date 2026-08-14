@@ -268,7 +268,13 @@ final class PanelNav: ObservableObject {
     // poller in PanelController. nil before the first probe completes, or
     // when the probe failed (no `claude` on PATH, not signed in, parse error).
     @Published var quota:            QuotaSnapshot?
+    // Any client's quota — all three stamp it — so "Updated Xm ago" describes the
+    // pane as a whole.
     @Published var quotaLastUpdated: Date?
+    // The Claude probe alone. Codex and Antigravity are local reads that succeed
+    // on every tick, so they keep the shared timestamp looking fresh while the
+    // `claude` shell-out is failing; the sync-on-open check needs this one.
+    @Published var quotaClaudeLastUpdated: Date?
     // True while a probe is in-flight. Set by PanelController around the
     // fetch call so the UI can swap the footer status to "Syncing…".
     @Published var quotaSyncing:     Bool = false
@@ -1221,6 +1227,7 @@ final class PanelNav: ObservableObject {
         if !quotaTrackingEnabled {
             quota = nil
             quotaLastUpdated = nil
+            quotaClaudeLastUpdated = nil
             quotaError = nil
         }
     }

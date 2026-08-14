@@ -58,8 +58,12 @@ permission_context() {
   [[ -z "$tool_name" ]] && return
   case "$tool_name" in
     Bash)
-      printf '%s' "$HOOK_JSON" | jq -r '.tool_input.command // empty' 2>/dev/null \
-        | head -1 | cut -c1-60
+      # Truncate in jq (characters), not `cut -c` (bytes under a non-UTF-8 locale,
+      # which hooks can inherit). A half-sliced multibyte character survives
+      # python3's surrogateescape into the socket JSON, where EventListener fails
+      # to decode the line and drops the whole event silently.
+      printf '%s' "$HOOK_JSON" | jq -r '(.tool_input.command // empty) | .[0:60]' 2>/dev/null \
+        | head -1
       ;;
     Write|Edit|MultiEdit)
       local file
@@ -77,6 +81,14 @@ permission_context() {
         | grep -m1 -oE '^\*\*\* (Add|Update|Delete) File: .+' \
         | sed -E 's/^.*File: //; s|.*/||')
       if [[ -n "$file" ]]; then echo "apply_patch: ${file}"; else echo "apply_patch"; fi
+      ;;
+    AskUserQuestion)
+      # Without this the body read a bare "AskUserQuestion". Same jq truncation as
+      # the Bash case above.
+      local question
+      question=$(printf '%s' "$HOOK_JSON" \
+        | jq -r '(.tool_input.questions[0].question // empty) | .[0:60]' 2>/dev/null | head -1)
+      if [[ -n "$question" ]]; then echo "$question"; else echo "Needs your input"; fi
       ;;
     *)
       echo "$tool_name"
@@ -110,6 +122,14 @@ voice_permission_context() {
         | grep -m1 -oE '^\*\*\* (Add|Update|Delete) File: .+' \
         | sed -E 's/^.*File: //; s|.*/||')
       if [[ -n "$file" ]]; then echo "apply_patch: ${file}"; else echo "Edit needs approval"; fi
+      ;;
+    AskUserQuestion)
+      # Speak the short header ("Widget cadence") rather than the full question,
+      # which runs to a paragraph and doesn't read aloud well.
+      local header
+      header=$(printf '%s' "$HOOK_JSON" \
+        | jq -r '.tool_input.questions[0].header // empty' 2>/dev/null | head -1)
+      if [[ -n "$header" ]]; then echo "${header} needs your answer"; else echo "A question needs your answer"; fi
       ;;
     *)
       echo "$tool_name"
