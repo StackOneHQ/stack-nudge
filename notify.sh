@@ -78,6 +78,15 @@ permission_context() {
         | sed -E 's/^.*File: //; s|.*/||')
       if [[ -n "$file" ]]; then echo "apply_patch: ${file}"; else echo "apply_patch"; fi
       ;;
+    AskUserQuestion)
+      # The agent is asking the user something directly. Without this case the
+      # banner body read a bare "AskUserQuestion" — the tool name and nothing
+      # else. Surface the first question instead, trimmed like the Bash case.
+      local question
+      question=$(printf '%s' "$HOOK_JSON" \
+        | jq -r '.tool_input.questions[0].question // empty' 2>/dev/null | head -1 | cut -c1-60)
+      if [[ -n "$question" ]]; then echo "$question"; else echo "Needs your input"; fi
+      ;;
     *)
       echo "$tool_name"
       ;;
@@ -110,6 +119,14 @@ voice_permission_context() {
         | grep -m1 -oE '^\*\*\* (Add|Update|Delete) File: .+' \
         | sed -E 's/^.*File: //; s|.*/||')
       if [[ -n "$file" ]]; then echo "apply_patch: ${file}"; else echo "Edit needs approval"; fi
+      ;;
+    AskUserQuestion)
+      # Speak the short header ("Widget cadence") rather than the full question,
+      # which runs to a paragraph and doesn't read aloud well.
+      local header
+      header=$(printf '%s' "$HOOK_JSON" \
+        | jq -r '.tool_input.questions[0].header // empty' 2>/dev/null | head -1)
+      if [[ -n "$header" ]]; then echo "${header} needs your answer"; else echo "A question needs your answer"; fi
       ;;
     *)
       echo "$tool_name"

@@ -478,8 +478,11 @@ struct UsageView: View {
             }
             ProgressView(value: min(tier.utilization, 100), total: 100)
                 .tint(barColor(tier.utilization))
-            if let resets = tier.resetsAt {
-                Text("Resets \(RelativeTime.string(resets, style: .full))")
+            // Hidden rather than rendered as "Resets 11 months ago" when the
+            // deadline has passed — that only happens on a stale snapshot, and a
+            // silent row beats a confidently wrong one.
+            if let resets = tier.resetsAt, let label = QuotaReset.relativeLabel(until: resets) {
+                Text("Resets \(label)")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }

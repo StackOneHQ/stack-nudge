@@ -181,6 +181,38 @@ final class ClaudeCliQuotaProbeTests: XCTestCase {
         XCTAssertNil(ClaudeCliQuotaProbe.parseResetsAt(""))
     }
 
+    // The CLI omits the year, so a January reset read on New Year's Eve used to
+    // splice in the *current* year and land ~12 months in the past.
+    func testParseResetsAtRollsIntoNextYearAcrossNewYear() {
+        let now = Self.london(year: 2026, month: 12, day: 31, hour: 23)
+        let parsed = ClaudeCliQuotaProbe.parseResetsAt("Jan 1 at 3am (Europe/London)", now: now)
+        XCTAssertNotNil(parsed)
+        XCTAssertEqual(Self.londonCalendar.component(.year, from: parsed!), 2027)
+        // And it must be ahead of now, not behind it.
+        XCTAssertGreaterThan(parsed!, now)
+    }
+
+    // The ordinary case must keep resolving to the year it's read in.
+    func testParseResetsAtKeepsCurrentYearMidYear() {
+        let now = Self.london(year: 2026, month: 6, day: 1, hour: 12)
+        let parsed = ClaudeCliQuotaProbe.parseResetsAt("Jun 3 at 3am (Europe/London)", now: now)
+        XCTAssertNotNil(parsed)
+        XCTAssertEqual(Self.londonCalendar.component(.year, from: parsed!), 2026)
+        XCTAssertGreaterThan(parsed!, now)
+    }
+
+    private static let londonCalendar: Calendar = {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "Europe/London")!
+        return cal
+    }()
+
+    private static func london(year: Int, month: Int, day: Int, hour: Int) -> Date {
+        var comps = DateComponents()
+        comps.year = year; comps.month = month; comps.day = day; comps.hour = hour
+        return londonCalendar.date(from: comps)!
+    }
+
     // MARK: - Session cleanup
 
     func testExtractSessionId() {

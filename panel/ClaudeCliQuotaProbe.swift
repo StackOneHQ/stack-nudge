@@ -198,11 +198,14 @@ final class ClaudeCliQuotaProbe {
     }
 
     // Best-effort: "Jun 30 at 6:50pm (Europe/London)" → Date.
-    // The CLI omits the year, so we splice in the current one. If the deadline
-    // is "Jan 2 at 1am" rendered on Dec 31, the parsed date will be ~12 months
-    // in the past — accept the rare wraparound, the UI just shows nil when
-    // resetsAt is in the past (RelativeTime treats negative deltas gracefully).
-    static func parseResetsAt(_ raw: String) -> Date? {
+    //
+    // The CLI omits the year. Splicing in the current one alone broke across New
+    // Year: "Jan 2 at 1am" rendered on Dec 31 parsed ~12 months in the past, and
+    // both surfaces then rendered that as fact — "Resets 11 months ago" in the
+    // Usage tab, a stuck "1m" on the widget. So try the neighbouring years too
+    // and keep whichever candidate lands nearest `now`, which handles the Dec→Jan
+    // and Jan→Dec directions without special-casing either.
+    static func parseResetsAt(_ raw: String, now: Date = Date()) -> Date? {
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
         var dateTimeStr = trimmed
         var tz: TimeZone?
@@ -216,13 +219,24 @@ final class ClaudeCliQuotaProbe {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         if let tz { formatter.timeZone = tz }
-        let year = Calendar(identifier: .gregorian).component(.year, from: Date())
-        let withYear = "\(dateTimeStr) \(year)"
-        // "h:mma" matches "6:50pm"; "ha" matches "3am".
-        for fmt in ["MMM d 'at' h:mma yyyy", "MMM d 'at' ha yyyy"] {
-            formatter.dateFormat = fmt
-            if let d = formatter.date(from: withYear) { return d }
+        var calendar = Calendar(identifier: .gregorian)
+        if let tz { calendar.timeZone = tz }
+        let year = calendar.component(.year, from: now)
+
+        var best: Date?
+        for candidateYear in [year - 1, year, year + 1] {
+            let withYear = "\(dateTimeStr) \(candidateYear)"
+            // "h:mma" matches "6:50pm"; "ha" matches "3am".
+            for fmt in ["MMM d 'at' h:mma yyyy", "MMM d 'at' ha yyyy"] {
+                formatter.dateFormat = fmt
+                guard let candidate = formatter.date(from: withYear) else { continue }
+                let closer = best.map {
+                    abs(candidate.timeIntervalSince(now)) < abs($0.timeIntervalSince(now))
+                } ?? true
+                if closer { best = candidate }
+                break
+            }
         }
-        return nil
+        return best
     }
 }

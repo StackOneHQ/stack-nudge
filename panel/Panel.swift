@@ -1081,6 +1081,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func expandFromCompact() {
         nav.compactExpanded = true
         applyCompactLayout()
+        usageSurfaceDidChange()
     }
 
     // Applies the user-configured widget opacity to the window. Only takes
@@ -1284,16 +1285,55 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         scheduleNextQuotaPoll()
     }
 
+    // In compact mode the widget pill IS the panel window: applyCompactLayout()
+    // ends with orderFront and hidePanel() only collapses it, so panel.isVisible
+    // never goes false. Keying the cadence off that alone pinned every widget
+    // user to the 60s visible interval and made Settings → Poll frequency a
+    // no-op — ~1,440 `claude --print /usage` spawns a day against 288 at the
+    // default, which is enough to earn the CLI's own rate limiting. A collapsed
+    // pill is a background surface; its countdown re-renders off other published
+    // state, so a slower probe doesn't freeze it.
+    //
+    // Static and parameterised because PanelController is AppKit-bound and can't
+    // be reached from the test target.
+    static func quotaPollInterval(visible: Bool,
+                                  compactMode: Bool,
+                                  compactExpanded: Bool,
+                                  hiddenInterval: TimeInterval) -> TimeInterval {
+        let showingUsage = visible && (!compactMode || compactExpanded)
+        return showingUsage ? quotaPollVisibleInterval : hiddenInterval
+    }
+
     private func scheduleNextQuotaPoll() {
         quotaTimer?.invalidate()
         // Schedule unconditionally so a re-enable from Settings picks up
         // again on the next tick without needing an explicit start call.
         // The probe itself bails when tracking is off.
-        let interval = panel.isVisible ? Self.quotaPollVisibleInterval : quotaPollHiddenInterval
+        let interval = Self.quotaPollInterval(visible: panel.isVisible,
+                                              compactMode: nav.compactMode,
+                                              compactExpanded: nav.compactExpanded,
+                                              hiddenInterval: quotaPollHiddenInterval)
         quotaTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
             self?.runQuotaProbe()
             self?.scheduleNextQuotaPoll()
         }
+    }
+
+    // Called whenever the usage surface is shown or hidden. Without this the
+    // cadence only changed on the *next* tick, so summoning the panel could show
+    // data a full hidden interval old and leave it that way for another one.
+    private func usageSurfaceDidChange() {
+        let showingUsage = panel.isVisible && (!nav.compactMode || nav.compactExpanded)
+        // `quotaSyncing` guards the case where two entry points fire in the same
+        // run loop pass: the probe is async, so quotaLastUpdated hasn't moved yet
+        // and both would see the same stale timestamp.
+        if showingUsage, !nav.quotaSyncing {
+            let age = nav.quotaLastUpdated.map { Date().timeIntervalSince($0) }
+            if age == nil || age! >= Self.quotaPollVisibleInterval {
+                runQuotaProbe()
+            }
+        }
+        scheduleNextQuotaPoll()
     }
 
     private func runQuotaProbe() {
@@ -1488,8 +1528,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     private func postQuotaBanner(label: String, percent: Int, resetsAt: Date?) {
         let body: String
-        if let resetsAt {
-            body = "\(percent)% used. Resets \(RelativeTime.string(resetsAt, style: .full))."
+        if let resetsAt, let resetLabel = QuotaReset.relativeLabel(until: resetsAt) {
+            body = "\(percent)% used. Resets \(resetLabel)."
         } else {
             body = "\(percent)% used."
         }
@@ -2128,17 +2168,24 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // for the initial fire and by the snooze timer for re-fires. Request
     // identifier is a fresh UUID each time (macOS replaces by identifier);
     // event.id stays in userInfo so click handlers can find the source.
-    // Banner title with session label appended when we can resolve one.
-    // Default project name is suppressed (already implied by the title); only
-    // a name someone actually chose is shown.
+    // Banner title with the session label appended: a chosen name when one
+    // exists, else the project folder.
     //
-    // This used to join event to session on Claude's session UUID alone, so a
-    // rename never reached the banner for any other agent, and it accepted
-    // Claude Code's auto-derived name — which 2.1+ gives every session, so
-    // every banner read "Claude Code — stackone-89" whether or not anything
-    // had been renamed. SessionLabel handles both.
+    // Two prior rounds of this were too narrow. It first joined event to session
+    // on Claude's session UUID alone, so a rename never reached the banner for any
+    // other agent, and it accepted Claude Code's auto-derived name — which 2.1+
+    // gives every session, so every banner read "Claude Code — stackone-89"
+    // whether or not anything had been renamed. Routing through SessionLabel fixed
+    // both, but via `chosenName`, which is nil unless a human renamed the session
+    // — so the common case (nobody renamed anything) posted a bare "Claude Code"
+    // with no clue which project was asking. The banner is the one surface read
+    // with no surrounding context, so it takes `displayName`, the same label the
+    // Events row shows.
     private func bannerTitle(for event: NudgeEvent) -> String {
-        guard let label = sessionLabel(for: event) else { return event.title }
+        guard let label = SessionLabel.displayName(for: event,
+                                                   in: sessions.sessions,
+                                                   persistence: SessionPersistence.shared)
+        else { return event.title }
         return "\(event.title) — \(label)"
     }
 
@@ -3116,6 +3163,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         positionPanel()  // re-resolve in case the user moved to a different display
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
+        usageSurfaceDidChange()
     }
 
     // NSApp.hide hides all our windows AND deactivates the app, so the system
@@ -3128,11 +3176,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             if nav.compactExpanded {
                 nav.compactExpanded = false
                 applyCompactLayout()
+                usageSurfaceDidChange()
             }
             return
         }
         panel.orderOut(nil)
         NSApp.hide(nil)
+        usageSurfaceDidChange()
     }
 
     // MARK: - Setup helpers

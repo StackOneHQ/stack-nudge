@@ -186,7 +186,7 @@ Bars are color-coded: green below 50%, yellow 50–80%, red 80%+. Reset times sh
 
 Numbers come straight from the `claude` CLI — stack-nudge shells out to `claude --print /usage` and parses the result. Because the CLI reads its *own* keychain grant, **stack-nudge never touches your keychain or calls the Anthropic API, so there's no password prompt**. If `claude` isn't on your `PATH` or you're signed out, the tab shows *"Claude usage unavailable — run `claude /usage` to check your session"* rather than falling back to any other source. (Codex and Antigravity usage are read from their own local files, unaffected.)
 
-Polls every 60 seconds while the panel is visible, or every 5 minutes by default in the background (configurable via Settings → Usage → "Poll frequency"). On the Usage tab: `r` triggers a manual sync, `p` pauses/resumes the poller.
+Polls every 60 seconds while the full panel is open, and otherwise every 5 minutes by default (configurable via Settings → Usage → "Poll frequency"). The collapsed widget counts as background, so it polls at your configured frequency rather than the faster open-panel rate. Opening the panel syncs immediately if the last one is over a minute old. On the Usage tab: `r` triggers a manual sync, `p` pauses/resumes the poller.
 
 #### Threshold-crossing notifications
 
