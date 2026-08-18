@@ -23,10 +23,14 @@ enum Agent {
 // future dormancy-based eviction pass.
 struct SessionEntry: Codable {
     var customName: String?
-    var muted: Bool
+    // Tri-state on purpose. nil means "no opinion, ask the project-level
+    // entry"; `false` is an explicit override that outranks it. Without the
+    // distinction a session inheriting a project-wide mute had no way to say
+    // no — see `toggleMuted`.
+    var muted: Bool?
     var lastSeenAt: TimeInterval
 
-    init(customName: String? = nil, muted: Bool = false, lastSeenAt: TimeInterval) {
+    init(customName: String? = nil, muted: Bool? = nil, lastSeenAt: TimeInterval) {
         self.customName = customName
         self.muted = muted
         self.lastSeenAt = lastSeenAt
@@ -37,7 +41,7 @@ struct SessionEntry: Codable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.customName = try c.decodeIfPresent(String.self, forKey: .customName)
-        self.muted      = (try c.decodeIfPresent(Bool.self, forKey: .muted)) ?? false
+        self.muted      = try c.decodeIfPresent(Bool.self, forKey: .muted)
         self.lastSeenAt = try c.decode(TimeInterval.self, forKey: .lastSeenAt)
     }
 }
@@ -82,12 +86,12 @@ final class SessionPersistence: ObservableObject {
         guard let projectPath else { return nil }
         let canon = Agent.canonical(agent)
         if let tabId, !tabId.isEmpty {
-            if let trimmed = entries[Self.key(agent: canon, projectPath: projectPath, tabId: tabId)]?.customName,
+            if let trimmed = entries[Self.key(agent: canon, projectPath: projectPath, scope: tabId)]?.customName,
                !trimmed.isEmpty {
                 return trimmed
             }
         }
-        let trimmed = entries[Self.key(agent: canon, projectPath: projectPath, tabId: nil)]?.customName
+        let trimmed = entries[Self.key(agent: canon, projectPath: projectPath, scope: nil)]?.customName
         guard let trimmed, !trimmed.isEmpty else { return nil }
         return trimmed
     }
@@ -102,14 +106,14 @@ final class SessionPersistence: ObservableObject {
     // (if any) keeps working as the fallback.
     func setCustomName(agent: String, projectPath: String?, tabId: String? = nil, _ name: String?) {
         guard let projectPath else { return }
-        let key = Self.key(agent: Agent.canonical(agent), projectPath: projectPath, tabId: tabId)
+        let key = Self.key(agent: Agent.canonical(agent), projectPath: projectPath, scope: tabId)
         let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let now = Date().timeIntervalSince1970
         if trimmed.isEmpty {
             // Clearing the name: keep the entry only if it has other prefs.
             guard var existing = entries[key] else { return }
             existing.customName = nil
-            if existing.muted {
+            if existing.muted != nil {
                 existing.lastSeenAt = now
                 entries[key] = existing
             } else {
@@ -126,31 +130,56 @@ final class SessionPersistence: ObservableObject {
 
     // MARK: - Mute
 
-    func isMuted(agent: String, projectPath: String?, tabId: String? = nil) -> Bool {
+    // Which segment scopes a session's mute. Ordered most- to least-specific:
+    // an integration's tab id where we have one, else the tty, else Claude's
+    // sidecar session id for the rare tty-less session. Names deliberately do
+    // not use this ladder — they're also looked up from events, which carry a
+    // tab id but no tty, so widening the key there would orphan every rename.
+    static func muteScope(for session: Session) -> String? {
+        for candidate in [session.tabId, session.tty, session.claudeSessionID] {
+            if let candidate, !candidate.isEmpty { return candidate }
+        }
+        return nil
+    }
+
+    // The most specific entry that exists wins outright, including when it says
+    // `false`. Falling back past an explicit override would resurrect a mute the
+    // user just cleared.
+    func isMuted(agent: String, projectPath: String?, scope: String? = nil) -> Bool {
         guard let projectPath else { return false }
         let canon = Agent.canonical(agent)
-        if let tabId, !tabId.isEmpty,
-           entries[Self.key(agent: canon, projectPath: projectPath, tabId: tabId)]?.muted == true {
-            return true
+        if let scope, !scope.isEmpty,
+           let own = entries[Self.key(agent: canon, projectPath: projectPath, scope: scope)]?.muted {
+            return own
         }
-        return entries[Self.key(agent: canon, projectPath: projectPath, tabId: nil)]?.muted == true
+        return entries[Self.key(agent: canon, projectPath: projectPath, scope: nil)]?.muted == true
     }
 
     func isMuted(_ session: Session) -> Bool {
-        isMuted(agent: session.agent, projectPath: session.projectPath, tabId: session.tabId)
+        isMuted(agent: session.agent, projectPath: session.projectPath,
+                scope: Self.muteScope(for: session))
     }
 
     func toggleMuted(_ session: Session) {
         guard let projectPath = session.projectPath, !projectPath.isEmpty else { return }
-        let key = Self.key(agent: Agent.canonical(session.agent),
-                           projectPath: projectPath, tabId: session.tabId)
+        let canon = Agent.canonical(session.agent)
+        let key = Self.key(agent: canon, projectPath: projectPath,
+                           scope: Self.muteScope(for: session))
+        let projectKey = Self.key(agent: canon, projectPath: projectPath, scope: nil)
+        let inherited = key != projectKey && entries[projectKey]?.muted == true
+        // Negate what the user is looking at, not the stored flag — they differ
+        // whenever the visible state came from the project-level entry, and
+        // negating the flag there re-muted an already-muted session.
+        let next = !isMuted(session)
         let now = Date().timeIntervalSince1970
         var entry = entries[key] ?? SessionEntry(lastSeenAt: now)
-        entry.muted = !entry.muted
+        // Unmuting only needs recording when a project-level mute would
+        // otherwise reassert; otherwise absence says the same thing.
+        entry.muted = (next || inherited) ? next : nil
         entry.lastSeenAt = now
         // Drop entries that hold no surviving preference, matching the
         // "deliberate user intent only" invariant for the on-disk store.
-        if entry.muted == false, entry.customName?.isEmpty ?? true {
+        if entry.muted == nil, entry.customName?.isEmpty ?? true {
             entries.removeValue(forKey: key)
         } else {
             entries[key] = entry
@@ -170,11 +199,11 @@ final class SessionPersistence: ObservableObject {
         let candidates: [String] = {
             if let tabId, !tabId.isEmpty {
                 return [
-                    Self.key(agent: canon, projectPath: projectPath, tabId: tabId),
-                    Self.key(agent: canon, projectPath: projectPath, tabId: nil),
+                    Self.key(agent: canon, projectPath: projectPath, scope: tabId),
+                    Self.key(agent: canon, projectPath: projectPath, scope: nil),
                 ]
             }
-            return [Self.key(agent: canon, projectPath: projectPath, tabId: nil)]
+            return [Self.key(agent: canon, projectPath: projectPath, scope: nil)]
         }()
         for key in candidates {
             guard !seenThisLaunch.contains(key), entries[key] != nil else { continue }
@@ -187,11 +216,13 @@ final class SessionPersistence: ObservableObject {
 
     // MARK: - I/O
 
-    // Stable across PID churn and restarts; shared with PanelNav.mutedSessions.
-    static func key(agent: String, projectPath: String, tabId: String?) -> String {
+    // Stable across PID churn and restarts. The trailing segment scopes the
+    // entry within a project — a tab id for names, `muteScope` for mutes — and
+    // is omitted entirely when there is none, which is the project-wide key.
+    static func key(agent: String, projectPath: String, scope: String?) -> String {
         let canon = Agent.canonical(agent)
-        if let tabId, !tabId.isEmpty {
-            return "\(canon)::\(projectPath)::\(tabId)"
+        if let scope, !scope.isEmpty {
+            return "\(canon)::\(projectPath)::\(scope)"
         }
         return "\(canon)::\(projectPath)"
     }
@@ -199,7 +230,7 @@ final class SessionPersistence: ObservableObject {
     // nil when the session has no projectPath — no stable identity possible.
     static func key(for session: Session) -> String? {
         guard let path = session.projectPath, !path.isEmpty else { return nil }
-        return key(agent: session.agent, projectPath: path, tabId: session.tabId)
+        return key(agent: session.agent, projectPath: path, scope: session.tabId)
     }
 
     private func load() {

@@ -24,6 +24,11 @@ struct Session: Identifiable, Equatable {
     // which is exactly the pre-Stage-2 behaviour.
     var tabId: String?
     var tabName: String?
+    // Controlling terminal ("ttys014"), straight from ps. The only per-session
+    // discriminator every agent and every terminal has: integrations only cover
+    // the terminals we've written conformers for, and Zed / a bare shell leave
+    // tabId nil, which collapses two sessions in one project onto one identity.
+    var tty: String?
     // Claude's per-pid sidecar (~/.claude/sessions/<pid>.json) gives an
     // authoritative session id without waiting for a hook event.
     var claudeSessionID: String?
@@ -324,7 +329,7 @@ final class SessionStore: ObservableObject {
         let lines = runProcess("/bin/ps", ["-axo", "pid=,etime=,tty=,args="])
             .split(separator: "\n")
 
-        var candidates: [(pid: Int, elapsed: String, hasTTY: Bool, agent: String)] = []
+        var candidates: [(pid: Int, elapsed: String, tty: String?, agent: String)] = []
         for raw in lines {
             let line = String(raw).trimmingCharacters(in: .whitespaces)
             // pid (digits) <ws> etime <ws> tty <ws> args...
@@ -337,8 +342,9 @@ final class SessionStore: ObservableObject {
             let args = String(parts[3])
 
             guard let agent = detectAgent(args: args) else { continue }
+            let ownedTTY = (tty == "??" || tty.isEmpty) ? nil : tty
             candidates.append((pid: pid, elapsed: etime,
-                               hasTTY: tty != "??" && !tty.isEmpty, agent: agent))
+                               tty: ownedTTY, agent: agent))
         }
 
         let pids = candidates.map(\.pid)
@@ -357,7 +363,7 @@ final class SessionStore: ObservableObject {
             // so it showed up as a row the finished-session prune could never
             // reach. The subcommand denylist in detectAgent catches the ones
             // we know by name; this catches whatever 2.2 invents next.
-            if candidate.agent == "claude", !candidate.hasTTY, sidecar == nil { continue }
+            if candidate.agent == "claude", candidate.tty == nil, sidecar == nil { continue }
             let cwd = cwdByPID[candidate.pid]
             let chain = walkParentChain(from: candidate.pid, processTable: processTable)
             found.append(Session(
@@ -373,6 +379,7 @@ final class SessionStore: ObservableObject {
                 status: .active,
                 tabId: nil,
                 tabName: nil,
+                tty: candidate.tty,
                 claudeSessionID: sidecar?.sessionId,
                 liveTitle:      sidecar?.name,
                 liveTitleSource: sidecar?.nameSource,
@@ -626,6 +633,7 @@ private extension Session {
             status: status,
             tabId: tabId ?? self.tabId,
             tabName: tabName ?? self.tabName,
+            tty: self.tty,
             // Preserve the live sidecar values from the freshly-discovered
             // snapshot — these change turn-to-turn (status especially), so
             // we want the merge to surface the latest, not the stale value
