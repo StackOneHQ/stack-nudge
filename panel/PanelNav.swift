@@ -1216,7 +1216,7 @@ final class PanelNav: ObservableObject {
         case .permissions, .update, .hotkey, .speakHotkey,
              .banner, .muteWhenFocused, .mute, .muteDuration, .pinPanel,
              .keepOpenWhenEmpty, .launchAtLogin,
-             .widget, .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme,
+             .widget, .snapToCorners, .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme,
              .soundEnabled, .agentDoneSound, .permissionSound,
              .voiceEnabled, .voice, .voiceSpeed, .downloadVoiceModel,
              .quotaTracking, .quotaAlerts, .alertThreshold, .pollFrequency,
