@@ -16,6 +16,8 @@ final class CompactPlacementTests: XCTestCase {
         XCTAssertEqual(CompactPlacement.nearestCorner(toCenter: CGPoint(x: 900, y: 100), in: frame), .bottomRight)
         XCTAssertEqual(CompactPlacement.nearestCorner(toCenter: CGPoint(x: 100, y: 900), in: frame), .topLeft)
         XCTAssertEqual(CompactPlacement.nearestCorner(toCenter: CGPoint(x: 900, y: 900), in: frame), .topRight)
+        // Exactly on both midpoints ties to top-right (`<` is false on each axis).
+        XCTAssertEqual(CompactPlacement.nearestCorner(toCenter: CGPoint(x: 500, y: 500), in: frame), .topRight)
     }
 
     func test_nearestCorner_respectsFrameOrigin() {
@@ -94,6 +96,11 @@ final class CompactPlacementTests: XCTestCase {
         XCTAssertNil(CompactPlacement.parsePosition("123"))
         XCTAssertNil(CompactPlacement.parsePosition("a,b"))
         XCTAssertNil(CompactPlacement.parsePosition("1,2,3"))
+        // Non-finite values parse as Double but must be rejected — a hand-edited
+        // config must never feed NaN/Inf through clamp into setFrame.
+        XCTAssertNil(CompactPlacement.parsePosition("nan,0"))
+        XCTAssertNil(CompactPlacement.parsePosition("0,inf"))
+        XCTAssertNil(CompactPlacement.parsePosition("-inf,10"))
     }
 
     func test_formatPosition_roundsToIntegers() {
@@ -110,6 +117,17 @@ final class CompactPlacementTests: XCTestCase {
         XCTAssertEqual(b.minY, 0)      // reaches the physical bottom (over the Dock)
         XCTAssertEqual(b.maxY, 975)    // capped at the menu-bar underside
         XCTAssertEqual(b.minX, 0)      // full width
+        XCTAssertEqual(b.maxX, 1000)
+    }
+
+    func test_placementBounds_displayBelowMain_negativeOrigin() {
+        // A display arranged below the main one: frame.minY is negative.
+        let physical = CGRect(x: 0, y: -1000, width: 1000, height: 1000)
+        let visible  = CGRect(x: 0, y: -940, width: 1000, height: 915)  // maxY = -25
+        let b = CompactPlacement.placementBounds(frame: physical, visibleFrame: visible)
+        XCTAssertEqual(b.minY, -1000)  // physical bottom of the lower display
+        XCTAssertEqual(b.maxY, -25)    // menu-bar underside (visibleFrame.maxY)
+        XCTAssertEqual(b.minX, 0)
         XCTAssertEqual(b.maxX, 1000)
     }
 }

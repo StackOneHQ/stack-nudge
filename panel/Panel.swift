@@ -1030,7 +1030,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // Apply window size + origin appropriate to the current compact-mode
     // state. Called whenever nav.compactMode or nav.compactExpanded changes
     // and once at launch to handle config-restored state.
-    private func applyCompactLayout() {
+    //
+    // `snap` overrides nav.compactSnap for callers that run inside its
+    // @Published willSet (the $compactSnap sink), where the property still
+    // holds the pre-change value. Everyone else passes nil and reads the
+    // settled property.
+    private func applyCompactLayout(snap: Bool? = nil) {
         if nav.compactMode, !nav.compactExpanded {
             // Widget: shrink + pin to the chosen corner, float above
             // everything, follow the user across spaces. Transparent
@@ -1042,7 +1047,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             panel.contentMinSize = size
             var frame = panel.frame
             frame.size = size
-            frame.origin = nav.compactSnap
+            frame.origin = (snap ?? nav.compactSnap)
                 ? compactCornerOrigin(for: size)
                 : resolvedFreeOrigin(for: size)
             ignoringProgrammaticMove = true
@@ -1229,9 +1234,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                                  value: corner.rawValue)
             }
         } else {
-            nav.setCompactFreeOrigin(cornerOrigin(for: size, corner: nav.compactCorner))
+            // Seed the free origin from the pill's current resting corner so it
+            // stays put. Resolve against the panel's own screen, not the cursor's
+            // (Settings is keyboard-driven, so on multi-monitor the cursor may be
+            // on a different display than the widget).
+            nav.setCompactFreeOrigin(
+                cornerOrigin(for: size, corner: nav.compactCorner, on: panel.screen))
         }
-        applyCompactLayout()
+        applyCompactLayout(snap: snap)
     }
 
     // The region a free-placed pill may occupy on `screen`: full width, down to
@@ -1274,8 +1284,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                                       inset: Self.compactWidgetInset)
     }
 
-    private func cornerOrigin(for size: NSSize, corner: CompactCorner) -> NSPoint {
-        let visible = activeScreen().visibleFrame
+    private func cornerOrigin(for size: NSSize, corner: CompactCorner,
+                              on screen: NSScreen? = nil) -> NSPoint {
+        let visible = (screen ?? activeScreen()).visibleFrame
         let inset = Self.compactWidgetInset
         switch corner {
         case .topLeft:

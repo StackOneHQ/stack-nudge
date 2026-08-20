@@ -9,7 +9,8 @@ enum CompactPlacement {
 
     // Which corner a pill centred at `center` is closest to, within
     // `visibleFrame`. AppKit coordinates: y grows upward, so a center below
-    // the vertical midpoint is a *bottom* corner.
+    // the vertical midpoint is a *bottom* corner. A center exactly on midX/midY
+    // ties to the right/top (the `<` comparisons are false).
     static func nearestCorner(toCenter center: CGPoint,
                               in visibleFrame: CGRect) -> CompactCorner {
         switch (center.x < visibleFrame.midX, center.y < visibleFrame.midY) {
@@ -58,8 +59,8 @@ enum CompactPlacement {
         guard let raw else { return nil }
         let parts = raw.split(separator: ",", omittingEmptySubsequences: false)
         guard parts.count == 2,
-              let x = Double(parts[0].trimmingCharacters(in: .whitespaces)),
-              let y = Double(parts[1].trimmingCharacters(in: .whitespaces))
+              let x = Double(parts[0].trimmingCharacters(in: .whitespaces)), x.isFinite,
+              let y = Double(parts[1].trimmingCharacters(in: .whitespaces)), y.isFinite
         else { return nil }
         return CGPoint(x: x, y: y)
     }
