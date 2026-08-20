@@ -41,6 +41,17 @@ enum CompactPlacement {
         frames.firstIndex { $0.contains(point) }
     }
 
+    // The region a free-placed pill may occupy on a screen: full width and down
+    // to the physical bottom of `frame` (so it can sit over the Dock), but
+    // capped at the top of `visibleFrame` (just under the menu bar). Clamping a
+    // pill into this keeps it fully on-screen while allowing Dock-level
+    // placement. AppKit coords (y up): the menu bar is at the top, so
+    // visibleFrame.maxY is the underside of the menu bar.
+    static func placementBounds(frame: CGRect, visibleFrame: CGRect) -> CGRect {
+        CGRect(x: frame.minX, y: frame.minY,
+               width: frame.width, height: visibleFrame.maxY - frame.minY)
+    }
+
     // Parse a persisted "x,y" string into a point. Returns nil for missing or
     // malformed input so callers can fall back to a corner origin.
     static func parsePosition(_ raw: String?) -> CGPoint? {

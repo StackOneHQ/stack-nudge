@@ -99,4 +99,17 @@ final class CompactPlacementTests: XCTestCase {
     func test_formatPosition_roundsToIntegers() {
         XCTAssertEqual(CompactPlacement.formatPosition(CGPoint(x: 12.6, y: 34.2)), "13,34")
     }
+
+    // MARK: - placementBounds (free placement: Dock free at bottom, menu bar capped at top)
+
+    func test_placementBounds_bottomIsPhysical_topIsBelowMenuBar() {
+        // Full screen 1000 tall; 60pt Dock at the bottom, 25pt menu bar at the top.
+        let physical = CGRect(x: 0, y: 0, width: 1000, height: 1000)
+        let visible  = CGRect(x: 0, y: 60, width: 1000, height: 915) // maxY = 975
+        let b = CompactPlacement.placementBounds(frame: physical, visibleFrame: visible)
+        XCTAssertEqual(b.minY, 0)      // reaches the physical bottom (over the Dock)
+        XCTAssertEqual(b.maxY, 975)    // capped at the menu-bar underside
+        XCTAssertEqual(b.minX, 0)      // full width
+        XCTAssertEqual(b.maxX, 1000)
+    }
 }

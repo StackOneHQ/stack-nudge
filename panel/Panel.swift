@@ -1186,15 +1186,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
     }
 
-    // Free-placement drop: clamp the released origin into the active screen,
-    // settle the window there if the clamp moved it, and persist. No snap
-    // animation — the pill stays where the user let go.
+    // Free-placement drop: clamp the released origin into the free-placement
+    // bounds (full width, down to the Dock at the bottom, capped below the menu
+    // bar at the top) so nothing hangs off-screen but the pill can rest at Dock
+    // level. Settle the window there if the clamp moved it, then persist. No
+    // snap animation — the pill stays where the user let go.
     private func persistCompactFreePosition() {
         guard nav.compactMode, !nav.compactExpanded else { return }
-        let visible = screenForFreeOrigin(panel.frame.origin, size: panel.frame.size).visibleFrame
+        let bounds = freePlacementBounds(on: screenForFreeOrigin(panel.frame.origin,
+                                                                 size: panel.frame.size))
         let clamped = CompactPlacement.clamp(origin: panel.frame.origin,
                                              size: panel.frame.size,
-                                             into: visible,
+                                             into: bounds,
                                              inset: Self.compactWidgetInset)
         if clamped != panel.frame.origin {
             ignoringProgrammaticMove = true
@@ -1231,6 +1234,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         applyCompactLayout()
     }
 
+    // The region a free-placed pill may occupy on `screen`: full width, down to
+    // the physical bottom (Dock level) but capped just below the menu bar.
+    private func freePlacementBounds(on screen: NSScreen) -> NSRect {
+        CompactPlacement.placementBounds(frame: screen.frame,
+                                         visibleFrame: screen.visibleFrame)
+    }
+
     // The screen a free-placed pill at `origin` lives on — the one containing
     // the pill's centre — so it stays on its own display regardless of where
     // the cursor is. Falls back to the cursor's screen when the centre is on
@@ -1249,16 +1259,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         cornerOrigin(for: size, corner: nav.compactCorner)
     }
 
-    // Origin for free-placement mode: the saved free position clamped into the
-    // screen that contains it (so it stays on its own display, and a resolution
-    // change can't strand it), falling back to the current corner the first
-    // time free mode is entered.
+    // Origin for free-placement mode: the saved free position, clamped into the
+    // free-placement bounds of the screen that contains it (full width, down to
+    // the Dock at the bottom, capped below the menu bar at the top). So it can
+    // rest at Dock level but nothing hangs off-screen; a resolution change or
+    // unplugged monitor still pulls it back on-screen. Falls back to the current
+    // corner the first time free mode is entered.
     private func resolvedFreeOrigin(for size: NSSize) -> NSPoint {
         let saved = nav.compactFreeOrigin
             ?? cornerOrigin(for: size, corner: nav.compactCorner)
-        let visible = screenForFreeOrigin(saved, size: size).visibleFrame
+        let bounds = freePlacementBounds(on: screenForFreeOrigin(saved, size: size))
         return CompactPlacement.clamp(origin: saved, size: size,
-                                      into: visible,
+                                      into: bounds,
                                       inset: Self.compactWidgetInset)
     }
 
