@@ -466,7 +466,12 @@ walk_session_chain() {
       "Cursor Helper"|"Cursor Helper (Plugin)"|"Cursor Helper (Renderer)"|Cursor|\
       "Antigravity Helper"|"Antigravity Helper (Plugin)"|"Antigravity Helper (Renderer)"|Antigravity|\
       Zed|zed|\
-      iTerm2|iTerm|Terminal|Warp|WarpTerminal|ghostty|Ghostty)
+      iTerm2|iTerm|Terminal|Warp|WarpTerminal|ghostty|Ghostty|\
+      tmux)
+        # tmux severs the process tree from the host terminal (the agent runs
+        # under the tmux server, parented to launchd), so the emulator is never
+        # in the chain. Record the server itself; the panel keys the pane off
+        # TMUX_PANE (session id below) and focus reads the live env.
         TERMINAL_PID="$pid"; TERMINAL_APP="$base"; break ;;
     esac
     pid=$(ps -p "$pid" -o ppid= 2>/dev/null | tr -d ' ')
@@ -516,7 +521,7 @@ post_to_panel() {
   NUDGE_TERMINAL_PID="${TERMINAL_PID:-}" \
   NUDGE_TERMINAL_APP="${TERMINAL_APP:-}" \
   NUDGE_TERM_PROGRAM="${TERM_PROGRAM:-}" \
-  NUDGE_SESSION_ID="${TERM_SESSION_ID:-${ITERM_SESSION_ID:-}}" \
+  NUDGE_SESSION_ID="${TMUX_PANE:-${TERM_SESSION_ID:-${ITERM_SESSION_ID:-}}}" \
   NUDGE_ITERM_TAB_NAME="${ITERM_TAB_NAME:-}" \
   NUDGE_HOOK_JSON="$hook_json" \
   python3 - <<'PY' 2>/dev/null

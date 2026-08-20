@@ -65,4 +65,22 @@ final class EnvVarTerminalIntegrationTests: XCTestCase {
         let result = EnvVarTerminalIntegration.parseEnvValues(raw, envVar: "TERM_SESSION_ID")
         XCTAssertTrue(result.isEmpty)
     }
+
+    func test_parseEnvValues_tmuxPane() {
+        // tmux integration keys off TMUX_PANE; the value starts with "%".
+        let raw = "99028 /bin/zsh TMUX=/private/tmp/tmux-502/default,12390,0 TMUX_PANE=%4 LC_TERMINAL=iTerm2"
+        let result = EnvVarTerminalIntegration.parseEnvValues(raw, envVar: "TMUX_PANE")
+        XCTAssertEqual(result[99028], "%4")
+    }
+
+    func test_parseEnvValues_tmuxVarDoesNotMatchPaneVar() {
+        // The needle is "<var>=", so a scan for TMUX must not be satisfied by
+        // TMUX_PANE=… (the "_" breaks the "TMUX=" match). Order the pane var
+        // first to prove the socket var is the one found.
+        let raw = "99028 /bin/zsh TMUX_PANE=%4 TMUX=/private/tmp/tmux-502/default,12390,0"
+        let socket = EnvVarTerminalIntegration.parseEnvValues(raw, envVar: "TMUX")
+        let pane   = EnvVarTerminalIntegration.parseEnvValues(raw, envVar: "TMUX_PANE")
+        XCTAssertEqual(socket[99028], "/private/tmp/tmux-502/default,12390,0")
+        XCTAssertEqual(pane[99028], "%4")
+    }
 }

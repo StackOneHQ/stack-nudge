@@ -2058,6 +2058,16 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return
         }
 
+        // tmux-hosted event: no bundleID resolves (TERM_PROGRAM=tmux), so focus
+        // the pane via the tmux server. activate-immediately doesn't hide the
+        // panel, so no settle wait.
+        if config.activateImmediately,
+           event.termProgram == "tmux" || event.terminalApp == "tmux",
+           let agentPID = event.agentPID,
+           let target = TmuxFocus.target(agentPID: agentPID) {
+            dispatchTmuxFocus(target, settle: false)
+            return
+        }
         if config.activateImmediately, let bundleID = event.bundleID {
             DispatchQueue.global(qos: .userInitiated).async {
                 AppActivator.activate(bundleID: bundleID,
@@ -2316,6 +2326,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
 
         let approve = response.actionIdentifier == "ALLOW"
+
+        // tmux-hosted event: focus the pane via the tmux server (no bundleID
+        // resolves under tmux). The permission decision rides the FIFO, not a
+        // keystroke, so `approve` doesn't apply here.
+        if event.termProgram == "tmux" || event.terminalApp == "tmux",
+           let agentPID = event.agentPID,
+           let target = TmuxFocus.target(agentPID: agentPID) {
+            NSApp.hide(nil)
+            dispatchTmuxFocus(target, settle: true)
+            return
+        }
         guard let bundleID = event.bundleID else { return }
 
         // Hide the app first so the system restores focus to the previous
@@ -2979,6 +3000,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // banner-click path. The 0.15s settle lets our deactivation land before
         // the target is raised (without it an approval keystroke can hit our
         // own process instead of the target's key window).
+        // tmux-hosted event: focus the pane via the tmux server (no bundleID
+        // resolves under tmux).
+        if event.termProgram == "tmux" || event.terminalApp == "tmux",
+           let agentPID = event.agentPID,
+           let target = TmuxFocus.target(agentPID: agentPID) {
+            hidePanel()
+            dispatchTmuxFocus(target, settle: true)
+            return
+        }
         guard let bundleID = event.bundleID else { return }
         hidePanel()
         DispatchQueue.global(qos: .userInitiated).async {
@@ -3064,10 +3094,31 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         return true
     }
 
+    // Route a resolved tmux pane to AppActivator on a background queue. `settle`
+    // waits after a panel/app hide so StackNudge has resigned frontmost before
+    // the pane is raised (matches the AppActivator.activate call sites).
+    private func dispatchTmuxFocus(_ target: TmuxFocus.Target, settle: Bool) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            if settle { Thread.sleep(forTimeInterval: 0.15) }
+            AppActivator.focusTmux(pane: target.pane,
+                                   socket: target.socket,
+                                   hostBundleID: target.hostBundleID)
+        }
+    }
+
     private func focusSelectedSession() {
         guard let pid = sessions.selectedPID,
-              let session = sessions.sessions.first(where: { $0.pid == pid }),
-              let bundleID = bundleID(for: session.terminalApp) else { return }
+              let session = sessions.sessions.first(where: { $0.pid == pid })
+        else { return }
+        // tmux: no terminalApp→bundleID mapping applies (the host emulator isn't
+        // in the process tree), so focus the pane via the tmux server instead.
+        if session.terminalApp == "tmux",
+           let target = TmuxFocus.target(agentPID: session.pid) {
+            hidePanel()
+            dispatchTmuxFocus(target, settle: true)
+            return
+        }
+        guard let bundleID = bundleID(for: session.terminalApp) else { return }
         hidePanel()
         // session.tabId is the per-tab identity our terminal integrations
         // captured, but the underlying value differs per terminal — so it

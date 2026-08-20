@@ -482,4 +482,51 @@ struct AppActivator {
         }
         return false
     }
+
+    // MARK: - tmux
+
+    // Focus a tmux pane by talking to the tmux server (select-window resolves
+    // the pane's window; select-pane focuses the pane), then raise the host
+    // terminal. Under iTerm2 `-CC` control mode the window select surfaces the
+    // mapped native tab; under plain tmux it switches the active pane inside
+    // the host's single window. socket nil → tmux default socket. hostBundleID
+    // nil → skip the raise (rely on -CC surfacing the tab). Callers resolve the
+    // pane/socket/host via TmuxFocus and dispatch this on a background queue.
+    static func focusTmux(pane: String, socket: String?, hostBundleID: String?) {
+        guard let tmux = tmuxPath() else { return }
+        var base: [String] = []
+        if let socket, !socket.isEmpty { base += ["-S", socket] }
+        runDetached(tmux, base + ["select-window", "-t", pane])
+        runDetached(tmux, base + ["select-pane", "-t", pane])
+        if let hostBundleID, !hostBundleID.isEmpty {
+            NSRunningApplication
+                .runningApplications(withBundleIdentifier: hostBundleID)
+                .first?
+                .activate(options: [.activateIgnoringOtherApps])
+        }
+    }
+
+    // Resolve the tmux binary from common install locations. A launchd-spawned
+    // app has a minimal PATH, so probe paths directly (same rationale as the
+    // gh/claude resolvers). Self-contained here to keep shared/ independent of
+    // panel/'s ProcessOutput.
+    private static func tmuxPath() -> String? {
+        let home = NSHomeDirectory()
+        return [
+            "/opt/homebrew/bin/tmux",
+            "/usr/local/bin/tmux",
+            "\(home)/.local/bin/tmux",
+            "/usr/bin/tmux",
+        ].first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    private static func runDetached(_ path: String, _ args: [String]) {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: path)
+        task.arguments = args
+        task.standardOutput = Pipe()
+        task.standardError = Pipe()
+        try? task.run()
+        task.waitUntilExit()
+    }
 }

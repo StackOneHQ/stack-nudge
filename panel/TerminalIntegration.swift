@@ -57,6 +57,17 @@ enum TerminalRegistry {
             terminalApps: ["Ghostty", "ghostty"],
             envVar: "TERM_SESSION_ID"
         ),
+        // tmux: SessionStore.walkParentChain dead-ends at the tmux server and
+        // emits terminalApp "tmux" (the host emulator isn't in the parent
+        // chain). TMUX_PANE (e.g. "%4") is the stable per-pane id, unique
+        // within a server. No tab name — tmux exposes none via env. Focus into
+        // the pane (and, under iTerm2 `-CC`, the mapped tab) is AppActivator's
+        // job, not this conformer's.
+        EnvVarTerminalIntegration(
+            name: "tmux",
+            terminalApps: ["tmux"],
+            envVar: "TMUX_PANE"
+        ),
     ]
 
     static func enrich(_ sessions: [Session]) -> [Session] {
