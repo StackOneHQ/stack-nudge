@@ -526,38 +526,48 @@ struct AppActivator {
     // the exact tab + split. Returns false when no session matches (title
     // changed, or not iTerm2) so the caller falls back to a plain app raise.
     @discardableResult
-    private static func selectITermSessionByName(_ name: String) -> Bool {
-        let escaped = name
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        let script = """
+    private static func selectITermSessionByName(_ title: String) -> Bool {
+        // Match in Swift, not AppleScript. NSAppleScript mangles non-ASCII
+        // string literals (Claude's "✳ …" titles decode as MacRoman), and
+        // `system attribute` mangles them the same way — so ASCII titles
+        // (codex/agy) matched but Claude titles never did. Reading (id, name)
+        // OUT is UTF-8-faithful, so enumerate here, match the title in Swift,
+        // and select by the ASCII GUID via the proven session-id path. Returns
+        // false when nothing matches (title changed, or not iTerm2) so the
+        // caller falls back to a plain app raise.
+        let listScript = """
         tell application "iTerm2"
-          activate
-          set target to "\(escaped)"
+          set out to ""
           repeat with w in windows
             repeat with t in tabs of w
               repeat with s in sessions of t
                 try
-                  if (name of s) is target then
-                    tell w to select
-                    tell t to select
-                    tell s to select
-                    return "matched"
-                  end if
+                  set out to out & (unique id of s) & "|" & (name of s) & linefeed
                 end try
               end repeat
             end repeat
           end repeat
-          return "no-match"
+          return out
         end tell
         """
         var err: NSDictionary?
-        let result = NSAppleScript(source: script)?.executeAndReturnError(&err)
-        guard err == nil else {
-            logScriptError(err, "tmux-iterm2-title")
+        let listed = NSAppleScript(source: listScript)?.executeAndReturnError(&err)
+        guard err == nil, let out = listed?.stringValue else {
+            logScriptError(err, "tmux-iterm2-list")
             return false
         }
-        return result?.stringValue == "matched"
+        // GUIDs never contain "|", so split on the first one; the name (which
+        // may) is everything after it.
+        var guid: String?
+        for line in out.split(separator: "\n") {
+            guard let bar = line.firstIndex(of: "|") else { continue }
+            if String(line[line.index(after: bar)...]) == title {
+                guid = String(line[..<bar])
+                break
+            }
+        }
+        guard let guid else { return false }
+        return focusIterm2Session(sessionID: guid)
     }
 
     // Resolve the tmux binary from common install locations. A launchd-spawned
