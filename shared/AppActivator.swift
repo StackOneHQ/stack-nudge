@@ -498,12 +498,66 @@ struct AppActivator {
         if let socket, !socket.isEmpty { base += ["-S", socket] }
         runDetached(tmux, base + ["select-window", "-t", pane])
         runDetached(tmux, base + ["select-pane", "-t", pane])
+
+        // iTerm2 `-CC`: external tmux selection doesn't surface the native tab,
+        // and the tab has no tty to match on. The one handle iTerm2 exposes is
+        // that its `-CC` session name mirrors the tmux pane_title — so select
+        // the iTerm2 session whose name equals the target pane's live title,
+        // which brings that exact tab + split to the front. Read the title live
+        // (both sides track it, so they agree at focus time). Ambiguous only
+        // when two panes share a title; other hosts just get an app raise.
+        if hostBundleID == "com.googlecode.iterm2" {
+            let title = runCapture(
+                tmux, base + ["display-message", "-p", "-t", pane, "#{pane_title}"])?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let title, !title.isEmpty, selectITermSessionByName(title) { return }
+        }
+
         if let hostBundleID, !hostBundleID.isEmpty {
             NSRunningApplication
                 .runningApplications(withBundleIdentifier: hostBundleID)
                 .first?
                 .activate(options: [.activateIgnoringOtherApps])
         }
+    }
+
+    // Select the iTerm2 session whose name matches `name` and bring it forward.
+    // Under `-CC` the session name mirrors the tmux pane_title, so this focuses
+    // the exact tab + split. Returns false when no session matches (title
+    // changed, or not iTerm2) so the caller falls back to a plain app raise.
+    @discardableResult
+    private static func selectITermSessionByName(_ name: String) -> Bool {
+        let escaped = name
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let script = """
+        tell application "iTerm2"
+          activate
+          set target to "\(escaped)"
+          repeat with w in windows
+            repeat with t in tabs of w
+              repeat with s in sessions of t
+                try
+                  if (name of s) is target then
+                    tell w to select
+                    tell t to select
+                    tell s to select
+                    return "matched"
+                  end if
+                end try
+              end repeat
+            end repeat
+          end repeat
+          return "no-match"
+        end tell
+        """
+        var err: NSDictionary?
+        let result = NSAppleScript(source: script)?.executeAndReturnError(&err)
+        guard err == nil else {
+            logScriptError(err, "tmux-iterm2-title")
+            return false
+        }
+        return result?.stringValue == "matched"
     }
 
     // Resolve the tmux binary from common install locations. A launchd-spawned
@@ -528,5 +582,18 @@ struct AppActivator {
         task.standardError = Pipe()
         try? task.run()
         task.waitUntilExit()
+    }
+
+    private static func runCapture(_ path: String, _ args: [String]) -> String? {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: path)
+        task.arguments = args
+        let out = Pipe()
+        task.standardOutput = out
+        task.standardError = Pipe()
+        do { try task.run() } catch { return nil }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        return String(data: data, encoding: .utf8)
     }
 }
