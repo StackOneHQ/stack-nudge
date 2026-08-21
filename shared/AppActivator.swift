@@ -562,18 +562,38 @@ struct AppActivator {
             logScriptError(err, "tmux-iterm2-list")
             return false
         }
-        // GUIDs never contain "|", so split on the first one; the name (which
-        // may) is everything after it.
+        // Match on the title with any leading animated-spinner run stripped:
+        // codex renders a braille spinner ("⠦ stackone") whose frame differs
+        // between the tmux read and the iTerm2 name a moment later, so an exact
+        // compare misses whenever it's busy. Stable prefixes (Claude's "✳ …")
+        // aren't braille, so they're untouched. GUIDs never contain "|", so
+        // split on the first one; the name (which may) is everything after it.
+        let wanted = normalizedTitle(title)
+        guard !wanted.isEmpty else { return false }
         var guid: String?
         for line in out.split(separator: "\n") {
             guard let bar = line.firstIndex(of: "|") else { continue }
-            if String(line[line.index(after: bar)...]) == title {
+            if normalizedTitle(String(line[line.index(after: bar)...])) == wanted {
                 guid = String(line[..<bar])
                 break
             }
         }
         guard let guid else { return false }
         return focusIterm2Session(sessionID: guid)
+    }
+
+    // Drop a leading run of whitespace and braille-pattern glyphs (U+2800–U+28FF,
+    // the common CLI spinner) so a mid-animation title still matches. Only the
+    // leading spinner is removed; the rest of the title (and non-braille markers
+    // like Claude's "✳") is preserved.
+    static func normalizedTitle(_ title: String) -> String {
+        var rest = Substring(title)
+        while let first = rest.first,
+              let scalar = first.unicodeScalars.first,
+              scalar.properties.isWhitespace || (0x2800...0x28FF).contains(scalar.value) {
+            rest = rest.dropFirst()
+        }
+        return String(rest)
     }
 
     // Resolve the tmux binary from common install locations. A launchd-spawned

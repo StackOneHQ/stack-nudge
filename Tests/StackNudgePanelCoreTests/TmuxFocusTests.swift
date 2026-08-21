@@ -32,6 +32,21 @@ final class TmuxFocusTests: XCTestCase {
         XCTAssertEqual(target?.hostBundleID, "com.googlecode.iterm2")
     }
 
+    func test_normalizedTitle_stripsAnimatedSpinner() {
+        // codex renders a braille spinner; different frames must normalize to
+        // the same stable title so the tmux read and iTerm2 name still match.
+        XCTAssertEqual(AppActivator.normalizedTitle("⠦ stackone"), "stackone")
+        XCTAssertEqual(AppActivator.normalizedTitle("⠋ stackone"),
+                       AppActivator.normalizedTitle("⠧ stackone"))
+    }
+
+    func test_normalizedTitle_leavesStablePrefixesAlone() {
+        // Claude's "✳" is not a braille glyph; agy has no decoration.
+        XCTAssertEqual(AppActivator.normalizedTitle("✳ Bump stackvox to version 0.6.0"),
+                       "✳ Bump stackvox to version 0.6.0")
+        XCTAssertEqual(AppActivator.normalizedTitle("StackOne.local"), "StackOne.local")
+    }
+
     func test_hostBundleID_iTerm2() {
         XCTAssertEqual(TmuxFocus.hostBundleID(forLCTerminal: "iTerm2"), "com.googlecode.iterm2")
     }
