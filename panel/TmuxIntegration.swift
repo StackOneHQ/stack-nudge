@@ -38,7 +38,12 @@ final class TmuxIntegration: TerminalIntegration {
     // ("<socket>,<serverPID>,<n>"). Falls back to the bare pane when TMUX is
     // absent or malformed. Must stay in sync with notify.sh's session-id build.
     static func tabId(pane: String, tmux: String?) -> String {
-        guard let server = tmux?.split(separator: ",").dropFirst().first.map(String.init),
+        // serverPID is positional (2nd field), so keep empty fields — otherwise
+        // a malformed "<socket>,,<n>" would slide the session index into the
+        // server slot. An empty/absent server field falls back to the bare pane.
+        guard let server = tmux?
+                .split(separator: ",", omittingEmptySubsequences: false)
+                .dropFirst().first.map(String.init),
               !server.isEmpty
         else { return pane }
         return "\(server):\(pane)"
