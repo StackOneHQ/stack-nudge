@@ -482,4 +482,174 @@ struct AppActivator {
         }
         return false
     }
+
+    // MARK: - tmux
+
+    // Focus a tmux pane by talking to the tmux server (select-window resolves
+    // the pane's window; select-pane focuses the pane), then raise the host
+    // terminal. Under iTerm2 `-CC` control mode the window select surfaces the
+    // mapped native tab; under plain tmux it switches the active pane inside
+    // the host's single window. socket nil → tmux default socket. hostBundleID
+    // nil → skip the raise (rely on -CC surfacing the tab). Callers resolve the
+    // pane/socket/host via TmuxFocus and dispatch this on a background queue.
+    static func focusTmux(pane: String, socket: String?, hostBundleID: String?) {
+        guard let tmux = tmuxPath() else {
+            tmuxDebug("focusTmux: no tmux binary on the probe paths")
+            return
+        }
+        var base: [String] = []
+        if let socket, !socket.isEmpty { base += ["-S", socket] }
+        runDetached(tmux, base + ["select-window", "-t", pane])
+        runDetached(tmux, base + ["select-pane", "-t", pane])
+
+        // iTerm2 `-CC`: external tmux selection doesn't surface the native tab,
+        // and the tab has no tty to match on. The one handle iTerm2 exposes is
+        // that its `-CC` session name mirrors the tmux pane_title — so select
+        // the iTerm2 session whose name equals the target pane's live title,
+        // which brings that exact tab + split to the front. Read the title live
+        // (both sides track it, so they agree at focus time). Ambiguous only
+        // when two panes share a title; other hosts just get an app raise.
+        if hostBundleID == "com.googlecode.iterm2" {
+            let title = runCapture(
+                tmux, base + ["display-message", "-p", "-t", pane, "#{pane_title}"])?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let matched = title.map { !$0.isEmpty && selectITermSessionByName($0) } ?? false
+            tmuxDebug("focusTmux pane=\(pane) title=«\(title ?? "")» iterm-select=\(matched)")
+            if matched { return }
+        }
+
+        if let hostBundleID, !hostBundleID.isEmpty {
+            tmuxDebug("focusTmux pane=\(pane) → app-raise \(hostBundleID)")
+            NSRunningApplication
+                .runningApplications(withBundleIdentifier: hostBundleID)
+                .first?
+                .activate(options: [.activateIgnoringOtherApps])
+        }
+    }
+
+    // Select the iTerm2 session whose name matches `name` and bring it forward.
+    // Under `-CC` the session name mirrors the tmux pane_title, so this focuses
+    // the exact tab + split. Returns false when no session matches (title
+    // changed, or not iTerm2) so the caller falls back to a plain app raise.
+    @discardableResult
+    private static func selectITermSessionByName(_ title: String) -> Bool {
+        // Match in Swift, not AppleScript. NSAppleScript mangles non-ASCII
+        // string literals (Claude's "✳ …" titles decode as MacRoman), and
+        // `system attribute` mangles them the same way — so ASCII titles
+        // (codex/agy) matched but Claude titles never did. Reading (id, name)
+        // OUT is UTF-8-faithful, so enumerate here, match the title in Swift,
+        // and select by the ASCII GUID via the proven session-id path. Returns
+        // false when nothing matches (title changed, or not iTerm2) so the
+        // caller falls back to a plain app raise.
+        let listScript = """
+        tell application "iTerm2"
+          set out to ""
+          repeat with w in windows
+            repeat with t in tabs of w
+              repeat with s in sessions of t
+                try
+                  set out to out & (unique id of s) & "|" & (name of s) & linefeed
+                end try
+              end repeat
+            end repeat
+          end repeat
+          return out
+        end tell
+        """
+        var err: NSDictionary?
+        let listed = NSAppleScript(source: listScript)?.executeAndReturnError(&err)
+        guard err == nil, let out = listed?.stringValue else {
+            logScriptError(err, "tmux-iterm2-list")
+            return false
+        }
+        // Match on the title with any leading animated-spinner run stripped:
+        // codex renders a braille spinner ("⠦ stackone") whose frame differs
+        // between the tmux read and the iTerm2 name a moment later, so an exact
+        // compare misses whenever it's busy. Stable prefixes (Claude's "✳ …")
+        // aren't braille, so they're untouched. GUIDs never contain "|", so
+        // split on the first one; the name (which may) is everything after it.
+        let wanted = normalizedTitle(title)
+        guard !wanted.isEmpty else { return false }
+        var guid: String?
+        for line in out.split(separator: "\n") {
+            guard let bar = line.firstIndex(of: "|") else { continue }
+            if normalizedTitle(String(line[line.index(after: bar)...])) == wanted {
+                guid = String(line[..<bar])
+                break
+            }
+        }
+        guard let guid else { return false }
+        return focusIterm2Session(sessionID: guid)
+    }
+
+    // Drop a leading run of whitespace and braille-pattern glyphs (U+2800–U+28FF,
+    // the common CLI spinner) so a mid-animation title still matches. Only the
+    // leading spinner is removed; the rest of the title (and non-braille markers
+    // like Claude's "✳") is preserved.
+    static func normalizedTitle(_ title: String) -> String {
+        var rest = Substring(title)
+        while let first = rest.first,
+              let scalar = first.unicodeScalars.first,
+              scalar.properties.isWhitespace || (0x2800...0x28FF).contains(scalar.value) {
+            rest = rest.dropFirst()
+        }
+        return String(rest)
+    }
+
+    // Resolve the tmux binary from common install locations. A launchd-spawned
+    // app has a minimal PATH, so probe paths directly (same rationale as the
+    // gh/claude resolvers). Self-contained here to keep shared/ independent of
+    // panel/'s ProcessOutput.
+    private static func tmuxPath() -> String? {
+        let home = NSHomeDirectory()
+        return [
+            "/opt/homebrew/bin/tmux",
+            "/usr/local/bin/tmux",
+            "\(home)/.local/bin/tmux",
+            "/usr/bin/tmux",
+        ].first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    // tmux renders non-ASCII in formats like #{pane_title} as "_" unless its
+    // client is UTF-8, which it decides from LC_ALL/LC_CTYPE/LANG. The
+    // launchd-spawned panel inherits no locale, so Claude's "✳ …" titles came
+    // back as "_ …" and never matched the iTerm2 session name. Force a UTF-8
+    // locale on the tmux subprocess so the real bytes come through.
+    private static func tmuxEnv() -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        env["LC_ALL"] = "en_US.UTF-8"
+        return env
+    }
+
+    private static func runDetached(_ path: String, _ args: [String]) {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: path)
+        task.arguments = args
+        task.environment = tmuxEnv()
+        task.standardOutput = Pipe()
+        task.standardError = Pipe()
+        try? task.run()
+        task.waitUntilExit()
+    }
+
+    private static func runCapture(_ path: String, _ args: [String]) -> String? {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: path)
+        task.arguments = args
+        task.environment = tmuxEnv()
+        let out = Pipe()
+        task.standardOutput = out
+        task.standardError = Pipe()
+        do { try task.run() } catch { return nil }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        return String(data: data, encoding: .utf8)
+    }
+
+    // Gated on STACKNUDGE_PANEL_DEBUG (same switch as logScriptError). Local to
+    // AppActivator so shared/ stays independent of panel/.
+    private static func tmuxDebug(_ message: @autoclosure () -> String) {
+        guard ProcessInfo.processInfo.environment["STACKNUDGE_PANEL_DEBUG"] != nil else { return }
+        FileHandle.standardError.write(Data("AppActivator[tmux]: \(message())\n".utf8))
+    }
 }

@@ -560,6 +560,15 @@ final class SessionStore: ObservableObject {
     private static func canonicalTerminalApp(_ processName: String) -> String? {
         if terminalApps.contains(processName) { return processName }
         if processName.hasPrefix("iTermServer") { return "iTerm2" }
+        // tmux severs the process tree from the host terminal: the agent runs
+        // under the tmux *server* (parented to launchd), so the host emulator
+        // (iTerm2/Terminal/…) is never in the parent chain to walk up to. Left
+        // unmapped, every session inside tmux gets no terminalApp and is
+        // dropped from enrichment/focus. Recognise the server itself; the
+        // per-pane tabId comes from TMUX_PANE via the tmux EnvVarTerminal
+        // integration, and host-terminal focus (LC_TERMINAL + `tmux
+        // select-pane`) is handled in AppActivator.
+        if processName == "tmux" { return "tmux" }
         return nil
     }
 

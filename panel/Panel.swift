@@ -2158,6 +2158,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return
         }
 
+        // tmux-hosted event: no bundleID resolves (TERM_PROGRAM=tmux). Resolve
+        // the pane + focus off the main thread. Exclusive — a tmux event never
+        // falls through to the bundle path below, which would raise Terminal.app
+        // (notify.sh's default bundle for an unknown TERM_PROGRAM).
+        if config.activateImmediately,
+           event.termProgram == "tmux" || event.terminalApp == "tmux" {
+            if let agentPID = event.agentPID {
+                dispatchTmuxFocus(agentPID: agentPID, settle: false)
+            }
+            return
+        }
         if config.activateImmediately, let bundleID = event.bundleID {
             DispatchQueue.global(qos: .userInitiated).async {
                 AppActivator.activate(bundleID: bundleID,
@@ -2416,6 +2427,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
 
         let approve = response.actionIdentifier == "ALLOW"
+
+        // tmux-hosted event: focus the pane via the tmux server (no bundleID
+        // resolves under tmux). The permission decision rides the FIFO, not a
+        // keystroke, so `approve` doesn't apply here. Exclusive — return even if
+        // the pane can't be resolved, so we never fall through and raise Terminal.app.
+        if event.termProgram == "tmux" || event.terminalApp == "tmux" {
+            if let agentPID = event.agentPID {
+                NSApp.hide(nil)
+                dispatchTmuxFocus(agentPID: agentPID, settle: true)
+            }
+            return
+        }
         guard let bundleID = event.bundleID else { return }
 
         // Hide the app first so the system restores focus to the previous
@@ -3079,6 +3102,16 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // banner-click path. The 0.15s settle lets our deactivation land before
         // the target is raised (without it an approval keystroke can hit our
         // own process instead of the target's key window).
+        // tmux-hosted event: focus the pane via the tmux server (no bundleID
+        // resolves under tmux). Exclusive — return even if the pane can't be
+        // resolved, so we never fall through and raise Terminal.app.
+        if event.termProgram == "tmux" || event.terminalApp == "tmux" {
+            if let agentPID = event.agentPID {
+                hidePanel()
+                dispatchTmuxFocus(agentPID: agentPID, settle: true)
+            }
+            return
+        }
         guard let bundleID = event.bundleID else { return }
         hidePanel()
         DispatchQueue.global(qos: .userInitiated).async {
@@ -3164,10 +3197,32 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         return true
     }
 
+    // Resolve the tmux target and focus its pane on a background queue — the
+    // `ps` read in TmuxFocus.target must not run on the UI queue. `settle` waits
+    // after a panel/app hide so StackNudge has resigned frontmost before the
+    // pane is raised (matches the AppActivator.activate call sites).
+    private func dispatchTmuxFocus(agentPID: Int, settle: Bool) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            if settle { Thread.sleep(forTimeInterval: 0.15) }
+            guard let target = TmuxFocus.target(agentPID: agentPID) else { return }
+            AppActivator.focusTmux(pane: target.pane,
+                                   socket: target.socket,
+                                   hostBundleID: target.hostBundleID)
+        }
+    }
+
     private func focusSelectedSession() {
         guard let pid = sessions.selectedPID,
-              let session = sessions.sessions.first(where: { $0.pid == pid }),
-              let bundleID = bundleID(for: session.terminalApp) else { return }
+              let session = sessions.sessions.first(where: { $0.pid == pid })
+        else { return }
+        // tmux: no terminalApp→bundleID mapping applies (the host emulator isn't
+        // in the process tree), so focus the pane via the tmux server instead.
+        if session.terminalApp == "tmux" {
+            hidePanel()
+            dispatchTmuxFocus(agentPID: session.pid, settle: true)
+            return
+        }
+        guard let bundleID = bundleID(for: session.terminalApp) else { return }
         hidePanel()
         // session.tabId is the per-tab identity our terminal integrations
         // captured, but the underlying value differs per terminal — so it
