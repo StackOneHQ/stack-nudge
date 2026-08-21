@@ -31,7 +31,18 @@ enum TmuxFocus {
     static func target(agentPID: Int) -> Target? {
         let raw = ProcessOutput.read(
             "/bin/ps", ["eww", "-o", "pid=,command=", "-p", String(agentPID)])
-        return parse(psOutput: raw, pid: agentPID)
+        let resolved = parse(psOutput: raw, pid: agentPID)
+        debug("target(pid=\(agentPID)) -> " + (resolved.map {
+            "pane=\($0.pane) socket=\($0.socket ?? "default") host=\($0.hostBundleID ?? "nil")"
+        } ?? "nil (no TMUX_PANE in that pid's env)"))
+        return resolved
+    }
+
+    // Gated on STACKNUDGE_PANEL_DEBUG (same switch AppActivator uses). Off by
+    // default; surfaces what the running app resolved for a focus attempt.
+    static func debug(_ message: @autoclosure () -> String) {
+        guard ProcessInfo.processInfo.environment["STACKNUDGE_PANEL_DEBUG"] != nil else { return }
+        FileHandle.standardError.write(Data("TmuxFocus: \(message())\n".utf8))
     }
 
     // Pure: given `ps eww` output and the pid, extract the tmux target. Returns

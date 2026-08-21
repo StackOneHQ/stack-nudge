@@ -493,7 +493,10 @@ struct AppActivator {
     // nil → skip the raise (rely on -CC surfacing the tab). Callers resolve the
     // pane/socket/host via TmuxFocus and dispatch this on a background queue.
     static func focusTmux(pane: String, socket: String?, hostBundleID: String?) {
-        guard let tmux = tmuxPath() else { return }
+        guard let tmux = tmuxPath() else {
+            tmuxDebug("focusTmux: no tmux binary on the probe paths")
+            return
+        }
         var base: [String] = []
         if let socket, !socket.isEmpty { base += ["-S", socket] }
         runDetached(tmux, base + ["select-window", "-t", pane])
@@ -510,10 +513,13 @@ struct AppActivator {
             let title = runCapture(
                 tmux, base + ["display-message", "-p", "-t", pane, "#{pane_title}"])?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            if let title, !title.isEmpty, selectITermSessionByName(title) { return }
+            let matched = title.map { !$0.isEmpty && selectITermSessionByName($0) } ?? false
+            tmuxDebug("focusTmux pane=\(pane) title=«\(title ?? "")» iterm-select=\(matched)")
+            if matched { return }
         }
 
         if let hostBundleID, !hostBundleID.isEmpty {
+            tmuxDebug("focusTmux pane=\(pane) → app-raise \(hostBundleID)")
             NSRunningApplication
                 .runningApplications(withBundleIdentifier: hostBundleID)
                 .first?
@@ -605,5 +611,12 @@ struct AppActivator {
         let data = out.fileHandleForReading.readDataToEndOfFile()
         task.waitUntilExit()
         return String(data: data, encoding: .utf8)
+    }
+
+    // Gated on STACKNUDGE_PANEL_DEBUG (same switch as logScriptError). Local to
+    // AppActivator so shared/ stays independent of panel/.
+    private static func tmuxDebug(_ message: @autoclosure () -> String) {
+        guard ProcessInfo.processInfo.environment["STACKNUDGE_PANEL_DEBUG"] != nil else { return }
+        FileHandle.standardError.write(Data("AppActivator[tmux]: \(message())\n".utf8))
     }
 }
