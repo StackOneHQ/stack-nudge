@@ -145,4 +145,16 @@ final class SettingsRowTests: XCTestCase {
             XCTAssertEqual(nav.selectedRow, row)
         }
     }
+
+    func test_snapToCorners_defaultsOn() {
+        XCTAssertTrue(PanelNav().compactSnap)
+    }
+
+    func test_snapToCorners_sitsRightAfterWidget() {
+        let rows = PanelNav().settingsRows
+        let widget = rows.firstIndex(of: .widget)
+        XCTAssertNotNil(widget)
+        XCTAssertEqual(rows[widget! + 1], .snapToCorners)
+        XCTAssertEqual(rows[widget! + 2], .widgetCorner)
+    }
 }
