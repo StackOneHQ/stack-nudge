@@ -590,10 +590,22 @@ struct AppActivator {
         ].first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
+    // tmux renders non-ASCII in formats like #{pane_title} as "_" unless its
+    // client is UTF-8, which it decides from LC_ALL/LC_CTYPE/LANG. The
+    // launchd-spawned panel inherits no locale, so Claude's "✳ …" titles came
+    // back as "_ …" and never matched the iTerm2 session name. Force a UTF-8
+    // locale on the tmux subprocess so the real bytes come through.
+    private static func tmuxEnv() -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        env["LC_ALL"] = "en_US.UTF-8"
+        return env
+    }
+
     private static func runDetached(_ path: String, _ args: [String]) {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: path)
         task.arguments = args
+        task.environment = tmuxEnv()
         task.standardOutput = Pipe()
         task.standardError = Pipe()
         try? task.run()
@@ -604,6 +616,7 @@ struct AppActivator {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: path)
         task.arguments = args
+        task.environment = tmuxEnv()
         let out = Pipe()
         task.standardOutput = out
         task.standardError = Pipe()
