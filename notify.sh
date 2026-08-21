@@ -501,6 +501,17 @@ post_to_panel() {
   local hook_json="$HOOK_JSON"
   (( ${#hook_json} > 32768 )) && hook_json=""
 
+  # tmux tab identity: "<serverPID>:<pane>" from TMUX="<socket>,<serverPID>,<n>",
+  # matching TmuxIntegration.tabId so events and sessions share the id. Unique
+  # across multiple tmux servers, unlike a bare pane id. Outside tmux, fall back
+  # to the terminal's own session id.
+  local session_id
+  if [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]]; then
+    session_id="$(printf '%s' "$TMUX" | cut -d, -f2):${TMUX_PANE}"
+  else
+    session_id="${TERM_SESSION_ID:-${ITERM_SESSION_ID:-}}"
+  fi
+
   NUDGE_AGENT="$AGENT" \
   NUDGE_EVENT="$EVENT" \
   NUDGE_TITLE="$1" \
@@ -521,7 +532,7 @@ post_to_panel() {
   NUDGE_TERMINAL_PID="${TERMINAL_PID:-}" \
   NUDGE_TERMINAL_APP="${TERMINAL_APP:-}" \
   NUDGE_TERM_PROGRAM="${TERM_PROGRAM:-}" \
-  NUDGE_SESSION_ID="${TMUX_PANE:-${TERM_SESSION_ID:-${ITERM_SESSION_ID:-}}}" \
+  NUDGE_SESSION_ID="$session_id" \
   NUDGE_ITERM_TAB_NAME="${ITERM_TAB_NAME:-}" \
   NUDGE_HOOK_JSON="$hook_json" \
   python3 - <<'PY' 2>/dev/null

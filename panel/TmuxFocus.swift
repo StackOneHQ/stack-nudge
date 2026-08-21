@@ -15,22 +15,23 @@ enum TmuxFocus {
         let hostBundleID: String? // app to raise; nil → rely on -CC tab surfacing
     }
 
-    // iTerm2 and Terminal.app propagate LC_TERMINAL through tmux/ssh. Only map
-    // the hosts we can actually raise; anything else leaves hostBundleID nil,
-    // so focus still selects the pane and (under iTerm2 `-CC`) the mapped tab
-    // still surfaces.
+    // Only iTerm2 gives a usable host signal through tmux: it sets
+    // LC_TERMINAL=iTerm2, which survives tmux/ssh. Terminal.app sets
+    // TERM_PROGRAM=Apple_Terminal — which tmux overwrites with "tmux" — and does
+    // not propagate LC_TERMINAL, and it has no tmux `-CC` integration anyway, so
+    // there is no reliable way to identify or raise it from here. nil host means
+    // focus still selects the pane; only the app-raise/tab-surfacing is skipped.
     static func hostBundleID(forLCTerminal lcTerminal: String?) -> String? {
-        switch lcTerminal {
-        case "iTerm2":         return "com.googlecode.iterm2"
-        case "Apple_Terminal": return "com.apple.Terminal"
-        default:               return nil
-        }
+        lcTerminal == "iTerm2" ? "com.googlecode.iterm2" : nil
     }
 
     // Live resolve: read the agent pid's environment and pull the tmux identity.
+    // Runs on a background queue (callers dispatch), with a timeout so a hung
+    // `ps` can't wedge the focus path.
     static func target(agentPID: Int) -> Target? {
-        let raw = ProcessOutput.read(
-            "/bin/ps", ["eww", "-o", "pid=,command=", "-p", String(agentPID)])
+        guard let raw = ProcessOutput.read(
+            "/bin/ps", ["eww", "-o", "pid=,command=", "-p", String(agentPID)],
+            timeout: 3) else { return nil }
         let resolved = parse(psOutput: raw, pid: agentPID)
         debug("target(pid=\(agentPID)) -> " + (resolved.map {
             "pane=\($0.pane) socket=\($0.socket ?? "default") host=\($0.hostBundleID ?? "nil")"

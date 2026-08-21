@@ -25,19 +25,21 @@ final class TmuxFocusTests: XCTestCase {
     func test_parse_socketNilWhenTmuxUnset() {
         // A pane var with no TMUX socket (unusual, but must not crash): socket
         // is nil and focus falls back to the default socket.
-        let raw = "42 /bin/zsh TMUX_PANE=%1 LC_TERMINAL=Apple_Terminal"
+        let raw = "42 /bin/zsh TMUX_PANE=%1 LC_TERMINAL=iTerm2"
         let target = TmuxFocus.parse(psOutput: raw, pid: 42)
         XCTAssertEqual(target?.pane, "%1")
         XCTAssertNil(target?.socket)
-        XCTAssertEqual(target?.hostBundleID, "com.apple.Terminal")
+        XCTAssertEqual(target?.hostBundleID, "com.googlecode.iterm2")
     }
 
-    func test_hostBundleID_knownHosts() {
+    func test_hostBundleID_iTerm2() {
         XCTAssertEqual(TmuxFocus.hostBundleID(forLCTerminal: "iTerm2"), "com.googlecode.iterm2")
-        XCTAssertEqual(TmuxFocus.hostBundleID(forLCTerminal: "Apple_Terminal"), "com.apple.Terminal")
     }
 
-    func test_hostBundleID_unknownOrNilIsNil() {
+    func test_hostBundleID_unmappableHostsAreNil() {
+        // Terminal.app doesn't propagate LC_TERMINAL through tmux, so it (and
+        // any other host) resolves to nil — pane select still happens, no raise.
+        XCTAssertNil(TmuxFocus.hostBundleID(forLCTerminal: "Apple_Terminal"))
         XCTAssertNil(TmuxFocus.hostBundleID(forLCTerminal: "WezTerm"))
         XCTAssertNil(TmuxFocus.hostBundleID(forLCTerminal: nil))
     }
