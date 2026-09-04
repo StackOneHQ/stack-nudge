@@ -73,6 +73,17 @@ final class DetectAgentTests: XCTestCase {
         XCTAssertEqual(SessionStore.detectAgent(args: "agy"), "agy")
     }
 
+    func test_detectAgent_pi() {
+        // pi ships as a node-run bundle; the package path is the signature.
+        XCTAssertEqual(
+            SessionStore.detectAgent(
+                args: "node /Users/x/.nvm/versions/node/v22.20.0/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"),
+            "pi")
+        // A future compiled binary invoked directly.
+        XCTAssertEqual(SessionStore.detectAgent(args: "pi"), "pi")
+        XCTAssertEqual(SessionStore.detectAgent(args: "/opt/homebrew/bin/pi --resume"), "pi")
+    }
+
     // Similarly-named neighbours that share a prefix with an agent binary.
     func test_detectAgent_nonAgentProcesses() {
         XCTAssertNil(SessionStore.detectAgent(args: "/Users/x/.local/bin/codex-code-mode-host"))
