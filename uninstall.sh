@@ -160,6 +160,15 @@ print(f"  Cleaned {path}")
 PY
 fi
 
+# pi has no hook config to splice — it loads an extension from
+# ~/.pi/agent/extensions/. Left behind it would keep spawning a now-removed
+# notify.sh on every pi turn. (Its ~/.stack-nudge/pi-sessions/ sidecars are
+# removed with $INSTALL_DIR below.)
+if [[ -f "$HOME/.pi/agent/extensions/stack-nudge.ts" ]]; then
+  rm -f "$HOME/.pi/agent/extensions/stack-nudge.ts"
+  echo "  Removed ~/.pi/agent/extensions/stack-nudge.ts"
+fi
+
 # Stop and remove launchd agents (macOS)
 for label in com.stackonehq.stack-nudge com.stackonehq.stack-nudge-daemon com.stackonehq.stack-nudge-panel; do
   plist="$HOME/Library/LaunchAgents/${label}.plist"

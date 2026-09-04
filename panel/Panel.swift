@@ -1999,6 +1999,29 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 }
             }
         }
+
+        // pi: no sidecar and (until a pi extension pushes events) no hook event,
+        // but its session file is locatable on disk by cwd, so bind + read stats
+        // directly like Claude — no event required. Skipped once a hook event has
+        // seeded a transcript ref for the PID, which the loop above then owns.
+        for session in sessions.sessions
+            where session.agent == "pi"
+                && session.status == .active
+                && nav.transcriptRefByPID[session.pid] == nil
+        {
+            guard let id = session.claudeSessionID,
+                  let project = session.projectPath
+            else { continue }
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let ref = PiTranscriptReader.locate(cwd: project),
+                      let stats = TranscriptReader.read(path: ref.path)
+                else { return }
+                DispatchQueue.main.async {
+                    self?.nav.claudeSessionStats[id] = stats
+                    self?.evaluateContextThreshold(sessionID: id, stats: stats)
+                }
+            }
+        }
     }
 
     // Claude Code stores transcripts at:
@@ -2430,9 +2453,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // (notify.sh's default bundle for an unknown TERM_PROGRAM).
         if config.activateImmediately,
            event.termProgram == "tmux" || event.terminalApp == "tmux" {
-            if let agentPID = event.agentPID {
-                dispatchTmuxFocus(agentPID: agentPID, settle: false)
-            }
+            dispatchTmuxFocus(agentPID: event.agentPID, shellPID: event.shellPID, settle: false)
             return
         }
         if config.activateImmediately, let bundleID = event.bundleID {
@@ -3054,10 +3075,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // keystroke, so `approve` doesn't apply here. Exclusive — return even if
         // the pane can't be resolved, so we never fall through and raise Terminal.app.
         if event.termProgram == "tmux" || event.terminalApp == "tmux" {
-            if let agentPID = event.agentPID {
-                NSApp.hide(nil)
-                dispatchTmuxFocus(agentPID: agentPID, settle: true)
-            }
+            NSApp.hide(nil)
+            dispatchTmuxFocus(agentPID: event.agentPID, shellPID: event.shellPID, settle: true)
             return
         }
         guard let bundleID = event.bundleID else { return }
@@ -3812,10 +3831,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // resolves under tmux). Exclusive — return even if the pane can't be
         // resolved, so we never fall through and raise Terminal.app.
         if event.termProgram == "tmux" || event.terminalApp == "tmux" {
-            if let agentPID = event.agentPID {
-                hidePanel()
-                dispatchTmuxFocus(agentPID: agentPID, settle: true)
-            }
+            hidePanel()
+            dispatchTmuxFocus(agentPID: event.agentPID, shellPID: event.shellPID, settle: true)
             return
         }
         guard let bundleID = event.bundleID else { return }
@@ -3912,10 +3929,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // `ps` read in TmuxFocus.target must not run on the UI queue. `settle` waits
     // after a panel/app hide so StackNudge has resigned frontmost before the
     // pane is raised (matches the AppActivator.activate call sites).
-    private func dispatchTmuxFocus(agentPID: Int, settle: Bool) {
+    // Resolve the tmux pane from the agent process's live env, falling back to
+    // the pane's shell. The agent pid is authoritative while it's alive, but
+    // short-lived agents (pi, and anything run non-interactively) have already
+    // exited by the time the user clicks the event — leaving nothing to read.
+    // The pane's shell (SHELL_PID from walk_session_chain) outlives the agent
+    // and carries the same TMUX_PANE/TMUX/LC_TERMINAL, so it recovers the pane
+    // for a dead-agent event. nil pids are skipped; nil target is a no-op.
+    private func dispatchTmuxFocus(agentPID: Int?, shellPID: Int?, settle: Bool) {
         DispatchQueue.global(qos: .userInitiated).async {
             if settle { Thread.sleep(forTimeInterval: 0.15) }
-            guard let target = TmuxFocus.target(agentPID: agentPID) else { return }
+            let target = agentPID.flatMap { TmuxFocus.target(agentPID: $0) }
+                ?? shellPID.flatMap { TmuxFocus.target(agentPID: $0) }
+            guard let target else { return }
             AppActivator.focusTmux(pane: target.pane,
                                    socket: target.socket,
                                    hostBundleID: target.hostBundleID)
@@ -3930,7 +3956,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // in the process tree), so focus the pane via the tmux server instead.
         if session.terminalApp == "tmux" {
             hidePanel()
-            dispatchTmuxFocus(agentPID: session.pid, settle: true)
+            // A session in the list is live, so its own pid resolves the pane;
+            // no shell fallback needed (that's for dead-agent event focus).
+            dispatchTmuxFocus(agentPID: session.pid, shellPID: nil, settle: true)
             return
         }
         guard let bundleID = bundleID(for: session.terminalApp) else { return }

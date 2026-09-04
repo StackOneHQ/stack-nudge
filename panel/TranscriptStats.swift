@@ -27,12 +27,17 @@ struct TranscriptRef: Equatable {
 enum TranscriptReader {
 
     // Dispatch by transcript path. Codex rollout files live under
-    // ~/.codex/sessions/.../rollout-*.jsonl and use a different JSONL schema
-    // (token_count events rather than assistant-message usage blocks), so they
-    // route to CodexTranscriptReader. Everything else is a Claude Code
-    // transcript. Both return the same TranscriptStats shape so the Sessions
-    // and Compact views render context usage identically across agents.
+    // ~/.codex/sessions/.../rollout-*.jsonl and pi sessions under
+    // ~/.pi/agent/sessions/, each using a different JSONL schema from Claude's
+    // (token_count events / camelCase-wrapped messages rather than top-level
+    // assistant-message usage blocks), so they route to their own readers.
+    // Everything else is a Claude Code transcript. All return the same
+    // TranscriptStats shape so the Sessions and Compact views render context
+    // usage identically across agents.
     static func read(path: String) -> TranscriptStats? {
+        if path.contains("/.pi/agent/sessions/") {
+            return PiTranscriptReader.read(path: path)
+        }
         if path.contains("/.codex/")
             || (path as NSString).lastPathComponent.hasPrefix("rollout-") {
             return CodexTranscriptReader.read(path: path)
