@@ -36,11 +36,28 @@ enum SlackCredentials {
         return token
     }
 
-    static func store(botToken: String) {
+    // Reports whether the Keychain actually took it. Callers must not treat a
+    // store as done on faith: if the login keychain is locked SecItemAdd fails
+    // with errSecInteractionNotAllowed, and a caller that then scrubbed the
+    // plaintext source would leave the token existing nowhere at all.
+    @discardableResult
+    static func store(botToken: String) -> Bool {
+        let previous = self.botToken()
         SecItemDelete(baseQuery(returningData: false) as CFDictionary)
         var add = baseQuery(returningData: false)
         add[kSecValueData as String] = Data(botToken.utf8)
-        SecItemAdd(add as CFDictionary, nil)
+        let status = SecItemAdd(add as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            // The delete already happened, so a failed add would otherwise also
+            // destroy a token that was working a moment ago. Put it back.
+            if let previous {
+                var restore = baseQuery(returningData: false)
+                restore[kSecValueData as String] = Data(previous.utf8)
+                SecItemAdd(restore as CFDictionary, nil)
+            }
+            return false
+        }
+        return true
     }
 
     static func clear() {
@@ -73,7 +90,10 @@ enum SlackCredentials {
         let raw = ConfigFile.read()[configTokenKey]?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !raw.isEmpty else { return false }
-        store(botToken: raw)
+        // Only scrub once the Keychain has it. Deleting the line on a failed
+        // store would leave the token in neither place, with Settings reporting
+        // a bland "not configured" and re-provisioning the only way back.
+        guard store(botToken: raw) else { return false }
         ConfigFile.remove(key: configTokenKey)
         return true
     }

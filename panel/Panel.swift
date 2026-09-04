@@ -297,6 +297,18 @@ struct PanelContentView: View {
                     .textFieldStyle(.plain)
                     .font(.callout)
                     .focused($historyFieldFocused)
+                    // The field editor is first responder here, so it swallows
+                    // keys before NSWindow.keyDown ever sees them — the panel's
+                    // own Esc handling can't fire. Same reason the rename field
+                    // uses this (Sessions.swift), and the same contract the
+                    // footer advertises: clear the filter, then step back.
+                    .onExitCommand {
+                        if nav.historyQuery.isEmpty {
+                            nav.eventsPane = .live
+                        } else {
+                            nav.historyQuery = ""
+                        }
+                    }
                 if !nav.historyQuery.isEmpty {
                     Button {
                         nav.historyQuery = ""
@@ -2686,6 +2698,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                                               project: event.projectPath,
                                               session: event.claudeSessionID),
                                   at: 0)
+        // Same ceiling the file gets, applied live. Without it a long-uptime
+        // machine grows past the on-disk cap until relaunch, and the History
+        // pane's filter is a computed property re-run on every body pass.
+        if nav.historyRecords.count > EventLog.maxRecords {
+            nav.historyRecords.removeLast(nav.historyRecords.count - EventLog.maxRecords)
+        }
     }
 
     // MARK: - Attention: unanswered prompts + stalled sessions
@@ -2773,7 +2791,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // the last on screen and burn the others' reminder budget for nothing. At a
     // 5s tick a queue still drains promptly.
     private func remindOnOldestDuePrompt(now: Date) {
-        guard nav.remindMinutes > 0, !promptWatches.isEmpty, !nav.isMuted else { return }
+        guard nav.remindMinutes > 0, !promptWatches.isEmpty else { return }
+        // Deliberately not gated on nav.isMuted: mute means "stop interrupting
+        // me *here*", and Slack exists because the user is elsewhere — the same
+        // rule postBannerIfNeeded already applies to the first nudge. Gating the
+        // reminder too made the two inconsistent: muted users got the opening
+        // Slack DM and then silence. Local cues are still gated, below.
+        let localEligible = !nav.isMuted
+        let slackEligible = nav.slackEnabled && nav.slackTokenPresent && nav.slackMemberID != nil
+        // Nothing can be delivered, so don't spend a reminder from the budget —
+        // the prompt should still get its nudges once the mute lifts.
+        guard localEligible || slackEligible else { return }
 
         let due = promptWatches.values
             .filter { watch in
@@ -2794,13 +2822,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         promptWatches[event.id]?.lastNudgedAt = now
         promptWatches[event.id]?.remindersSent += 1
 
+        notifySlack(for: event, isReminder: true)
+
+        guard localEligible else { return }
         if config.bannerEnabled {
             postBanner(for: event,
                        body: AttentionPolicy.reminderBody(original: event.message,
                                                           waitedSince: watch.firstSeenAt,
                                                           now: now))
         }
-        notifySlack(for: event, isReminder: true)
         // Same contract as a first nudge: voice replaces the chime when it's on.
         if config.voiceEnabled {
             let label = sessionLabel(for: event) ?? event.agent
@@ -3499,6 +3529,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
         let shifted = mods.contains(.shift)
 
+        // History pane: the search field is normally first responder and
+        // handles Esc itself via .onExitCommand, because a focused field editor
+        // consumes keys before they reach NSWindow.keyDown. This branch is the
+        // fallback for when focus is elsewhere (a row was clicked, focus lost),
+        // and deliberately swallows everything else so panel shortcuts can't
+        // fire against a pane they don't apply to.
+        if nav.eventsPane == .history {
+            guard event.keyCode == KeyCode.escape else { return false }
+            if nav.historyQuery.isEmpty { nav.eventsPane = .live } else { nav.historyQuery = "" }
+            return true
+        }
+
         // S/Shift+S handled before the no-shift switch since both variants
         // are valid; everything else requires no shift.
         if event.keyCode == KeyCode.sKey {
@@ -3506,16 +3548,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return true
         }
         guard !shifted else { return false }
-
-        // History pane: the search field is the first responder, so every
-        // printable key has to reach it. Only Esc is intercepted — it steps
-        // back to the live queue (or clears a filter first), which is the one
-        // gesture a text field would otherwise swallow into "do nothing".
-        if nav.eventsPane == .history {
-            guard event.keyCode == KeyCode.escape else { return false }
-            if nav.historyQuery.isEmpty { nav.eventsPane = .live } else { nav.historyQuery = "" }
-            return true
-        }
 
         switch event.keyCode {
         case KeyCode.escape:

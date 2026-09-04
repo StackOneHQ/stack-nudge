@@ -150,6 +150,30 @@ final class AttentionPolicyTests: XCTestCase {
                                    lastNudged: 300, sent: 0))
     }
 
+    // The invariant that was missing, and that let a dead option ship: every
+    // interval offered in Settings must be able to produce at least one reminder
+    // before promptLifetime closes the window. A 10m option shipped that never
+    // fired once — indistinguishable from Off, with the row still reading "10m".
+    func test_everyOfferedIntervalCanActuallyFire() {
+        for interval in AttentionPolicy.reminderMinuteOptions where interval > 0 {
+            let start = now
+            var lastNudged = start, sent = 0, fired = 0
+            var t = 0.0
+            while t < AttentionPolicy.promptLifetime {
+                let clock = start.addingTimeInterval(t)
+                if AttentionPolicy.shouldRemind(now: clock, firstSeenAt: start,
+                                                lastNudgedAt: lastNudged,
+                                                remindersSent: sent,
+                                                intervalMinutes: interval) {
+                    sent += 1; fired += 1; lastNudged = clock
+                }
+                t += 5  // the attention ticker's real cadence
+            }
+            XCTAssertGreaterThan(fired, 0,
+                "\(interval)m is offered in Settings but can never fire")
+        }
+    }
+
     // MARK: - Settings labels
 
     func test_minuteLabel_coversBothOptionLists() {

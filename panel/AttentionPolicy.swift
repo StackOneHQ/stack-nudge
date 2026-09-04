@@ -14,7 +14,14 @@ enum AttentionPolicy {
     // MARK: - Unanswered prompts
 
     // Reminder intervals offered in Settings, in minutes. 0 = off.
-    static let reminderMinuteOptions = [0, 1, 2, 5, 10]
+    //
+    // Derived rather than hardcoded: an interval at or past promptLifetime can
+    // never fire, because the first reminder is due after `interval` but the
+    // lifetime gate closes at 550s. A 10m option therefore sat in Settings
+    // looking active while behaving exactly like Off. Deriving it means the two
+    // constants can't drift apart again.
+    static let reminderMinuteOptions: [Int] =
+        [0, 1, 2, 5, 10].filter { $0 == 0 || TimeInterval($0 * 60) < promptLifetime }
 
     // notify.sh gives the FIFO 550s before it gives up and lets the agent fall
     // back to its own terminal prompt (see wait_for_permission_response). Past

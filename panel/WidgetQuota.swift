@@ -65,12 +65,15 @@ struct WidgetQuota: Equatable {
             // monthly credit pool. The model closest to its limit is the one
             // about to block you, so it takes the inner ring; the credit pool
             // is the only long-horizon number available for the outer.
-            guard let antigravity else { return .empty }
-            let worst = antigravity.models
+            // Keep the identity and labels even with no snapshot, matching the
+            // other two branches. Returning .empty here made a single dropped
+            // loopback tick flip the tooltip back to "5h session quota" and lose
+            // the "Agy" tag, while the Usage tab still said Antigravity.
+            let worst = antigravity?.models
                 .max(by: { $0.tier.utilization < $1.tier.utilization })
             return WidgetQuota(client: .antigravity,
                                short: worst?.tier,
-                               long: creditsTier(antigravity.promptCredits),
+                               long: creditsTier(antigravity?.promptCredits),
                                shortLabel: "now", longLabel: "mo")
         case nil:
             return .empty

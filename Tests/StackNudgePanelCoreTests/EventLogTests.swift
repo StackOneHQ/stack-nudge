@@ -131,6 +131,34 @@ final class EventLogTests: XCTestCase {
         XCTAssertEqual(attrs?[.posixPermissions] as? NSNumber, 0o600)
     }
 
+    // append() used to treat "couldn't open for writing" as "doesn't exist" and
+    // fall through to createFile, which unlinks and replaces — and succeeds
+    // whenever the *directory* is writable. A log that ended up read-only (root
+    // owned after a sudo run, restored from backup, or chmod'ed by a user who
+    // read the note about prompt text) lost a month of history on the next nudge.
+    func test_appendNeverReplacesAnUnwritableLog() throws {
+        let path = NSTemporaryDirectory() + "sn-ro-\(UUID().uuidString).jsonl"
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600],
+                                                    ofItemAtPath: path)
+            try? FileManager.default.removeItem(atPath: path)
+        }
+
+        let log = EventLog(path: path)
+        log.append(record("kept", at: ago(60)))
+        log.flush()
+        try FileManager.default.setAttributes([.posixPermissions: 0o400],
+                                               ofItemAtPath: path)
+
+        log.append(record("should not clobber", at: ago(30)))
+        log.flush()
+
+        // The new record is lost — unavoidable on a read-only file — but the
+        // existing history must survive.
+        let contents = try String(contentsOfFile: path, encoding: .utf8)
+        XCTAssertTrue(contents.contains("kept"))
+    }
+
     // MARK: - Search
 
     func test_matchesAcrossMessageAgentAndProject() {

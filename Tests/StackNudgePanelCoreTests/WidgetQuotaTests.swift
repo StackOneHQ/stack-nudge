@@ -83,6 +83,27 @@ final class WidgetQuotaTests: XCTestCase {
         XCTAssertNil(q.long)
     }
 
+    // A single dropped loopback tick used to return .empty, flipping the tooltip
+    // back to "5h session quota" and losing the "Agy" tag while the Usage tab
+    // still read Antigravity. Identity has to survive a missing snapshot, the
+    // way the claude/codex branches already do.
+    func test_antigravity_keepsItsIdentityWithNoSnapshot() {
+        let q = make(.antigravity, agy: nil)
+        XCTAssertEqual(q.client, .antigravity)
+        XCTAssertEqual(q.shortLabel, "now")
+        XCTAssertEqual(q.longLabel, "mo")
+        XCTAssertTrue(q.ringDescription.contains("monthly prompt credits"))
+        XCTAssertFalse(q.hasData)
+    }
+
+    // The same property for every client: a selected client with no snapshot
+    // still names itself.
+    func test_everyClientKeepsItsIdentityWithNoSnapshot() {
+        for client in UsageClient.allCases {
+            XCTAssertEqual(make(client).client, client, "\(client) lost its identity")
+        }
+    }
+
     // MARK: - Empty states
 
     func test_noClientSelected_isEmpty() {

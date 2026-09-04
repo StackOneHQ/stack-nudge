@@ -73,14 +73,21 @@ final class EventLog {
                 defer { try? handle.close() }
                 _ = try? handle.seekToEnd()
                 try? handle.write(contentsOf: data)
-            } else {
-                try? FileManager.default.createDirectory(
-                    at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-                // 0600: the log carries prompt and tool text, so it should be
-                // no more readable than the config beside it.
-                FileManager.default.createFile(atPath: path, contents: data,
-                                               attributes: [.posixPermissions: 0o600])
+                return
             }
+            // Only create when there is genuinely nothing there. createFile
+            // unlinks and replaces, and it succeeds whenever the *directory* is
+            // writable — so treating "couldn't open for writing" as "must not
+            // exist" would discard the whole history the first time the file was
+            // root-owned, restored read-only, or chmod'ed by a user who took the
+            // README's note about prompt text seriously.
+            guard !FileManager.default.fileExists(atPath: path) else { return }
+            try? FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            // 0600: the log carries prompt and tool text, so it should be no
+            // more readable than the config beside it.
+            FileManager.default.createFile(atPath: path, contents: data,
+                                           attributes: [.posixPermissions: 0o600])
         }
     }
 
