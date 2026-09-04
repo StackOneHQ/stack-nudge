@@ -8,7 +8,12 @@ final class ClaudeCliQuotaProbeTests: XCTestCase {
 
     func testParseTierLineWithResetsSuffix() {
         let line = "Current session: 2% used · resets Jun 30 at 6:50pm (Europe/London)"
-        let parsed = ClaudeCliQuotaProbe.parseTierLine(line)
+        // Pinned: parseResetsAt range-checks against plausibleWindow, so a fixed
+        // date in the fixture stops parsing once the wall clock drifts more than
+        // 60 days past it. Reading `Date()` here made this a time bomb that went
+        // off ~2 months after it was written.
+        let june = Date(timeIntervalSince1970: 1_782_000_000)  // 2026-06-21
+        let parsed = ClaudeCliQuotaProbe.parseTierLine(line, now: june)
         XCTAssertEqual(parsed?.name, "session")
         XCTAssertEqual(parsed?.tier.utilization, 2)
         XCTAssertNotNil(parsed?.tier.resetsAt)

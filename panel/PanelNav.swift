@@ -140,13 +140,22 @@ enum GithubSignIn: Equatable {
 // rendering and keyboard nav, so adding/removing/reordering a row is a one-line
 // change with no renumbering — and the applyCycle switch over this is
 // exhaustive, so the compiler flags any row left unhandled.
+enum EventsPane: String, CaseIterable {
+    case live, history
+}
+
+
 enum SettingsRow: Hashable {
     // One slot per button in the agent-reconciliation banner, so both are
     // keyboard-reachable rather than mouse-only.
     case wireAgents, dismissAgents
     case permissions, update, hotkey
-    case banner, muteWhenFocused, mute, muteDuration, pinPanel, keepOpenWhenEmpty, launchAtLogin
+    case banner, muteWhenFocused, mute, muteDuration, remindUnanswered, stalledSessions,
+         pinPanel, keepOpenWhenEmpty, launchAtLogin
     case widget, snapToCorners, widgetCorner, widgetOpacity, widgetContent, mascot, theme
+    case eventHistory, clearHistory
+    case slackPaste, slackIdentity, slackTest
+    case slackEnabled, slackIdle, slackDetail, slackStop
     case soundEnabled, agentDoneSound, permissionSound
     case voiceEnabled, voice, voiceSpeed, speakHotkey, downloadVoiceModel
     case quotaTracking, quotaAlerts, alertThreshold, pollFrequency, contextAlert, showRemaining
@@ -175,6 +184,14 @@ struct SettingsActions {
     // by PanelController, which owns the expiry timer and the menu-bar badge.
     let muteFor:             (Int) -> Void
     let resumeNotifications: () -> Void
+    // Event history: attach/detach the durable log when the toggle flips, and
+    // wipe the file from the Settings action row.
+    let applyEventHistorySetting: () -> Void
+    let clearEventHistory:        () -> Void
+    // Slack setup: read the clipboard, re-run identity discovery, send a test DM.
+    let pasteSlackSetup:  () -> Void
+    let detectSlackUser:  () -> Void
+    let sendSlackTest:    () -> Void
 }
 
 // Owns the panel's navigation state plus the live values the Settings page
@@ -267,7 +284,7 @@ final class PanelNav: ObservableObject {
     // Latest quota snapshot from `claude /usage`. Driven by the CLI probe
     // poller in PanelController. nil before the first probe completes, or
     // when the probe failed (no `claude` on PATH, not signed in, parse error).
-    @Published var quota:            QuotaSnapshot?
+    @Published var quota:            QuotaSnapshot? { didSet { widgetQuotaCache = nil } }
     // Any client's quota — all three stamp it — so "Updated Xm ago" describes the
     // pane as a whole.
     @Published var quotaLastUpdated: Date?
@@ -300,10 +317,10 @@ final class PanelNav: ObservableObject {
     @Published var transcriptRefByPID: [Int: TranscriptRef] = [:]
     // Codex (ChatGPT-plan) rate limits for the Usage tab, populated by
     // CodexQuotaProbe — the Codex analogue of `quota` above.
-    @Published var codexQuota: CodexQuotaSnapshot?
+    @Published var codexQuota: CodexQuotaSnapshot? { didSet { widgetQuotaCache = nil } }
     // Antigravity (agy) usage from the running CLI's loopback RPC, populated by
     // AntigravityUsageProbe — the agy analogue of `quota`/`codexQuota`.
-    @Published var antigravityQuota: AntigravityQuotaSnapshot?
+    @Published var antigravityQuota: AntigravityQuotaSnapshot? { didSet { widgetQuotaCache = nil } }
     // Bumped by PanelController after a handoff is upserted into the ledger so
     // the Tickets tab (OutcomesView) and its tab-strip count re-read the
     // in-memory HandoffLedger and reflect the new session live. The ledger
@@ -527,7 +544,7 @@ final class PanelNav: ObservableObject {
     // Usage tab: which connected client's quota is shown (index into
     // availableUsageClients). ↑/↓ move it; read through clampedUsageClientIndex
     // so a client losing its data can't strand the selection out of range.
-    @Published var usageClientIndex: Int = 0
+    @Published var usageClientIndex: Int = 0 { didSet { widgetQuotaCache = nil } }
     // When true, keyboard focus is inside the Usage detail pane: ↑/↓ scroll it
     // rather than switching client. →/Enter steps in; ←/Esc steps back out.
     @Published var usageDetailFocused: Bool = false
@@ -597,6 +614,26 @@ final class PanelNav: ObservableObject {
         let clients = availableUsageClients
         guard !clients.isEmpty else { return nil }
         return clients[clampedUsageClientIndex]
+    }
+
+    // The compact widget's gauge mirrors the Usage tab's selection rather than
+    // carrying its own, so the pill and the tab can never disagree about whose
+    // numbers you're looking at. All three probes already run on the same tick
+    // (see runQuotaProbe), so switching client costs no extra I/O.
+    // Memoised because CompactView reads it from ~16 places per body pass and
+    // the pill re-renders at 10Hz while an agent is busy — recomputing meant
+    // rebuilding availableUsageClients every time. Invalidated by didSet on each
+    // of the four inputs below, so the cache can't outlive its sources.
+    private var widgetQuotaCache: WidgetQuota?
+
+    var widgetQuota: WidgetQuota {
+        if let widgetQuotaCache { return widgetQuotaCache }
+        let value = WidgetQuota.make(client: selectedUsageClient,
+                                     claude: quota,
+                                     codex: codexQuota,
+                                     antigravity: antigravityQuota)
+        widgetQuotaCache = value
+        return value
     }
 
     // The cached series, but only when it belongs to the client on screen — a
@@ -707,6 +744,51 @@ final class PanelNav: ObservableObject {
     // Threshold-crossing notifications. quotaAlertsEnabled is the master
     // switch; quotaAlertThreshold is the single percent value used across
     // all tiers — banner fires once per period when any tier reaches it.
+    // Slack delivery. The credential itself lives in the Keychain (SlackAuth);
+    // these are just the switches and the connection status the Settings rows
+    // render. See SlackDelivery for what each gate means.
+    // Setup state. Delivery needs both a bot token (Keychain) and a member ID;
+    // either missing and nothing is sent, so a half-finished setup is inert
+    // rather than silently misdirected.
+    @Published var slackTokenPresent: Bool = false
+    @Published var slackMemberID: String?
+    @Published var slackMemberLabel: String?
+    @Published var slackIdentityFromEmail: Bool = false
+    // Last paste / test / delivery outcome, shown on the relevant row.
+    @Published var slackSetupNote: String?
+    @Published var slackError: String?
+    @Published var slackEnabled: Bool = false
+    @Published var slackIdleMinutes: Int = 5
+    @Published var slackIncludeDetail: Bool = false
+    @Published var slackNotifyOnStop: Bool = false
+
+    // Which pane of the Events tab is showing. `live` is the triage queue —
+    // capped, prunable, and gone on quit. `history` is the durable log behind
+    // it. Deliberately a second pane rather than merged into the queue: the
+    // live list is an action list, and salting it with dead records would make
+    // ⏎ and ⌫ mean different things depending on the row.
+    @Published var eventsPane: EventsPane = .live
+    @Published var historyQuery: String = ""
+    // Loaded once at launch and appended to in memory as events arrive, so the
+    // pane never re-reads the file while the panel is open.
+    @Published var historyRecords: [EventRecord] = []
+    // Settings → Event history. Off stops recording; what's already on disk
+    // stays readable until the user clears it.
+    @Published var eventHistoryEnabled: Bool = true
+
+    // Minutes between reminders for a permission prompt nobody has answered,
+    // and minutes of silence before a still-busy session is called stalled.
+    // 0 disables each. See AttentionPolicy for what counts as unanswered.
+    @Published var remindMinutes:  Int = 2
+    @Published var stalledMinutes: Int = 0
+    // Permission prompts currently blocking an agent, refreshed by
+    // PanelController's attention tick. Drives the menu-bar count.
+    @Published var pendingPromptCount: Int = 0
+    // Session composite keys (SessionPersistence.key) currently flagged as
+    // stalled, so the Sessions tab can mark the rows without re-deriving the
+    // threshold per row.
+    @Published var stalledSessionKeys: Set<String> = []
+
     @Published var quotaTrackingEnabled: Bool = true
     @Published var quotaAlertsEnabled:   Bool = true
     @Published var quotaShowRemaining:   Bool = false
@@ -854,14 +936,17 @@ final class PanelNav: ObservableObject {
         if !missingPermissions.isEmpty { rows.append(.permissions) }
         if updateAvailable != nil { rows.append(.update) }
         rows += [.hotkey,
-                 .banner, .muteWhenFocused, .mute, .muteDuration, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin,
+                 .banner, .muteWhenFocused, .mute, .muteDuration, .remindUnanswered, .stalledSessions,
+                 .pinPanel, .keepOpenWhenEmpty, .launchAtLogin,
                  .widget, .snapToCorners, .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme,
                  .soundEnabled, .agentDoneSound, .permissionSound,
                  .voiceEnabled, .speakHotkey]
         rows += voiceModelCached ? [.voice, .voiceSpeed] : [.downloadVoiceModel]
         rows += [.quotaTracking, .quotaAlerts, .alertThreshold, .pollFrequency, .contextAlert, .showRemaining,
                  .githubLinks, .hideShipped, .disconnectGithub,
-                 .historyPerSession,
+                 .historyPerSession, .eventHistory, .clearHistory,
+                 .slackPaste, .slackIdentity, .slackTest,
+                 .slackEnabled, .slackIdle, .slackDetail, .slackStop,
                  .editPhrases, .checkPermissions, .openConfig, .releaseNotes, .checkUpdates, .uninstall, .quit]
         return rows
     }
@@ -934,6 +1019,21 @@ final class PanelNav: ObservableObject {
         quotaPollMinutes = Self.quotaPollMinuteOptions.min(by: { abs($0 - rawPoll) < abs($1 - rawPoll) }) ?? 5
         let rawCtx = Int(config["STACKNUDGE_CONTEXT_ALERT_THRESHOLD"] ?? "") ?? 0
         contextAlertThresholdK = Self.contextAlertThresholdOptions.min(by: { abs($0 - rawCtx) < abs($1 - rawCtx) }) ?? 0
+        eventHistoryEnabled = ConfigFile.bool(config, "STACKNUDGE_EVENT_HISTORY", default: true)
+        slackEnabled       = ConfigFile.bool(config, "STACKNUDGE_SLACK", default: false)
+        slackIncludeDetail = ConfigFile.bool(config, "STACKNUDGE_SLACK_DETAIL", default: false)
+        slackNotifyOnStop  = ConfigFile.bool(config, "STACKNUDGE_SLACK_STOP", default: false)
+        let rawSlackIdle = Int(config["STACKNUDGE_SLACK_IDLE_MIN"] ?? "") ?? 5
+        slackIdleMinutes = SlackDelivery.idleMinuteOptions
+            .min(by: { abs($0 - rawSlackIdle) < abs($1 - rawSlackIdle) }) ?? 5
+        slackTokenPresent = SlackCredentials.botToken() != nil
+        let memberID = config["STACKNUDGE_SLACK_MEMBER_ID"]?
+            .trimmingCharacters(in: .whitespaces) ?? ""
+        slackMemberID = memberID.isEmpty ? nil : memberID
+        let rawRemind = Int(config["STACKNUDGE_REMIND_MIN"] ?? "") ?? 2
+        remindMinutes = AttentionPolicy.reminderMinuteOptions.min(by: { abs($0 - rawRemind) < abs($1 - rawRemind) }) ?? 2
+        let rawStalled = Int(config["STACKNUDGE_STALLED_MIN"] ?? "") ?? 0
+        stalledMinutes = AttentionPolicy.stalledMinuteOptions.min(by: { abs($0 - rawStalled) < abs($1 - rawStalled) }) ?? 0
         compactMode   = ConfigFile.bool(config, "STACKNUDGE_COMPACT_MODE", default: true)
         compactCorner = CompactCorner(rawValue: config["STACKNUDGE_COMPACT_CORNER"] ?? "")
             ?? .topRight
@@ -1191,6 +1291,10 @@ final class PanelNav: ObservableObject {
         case .editPhrases:      actions?.editPhrases()
         case .checkPermissions: actions?.checkPermissions()
         case .openConfig:       actions?.openConfig()
+        case .clearHistory:     actions?.clearEventHistory()
+        case .slackPaste:    actions?.pasteSlackSetup()
+        case .slackIdentity: actions?.detectSlackUser()
+        case .slackTest:     actions?.sendSlackTest()
         case .releaseNotes:     actions?.openReleaseNotes()
         case .checkUpdates:     actions?.checkForUpdates()
         case .uninstall:        actions?.beginUninstall()
@@ -1211,10 +1315,12 @@ final class PanelNav: ObservableObject {
         switch selectedRow {
         case .wireAgents, .dismissAgents,
              .disconnectGithub, .editPhrases, .checkPermissions, .openConfig,
-             .releaseNotes, .checkUpdates, .uninstall, .quit, .none:
+             .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
+             .slackPaste, .slackIdentity, .slackTest, .none:
             return false
         case .permissions, .update, .hotkey, .speakHotkey,
-             .banner, .muteWhenFocused, .mute, .muteDuration, .pinPanel,
+             .banner, .muteWhenFocused, .mute, .muteDuration,
+             .remindUnanswered, .stalledSessions, .pinPanel,
              .keepOpenWhenEmpty, .launchAtLogin,
              .widget, .snapToCorners, .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme,
              .soundEnabled, .agentDoneSound, .permissionSound,
@@ -1222,7 +1328,8 @@ final class PanelNav: ObservableObject {
              .quotaTracking, .quotaAlerts, .alertThreshold, .pollFrequency,
              .contextAlert, .showRemaining,
              .githubLinks, .hideShipped,
-             .historyPerSession:
+             .historyPerSession, .eventHistory,
+             .slackEnabled, .slackIdle, .slackDetail, .slackStop:
             return true
         }
     }
@@ -1305,6 +1412,21 @@ final class PanelNav: ObservableObject {
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
             muteDurationMinutes = list[next]
             ConfigFile.write(key: "STACKNUDGE_MUTE_DURATION_MIN", value: String(muteDurationMinutes))
+        case .remindUnanswered:
+            let list = AttentionPolicy.reminderMinuteOptions
+            let idx = list.firstIndex(of: remindMinutes) ?? 0
+            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+            remindMinutes = list[next]
+            ConfigFile.write(key: "STACKNUDGE_REMIND_MIN", value: String(remindMinutes))
+        case .stalledSessions:
+            let list = AttentionPolicy.stalledMinuteOptions
+            let idx = list.firstIndex(of: stalledMinutes) ?? 0
+            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+            stalledMinutes = list[next]
+            ConfigFile.write(key: "STACKNUDGE_STALLED_MIN", value: String(stalledMinutes))
+            // Clearing the threshold must clear the flags too — nothing else
+            // recomputes them once the tick stops evaluating.
+            if stalledMinutes == 0 { stalledSessionKeys = [] }
         case .pinPanel:
             panelPinned.toggle()
             ConfigFile.write(key: "STACKNUDGE_PANEL_PIN", value: panelPinned ? "true" : "false")
@@ -1425,6 +1547,28 @@ final class PanelNav: ObservableObject {
             toggleGithubLinking()
         case .hideShipped:
             toggleHideShipped()
+        case .slackEnabled:
+            slackEnabled.toggle()
+            ConfigFile.write(key: "STACKNUDGE_SLACK", value: slackEnabled ? "true" : "false")
+        case .slackIdle:
+            let list = SlackDelivery.idleMinuteOptions
+            let idx = list.firstIndex(of: slackIdleMinutes) ?? 1
+            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+            slackIdleMinutes = list[next]
+            ConfigFile.write(key: "STACKNUDGE_SLACK_IDLE_MIN", value: String(slackIdleMinutes))
+        case .slackDetail:
+            slackIncludeDetail.toggle()
+            ConfigFile.write(key: "STACKNUDGE_SLACK_DETAIL",
+                             value: slackIncludeDetail ? "true" : "false")
+        case .slackStop:
+            slackNotifyOnStop.toggle()
+            ConfigFile.write(key: "STACKNUDGE_SLACK_STOP",
+                             value: slackNotifyOnStop ? "true" : "false")
+        case .eventHistory:
+            eventHistoryEnabled.toggle()
+            ConfigFile.write(key: "STACKNUDGE_EVENT_HISTORY",
+                             value: eventHistoryEnabled ? "true" : "false")
+            actions?.applyEventHistorySetting()
         case .historyPerSession:
             let list = Self.eventsPerSessionOptions
             let idx = list.firstIndex(of: eventsPerSession) ?? 1
@@ -1437,7 +1581,8 @@ final class PanelNav: ObservableObject {
         // neither should fire on an arrow-key graze. Enter/Space only.
         case .wireAgents, .dismissAgents,
              .disconnectGithub, .editPhrases, .checkPermissions, .openConfig,
-             .releaseNotes, .checkUpdates, .uninstall, .quit, .none:
+             .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
+             .slackPaste, .slackIdentity, .slackTest, .none:
             break
         }
     }

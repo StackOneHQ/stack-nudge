@@ -32,6 +32,7 @@ private enum KeyCode {
     static let pKey:      UInt16 = 35
     static let mKey:      UInt16 = 46
     static let wKey:      UInt16 = 13
+    static let hKey:      UInt16 = 4
 }
 
 // Floating, non-activating panel. Shown via global hotkey; receives key
@@ -85,6 +86,10 @@ struct PanelContentView: View {
     // string — handing every row the whole session array would rebuild all of
     // them on every 3s poll.
     @EnvironmentObject private var persistence: SessionPersistence
+
+    // Owned here rather than inside historyPane so the key handler's gate
+    // (nav.historySearchFocused) and the actual first responder can't drift.
+    @FocusState private var historyFieldFocused: Bool
 
     let onGrantPermissions: () -> Void
 
@@ -262,14 +267,105 @@ struct PanelContentView: View {
             if let error = nav.listenerError {
                 listenerErrorBanner(error)
             }
-            if store.events.isEmpty {
-                emptyState
-            } else {
-                eventList
+            switch nav.eventsPane {
+            case .live:
+                if store.events.isEmpty { emptyState } else { eventList }
+            case .history:
+                historyPane
             }
             footer
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // Typing is the whole point of the pane, so claim the field on entry
+        // rather than making the user click it. Releasing on exit hands the
+        // keyboard back to the live queue's shortcuts.
+        .onChange(of: nav.eventsPane) { pane in
+            historyFieldFocused = (pane == .history)
+        }
+    }
+
+    // Durable log, newest first. Read-only by design: these records have no
+    // FIFO and no PID, so there is nothing here to approve or focus — which is
+    // exactly why they live behind the live queue rather than inside it.
+    private var historyPane: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                TextField("Filter history", text: $nav.historyQuery)
+                    .textFieldStyle(.plain)
+                    .font(.callout)
+                    .focused($historyFieldFocused)
+                    // The field editor is first responder here, so it swallows
+                    // keys before NSWindow.keyDown ever sees them — the panel's
+                    // own Esc handling can't fire. Same reason the rename field
+                    // uses this (Sessions.swift), and the same contract the
+                    // footer advertises: clear the filter, then step back.
+                    .onExitCommand {
+                        if nav.historyQuery.isEmpty {
+                            nav.eventsPane = .live
+                        } else {
+                            nav.historyQuery = ""
+                        }
+                    }
+                if !nav.historyQuery.isEmpty {
+                    Button {
+                        nav.historyQuery = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .onAppear { historyFieldFocused = true }
+            Divider().opacity(0.4)
+
+            if filteredHistory.isEmpty {
+                historyEmptyState
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(filteredHistory) { record in
+                            HistoryRow(record: record)
+                        }
+                    }
+                    .padding(.top, 4)
+                    .padding(.bottom, 8)
+                    .background(ThinScrollers())
+                }
+                .frame(maxHeight: .infinity)
+            }
+        }
+    }
+
+    private var filteredHistory: [EventRecord] {
+        let q = nav.historyQuery.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return nav.historyRecords }
+        return nav.historyRecords.filter { $0.matches(q) }
+    }
+
+    private var historyEmptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: nav.historyQuery.isEmpty ? "clock" : "magnifyingglass")
+                .font(.system(size: 28, weight: .light))
+                .foregroundStyle(.tertiary)
+            Text(nav.historyQuery.isEmpty
+                 ? (nav.eventHistoryEnabled ? "No history yet" : "Event history is off")
+                 : "Nothing matches \"\(nav.historyQuery)\"")
+                .foregroundStyle(.secondary)
+                .font(.subheadline)
+            if nav.historyQuery.isEmpty, !nav.eventHistoryEnabled {
+                Text("Turn it on in Settings → Event history")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.vertical, 24)
     }
 
     private func listenerErrorBanner(_ error: String) -> some View {
@@ -340,11 +436,17 @@ struct PanelContentView: View {
 
     private var footer: some View {
         PageFooter {
-            if store.events.isEmpty {
+            if nav.eventsPane == .history {
+                // The search field owns the keyboard here, so the only hint
+                // worth showing is the way back out.
+                FooterHint(label: nav.historyQuery.isEmpty ? "Back" : "Clear filter",
+                           keys: ["Esc"])
+            } else if store.events.isEmpty {
                 // Mute is still useful with an empty list — it pre-silences
                 // incoming nudges (e.g. heading into a meeting), so keep the
                 // shortcut discoverable even here.
                 FooterHint(label: muteLabel, keys: ["M"])
+                FooterHint(label: "History", keys: ["H"])
                 FooterHint(label: "Hide", keys: ["Esc"])
             } else {
                 if let primary = primaryActionLabel {
@@ -360,6 +462,7 @@ struct PanelContentView: View {
                     .opacity(snoozeEnabled ? 1.0 : 0.35)
                 FooterHint(label: dismissLabel, keys: ["⌫"])
                 FooterHint(label: muteLabel, keys: ["M"])
+                FooterHint(label: "History", keys: ["H"])
                 FooterHint(label: "Hide", keys: ["Esc"])
             }
         }
@@ -388,6 +491,45 @@ struct PanelContentView: View {
     }
 }
 
+
+// One line of durable history. Flatter than EventRow on purpose — there is no
+// selection, no action, and no snooze state to render, so the row is a plain
+// read rather than a control.
+private struct HistoryRow: View {
+
+    let record: EventRecord
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: record.kind == "permission" ? "hand.raised.fill" : "checkmark.circle")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .frame(width: 14)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(record.message)
+                    .font(.callout)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 4) {
+                    if let project = record.projectName {
+                        Text(project)
+                        Text("·").foregroundStyle(.quaternary)
+                    }
+                    Text(record.agent)
+                    Text("·").foregroundStyle(.quaternary)
+                    Text(RelativeTime.string(record.at))
+                }
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
 
 struct EventRow: View {
 
@@ -742,7 +884,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             expandFromCompact: { [weak self] in self?.expandFromCompact() },
             exitCompactMode:   { [weak self] in self?.exitCompactMode() },
             muteFor:             { [weak self] minutes in self?.muteFor(minutes: minutes) },
-            resumeNotifications: { [weak self] in self?.resumeNotifications() }
+            resumeNotifications: { [weak self] in self?.resumeNotifications() },
+            applyEventHistorySetting: { [weak self] in self?.applyEventHistorySetting() },
+            clearEventHistory:        { [weak self] in self?.clearEventHistory() },
+            pasteSlackSetup:  { [weak self] in self?.pasteSlackSetup() },
+            detectSlackUser:  { [weak self] in self?.detectSlackUser() },
+            sendSlackTest:    { [weak self] in self?.sendSlackTest() }
         )
         nav.setHotkey = { [weak self] spec in
             self?.registerHotkey(spec: spec) ?? false
@@ -761,8 +908,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         store.onAppend = { [weak self] event in
             self?.lastEventArrivalAt = Date()
             self?.postBannerIfNeeded(event)
+            // Register the watch now rather than waiting up to 5s, so the
+            // menu-bar count appears with the banner.
+            self?.tickAttention()
             self?.refreshTranscriptStats(for: event)
             self?.captureHandoff(for: event)
+            self?.noteHistory(event)
             self?.nav.reactToEvent(event.kind)
         }
         nav.loadFromConfig()  // populate panelPinned + other live values up-front
@@ -780,6 +931,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         updater = Updater(nav: nav)
 
         startQuotaPolling()
+        startAttentionTicking()
+        startEventHistory()
+        startSlack()
         // The pill (CompactView) reads sessions.sessions for the busy/idle
         // headline and mascot state, so polling has to run as soon as the
         // app is up — not gated on the Sessions tab being visible. Sessions
@@ -2143,6 +2297,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     }
 
     private func postBannerIfNeeded(_ event: NudgeEvent) {
+        // Before every local gate below: a global mute, a focused source window,
+        // or activate-immediately all mean "don't interrupt me at this Mac", which
+        // says nothing about whether the user wants to know in Slack.
+        notifySlack(for: event, isReminder: false)
+
         // Timed global mute swallows every interrupting output — banner,
         // sound, voice, and the activate-immediately focus jump — for all
         // events including permission prompts and welcome. The event has
@@ -2304,10 +2463,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                                 persistence: SessionPersistence.shared)
     }
 
-    private func postBanner(for event: NudgeEvent) {
+    // `body` overrides event.message — the reminder path reuses everything else
+    // (title, category, userInfo) so a re-nudge stays actionable from the
+    // banner's own Allow / Deny buttons.
+    private func postBanner(for event: NudgeEvent, body: String? = nil) {
         let content = UNMutableNotificationContent()
         content.title = bannerTitle(for: event)
-        content.body  = event.message
+        content.body  = body ?? event.message
         content.categoryIdentifier = event.kind == .permission ? "PERMISSION" : "STOP"
         content.userInfo = ["eventID": event.id.uuidString]
 
@@ -2341,9 +2503,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 return
             }
             self.nav.muteTick += 1
-            self.menuBar?.refreshMuteBadge(until: until)
+            self.refreshStatusBadge()
         }
-        menuBar?.refreshMuteBadge(until: nav.muteUntil)
+        refreshStatusBadge()
     }
 
     func resumeNotifications() {
@@ -2351,7 +2513,359 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         muteTicker = nil
         nav.muteUntil = nil
         nav.muteTick += 1
-        menuBar?.refreshMuteBadge(until: nil)
+        refreshStatusBadge()
+    }
+
+    // MARK: - Slack
+
+    private let slackNotifier = SlackNotifier()
+
+    // Adopt a token planted in the config file by a setup script or MDM, then
+    // reflect what we ended up with. Runs at launch so provisioning takes effect
+    // without the user touching Settings.
+    private func startSlack() {
+        SlackCredentials.adoptFromConfig()
+        nav.slackTokenPresent = SlackCredentials.botToken() != nil
+        if nav.slackTokenPresent, nav.slackMemberID == nil { detectSlackUser() }
+    }
+
+    // One clipboard read carries either half of the setup or both, so an org can
+    // keep a single JSON entry in its password manager.
+    private func pasteSlackSetup() {
+        let pasted = NSPasteboard.general.string(forType: .string) ?? ""
+        switch SlackCredentials.classify(pasted) {
+        case .botToken(let token):
+            storeSlack(token: token)
+            nav.slackSetupNote = "Bot token stored"
+            detectSlackUser()
+        case .memberID(let id):
+            storeSlack(memberID: id, fromEmail: false)
+            nav.slackSetupNote = "Slack user set"
+        case .both(let token, let id):
+            storeSlack(token: token)
+            storeSlack(memberID: id, fromEmail: false)
+            nav.slackSetupNote = "Bot token and user stored"
+        case .unrecognised:
+            nav.slackSetupNote = pasted.isEmpty
+                ? "Clipboard is empty"
+                : "Clipboard isn't an xoxb- token or a U… member ID"
+        }
+    }
+
+    private func storeSlack(token: String) {
+        SlackCredentials.store(botToken: token)
+        nav.slackTokenPresent = true
+        nav.slackError = nil
+    }
+
+    private func storeSlack(memberID: String, fromEmail: Bool, label: String? = nil) {
+        nav.slackMemberID = memberID
+        nav.slackMemberLabel = label
+        nav.slackIdentityFromEmail = fromEmail
+        // Not a secret, and keeping it in the config lets a setup script
+        // provision both halves.
+        ConfigFile.write(key: SlackCredentials.configMemberKey, value: memberID)
+    }
+
+    // Suggest who to DM from the machine's git identity. Only ever a suggestion —
+    // a wrong id would send prompts to a colleague — so the row shows what was
+    // found and stays overridable by pasting an id.
+    private func detectSlackUser() {
+        guard let token = SlackCredentials.botToken() else {
+            nav.slackSetupNote = "Paste a bot token first"
+            return
+        }
+        nav.slackSetupNote = "Looking you up…"
+        // ProcessOutput.read spawns a process and waits on it, so the git call
+        // has to leave the main thread or the panel hitches on the keypress.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let email = SlackDirectory.gitEmail() else {
+                DispatchQueue.main.async {
+                    self?.nav.slackSetupNote =
+                        "No git email to look up — paste your member ID"
+                }
+                return
+            }
+            SlackDirectory.lookup(token: token, email: email) { result in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    switch result {
+                    case .found(let id, let label):
+                        self.storeSlack(memberID: id, fromEmail: true, label: label)
+                        self.nav.slackSetupNote =
+                            "Found \(label) — send a test message to confirm"
+                    case .notFound:
+                        self.nav.slackSetupNote =
+                            "No Slack user for \(email) — paste your member ID"
+                    case .missingScope:
+                        self.nav.slackSetupNote =
+                            "Bot token can't look users up (needs users:read.email)"
+                    case .failed(let message):
+                        self.nav.slackSetupNote = "Lookup failed: \(message)"
+                    }
+                }
+            }
+        }
+    }
+
+    // The confirmation gesture: a successful test proves the token, the member id
+    // and the scopes all line up, so it also turns delivery on rather than
+    // leaving one more switch to remember.
+    private func sendSlackTest() {
+        nav.slackSetupNote = "Sending…"
+        slackNotifier.send("StackNudge is connected — this is a test message.",
+                           to: nav.slackMemberID) { [weak self] error in
+            guard let self else { return }
+            if let error {
+                self.nav.slackSetupNote = "Test failed: \(error)"
+                return
+            }
+            self.nav.slackSetupNote = "Test message sent"
+            self.nav.slackError = nil
+            if !self.nav.slackEnabled {
+                self.nav.slackEnabled = true
+                ConfigFile.write(key: "STACKNUDGE_SLACK", value: "true")
+            }
+        }
+    }
+
+    private func refreshSlackStatus() {
+        let error = slackNotifier.lastError
+        if nav.slackError != error { nav.slackError = error }
+    }
+
+    // Called from both places a nudge is decided: the first banner and a reminder.
+    // Deliberately outside postBannerIfNeeded's mute/focus gates — Slack is the
+    // away-from-desk channel, so it has its own rules (see SlackDelivery).
+    private func notifySlack(for event: NudgeEvent, isReminder: Bool) {
+        guard nav.slackTokenPresent, nav.slackMemberID != nil else { return }
+        guard SlackDelivery.shouldSend(
+            kind: event.kind,
+            isReminder: isReminder,
+            sessionMuted: nav.isSessionMuted(event: event, in: sessions.sessions),
+            enabled: nav.slackEnabled,
+            notifyOnStop: nav.slackNotifyOnStop,
+            idleSeconds: IdleTime.seconds(),
+            idleThresholdMinutes: nav.slackIdleMinutes)
+        else { return }
+
+        slackNotifier.send(SlackDelivery.text(for: event,
+                                              label: sessionLabel(for: event),
+                                              includeDetail: nav.slackIncludeDetail,
+                                              isReminder: isReminder),
+                           to: nav.slackMemberID)
+        // Surface a delivery failure on the Settings row. Read one tick later so
+        // the in-flight request has had a chance to land; the attention ticker
+        // refreshes it again on its own cadence.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            self?.refreshSlackStatus()
+        }
+    }
+
+    // MARK: - Event history
+
+    private let eventLog = EventLog()
+
+    // Load the durable log once at launch and attach it to the store if
+    // recording is on. Loading happens regardless of the toggle: turning
+    // recording off should stop new writes, not hide what's already there.
+    private func startEventHistory() {
+        nav.historyRecords = eventLog.load()
+        applyEventHistorySetting()
+    }
+
+    private func applyEventHistorySetting() {
+        store.log = nav.eventHistoryEnabled ? eventLog : nil
+    }
+
+    private func clearEventHistory() {
+        eventLog.clear()
+        nav.historyRecords = []
+        nav.historyQuery = ""
+    }
+
+    // Mirror a newly-recorded event into the in-memory list so the History
+    // pane updates live instead of only after the next launch. Cheap: the log
+    // itself is what bounds growth, and this list is capped by the same
+    // retention on the next load.
+    private func noteHistory(_ event: NudgeEvent) {
+        guard nav.eventHistoryEnabled else { return }
+        nav.historyRecords.insert(EventRecord(at: event.timestamp,
+                                              agent: event.agent,
+                                              kind: event.kind.rawValue,
+                                              title: event.title,
+                                              message: event.message,
+                                              project: event.projectPath,
+                                              session: event.claudeSessionID),
+                                  at: 0)
+        // Same ceiling the file gets, applied live. Without it a long-uptime
+        // machine grows past the on-disk cap until relaunch, and the History
+        // pane's filter is a computed property re-run on every body pass.
+        if nav.historyRecords.count > EventLog.maxRecords {
+            nav.historyRecords.removeLast(nav.historyRecords.count - EventLog.maxRecords)
+        }
+    }
+
+    // MARK: - Attention: unanswered prompts + stalled sessions
+
+    // One entry per permission prompt still blocking its agent.
+    //
+    // Carries its own copy of the event rather than looking it back up in the
+    // store. EventStore is a *display* cache — it prunes to maxEventsPerSession
+    // per session key, and that key falls back to "agent:projectPath" for agents
+    // with no claudeSessionID (Codex). Two Codex sessions in one repo therefore
+    // share a key, so a second session's chatter could evict a first session's
+    // still-blocking prompt and silently end its reminders while the agent stayed
+    // stuck. Durable state can't hang off a cache that evicts.
+    private struct PromptWatch {
+        let event: NudgeEvent
+        let firstSeenAt: Date
+        var lastNudgedAt: Date
+        var remindersSent: Int
+    }
+    private var promptWatches: [NudgeEvent.ID: PromptWatch] = [:]
+    private var attentionTicker: Timer?
+
+    // 5s so the menu-bar count clears promptly after an approval. Nothing
+    // explicitly deregisters a watch — see reconcilePromptWatches — so the tick
+    // is also what notices a prompt was answered, and a slower cadence would
+    // leave a stale count on screen.
+    private func startAttentionTicking() {
+        attentionTicker?.invalidate()
+        attentionTicker = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            self?.tickAttention()
+        }
+    }
+
+    private func tickAttention() {
+        let now = Date()
+        reconcilePromptWatches(now: now)
+        if nav.pendingPromptCount != promptWatches.count {
+            nav.pendingPromptCount = promptWatches.count
+            refreshStatusBadge()
+        }
+        remindOnOldestDuePrompt(now: now)
+        refreshStalledSessions(now: now)
+        if nav.slackTokenPresent { refreshSlackStatus() }
+    }
+
+    // A permission prompt we can *prove* is still blocking: notify.sh creates
+    // the FIFO before emitting the event and removes it on exit (the EXIT trap
+    // in wait_for_permission_response), so the file existing means nobody has
+    // answered yet — in the panel, on the banner, or in the terminal.
+    //
+    // Observability-only agents (Gemini, Antigravity) get no FIFO because their
+    // hooks can't consume a decision, so they're never reminded about. A
+    // reminder we can't verify would eventually fire for prompts already
+    // handled in the terminal, and a nudge that cries wolf is worse than none.
+    private func isBlockingPrompt(_ event: NudgeEvent) -> Bool {
+        guard event.kind == .permission, let fifo = event.fifoPath else { return false }
+        return FileManager.default.fileExists(atPath: fifo)
+    }
+
+    // Register newly-arrived prompts and drop answered ones. Deliberately
+    // reconciled from observable state rather than hooked into each resolution
+    // path: every allow/deny route already removes the event or lets the hook
+    // exit, so no future code path can forget to deregister here.
+    private func reconcilePromptWatches(now: Date) {
+        for event in store.events where isBlockingPrompt(event) {
+            if promptWatches[event.id] == nil {
+                promptWatches[event.id] = PromptWatch(event: event,
+                                                      firstSeenAt: event.timestamp,
+                                                      lastNudgedAt: now,
+                                                      remindersSent: 0)
+            }
+        }
+        // Retire on the FIFO alone, never on store membership — see PromptWatch.
+        // The age cap is the backstop for a hook killed hard enough to skip its
+        // cleanup trap: past its own timeout the prompt can't be answered from
+        // the panel anyway, so a leaked FIFO must not pin the count on forever.
+        promptWatches = promptWatches.filter { _, watch in
+            isBlockingPrompt(watch.event)
+                && now.timeIntervalSince(watch.firstSeenAt) < AttentionPolicy.promptLifetime
+        }
+    }
+
+    // Re-nudge one prompt per tick — the oldest that's due. postBanner clears
+    // delivered notifications first, so firing several at once would leave only
+    // the last on screen and burn the others' reminder budget for nothing. At a
+    // 5s tick a queue still drains promptly.
+    private func remindOnOldestDuePrompt(now: Date) {
+        guard nav.remindMinutes > 0, !promptWatches.isEmpty else { return }
+        // Deliberately not gated on nav.isMuted: mute means "stop interrupting
+        // me *here*", and Slack exists because the user is elsewhere — the same
+        // rule postBannerIfNeeded already applies to the first nudge. Gating the
+        // reminder too made the two inconsistent: muted users got the opening
+        // Slack DM and then silence. Local cues are still gated, below.
+        let localEligible = !nav.isMuted
+        let slackEligible = nav.slackEnabled && nav.slackTokenPresent && nav.slackMemberID != nil
+        // Nothing can be delivered, so don't spend a reminder from the budget —
+        // the prompt should still get its nudges once the mute lifts.
+        guard localEligible || slackEligible else { return }
+
+        let due = promptWatches.values
+            .filter { watch in
+                AttentionPolicy.shouldRemind(now: now,
+                                             firstSeenAt: watch.firstSeenAt,
+                                             lastNudgedAt: watch.lastNudgedAt,
+                                             remindersSent: watch.remindersSent,
+                                             intervalMinutes: nav.remindMinutes)
+            }
+            // A per-session mute silences its prompts too, matching the
+            // first-banner gate in postBannerIfNeeded.
+            .filter { !nav.isSessionMuted(event: $0.event, in: sessions.sessions) }
+
+        guard let watch = due.min(by: { $0.firstSeenAt < $1.firstSeenAt }) else { return }
+        let event = watch.event
+
+        let config = PanelConfig.load()
+        promptWatches[event.id]?.lastNudgedAt = now
+        promptWatches[event.id]?.remindersSent += 1
+
+        notifySlack(for: event, isReminder: true)
+
+        guard localEligible else { return }
+        if config.bannerEnabled {
+            postBanner(for: event,
+                       body: AttentionPolicy.reminderBody(original: event.message,
+                                                          waitedSince: watch.firstSeenAt,
+                                                          now: now))
+        }
+        // Same contract as a first nudge: voice replaces the chime when it's on.
+        if config.voiceEnabled {
+            let label = sessionLabel(for: event) ?? event.agent
+            Speaker.speak("Still waiting on \(label)",
+                          voice: config.voiceName, speed: config.voiceSpeed)
+        } else if config.soundEnabled, let sound = event.soundName {
+            Speaker.playSound(named: sound)
+        }
+    }
+
+    // Sessions the agent still reports as busy that have produced nothing for
+    // the configured window — usually a wedged tool call. Flagged in the
+    // Sessions tab only; no banner, because unlike a permission prompt there's
+    // no action to take and a stall often resolves itself.
+    private func refreshStalledSessions(now: Date) {
+        guard nav.stalledMinutes > 0 else {
+            if !nav.stalledSessionKeys.isEmpty { nav.stalledSessionKeys = [] }
+            return
+        }
+        let stalled = Set(sessions.sessions.compactMap { session -> String? in
+            guard AttentionPolicy.isStalled(lastActivityAt: session.lastActivityAt,
+                                            busy: session.liveStatus == "busy",
+                                            now: now,
+                                            thresholdMinutes: nav.stalledMinutes)
+            else { return nil }
+            return SessionPersistence.key(for: session)
+        })
+        if stalled != nav.stalledSessionKeys { nav.stalledSessionKeys = stalled }
+    }
+
+    // Single owner of the status item's appearance: the mute countdown wins the
+    // icon when muted, and the pending-prompt count rides alongside either way.
+    private func refreshStatusBadge() {
+        menuBar?.refreshStatusBadge(muteUntil: nav.muteUntil,
+                                    pendingPrompts: nav.pendingPromptCount)
     }
 
     // Snooze: mark the event, schedule a Timer to clear the snooze flag and
@@ -3015,6 +3529,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
         let shifted = mods.contains(.shift)
 
+        // History pane: the search field is normally first responder and
+        // handles Esc itself via .onExitCommand, because a focused field editor
+        // consumes keys before they reach NSWindow.keyDown. This branch is the
+        // fallback for when focus is elsewhere (a row was clicked, focus lost),
+        // and deliberately swallows everything else so panel shortcuts can't
+        // fire against a pane they don't apply to.
+        if nav.eventsPane == .history {
+            guard event.keyCode == KeyCode.escape else { return false }
+            if nav.historyQuery.isEmpty { nav.eventsPane = .live } else { nav.historyQuery = "" }
+            return true
+        }
+
         // S/Shift+S handled before the no-shift switch since both variants
         // are valid; everything else requires no shift.
         if event.keyCode == KeyCode.sKey {
@@ -3038,6 +3564,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             dismissSelected()
         case KeyCode.mKey:
             toggleGlobalMute()
+        case KeyCode.hKey:
+            nav.eventsPane = .history
         default:
             return false
         }
@@ -3322,6 +3850,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // NSApp.hide hides all our windows AND deactivates the app, so the system
     // frontmost reverts to whatever was active before the panel was summoned.
     private func hidePanel() {
+        // History is a lookup, not a place to leave the panel parked — the
+        // next summon should land on the live queue. Mirrors the Outcomes tab
+        // resetting to its overview pane on each open.
+        nav.eventsPane = .live
+        nav.historyQuery = ""
         // Compact mode: "hide" means "collapse back to the pill," never
         // make the user lose their widget entirely. Esc / hotkey / focus
         // loss all funnel through here.

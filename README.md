@@ -147,15 +147,54 @@ Recent nudges in chronological order. Each shows agent, message, project name, t
 | `O` | Focus source editor without approving |
 | `M` | Mute all notifications for the configured duration (press again to resume) |
 | `⌫` | Dismiss the selected nudge locally |
+| `H` | Open the searchable history pane |
 | `Esc` | Hide the panel |
 
 When you press `⏎` on a permission event in a VS Code / Cursor terminal pane, stack-nudge walks the editor's accessibility tree to focus the right pane (matched by the agent name in the tab title) before sending Enter — so the approval keystroke lands in the agent's terminal, not whatever was last focused. Falls back gracefully if the pane can't be found.
 
 **Mute for a while.** Press `M` (or use the bell button in the panel header, or the menu-bar **Mute notifications** submenu) to silence *everything* — banner, sound, voice, and the focus jump — for a set duration, **including permission prompts**. Events keep flowing into the panel while muted; only the interruptions are suppressed. A live countdown shows on the header bell and the menu-bar icon (the compact widget just shows a muted-bell glyph), and the mute lifts itself when the timer runs out (or immediately if you press `M` / **Resume** again). The default duration is configurable (`STACKNUDGE_MUTE_DURATION_MIN`, one of 15 / 30 / 60 / 120, default 30) and can be cycled in Settings. Mute is in-memory only — it resets on relaunch.
 
+**History.** The list above is a live triage queue — capped, pruned per session, and gone when you quit. Press `H` for the durable log behind it: every nudge, newest first, with a filter box that matches on message, agent, and repo. `Esc` clears the filter, then steps back to the queue.
+
+History is deliberately a separate pane rather than more rows in the queue. The queue is an action list — `⏎` approves, `⌫` dismisses — and a replayed record has no FIFO to answer and no process to focus, so mixing the two would make those keys mean different things depending on which row you happened to land on.
+
+Records live in `~/.stack-nudge/events.jsonl` (mode 0600), one JSON object per line, holding timestamp, agent, kind, title, message, repo path, and session id — the descriptive fields only, never the FIFO paths or PIDs. They're kept for 30 days or 10,000 records, whichever binds first, trimmed once per launch. **The log contains prompt and tool text**, so if that isn't something you want on disk, turn it off in Settings → **Event history** (`STACKNUDGE_EVENT_HISTORY=false`); Settings → **Clear event history** deletes the file outright. Nothing is ever sent anywhere — this is a local file, same as the rest of `~/.stack-nudge`.
+
+**Reminders for prompts you didn't answer.** macOS slides a banner into Notification Center after a few seconds, so a permission prompt you missed used to leave the agent blocked with nothing on screen to say so. stack-nudge now re-nudges: while a prompt is still waiting, it fires again on an interval (`STACKNUDGE_REMIND_MIN`, one of 1 / 2 / 5 minutes, default 2, `Off` to disable), up to three times — or fewer at longer intervals, since reminders stop once the hook hits its own 550-second timeout. The reminder carries the same **Allow** / **Deny** buttons and reads *"Still waiting 4m · Bash(rm -rf build/)"*, and the menu-bar icon shows a live count of prompts waiting on you — the one signal that survives an expired banner.
+
+Reminders only fire for prompts stack-nudge can *prove* are unanswered. Claude Code and Codex permission hooks block on a FIFO that's removed the moment the hook exits, so its presence means nobody has answered — in the panel, on the banner, or in the terminal. Gemini and Antigravity route permissions through fire-and-forget notification hooks with no such signal, so they get the single banner they always did rather than reminders that might be about something you already handled. Reminders stop at three, and stop early once the hook hits its own 550-second timeout and the agent falls back to prompting in the terminal. A per-session mute silences them like any other nudge. A *global* mute silences the banner and sound but not the Slack DM — see the Slack section for why.
+
+**Slack, for when you're not at the Mac.** Banners only work if you're looking at the screen. Point stack-nudge at a Slack bot token and a permission prompt also arrives as a DM **from StackNudge** — which, unlike a message you send yourself, actually notifies you.
+
+| Setting | Default | |
+|---|---|---|
+| `STACKNUDGE_SLACK` | off | Master switch; turned on for you by a successful test message |
+| `STACKNUDGE_SLACK_IDLE_MIN` | `5` | Minutes idle before Slack is used. `Always`, or 5–60 in steps of 5 |
+| `STACKNUDGE_SLACK_DETAIL` | off | Include the tool call, not just the headline |
+| `STACKNUDGE_SLACK_STOP` | off | Also DM on finished turns, not just permission prompts |
+| `STACKNUDGE_SLACK_MEMBER_ID` | — | Who to DM. Detected for you; not secret |
+
+**Setup, once per person:** Settings → **Paste Slack setup** reads your clipboard and takes either an `xoxb-…` bot token, a `U…` member ID, or a JSON blob with both — so an org can keep one password-manager entry and onboarding is a single paste. stack-nudge then looks you up from your `git config user.email` and shows who it found; that's a *suggestion*, and pasting a member ID overrides it. **Send test message** confirms the whole chain and switches delivery on.
+
+**Setup, once per org:** create a Slack app, give its **bot** token `chat:write` (plus `users:read.email` and `users:read` if you want the automatic user lookup), install it, and share the `xoxb-` token internally. There is deliberately **no default app and no embedded credentials** — every install points at its own workspace.
+
+The token lives in the **Keychain**, never `~/.stack-nudge/config`. For scripted provisioning you can plant `STACKNUDGE_SLACK_BOT_TOKEN` in the config file; stack-nudge moves it into the Keychain on next launch and deletes the line. (The config file is now written `0600` regardless — it never needed to be world-readable.)
+
+Three things worth knowing about how it behaves:
+
+- **It's idle-gated, not a mirror.** By default nothing reaches Slack until the Mac has been untouched for 5 minutes — there's no point pinging your phone about a prompt you're already looking at. Set it to `Always` if you'd rather have everything. Reminders for prompts you never answered skip the gate: you may be back at the desk and still not have seen the banner.
+- **A global mute does *not* silence Slack.** Mute means "stop interrupting me *here*", and Slack exists precisely because you're elsewhere. Use the Slack switch to stop it. A *per-session* mute does apply, same as it does to banners.
+- **Titles only, by default.** A DM reads *"Claude Code in attack-lib needs permission"*. The tool call itself (`Bash(rm -rf build/)`) stays on your machine unless you turn on **Include message text**, because command lines carry paths, hostnames, and sometimes secrets, and this is the one path that leaves the Mac.
+
+You can't approve or deny from Slack — that needs an inbound endpoint this app deliberately doesn't have.
+
+> **Why a bot token and not "Connect with Slack"?** We tried. Slack supports OAuth with PKCE, which lets a desktop app authenticate with no client secret and no server — but *"desktop redirects are not allowed to request bot scopes"*, so it only yields a **user** token, and a user token can only post *as you*. Slack never notifies you about your own messages, so those DMs arrive silently. A notifying DM requires a bot token, a bot token requires the client-secret exchange, and a desktop app can't hold a secret. Slackbot reminders were the remaining workaround and Slack retired that API in March 2023. Hence: provision the token, paste it once.
+
 #### Sessions tab
 
 Live list of running agent processes (`claude`, `gemini`, `codex` — including node-hosted variants like `gemini-cli`). Polls every 3 seconds while visible and every 15 seconds in the background for the compact widget. Sessions that exit linger for 30s with `ended Ns ago`.
+
+**Stalled sessions.** An agent that reports itself busy but has produced nothing for a while is usually a wedged tool call. Set `Settings → Flag stalled after` (`STACKNUDGE_STALLED_MIN`, one of 10 / 20 / 30 / 60 minutes, default `Off`) and those rows turn amber and read `stalled · no output 24m` instead of a `busy` that implies progress. Flagging only — no banner, since there's nothing to approve and a stall often clears itself.
 
 For Claude Code sessions specifically, stack-nudge reads `~/.claude/sessions/<pid>.json` (Claude Code's per-process sidecar) to surface live data without waiting for a hook event:
 
@@ -188,6 +227,10 @@ Numbers come straight from the `claude` CLI — stack-nudge shells out to `claud
 
 Polls every 60 seconds while the full panel is open, and otherwise every 5 minutes by default (configurable via Settings → Usage → "Poll frequency"). The collapsed widget counts as background, so it polls at your configured frequency rather than the faster open-panel rate. Opening the panel syncs immediately if the last one is over a minute old. On the Usage tab: `r` triggers a manual sync, `p` pauses/resumes the poller.
 
+Claude, Codex, and Antigravity each appear in the tab's client list when they have quota to show; `↑`/`↓` switch between them. **The compact widget's gauge follows whatever you select here** — pick Codex in the Usage tab and the pill's rings, hover legend, and reset countdown all switch to Codex, with the client name shown in the legend on hover. All three are read on the same poll tick, so switching costs nothing. The selection is in-memory and resets to the first connected client on relaunch.
+
+For Claude and Codex the two rings are the 5-hour and weekly windows. Antigravity reports neither — it publishes one window per model plus a monthly credit pool — so its inner ring shows whichever model is closest to its limit and the outer ring shows monthly prompt credits. Gemini CLI has no usage counter: unlike the others it writes no rate-limit data to disk and serves no local endpoint, so there's nothing to read.
+
 #### Threshold-crossing notifications
 
 When any quota tier reaches your configured threshold, stack-nudge fires a banner — *"Weekly quota at 85% — resets May 17"* — once per period per tier, so you get a heads-up before hitting the cap. Configure in Settings → Usage:
@@ -207,7 +250,7 @@ Independent of quota: stack-nudge can also fire a banner when an individual Clau
 
 #### Settings tab
 
-Reachable from the tab strip or `Cmd+5`. Keyboard-driven rows for hotkey, behavior toggles (banner, mute when focused, a Mute/Resume action row with mute duration, pin panel, launch at login), widget (corner, mascot picker, opacity), sound picks (with preview-on-cycle), voice notifications + picker + speed (with preview-on-cycle using a random conversational phrase), usage config (quota tracking + alerts + threshold + poll frequency + context alert threshold + show-remaining), and action rows (edit phrases, check permissions, open config file, view release notes, check for updates, uninstall, quit).
+Reachable from the tab strip or `Cmd+5`. Keyboard-driven rows for hotkey, behavior toggles (banner, mute when focused, a Mute/Resume action row with mute duration, unanswered-prompt reminder interval, stalled-session threshold, pin panel, launch at login), widget (snap-to-corners toggle, corner, mascot picker, opacity), sound picks (with preview-on-cycle), voice notifications + picker + speed (with preview-on-cycle using a random conversational phrase), usage config (quota tracking + alerts + threshold + poll frequency + context alert threshold + show-remaining), event history (recording toggle + clear), Slack (paste setup, detected user, test message, notifications toggle, idle threshold, message detail, finished-turn toggle), and action rows (edit phrases, check permissions, open config file, view release notes, check for updates, uninstall, quit).
 
 | Key | Action |
 |-----|--------|

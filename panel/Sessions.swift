@@ -70,6 +70,8 @@ struct SessionsView: View {
                             lastNudgeAt: nudges.lastAt,
                             transcriptStats: transcriptStats(for: session),
                             isMuted: nav.isMuted(session),
+                            isStalled: SessionPersistence.key(for: session)
+                                .map(nav.stalledSessionKeys.contains) ?? false,
                             onCommit: { store.commitRename() },
                             onCancel: { store.cancelRename() }
                         )
@@ -195,6 +197,10 @@ private struct SessionRow: View {
     let lastNudgeAt: Date?
     let transcriptStats: TranscriptStats?
     let isMuted: Bool
+    // Busy but silent past the configured window — see AttentionPolicy.isStalled.
+    // Computed by PanelController's attention tick rather than per row so every
+    // row agrees on "now".
+    let isStalled: Bool
     let onCommit: () -> Void
     let onCancel: () -> Void
 
@@ -403,10 +409,18 @@ private struct SessionRow: View {
         }
     }
 
+    // Stalled rows keep their card but swap the head of the status line, since
+    // "busy · 40m ago" reads as progress when it's the opposite.
+    private var stalledNote: String? {
+        guard isStalled, let last = session.lastActivityAt else { return nil }
+        return AttentionPolicy.stalledLabel(lastActivityAt: last)
+    }
+
     private var glyphColor: Color {
         switch session.status {
         case .finished: return .secondary
         case .active where session.isDormant(): return .secondary
+        case .active where isStalled: return .orange
         case .active:
             // For claude sessions we get a live busy/idle signal from the
             // ~/.claude/sessions/<pid>.json sidecar; reflect it in the dot
@@ -434,6 +448,7 @@ private struct SessionRow: View {
             // activity Nm ago" from the sidecar's updatedAt when available
             // — more useful than process elapsed time, which only tells
             // you how long ago the process was spawned.
+            if let stalledNote { return "stalled · \(stalledNote)" }
             let head = session.isDormant() ? "dormant" : (session.liveStatus ?? "active")
             if let updated = session.lastActivityAt {
                 return "\(head) · \(RelativeTime.string(updated))"

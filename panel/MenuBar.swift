@@ -20,8 +20,29 @@ enum ConfigFile {
 
     static func write(key: String, value: String) {
         let contents = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
-        let updated = apply(contents, key: key, value: value)
-        try? updated.write(toFile: path, atomically: true, encoding: .utf8)
+        persist(apply(contents, key: key, value: value))
+    }
+
+    // Drop a key entirely. Used to scrub a secret that was planted here for
+    // provisioning once it has been moved into the Keychain.
+    static func remove(key: String) {
+        guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else { return }
+        persist(strip(contents, key: key))
+    }
+
+    // An atomic write replaces the file, so the mode has to be reapplied every
+    // time or it reverts to the umask default (0644 in practice). Nothing in
+    // here benefits from being world-readable, and secrets pass through during
+    // provisioning.
+    static func persist(_ contents: String, to path: String = ConfigFile.path) {
+        // Create the directory first: before Bootstrap has run there is no
+        // ~/.stack-nudge, and the write would otherwise fail silently.
+        try? FileManager.default.createDirectory(
+            atPath: (path as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true)
+        try? contents.write(toFile: path, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600],
+                                               ofItemAtPath: path)
     }
 
     static func bool(_ map: [String: String], _ key: String, default defaultValue: Bool) -> Bool {
@@ -66,6 +87,19 @@ enum ConfigFile {
             lines.append(newLine)
             lines.append("")
         }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Return `contents` with every uncommented assignment of `key` removed,
+    /// leaving surrounding lines and comments untouched.
+    static func strip(_ contents: String, key: String) -> String {
+        var lines = contents.components(separatedBy: "\n")
+        lines.removeAll { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return !trimmed.hasPrefix("#") && trimmed.hasPrefix("\(key)=")
+        }
+        while lines.last?.isEmpty == true { lines.removeLast() }
+        lines.append("")
         return lines.joined(separator: "\n")
     }
 
@@ -250,22 +284,34 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         minutes % 60 == 0 ? "\(minutes / 60)h" : "\(minutes)m"
     }
 
-    // Swap the status-bar icon to a muted bell + countdown while muted, and
-    // back to the brand mark when the mute lifts. Driven by PanelController's
-    // countdown timer and its mute/resume calls.
-    func refreshMuteBadge(until: Date?) {
+    // Sole owner of the status item's appearance. Two independent signals share
+    // it: the mute countdown takes the icon while muted, and the count of
+    // permission prompts still blocking an agent rides alongside either way —
+    // that count is the only trace left once a banner has expired into
+    // Notification Center, so it must survive a mute.
+    func refreshStatusBadge(muteUntil: Date?, pendingPrompts: Int) {
         guard let button = statusItem.button else { return }
-        if let until, until > Date() {
+        let muted = muteUntil.map { $0 > Date() } ?? false
+        var parts: [String] = []
+
+        if muted, let muteUntil {
             let img = NSImage(systemSymbolName: "bell.slash.fill",
                               accessibilityDescription: "StackNudge (muted)")
             img?.isTemplate = true
             button.image = img
-            button.imagePosition = .imageLeft
-            button.title = " " + PanelNav.muteRemainingLabel(until: until)
+            parts.append(PanelNav.muteRemainingLabel(until: muteUntil))
         } else {
             button.image = MenuBarController.brandMarkImage()
-            button.title = ""
         }
+
+        if pendingPrompts > 0 {
+            parts.append("\(pendingPrompts)⏳")
+        }
+        button.imagePosition = .imageLeft
+        button.title = parts.isEmpty ? "" : " " + parts.joined(separator: " ")
+        button.toolTip = pendingPrompts > 0
+            ? "\(pendingPrompts) prompt\(pendingPrompts == 1 ? "" : "s") waiting for you"
+            : nil
     }
 
     private func toggle(_ title: String, state: Bool, key: String) -> NSMenuItem {
