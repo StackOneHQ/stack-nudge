@@ -74,6 +74,8 @@ struct SettingsView: View {
                             row(.muteWhenFocused,  label: "Mute when focused",    kind: .toggle, value: nav.muteWhenFocused  ? "On" : "Off")
                             row(.mute,             label: nav.isMuted ? "Resume notifications" : "Mute notifications", kind: .mute, value: muteRowValue)
                             row(.muteDuration,     label: "Mute duration",        kind: .cycle,  value: "\(nav.muteDurationMinutes) min")
+                            row(.remindUnanswered, label: "Remind unanswered",    kind: .cycle,  value: AttentionPolicy.minuteLabel(nav.remindMinutes))
+                            row(.stalledSessions,  label: "Flag stalled after",   kind: .cycle,  value: AttentionPolicy.minuteLabel(nav.stalledMinutes))
                             row(.pinPanel,         label: "Pin panel",            kind: .toggle, value: nav.panelPinned      ? "On" : "Off")
                             row(.keepOpenWhenEmpty, label: "Keep open when empty", kind: .toggle, value: nav.keepOpenWhenEmpty ? "On" : "Off")
                             row(.launchAtLogin,    label: "Launch at login",      kind: .toggle, value: nav.launchAtLogin    ? "On" : "Off")

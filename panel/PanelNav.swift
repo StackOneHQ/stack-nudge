@@ -145,7 +145,8 @@ enum SettingsRow: Hashable {
     // keyboard-reachable rather than mouse-only.
     case wireAgents, dismissAgents
     case permissions, update, hotkey
-    case banner, muteWhenFocused, mute, muteDuration, pinPanel, keepOpenWhenEmpty, launchAtLogin
+    case banner, muteWhenFocused, mute, muteDuration, remindUnanswered, stalledSessions,
+         pinPanel, keepOpenWhenEmpty, launchAtLogin
     case widget, snapToCorners, widgetCorner, widgetOpacity, widgetContent, mascot, theme
     case soundEnabled, agentDoneSound, permissionSound
     case voiceEnabled, voice, voiceSpeed, speakHotkey, downloadVoiceModel
@@ -718,6 +719,19 @@ final class PanelNav: ObservableObject {
     // Threshold-crossing notifications. quotaAlertsEnabled is the master
     // switch; quotaAlertThreshold is the single percent value used across
     // all tiers — banner fires once per period when any tier reaches it.
+    // Minutes between reminders for a permission prompt nobody has answered,
+    // and minutes of silence before a still-busy session is called stalled.
+    // 0 disables each. See AttentionPolicy for what counts as unanswered.
+    @Published var remindMinutes:  Int = 2
+    @Published var stalledMinutes: Int = 0
+    // Permission prompts currently blocking an agent, refreshed by
+    // PanelController's attention tick. Drives the menu-bar count.
+    @Published var pendingPromptCount: Int = 0
+    // Session composite keys (SessionPersistence.key) currently flagged as
+    // stalled, so the Sessions tab can mark the rows without re-deriving the
+    // threshold per row.
+    @Published var stalledSessionKeys: Set<String> = []
+
     @Published var quotaTrackingEnabled: Bool = true
     @Published var quotaAlertsEnabled:   Bool = true
     @Published var quotaShowRemaining:   Bool = false
@@ -865,7 +879,8 @@ final class PanelNav: ObservableObject {
         if !missingPermissions.isEmpty { rows.append(.permissions) }
         if updateAvailable != nil { rows.append(.update) }
         rows += [.hotkey,
-                 .banner, .muteWhenFocused, .mute, .muteDuration, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin,
+                 .banner, .muteWhenFocused, .mute, .muteDuration, .remindUnanswered, .stalledSessions,
+                 .pinPanel, .keepOpenWhenEmpty, .launchAtLogin,
                  .widget, .snapToCorners, .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme,
                  .soundEnabled, .agentDoneSound, .permissionSound,
                  .voiceEnabled, .speakHotkey]
@@ -945,6 +960,10 @@ final class PanelNav: ObservableObject {
         quotaPollMinutes = Self.quotaPollMinuteOptions.min(by: { abs($0 - rawPoll) < abs($1 - rawPoll) }) ?? 5
         let rawCtx = Int(config["STACKNUDGE_CONTEXT_ALERT_THRESHOLD"] ?? "") ?? 0
         contextAlertThresholdK = Self.contextAlertThresholdOptions.min(by: { abs($0 - rawCtx) < abs($1 - rawCtx) }) ?? 0
+        let rawRemind = Int(config["STACKNUDGE_REMIND_MIN"] ?? "") ?? 2
+        remindMinutes = AttentionPolicy.reminderMinuteOptions.min(by: { abs($0 - rawRemind) < abs($1 - rawRemind) }) ?? 2
+        let rawStalled = Int(config["STACKNUDGE_STALLED_MIN"] ?? "") ?? 0
+        stalledMinutes = AttentionPolicy.stalledMinuteOptions.min(by: { abs($0 - rawStalled) < abs($1 - rawStalled) }) ?? 0
         compactMode   = ConfigFile.bool(config, "STACKNUDGE_COMPACT_MODE", default: true)
         compactCorner = CompactCorner(rawValue: config["STACKNUDGE_COMPACT_CORNER"] ?? "")
             ?? .topRight
@@ -1225,7 +1244,8 @@ final class PanelNav: ObservableObject {
              .releaseNotes, .checkUpdates, .uninstall, .quit, .none:
             return false
         case .permissions, .update, .hotkey, .speakHotkey,
-             .banner, .muteWhenFocused, .mute, .muteDuration, .pinPanel,
+             .banner, .muteWhenFocused, .mute, .muteDuration,
+             .remindUnanswered, .stalledSessions, .pinPanel,
              .keepOpenWhenEmpty, .launchAtLogin,
              .widget, .snapToCorners, .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme,
              .soundEnabled, .agentDoneSound, .permissionSound,
@@ -1316,6 +1336,21 @@ final class PanelNav: ObservableObject {
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
             muteDurationMinutes = list[next]
             ConfigFile.write(key: "STACKNUDGE_MUTE_DURATION_MIN", value: String(muteDurationMinutes))
+        case .remindUnanswered:
+            let list = AttentionPolicy.reminderMinuteOptions
+            let idx = list.firstIndex(of: remindMinutes) ?? 0
+            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+            remindMinutes = list[next]
+            ConfigFile.write(key: "STACKNUDGE_REMIND_MIN", value: String(remindMinutes))
+        case .stalledSessions:
+            let list = AttentionPolicy.stalledMinuteOptions
+            let idx = list.firstIndex(of: stalledMinutes) ?? 0
+            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+            stalledMinutes = list[next]
+            ConfigFile.write(key: "STACKNUDGE_STALLED_MIN", value: String(stalledMinutes))
+            // Clearing the threshold must clear the flags too — nothing else
+            // recomputes them once the tick stops evaluating.
+            if stalledMinutes == 0 { stalledSessionKeys = [] }
         case .pinPanel:
             panelPinned.toggle()
             ConfigFile.write(key: "STACKNUDGE_PANEL_PIN", value: panelPinned ? "true" : "false")

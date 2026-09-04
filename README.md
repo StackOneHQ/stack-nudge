@@ -153,9 +153,15 @@ When you press `⏎` on a permission event in a VS Code / Cursor terminal pane, 
 
 **Mute for a while.** Press `M` (or use the bell button in the panel header, or the menu-bar **Mute notifications** submenu) to silence *everything* — banner, sound, voice, and the focus jump — for a set duration, **including permission prompts**. Events keep flowing into the panel while muted; only the interruptions are suppressed. A live countdown shows on the header bell and the menu-bar icon (the compact widget just shows a muted-bell glyph), and the mute lifts itself when the timer runs out (or immediately if you press `M` / **Resume** again). The default duration is configurable (`STACKNUDGE_MUTE_DURATION_MIN`, one of 15 / 30 / 60 / 120, default 30) and can be cycled in Settings. Mute is in-memory only — it resets on relaunch.
 
+**Reminders for prompts you didn't answer.** macOS slides a banner into Notification Center after a few seconds, so a permission prompt you missed used to leave the agent blocked with nothing on screen to say so. stack-nudge now re-nudges: while a prompt is still waiting, it fires again on an interval (`STACKNUDGE_REMIND_MIN`, one of 1 / 2 / 5 / 10 minutes, default 2, `Off` to disable), up to three times. The reminder carries the same **Allow** / **Deny** buttons and reads *"Still waiting 4m · Bash(rm -rf build/)"*, and the menu-bar icon shows a live count of prompts waiting on you — the one signal that survives an expired banner.
+
+Reminders only fire for prompts stack-nudge can *prove* are unanswered. Claude Code and Codex permission hooks block on a FIFO that's removed the moment the hook exits, so its presence means nobody has answered — in the panel, on the banner, or in the terminal. Gemini and Antigravity route permissions through fire-and-forget notification hooks with no such signal, so they get the single banner they always did rather than reminders that might be about something you already handled. Reminders stop at three, and stop early once the hook hits its own 550-second timeout and the agent falls back to prompting in the terminal. A global mute or a per-session mute silences them like any other nudge.
+
 #### Sessions tab
 
 Live list of running agent processes (`claude`, `gemini`, `codex` — including node-hosted variants like `gemini-cli`). Polls every 3 seconds while visible and every 15 seconds in the background for the compact widget. Sessions that exit linger for 30s with `ended Ns ago`.
+
+**Stalled sessions.** An agent that reports itself busy but has produced nothing for a while is usually a wedged tool call. Set `Settings → Flag stalled after` (`STACKNUDGE_STALLED_MIN`, one of 10 / 20 / 30 / 60 minutes, default `Off`) and those rows turn amber and read `stalled · no output 24m` instead of a `busy` that implies progress. Flagging only — no banner, since there's nothing to approve and a stall often clears itself.
 
 For Claude Code sessions specifically, stack-nudge reads `~/.claude/sessions/<pid>.json` (Claude Code's per-process sidecar) to surface live data without waiting for a hook event:
 
@@ -211,7 +217,7 @@ Independent of quota: stack-nudge can also fire a banner when an individual Clau
 
 #### Settings tab
 
-Reachable from the tab strip or `Cmd+5`. Keyboard-driven rows for hotkey, behavior toggles (banner, mute when focused, a Mute/Resume action row with mute duration, pin panel, launch at login), widget (snap-to-corners toggle, corner, mascot picker, opacity), sound picks (with preview-on-cycle), voice notifications + picker + speed (with preview-on-cycle using a random conversational phrase), usage config (quota tracking + alerts + threshold + poll frequency + context alert threshold + show-remaining), and action rows (edit phrases, check permissions, open config file, view release notes, check for updates, uninstall, quit).
+Reachable from the tab strip or `Cmd+5`. Keyboard-driven rows for hotkey, behavior toggles (banner, mute when focused, a Mute/Resume action row with mute duration, unanswered-prompt reminder interval, stalled-session threshold, pin panel, launch at login), widget (snap-to-corners toggle, corner, mascot picker, opacity), sound picks (with preview-on-cycle), voice notifications + picker + speed (with preview-on-cycle using a random conversational phrase), usage config (quota tracking + alerts + threshold + poll frequency + context alert threshold + show-remaining), and action rows (edit phrases, check permissions, open config file, view release notes, check for updates, uninstall, quit).
 
 | Key | Action |
 |-----|--------|

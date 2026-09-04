@@ -250,22 +250,34 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         minutes % 60 == 0 ? "\(minutes / 60)h" : "\(minutes)m"
     }
 
-    // Swap the status-bar icon to a muted bell + countdown while muted, and
-    // back to the brand mark when the mute lifts. Driven by PanelController's
-    // countdown timer and its mute/resume calls.
-    func refreshMuteBadge(until: Date?) {
+    // Sole owner of the status item's appearance. Two independent signals share
+    // it: the mute countdown takes the icon while muted, and the count of
+    // permission prompts still blocking an agent rides alongside either way —
+    // that count is the only trace left once a banner has expired into
+    // Notification Center, so it must survive a mute.
+    func refreshStatusBadge(muteUntil: Date?, pendingPrompts: Int) {
         guard let button = statusItem.button else { return }
-        if let until, until > Date() {
+        let muted = muteUntil.map { $0 > Date() } ?? false
+        var parts: [String] = []
+
+        if muted, let muteUntil {
             let img = NSImage(systemSymbolName: "bell.slash.fill",
                               accessibilityDescription: "StackNudge (muted)")
             img?.isTemplate = true
             button.image = img
-            button.imagePosition = .imageLeft
-            button.title = " " + PanelNav.muteRemainingLabel(until: until)
+            parts.append(PanelNav.muteRemainingLabel(until: muteUntil))
         } else {
             button.image = MenuBarController.brandMarkImage()
-            button.title = ""
         }
+
+        if pendingPrompts > 0 {
+            parts.append("\(pendingPrompts)⏳")
+        }
+        button.imagePosition = .imageLeft
+        button.title = parts.isEmpty ? "" : " " + parts.joined(separator: " ")
+        button.toolTip = pendingPrompts > 0
+            ? "\(pendingPrompts) prompt\(pendingPrompts == 1 ? "" : "s") waiting for you"
+            : nil
     }
 
     private func toggle(_ title: String, state: Bool, key: String) -> NSMenuItem {

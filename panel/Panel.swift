@@ -761,6 +761,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         store.onAppend = { [weak self] event in
             self?.lastEventArrivalAt = Date()
             self?.postBannerIfNeeded(event)
+            // Register the watch now rather than waiting up to 5s, so the
+            // menu-bar count appears with the banner.
+            self?.tickAttention()
             self?.refreshTranscriptStats(for: event)
             self?.captureHandoff(for: event)
             self?.nav.reactToEvent(event.kind)
@@ -780,6 +783,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         updater = Updater(nav: nav)
 
         startQuotaPolling()
+        startAttentionTicking()
         // The pill (CompactView) reads sessions.sessions for the busy/idle
         // headline and mascot state, so polling has to run as soon as the
         // app is up — not gated on the Sessions tab being visible. Sessions
@@ -2304,10 +2308,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                                 persistence: SessionPersistence.shared)
     }
 
-    private func postBanner(for event: NudgeEvent) {
+    // `body` overrides event.message — the reminder path reuses everything else
+    // (title, category, userInfo) so a re-nudge stays actionable from the
+    // banner's own Allow / Deny buttons.
+    private func postBanner(for event: NudgeEvent, body: String? = nil) {
         let content = UNMutableNotificationContent()
         content.title = bannerTitle(for: event)
-        content.body  = event.message
+        content.body  = body ?? event.message
         content.categoryIdentifier = event.kind == .permission ? "PERMISSION" : "STOP"
         content.userInfo = ["eventID": event.id.uuidString]
 
@@ -2341,9 +2348,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 return
             }
             self.nav.muteTick += 1
-            self.menuBar?.refreshMuteBadge(until: until)
+            self.refreshStatusBadge()
         }
-        menuBar?.refreshMuteBadge(until: nav.muteUntil)
+        refreshStatusBadge()
     }
 
     func resumeNotifications() {
@@ -2351,7 +2358,141 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         muteTicker = nil
         nav.muteUntil = nil
         nav.muteTick += 1
-        menuBar?.refreshMuteBadge(until: nil)
+        refreshStatusBadge()
+    }
+
+    // MARK: - Attention: unanswered prompts + stalled sessions
+
+    // One entry per permission prompt still blocking its agent.
+    private struct PromptWatch {
+        let firstSeenAt: Date
+        var lastNudgedAt: Date
+        var remindersSent: Int
+    }
+    private var promptWatches: [NudgeEvent.ID: PromptWatch] = [:]
+    private var attentionTicker: Timer?
+
+    // 5s so the menu-bar count clears promptly after an approval. Nothing
+    // explicitly deregisters a watch — see reconcilePromptWatches — so the tick
+    // is also what notices a prompt was answered, and a slower cadence would
+    // leave a stale count on screen.
+    private func startAttentionTicking() {
+        attentionTicker?.invalidate()
+        attentionTicker = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            self?.tickAttention()
+        }
+    }
+
+    private func tickAttention() {
+        let now = Date()
+        reconcilePromptWatches(now: now)
+        if nav.pendingPromptCount != promptWatches.count {
+            nav.pendingPromptCount = promptWatches.count
+            refreshStatusBadge()
+        }
+        remindOnOldestDuePrompt(now: now)
+        refreshStalledSessions(now: now)
+    }
+
+    // A permission prompt we can *prove* is still blocking: notify.sh creates
+    // the FIFO before emitting the event and removes it on exit (the EXIT trap
+    // in wait_for_permission_response), so the file existing means nobody has
+    // answered yet — in the panel, on the banner, or in the terminal.
+    //
+    // Observability-only agents (Gemini, Antigravity) get no FIFO because their
+    // hooks can't consume a decision, so they're never reminded about. A
+    // reminder we can't verify would eventually fire for prompts already
+    // handled in the terminal, and a nudge that cries wolf is worse than none.
+    private func isBlockingPrompt(_ event: NudgeEvent) -> Bool {
+        guard event.kind == .permission, let fifo = event.fifoPath else { return false }
+        return FileManager.default.fileExists(atPath: fifo)
+    }
+
+    // Register newly-arrived prompts and drop answered ones. Deliberately
+    // reconciled from observable state rather than hooked into each resolution
+    // path: every allow/deny route already removes the event or lets the hook
+    // exit, so no future code path can forget to deregister here.
+    private func reconcilePromptWatches(now: Date) {
+        var live: Set<NudgeEvent.ID> = []
+        for event in store.events where isBlockingPrompt(event) {
+            live.insert(event.id)
+            if promptWatches[event.id] == nil {
+                promptWatches[event.id] = PromptWatch(firstSeenAt: event.timestamp,
+                                                      lastNudgedAt: now,
+                                                      remindersSent: 0)
+            }
+        }
+        promptWatches = promptWatches.filter { live.contains($0.key) }
+    }
+
+    // Re-nudge one prompt per tick — the oldest that's due. postBanner clears
+    // delivered notifications first, so firing several at once would leave only
+    // the last on screen and burn the others' reminder budget for nothing. At a
+    // 5s tick a queue still drains promptly.
+    private func remindOnOldestDuePrompt(now: Date) {
+        guard nav.remindMinutes > 0, !promptWatches.isEmpty, !nav.isMuted else { return }
+
+        let due = store.events
+            .filter { event in
+                guard let watch = promptWatches[event.id] else { return false }
+                return AttentionPolicy.shouldRemind(now: now,
+                                                    firstSeenAt: watch.firstSeenAt,
+                                                    lastNudgedAt: watch.lastNudgedAt,
+                                                    remindersSent: watch.remindersSent,
+                                                    intervalMinutes: nav.remindMinutes)
+            }
+            // A per-session mute silences its prompts too, matching the
+            // first-banner gate in postBannerIfNeeded.
+            .filter { !nav.isSessionMuted(event: $0, in: sessions.sessions) }
+
+        guard let event = due.min(by: { $0.timestamp < $1.timestamp }),
+              let watch = promptWatches[event.id] else { return }
+
+        let config = PanelConfig.load()
+        promptWatches[event.id]?.lastNudgedAt = now
+        promptWatches[event.id]?.remindersSent += 1
+
+        if config.bannerEnabled {
+            postBanner(for: event,
+                       body: AttentionPolicy.reminderBody(original: event.message,
+                                                          waitedSince: watch.firstSeenAt,
+                                                          now: now))
+        }
+        // Same contract as a first nudge: voice replaces the chime when it's on.
+        if config.voiceEnabled {
+            let label = sessionLabel(for: event) ?? event.agent
+            Speaker.speak("Still waiting on \(label)",
+                          voice: config.voiceName, speed: config.voiceSpeed)
+        } else if config.soundEnabled, let sound = event.soundName {
+            Speaker.playSound(named: sound)
+        }
+    }
+
+    // Sessions the agent still reports as busy that have produced nothing for
+    // the configured window — usually a wedged tool call. Flagged in the
+    // Sessions tab only; no banner, because unlike a permission prompt there's
+    // no action to take and a stall often resolves itself.
+    private func refreshStalledSessions(now: Date) {
+        guard nav.stalledMinutes > 0 else {
+            if !nav.stalledSessionKeys.isEmpty { nav.stalledSessionKeys = [] }
+            return
+        }
+        let stalled = Set(sessions.sessions.compactMap { session -> String? in
+            guard AttentionPolicy.isStalled(lastActivityAt: session.lastActivityAt,
+                                            busy: session.liveStatus == "busy",
+                                            now: now,
+                                            thresholdMinutes: nav.stalledMinutes)
+            else { return nil }
+            return SessionPersistence.key(for: session)
+        })
+        if stalled != nav.stalledSessionKeys { nav.stalledSessionKeys = stalled }
+    }
+
+    // Single owner of the status item's appearance: the mute countdown wins the
+    // icon when muted, and the pending-prompt count rides alongside either way.
+    private func refreshStatusBadge() {
+        menuBar?.refreshStatusBadge(muteUntil: nav.muteUntil,
+                                    pendingPrompts: nav.pendingPromptCount)
     }
 
     // Snooze: mark the event, schedule a Timer to clear the snooze flag and
