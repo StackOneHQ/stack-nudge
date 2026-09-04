@@ -330,6 +330,7 @@ agent_label() {
     codex)               echo "Codex" ;;
     agy|antigravity|antigravity-cli)
                          echo "Antigravity" ;;
+    pi)                  echo "pi" ;;
     *)                   echo "$1" ;;
   esac
 }
@@ -445,7 +446,11 @@ APPLESCRIPT
 # binary, parent shell, and terminal/helper. Sets AGENT_PID, SHELL_PID,
 # TERMINAL_PID, TERMINAL_APP (each empty if not found).
 walk_session_chain() {
-  AGENT_PID=""; SHELL_PID=""; TERMINAL_PID=""; TERMINAL_APP=""
+  # A caller that already knows the agent PID can seed it via NUDGE_AGENT_PID —
+  # node-hosted agents (pi runs as `node .../pi-coding-agent/...`) show comm as
+  # "node", so the walk below can't recognise them by name. The shell/terminal
+  # legs are still resolved from $PPID as usual.
+  AGENT_PID="${NUDGE_AGENT_PID:-}"; SHELL_PID=""; TERMINAL_PID=""; TERMINAL_APP=""
   local pid="$PPID"
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
     [[ -z "$pid" || "$pid" -le 1 ]] && break

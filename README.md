@@ -31,9 +31,10 @@
 | Codex | ✅ |
 | Gemini CLI | ✅ † |
 | Antigravity CLI | ✅ † |
+| pi | ✅ † |
 | Any hooks-capable agent | ✅ — point it at `notify.sh` |
 
-† Gemini CLI and Antigravity route tool-permission prompts through an observability-only hook — the banner shows the prompt, but the Allow / Deny click still has to happen in the agent's own terminal. Claude Code and Codex permission events can be approved from the panel directly.
+† Gemini CLI, Antigravity, and pi route their turn-end / permission signals through an observability-only hook — the banner shows the prompt, but the Allow / Deny click still has to happen in the agent's own terminal. Claude Code and Codex permission events can be approved from the panel directly. (pi has no native hook system; stack-nudge installs a pi extension that forwards its lifecycle events.)
 
 **Platforms:** macOS — full app with panel, click-to-focus banners, auto-update, quota tracking, voice. Linux (PulseAudio / ALSA / libnotify) and Windows (Git Bash / WSL) get audio + basic notifications via `notify.sh` only.
 
@@ -76,7 +77,7 @@ cd stack-nudge
 
 **Prerequisites:** Python ≥ 3.10 (the bundled voice engine [stackvox](https://github.com/StackOneHQ/stackvox) requires it).
 
-The installer auto-wires hooks for every detected agent — **Claude Code** (`~/.claude`), **Cursor** (`~/.cursor`), **Codex** (`~/.codex`), **Gemini CLI** (`~/.gemini`), and **Antigravity CLI** (`~/.gemini/antigravity-cli`). Any other hooks-capable agent can be wired by hand — see [Manual setup](#manual-setup) below.
+The installer auto-wires hooks for every detected agent — **Claude Code** (`~/.claude`), **Cursor** (`~/.cursor`), **Codex** (`~/.codex`), **Gemini CLI** (`~/.gemini`), **Antigravity CLI** (`~/.gemini/antigravity-cli`), and **pi** (`~/.pi/agent`, wired by installing a pi extension rather than a hook config). Any other hooks-capable agent can be wired by hand — see [Manual setup](#manual-setup) below.
 
 ### From source (macOS dev)
 
@@ -100,6 +101,7 @@ Each supported agent has a hooks system. `stack-nudge` registers these hooks:
 | Claude Code | `PermissionRequest` | Banner when Claude pauses for approval |
 | Cursor | `stop` | Banner when agent turn ends |
 | Gemini CLI | session end | Banner when agent finishes |
+| pi | `agent_settled` (via extension) | Banner when the turn settles |
 
 The hook calls `notify.sh <agent> <event>`, which plays a sound and shows a banner via:
 
