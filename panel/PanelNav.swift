@@ -599,6 +599,17 @@ final class PanelNav: ObservableObject {
         return clients[clampedUsageClientIndex]
     }
 
+    // The compact widget's gauge mirrors the Usage tab's selection rather than
+    // carrying its own, so the pill and the tab can never disagree about whose
+    // numbers you're looking at. All three probes already run on the same tick
+    // (see runQuotaProbe), so switching client costs no extra I/O.
+    var widgetQuota: WidgetQuota {
+        WidgetQuota.make(client: selectedUsageClient,
+                         claude: quota,
+                         codex: codexQuota,
+                         antigravity: antigravityQuota)
+    }
+
     // The cached series, but only when it belongs to the client on screen — a
     // scan that finished for a previous selection must not render under a new one.
     func usageSeries(for client: UsageClient) -> UsageSeries? {

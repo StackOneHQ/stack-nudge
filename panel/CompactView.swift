@@ -120,7 +120,12 @@ struct CompactView: View {
         }
     }
 
-    // MARK: - Gauge cluster (5h gauge + 7d + reset countdown)
+    // MARK: - Gauge cluster (short-window gauge + long window + reset countdown)
+
+    // Whichever client the Usage tab has selected, reduced to the two rings and
+    // the countdown the pill can show. Recomputed per body pass — it's a handful
+    // of optional reads over state the view already observes.
+    private var quota: WidgetQuota { nav.widgetQuota }
 
     private var gaugeCluster: some View {
         gaugeClusterBody(size: nav.compactContent == .usage ? 52 : 42)
@@ -140,10 +145,10 @@ struct CompactView: View {
                         .blur(radius: 8)
                 }
                 QuotaGauge(
-                    fivePct:  nav.quota?.fiveHour?.utilization ?? 0,
-                    sevenPct: nav.quota?.sevenDay?.utilization ?? 0,
-                    hasFive:  nav.quota?.fiveHour != nil,
-                    hasSeven: nav.quota?.sevenDay != nil,
+                    shortPct: quota.shortUtilization,
+                    longPct:  quota.long?.utilization ?? 0,
+                    hasShort: quota.short != nil,
+                    hasLong:  quota.long != nil,
                     polling:  nav.quotaSyncing,
                     anyBusy:  anyBusy,
                     paused:   nav.compactDragging,
@@ -157,12 +162,12 @@ struct CompactView: View {
         .scaleEffect(isHovering && !nav.compactDragging ? 1.07 : 1.0)
         .brightness(isHovering && !nav.compactDragging ? 0.06 : 0)
         .animation(.easeInOut(duration: 0.18), value: isHovering)
-        .help("Inner ring: 5h session quota · Outer ring: 7d weekly quota")
+        .help(quota.ringDescription)
     }
 
     @ViewBuilder
     private var sideText: some View {
-        let show = isHovering && !nav.compactDragging && nav.quota != nil
+        let show = isHovering && !nav.compactDragging && quota.hasData
         ZStack(alignment: .center) {
             // Invisible width sizers — reserve the slot's horizontal footprint
             // so the cluster width stays constant across hover and across the
@@ -182,7 +187,7 @@ struct CompactView: View {
                 .frame(width: 0, height: 0)
             if show {
                 hoverLegend
-            } else if let reset = nav.quota?.fiveHour?.resetsAt,
+            } else if let reset = quota.countdownTarget,
                       let countdown = QuotaReset.shortLabel(until: reset) {
                 Text(countdown)
                     .font(.system(size: 9, weight: .medium).monospacedDigit())
@@ -220,11 +225,19 @@ struct CompactView: View {
     }
 
     private var hoverLegend: some View {
-        let fiveText  = nav.quota?.fiveHour.map  { "5h \(Int($0.utilization.rounded()))%" } ?? "5h —"
-        let sevenText = nav.quota?.sevenDay.map { "7d \(Int($0.utilization.rounded()))%" } ?? "7d —"
+        let shortText = quota.short.map { "\(quota.shortLabel) \(Int($0.utilization.rounded()))%" }
+            ?? "\(quota.shortLabel) —"
+        let longText  = quota.long.map  { "\(quota.longLabel) \(Int($0.utilization.rounded()))%" }
+            ?? "\(quota.longLabel) —"
         return VStack(alignment: .leading, spacing: 1) {
-            Text(fiveText)
-            Text(sevenText)
+            // Only non-Claude clients get a name line — see UsageClient.widgetTag.
+            // Every tag is narrower than the "5h 50%" below it, so this never
+            // widens the reserved legend slot.
+            if let tag = quota.client?.widgetTag {
+                Text(tag).foregroundStyle(.tertiary)
+            }
+            Text(shortText)
+            Text(longText)
         }
         .font(.system(size: 9, weight: .medium).monospacedDigit())
         .foregroundStyle(.secondary)
@@ -285,15 +298,10 @@ struct CompactView: View {
             }
     }
 
-    // Passive quota-stress signal for the mascot. True when either the 5h
-    // session window or the 7d weekly utilization is ≥75%. The mascot
-    // shows a tired/worried expression so the user sees the budget
-    // pressure without opening the Usage tab.
-    private var quotaStressed: Bool {
-        let five  = nav.quota?.fiveHour?.utilization  ?? 0
-        let seven = nav.quota?.sevenDay?.utilization ?? 0
-        return five >= 75 || seven >= 75
-    }
+    // Passive quota-stress signal for the mascot. True when either window of
+    // the selected client is ≥75%. The mascot shows a tired/worried expression
+    // so the user sees the budget pressure without opening the Usage tab.
+    private var quotaStressed: Bool { quota.peakUtilization >= 75 }
 
     private var botState: BotState {
         if let _ = recentEvent {
@@ -396,21 +404,21 @@ struct CompactView: View {
     }
 
     private var backgroundTimelineInterval: TimeInterval {
-        (anyBusy || (nav.quota?.fiveHour?.utilization ?? 0) >= 75) ? 0.1 : 60
+        (anyBusy || quota.shortUtilization >= 75) ? 0.1 : 60
     }
 
-    // Border color tracks 5h quota urgency: themed accent under 75%, amber
-    // 75–90%, red 90%+. Pulse rate climbs with severity so red-state pill is
-    // visibly more urgent than amber.
+    // Border color tracks the selected client's short-window urgency: themed
+    // accent under 75%, amber 75–90%, red 90%+. Pulse rate climbs with severity
+    // so a red-state pill is visibly more urgent than amber.
     private var urgencyColor: Color {
-        let pct = nav.quota?.fiveHour?.utilization ?? 0
+        let pct = quota.shortUtilization
         if pct >= 90 { return .red }
         if pct >= 75 { return .orange }
         return nav.theme.color
     }
 
     private func pulseAmount(at date: Date) -> Double {
-        let pct = nav.quota?.fiveHour?.utilization ?? 0
+        let pct = quota.shortUtilization
         let busyPulse = anyBusy
         guard busyPulse || pct >= 75 else { return 0 }
         let speed: Double = pct >= 90 ? 4.5 : pct >= 75 ? 3.2 : 2.4
@@ -481,17 +489,19 @@ struct CompactView: View {
     }
 }
 
-// Concentric quota gauge: outer ring = 7d utilization, inner ring = 5h.
-// Each fills clockwise from 12 o'clock with its own angular gradient
-// (cyan → yellow → orange → red). Inner glow pulses on busy sessions.
-// A spinner dot orbits the outer ring when actively polling. Center
-// shows the 5h % since that's the more immediate concern.
+// Concentric quota gauge: outer ring = the selected client's long window,
+// inner ring = its short one (5h/weekly for Claude and Codex, worst model
+// window/monthly credits for Antigravity — see WidgetQuota). Each fills
+// clockwise from 12 o'clock with its own angular gradient (cyan → yellow →
+// orange → red). Inner glow pulses on busy sessions. A spinner dot orbits the
+// outer ring when actively polling. Center shows the short-window % since
+// that's the more immediate concern.
 private struct QuotaGauge: View {
 
-    let fivePct: Double
-    let sevenPct: Double
-    let hasFive: Bool
-    let hasSeven: Bool
+    let shortPct: Double
+    let longPct: Double
+    let hasShort: Bool
+    let hasLong: Bool
     let polling: Bool
     let anyBusy: Bool
     let paused: Bool
@@ -509,8 +519,8 @@ private struct QuotaGauge: View {
             ZStack {
                 outerTrack
                 innerTrack
-                if hasSeven { outerFill }
-                if hasFive  { innerFill }
+                if hasLong { outerFill }
+                if hasShort { innerFill }
                 centerReadout
             }
         } else {
@@ -518,14 +528,14 @@ private struct QuotaGauge: View {
                 ZStack {
                     outerTrack
                     innerTrack
-                    if hasSeven { outerFill }
-                    if hasFive  { innerFill }
+                    if hasLong { outerFill }
+                    if hasShort { innerFill }
                     innerGlow(at: tl.date)
                     centerReadout
                     if polling { spinnerDot(at: tl.date) }
                 }
-                .animation(.easeOut(duration: 0.45), value: fivePct)
-                .animation(.easeOut(duration: 0.45), value: sevenPct)
+                .animation(.easeOut(duration: 0.45), value: shortPct)
+                .animation(.easeOut(duration: 0.45), value: longPct)
             }
         }
     }
@@ -548,8 +558,8 @@ private struct QuotaGauge: View {
 
     private var outerFill: some View {
         Circle()
-            .trim(from: 0, to: max(0, min(1, sevenPct / 100)))
-            .stroke(urgencyColor(for: sevenPct),
+            .trim(from: 0, to: max(0, min(1, longPct / 100)))
+            .stroke(urgencyColor(for: longPct),
                     style: StrokeStyle(lineWidth: Self.outerLineWidth, lineCap: .round))
             .rotationEffect(.degrees(-90))
             .padding(Self.outerLineWidth / 2)
@@ -557,8 +567,8 @@ private struct QuotaGauge: View {
 
     private var innerFill: some View {
         Circle()
-            .trim(from: 0, to: max(0, min(1, fivePct / 100)))
-            .stroke(urgencyColor(for: fivePct),
+            .trim(from: 0, to: max(0, min(1, shortPct / 100)))
+            .stroke(urgencyColor(for: shortPct),
                     style: StrokeStyle(lineWidth: Self.innerLineWidth, lineCap: .round))
             .rotationEffect(.degrees(-90))
             .padding(Self.outerLineWidth + Self.ringGap)
@@ -595,8 +605,8 @@ private struct QuotaGauge: View {
         // Ring still fills with "used" so the urgency-colored gradient
         // (green→red as it grows) keeps its meaning. Only the number in
         // the middle flips: 30% used ↔ 70% (remaining).
-        let pct = showRemaining ? max(0, 100 - fivePct) : fivePct
-        return Text(hasFive ? "\(Int(pct.rounded()))" : "—")
+        let pct = showRemaining ? max(0, 100 - shortPct) : shortPct
+        return Text(hasShort ? "\(Int(pct.rounded()))" : "—")
             .font(.system(size: 14, weight: .semibold).monospacedDigit())
             .foregroundStyle(.primary)
     }

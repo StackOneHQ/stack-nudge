@@ -188,6 +188,10 @@ Numbers come straight from the `claude` CLI — stack-nudge shells out to `claud
 
 Polls every 60 seconds while the full panel is open, and otherwise every 5 minutes by default (configurable via Settings → Usage → "Poll frequency"). The collapsed widget counts as background, so it polls at your configured frequency rather than the faster open-panel rate. Opening the panel syncs immediately if the last one is over a minute old. On the Usage tab: `r` triggers a manual sync, `p` pauses/resumes the poller.
 
+Claude, Codex, and Antigravity each appear in the tab's client list when they have quota to show; `↑`/`↓` switch between them. **The compact widget's gauge follows whatever you select here** — pick Codex in the Usage tab and the pill's rings, hover legend, and reset countdown all switch to Codex, with the client name shown in the legend on hover. All three are read on the same poll tick, so switching costs nothing. The selection is in-memory and resets to the first connected client on relaunch.
+
+For Claude and Codex the two rings are the 5-hour and weekly windows. Antigravity reports neither — it publishes one window per model plus a monthly credit pool — so its inner ring shows whichever model is closest to its limit and the outer ring shows monthly prompt credits. Gemini CLI has no usage counter: unlike the others it writes no rate-limit data to disk and serves no local endpoint, so there's nothing to read.
+
 #### Threshold-crossing notifications
 
 When any quota tier reaches your configured threshold, stack-nudge fires a banner — *"Weekly quota at 85% — resets May 17"* — once per period per tier, so you get a heads-up before hitting the cap. Configure in Settings → Usage:
@@ -207,7 +211,7 @@ Independent of quota: stack-nudge can also fire a banner when an individual Clau
 
 #### Settings tab
 
-Reachable from the tab strip or `Cmd+5`. Keyboard-driven rows for hotkey, behavior toggles (banner, mute when focused, a Mute/Resume action row with mute duration, pin panel, launch at login), widget (corner, mascot picker, opacity), sound picks (with preview-on-cycle), voice notifications + picker + speed (with preview-on-cycle using a random conversational phrase), usage config (quota tracking + alerts + threshold + poll frequency + context alert threshold + show-remaining), and action rows (edit phrases, check permissions, open config file, view release notes, check for updates, uninstall, quit).
+Reachable from the tab strip or `Cmd+5`. Keyboard-driven rows for hotkey, behavior toggles (banner, mute when focused, a Mute/Resume action row with mute duration, pin panel, launch at login), widget (snap-to-corners toggle, corner, mascot picker, opacity), sound picks (with preview-on-cycle), voice notifications + picker + speed (with preview-on-cycle using a random conversational phrase), usage config (quota tracking + alerts + threshold + poll frequency + context alert threshold + show-remaining), and action rows (edit phrases, check permissions, open config file, view release notes, check for updates, uninstall, quit).
 
 | Key | Action |
 |-----|--------|
