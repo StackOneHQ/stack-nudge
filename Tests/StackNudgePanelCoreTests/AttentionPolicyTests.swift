@@ -124,6 +124,32 @@ final class AttentionPolicyTests: XCTestCase {
                        "no output 24m")
     }
 
+    // MARK: - Watch lifetime
+
+    // Regression guard for the bug this branch shipped and then fixed: prompt
+    // watches used to be retired whenever their event left EventStore, but that
+    // store prunes to `maxEventsPerSession` keyed on
+    // `claudeSessionID ?? "agent:projectPath"`. Codex reports no claudeSessionID,
+    // so two Codex sessions in one repo share a key and one could evict the
+    // other's still-blocking prompt — silently ending reminders for an agent
+    // that was still stuck. These assert the properties the fix relies on.
+    func test_promptLifetimeMatchesTheHookTimeout() {
+        // notify.sh's wait_for_permission_response gives the FIFO 550s. Past
+        // that the agent has fallen back to its own prompt and the banner's
+        // Allow/Deny are dead buttons, so reminders must stop.
+        XCTAssertEqual(AttentionPolicy.promptLifetime, 550)
+    }
+
+    // The age cap is what retires a watch whose FIFO leaked because the hook was
+    // killed before its cleanup trap ran. Without it a leaked FIFO would pin the
+    // menu-bar count on forever.
+    func test_remindingStopsAtTheLifetimeEvenIfNudgesRemain() {
+        XCTAssertFalse(shouldRemind(firstSeen: AttentionPolicy.promptLifetime,
+                                    lastNudged: 300, sent: 0))
+        XCTAssertTrue(shouldRemind(firstSeen: AttentionPolicy.promptLifetime - 1,
+                                   lastNudged: 300, sent: 0))
+    }
+
     // MARK: - Settings labels
 
     func test_minuteLabel_coversBothOptionLists() {

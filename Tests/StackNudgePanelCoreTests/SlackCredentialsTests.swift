@@ -7,15 +7,15 @@ final class SlackCredentialsTests: XCTestCase {
     // MARK: - Paste classification
 
     func test_classifiesABareBotToken() {
-        XCTAssertEqual(SlackCredentials.classify("xoxb-123456789-abcdefg"),
-                       .botToken("xoxb-123456789-abcdefg"))
+        XCTAssertEqual(SlackCredentials.classify("xoxb-EXAMPLE-NOT-A-REAL-TOKEN"),
+                       .botToken("xoxb-EXAMPLE-NOT-A-REAL-TOKEN"))
     }
 
     // Clipboards pick up trailing newlines constantly — from a terminal, a
     // password manager, a docs page.
     func test_tolerantOfSurroundingWhitespace() {
-        XCTAssertEqual(SlackCredentials.classify("  xoxb-123456789-abcdefg\n"),
-                       .botToken("xoxb-123456789-abcdefg"))
+        XCTAssertEqual(SlackCredentials.classify("  xoxb-EXAMPLE-NOT-A-REAL-TOKEN\n"),
+                       .botToken("xoxb-EXAMPLE-NOT-A-REAL-TOKEN"))
         XCTAssertEqual(SlackCredentials.classify("\nU012ABCDEF  "),
                        .memberID("U012ABCDEF"))
     }
@@ -24,8 +24,8 @@ final class SlackCredentialsTests: XCTestCase {
     // that explains nothing. This whole design exists *because* user tokens
     // can't notify, so refusing one at the door is the honest place to say so.
     func test_rejectsAUserToken() {
-        XCTAssertEqual(SlackCredentials.classify("xoxp-123456789-abcdefg"), .unrecognised)
-        XCTAssertNil(SlackCredentials.validBotToken("xoxp-123456789-abcdefg"))
+        XCTAssertEqual(SlackCredentials.classify("xoxp-EXAMPLE-NOT-A-REAL-TOKEN"), .unrecognised)
+        XCTAssertNil(SlackCredentials.validBotToken("xoxp-EXAMPLE-NOT-A-REAL-TOKEN"))
     }
 
     func test_classifiesMemberIDs() {
@@ -43,14 +43,14 @@ final class SlackCredentialsTests: XCTestCase {
 
     // The point of the JSON form: one password-manager entry, one paste.
     func test_classifiesAJSONBlobCarryingBoth() {
-        let blob = #"{"bot_token": "xoxb-123456789-abcdefg", "member_id": "U012ABCDEF"}"#
+        let blob = #"{"bot_token": "xoxb-EXAMPLE-NOT-A-REAL-TOKEN", "member_id": "U012ABCDEF"}"#
         XCTAssertEqual(SlackCredentials.classify(blob),
-                       .both(token: "xoxb-123456789-abcdefg", memberID: "U012ABCDEF"))
+                       .both(token: "xoxb-EXAMPLE-NOT-A-REAL-TOKEN", memberID: "U012ABCDEF"))
     }
 
     func test_partialJSONYieldsWhicheverHalfIsValid() {
-        XCTAssertEqual(SlackCredentials.classify(#"{"bot_token": "xoxb-123456789-abcdefg"}"#),
-                       .botToken("xoxb-123456789-abcdefg"))
+        XCTAssertEqual(SlackCredentials.classify(#"{"bot_token": "xoxb-EXAMPLE-NOT-A-REAL-TOKEN"}"#),
+                       .botToken("xoxb-EXAMPLE-NOT-A-REAL-TOKEN"))
         XCTAssertEqual(SlackCredentials.classify(#"{"member_id": "U012ABCDEF"}"#),
                        .memberID("U012ABCDEF"))
         // A blob whose fields are present but junk shouldn't half-configure.

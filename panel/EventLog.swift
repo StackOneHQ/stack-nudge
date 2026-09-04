@@ -88,7 +88,11 @@ final class EventLog {
     // anything, so retention is enforced once per launch rather than on every
     // append (which would mean rewriting the whole file per nudge).
     func load(now: Date = Date()) -> [EventRecord] {
-        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
+        // Through the queue: appends write on it, and an unsynchronised read
+        // could catch a half-written line. parse() would skip the torn line
+        // rather than fail, but silently losing a record is still a bug.
+        let contents = queue.sync { try? String(contentsOfFile: path, encoding: .utf8) }
+        guard let text = contents else { return [] }
         let all = Self.parse(text)
         let kept = Self.trim(all, now: now)
         if kept.count != all.count { rewrite(kept) }

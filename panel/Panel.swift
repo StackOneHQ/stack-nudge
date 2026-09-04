@@ -2563,26 +2563,34 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             nav.slackSetupNote = "Paste a bot token first"
             return
         }
-        guard let email = SlackDirectory.gitEmail() else {
-            nav.slackSetupNote = "No git email to look up — paste your member ID"
-            return
-        }
-        nav.slackSetupNote = "Looking up \(email)…"
-        SlackDirectory.lookup(token: token, email: email) { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                switch result {
-                case .found(let id, let label):
-                    self.storeSlack(memberID: id, fromEmail: true, label: label)
-                    self.nav.slackSetupNote = "Found \(label) — send a test message to confirm"
-                case .notFound:
-                    self.nav.slackSetupNote =
-                        "No Slack user for \(email) — paste your member ID"
-                case .missingScope:
-                    self.nav.slackSetupNote =
-                        "Bot token can't look users up (needs users:read.email)"
-                case .failed(let message):
-                    self.nav.slackSetupNote = "Lookup failed: \(message)"
+        nav.slackSetupNote = "Looking you up…"
+        // ProcessOutput.read spawns a process and waits on it, so the git call
+        // has to leave the main thread or the panel hitches on the keypress.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let email = SlackDirectory.gitEmail() else {
+                DispatchQueue.main.async {
+                    self?.nav.slackSetupNote =
+                        "No git email to look up — paste your member ID"
+                }
+                return
+            }
+            SlackDirectory.lookup(token: token, email: email) { result in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    switch result {
+                    case .found(let id, let label):
+                        self.storeSlack(memberID: id, fromEmail: true, label: label)
+                        self.nav.slackSetupNote =
+                            "Found \(label) — send a test message to confirm"
+                    case .notFound:
+                        self.nav.slackSetupNote =
+                            "No Slack user for \(email) — paste your member ID"
+                    case .missingScope:
+                        self.nav.slackSetupNote =
+                            "Bot token can't look users up (needs users:read.email)"
+                    case .failed(let message):
+                        self.nav.slackSetupNote = "Lookup failed: \(message)"
+                    }
                 }
             }
         }
@@ -2683,7 +2691,16 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // MARK: - Attention: unanswered prompts + stalled sessions
 
     // One entry per permission prompt still blocking its agent.
+    //
+    // Carries its own copy of the event rather than looking it back up in the
+    // store. EventStore is a *display* cache — it prunes to maxEventsPerSession
+    // per session key, and that key falls back to "agent:projectPath" for agents
+    // with no claudeSessionID (Codex). Two Codex sessions in one repo therefore
+    // share a key, so a second session's chatter could evict a first session's
+    // still-blocking prompt and silently end its reminders while the agent stayed
+    // stuck. Durable state can't hang off a cache that evicts.
     private struct PromptWatch {
+        let event: NudgeEvent
         let firstSeenAt: Date
         var lastNudgedAt: Date
         var remindersSent: Int
@@ -2733,16 +2750,22 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // path: every allow/deny route already removes the event or lets the hook
     // exit, so no future code path can forget to deregister here.
     private func reconcilePromptWatches(now: Date) {
-        var live: Set<NudgeEvent.ID> = []
         for event in store.events where isBlockingPrompt(event) {
-            live.insert(event.id)
             if promptWatches[event.id] == nil {
-                promptWatches[event.id] = PromptWatch(firstSeenAt: event.timestamp,
+                promptWatches[event.id] = PromptWatch(event: event,
+                                                      firstSeenAt: event.timestamp,
                                                       lastNudgedAt: now,
                                                       remindersSent: 0)
             }
         }
-        promptWatches = promptWatches.filter { live.contains($0.key) }
+        // Retire on the FIFO alone, never on store membership — see PromptWatch.
+        // The age cap is the backstop for a hook killed hard enough to skip its
+        // cleanup trap: past its own timeout the prompt can't be answered from
+        // the panel anyway, so a leaked FIFO must not pin the count on forever.
+        promptWatches = promptWatches.filter { _, watch in
+            isBlockingPrompt(watch.event)
+                && now.timeIntervalSince(watch.firstSeenAt) < AttentionPolicy.promptLifetime
+        }
     }
 
     // Re-nudge one prompt per tick — the oldest that's due. postBanner clears
@@ -2752,21 +2775,20 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func remindOnOldestDuePrompt(now: Date) {
         guard nav.remindMinutes > 0, !promptWatches.isEmpty, !nav.isMuted else { return }
 
-        let due = store.events
-            .filter { event in
-                guard let watch = promptWatches[event.id] else { return false }
-                return AttentionPolicy.shouldRemind(now: now,
-                                                    firstSeenAt: watch.firstSeenAt,
-                                                    lastNudgedAt: watch.lastNudgedAt,
-                                                    remindersSent: watch.remindersSent,
-                                                    intervalMinutes: nav.remindMinutes)
+        let due = promptWatches.values
+            .filter { watch in
+                AttentionPolicy.shouldRemind(now: now,
+                                             firstSeenAt: watch.firstSeenAt,
+                                             lastNudgedAt: watch.lastNudgedAt,
+                                             remindersSent: watch.remindersSent,
+                                             intervalMinutes: nav.remindMinutes)
             }
             // A per-session mute silences its prompts too, matching the
             // first-banner gate in postBannerIfNeeded.
-            .filter { !nav.isSessionMuted(event: $0, in: sessions.sessions) }
+            .filter { !nav.isSessionMuted(event: $0.event, in: sessions.sessions) }
 
-        guard let event = due.min(by: { $0.timestamp < $1.timestamp }),
-              let watch = promptWatches[event.id] else { return }
+        guard let watch = due.min(by: { $0.firstSeenAt < $1.firstSeenAt }) else { return }
+        let event = watch.event
 
         let config = PanelConfig.load()
         promptWatches[event.id]?.lastNudgedAt = now

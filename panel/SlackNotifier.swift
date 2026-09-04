@@ -127,10 +127,6 @@ final class SlackNotifier {
     private var _lastError: String?
     var lastError: String? { stateQueue.sync { _lastError } }
 
-    // Set when Slack says the credential is dead, so the UI can offer Reconnect.
-    private var _needsReconnect = false
-    var needsReconnect: Bool { stateQueue.sync { _needsReconnect } }
-
     init(session: URLSession = .shared) {
         self.session = session
     }
@@ -194,24 +190,17 @@ final class SlackNotifier {
     }
 
     private func finish(_ error: String?, _ completion: ((String?) -> Void)?) {
-        record(error: error, reconnect: false)
+        record(error: error)
         if let completion {
             DispatchQueue.main.async { completion(error) }
         }
     }
 
-    private func record(error: String?, reconnect: Bool) {
-        stateQueue.async {
-            self._lastError = error
-            if reconnect { self._needsReconnect = true }
-            if error == nil { self._needsReconnect = false }
-        }
+    private func record(error: String?) {
+        stateQueue.async { self._lastError = error }
     }
 
     func clearState() {
-        stateQueue.async {
-            self._lastError = nil
-            self._needsReconnect = false
-        }
+        stateQueue.async { self._lastError = nil }
     }
 }

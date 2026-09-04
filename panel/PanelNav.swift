@@ -284,7 +284,7 @@ final class PanelNav: ObservableObject {
     // Latest quota snapshot from `claude /usage`. Driven by the CLI probe
     // poller in PanelController. nil before the first probe completes, or
     // when the probe failed (no `claude` on PATH, not signed in, parse error).
-    @Published var quota:            QuotaSnapshot?
+    @Published var quota:            QuotaSnapshot? { didSet { widgetQuotaCache = nil } }
     // Any client's quota — all three stamp it — so "Updated Xm ago" describes the
     // pane as a whole.
     @Published var quotaLastUpdated: Date?
@@ -317,10 +317,10 @@ final class PanelNav: ObservableObject {
     @Published var transcriptRefByPID: [Int: TranscriptRef] = [:]
     // Codex (ChatGPT-plan) rate limits for the Usage tab, populated by
     // CodexQuotaProbe — the Codex analogue of `quota` above.
-    @Published var codexQuota: CodexQuotaSnapshot?
+    @Published var codexQuota: CodexQuotaSnapshot? { didSet { widgetQuotaCache = nil } }
     // Antigravity (agy) usage from the running CLI's loopback RPC, populated by
     // AntigravityUsageProbe — the agy analogue of `quota`/`codexQuota`.
-    @Published var antigravityQuota: AntigravityQuotaSnapshot?
+    @Published var antigravityQuota: AntigravityQuotaSnapshot? { didSet { widgetQuotaCache = nil } }
     // Bumped by PanelController after a handoff is upserted into the ledger so
     // the Tickets tab (OutcomesView) and its tab-strip count re-read the
     // in-memory HandoffLedger and reflect the new session live. The ledger
@@ -544,7 +544,7 @@ final class PanelNav: ObservableObject {
     // Usage tab: which connected client's quota is shown (index into
     // availableUsageClients). ↑/↓ move it; read through clampedUsageClientIndex
     // so a client losing its data can't strand the selection out of range.
-    @Published var usageClientIndex: Int = 0
+    @Published var usageClientIndex: Int = 0 { didSet { widgetQuotaCache = nil } }
     // When true, keyboard focus is inside the Usage detail pane: ↑/↓ scroll it
     // rather than switching client. →/Enter steps in; ←/Esc steps back out.
     @Published var usageDetailFocused: Bool = false
@@ -620,11 +620,20 @@ final class PanelNav: ObservableObject {
     // carrying its own, so the pill and the tab can never disagree about whose
     // numbers you're looking at. All three probes already run on the same tick
     // (see runQuotaProbe), so switching client costs no extra I/O.
+    // Memoised because CompactView reads it from ~16 places per body pass and
+    // the pill re-renders at 10Hz while an agent is busy — recomputing meant
+    // rebuilding availableUsageClients every time. Invalidated by didSet on each
+    // of the four inputs below, so the cache can't outlive its sources.
+    private var widgetQuotaCache: WidgetQuota?
+
     var widgetQuota: WidgetQuota {
-        WidgetQuota.make(client: selectedUsageClient,
-                         claude: quota,
-                         codex: codexQuota,
-                         antigravity: antigravityQuota)
+        if let widgetQuotaCache { return widgetQuotaCache }
+        let value = WidgetQuota.make(client: selectedUsageClient,
+                                     claude: quota,
+                                     codex: codexQuota,
+                                     antigravity: antigravityQuota)
+        widgetQuotaCache = value
+        return value
     }
 
     // The cached series, but only when it belongs to the client on screen — a
