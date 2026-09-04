@@ -874,7 +874,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             muteFor:             { [weak self] minutes in self?.muteFor(minutes: minutes) },
             resumeNotifications: { [weak self] in self?.resumeNotifications() },
             applyEventHistorySetting: { [weak self] in self?.applyEventHistorySetting() },
-            clearEventHistory:        { [weak self] in self?.clearEventHistory() }
+            clearEventHistory:        { [weak self] in self?.clearEventHistory() },
+            pasteSlackSetup:  { [weak self] in self?.pasteSlackSetup() },
+            detectSlackUser:  { [weak self] in self?.detectSlackUser() },
+            sendSlackTest:    { [weak self] in self?.sendSlackTest() }
         )
         nav.setHotkey = { [weak self] spec in
             self?.registerHotkey(spec: spec) ?? false
@@ -918,6 +921,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         startQuotaPolling()
         startAttentionTicking()
         startEventHistory()
+        startSlack()
         // The pill (CompactView) reads sessions.sessions for the busy/idle
         // headline and mascot state, so polling has to run as soon as the
         // app is up — not gated on the Sessions tab being visible. Sessions
@@ -2281,6 +2285,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     }
 
     private func postBannerIfNeeded(_ event: NudgeEvent) {
+        // Before every local gate below: a global mute, a focused source window,
+        // or activate-immediately all mean "don't interrupt me at this Mac", which
+        // says nothing about whether the user wants to know in Slack.
+        notifySlack(for: event, isReminder: false)
+
         // Timed global mute swallows every interrupting output — banner,
         // sound, voice, and the activate-immediately focus jump — for all
         // events including permission prompts and welcome. The event has
@@ -2495,6 +2504,144 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         refreshStatusBadge()
     }
 
+    // MARK: - Slack
+
+    private let slackNotifier = SlackNotifier()
+
+    // Adopt a token planted in the config file by a setup script or MDM, then
+    // reflect what we ended up with. Runs at launch so provisioning takes effect
+    // without the user touching Settings.
+    private func startSlack() {
+        SlackCredentials.adoptFromConfig()
+        nav.slackTokenPresent = SlackCredentials.botToken() != nil
+        if nav.slackTokenPresent, nav.slackMemberID == nil { detectSlackUser() }
+    }
+
+    // One clipboard read carries either half of the setup or both, so an org can
+    // keep a single JSON entry in its password manager.
+    private func pasteSlackSetup() {
+        let pasted = NSPasteboard.general.string(forType: .string) ?? ""
+        switch SlackCredentials.classify(pasted) {
+        case .botToken(let token):
+            storeSlack(token: token)
+            nav.slackSetupNote = "Bot token stored"
+            detectSlackUser()
+        case .memberID(let id):
+            storeSlack(memberID: id, fromEmail: false)
+            nav.slackSetupNote = "Slack user set"
+        case .both(let token, let id):
+            storeSlack(token: token)
+            storeSlack(memberID: id, fromEmail: false)
+            nav.slackSetupNote = "Bot token and user stored"
+        case .unrecognised:
+            nav.slackSetupNote = pasted.isEmpty
+                ? "Clipboard is empty"
+                : "Clipboard isn't an xoxb- token or a U… member ID"
+        }
+    }
+
+    private func storeSlack(token: String) {
+        SlackCredentials.store(botToken: token)
+        nav.slackTokenPresent = true
+        nav.slackError = nil
+    }
+
+    private func storeSlack(memberID: String, fromEmail: Bool, label: String? = nil) {
+        nav.slackMemberID = memberID
+        nav.slackMemberLabel = label
+        nav.slackIdentityFromEmail = fromEmail
+        // Not a secret, and keeping it in the config lets a setup script
+        // provision both halves.
+        ConfigFile.write(key: SlackCredentials.configMemberKey, value: memberID)
+    }
+
+    // Suggest who to DM from the machine's git identity. Only ever a suggestion —
+    // a wrong id would send prompts to a colleague — so the row shows what was
+    // found and stays overridable by pasting an id.
+    private func detectSlackUser() {
+        guard let token = SlackCredentials.botToken() else {
+            nav.slackSetupNote = "Paste a bot token first"
+            return
+        }
+        guard let email = SlackDirectory.gitEmail() else {
+            nav.slackSetupNote = "No git email to look up — paste your member ID"
+            return
+        }
+        nav.slackSetupNote = "Looking up \(email)…"
+        SlackDirectory.lookup(token: token, email: email) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .found(let id, let label):
+                    self.storeSlack(memberID: id, fromEmail: true, label: label)
+                    self.nav.slackSetupNote = "Found \(label) — send a test message to confirm"
+                case .notFound:
+                    self.nav.slackSetupNote =
+                        "No Slack user for \(email) — paste your member ID"
+                case .missingScope:
+                    self.nav.slackSetupNote =
+                        "Bot token can't look users up (needs users:read.email)"
+                case .failed(let message):
+                    self.nav.slackSetupNote = "Lookup failed: \(message)"
+                }
+            }
+        }
+    }
+
+    // The confirmation gesture: a successful test proves the token, the member id
+    // and the scopes all line up, so it also turns delivery on rather than
+    // leaving one more switch to remember.
+    private func sendSlackTest() {
+        nav.slackSetupNote = "Sending…"
+        slackNotifier.send("StackNudge is connected — this is a test message.",
+                           to: nav.slackMemberID) { [weak self] error in
+            guard let self else { return }
+            if let error {
+                self.nav.slackSetupNote = "Test failed: \(error)"
+                return
+            }
+            self.nav.slackSetupNote = "Test message sent"
+            self.nav.slackError = nil
+            if !self.nav.slackEnabled {
+                self.nav.slackEnabled = true
+                ConfigFile.write(key: "STACKNUDGE_SLACK", value: "true")
+            }
+        }
+    }
+
+    private func refreshSlackStatus() {
+        let error = slackNotifier.lastError
+        if nav.slackError != error { nav.slackError = error }
+    }
+
+    // Called from both places a nudge is decided: the first banner and a reminder.
+    // Deliberately outside postBannerIfNeeded's mute/focus gates — Slack is the
+    // away-from-desk channel, so it has its own rules (see SlackDelivery).
+    private func notifySlack(for event: NudgeEvent, isReminder: Bool) {
+        guard nav.slackTokenPresent, nav.slackMemberID != nil else { return }
+        guard SlackDelivery.shouldSend(
+            kind: event.kind,
+            isReminder: isReminder,
+            sessionMuted: nav.isSessionMuted(event: event, in: sessions.sessions),
+            enabled: nav.slackEnabled,
+            notifyOnStop: nav.slackNotifyOnStop,
+            idleSeconds: IdleTime.seconds(),
+            idleThresholdMinutes: nav.slackIdleMinutes)
+        else { return }
+
+        slackNotifier.send(SlackDelivery.text(for: event,
+                                              label: sessionLabel(for: event),
+                                              includeDetail: nav.slackIncludeDetail,
+                                              isReminder: isReminder),
+                           to: nav.slackMemberID)
+        // Surface a delivery failure on the Settings row. Read one tick later so
+        // the in-flight request has had a chance to land; the attention ticker
+        // refreshes it again on its own cadence.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            self?.refreshSlackStatus()
+        }
+    }
+
     // MARK: - Event history
 
     private let eventLog = EventLog()
@@ -2564,6 +2711,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
         remindOnOldestDuePrompt(now: now)
         refreshStalledSessions(now: now)
+        if nav.slackTokenPresent { refreshSlackStatus() }
     }
 
     // A permission prompt we can *prove* is still blocking: notify.sh creates
@@ -2630,6 +2778,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                                                           waitedSince: watch.firstSeenAt,
                                                           now: now))
         }
+        notifySlack(for: event, isReminder: true)
         // Same contract as a first nudge: voice replaces the chime when it's on.
         if config.voiceEnabled {
             let label = sessionLabel(for: event) ?? event.agent

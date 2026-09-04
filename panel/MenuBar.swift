@@ -20,8 +20,24 @@ enum ConfigFile {
 
     static func write(key: String, value: String) {
         let contents = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
-        let updated = apply(contents, key: key, value: value)
-        try? updated.write(toFile: path, atomically: true, encoding: .utf8)
+        persist(apply(contents, key: key, value: value))
+    }
+
+    // Drop a key entirely. Used to scrub a secret that was planted here for
+    // provisioning once it has been moved into the Keychain.
+    static func remove(key: String) {
+        guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else { return }
+        persist(strip(contents, key: key))
+    }
+
+    // An atomic write replaces the file, so the mode has to be reapplied every
+    // time or it reverts to the umask default (0644 in practice). Nothing in
+    // here benefits from being world-readable, and secrets pass through during
+    // provisioning.
+    private static func persist(_ contents: String) {
+        try? contents.write(toFile: path, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600],
+                                               ofItemAtPath: path)
     }
 
     static func bool(_ map: [String: String], _ key: String, default defaultValue: Bool) -> Bool {
@@ -66,6 +82,19 @@ enum ConfigFile {
             lines.append(newLine)
             lines.append("")
         }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Return `contents` with every uncommented assignment of `key` removed,
+    /// leaving surrounding lines and comments untouched.
+    static func strip(_ contents: String, key: String) -> String {
+        var lines = contents.components(separatedBy: "\n")
+        lines.removeAll { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return !trimmed.hasPrefix("#") && trimmed.hasPrefix("\(key)=")
+        }
+        while lines.last?.isEmpty == true { lines.removeLast() }
+        lines.append("")
         return lines.joined(separator: "\n")
     }
 

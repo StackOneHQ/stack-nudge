@@ -164,6 +164,32 @@ Records live in `~/.stack-nudge/events.jsonl` (mode 0600), one JSON object per l
 
 Reminders only fire for prompts stack-nudge can *prove* are unanswered. Claude Code and Codex permission hooks block on a FIFO that's removed the moment the hook exits, so its presence means nobody has answered — in the panel, on the banner, or in the terminal. Gemini and Antigravity route permissions through fire-and-forget notification hooks with no such signal, so they get the single banner they always did rather than reminders that might be about something you already handled. Reminders stop at three, and stop early once the hook hits its own 550-second timeout and the agent falls back to prompting in the terminal. A global mute or a per-session mute silences them like any other nudge.
 
+**Slack, for when you're not at the Mac.** Banners only work if you're looking at the screen. Point stack-nudge at a Slack bot token and a permission prompt also arrives as a DM **from StackNudge** — which, unlike a message you send yourself, actually notifies you.
+
+| Setting | Default | |
+|---|---|---|
+| `STACKNUDGE_SLACK` | off | Master switch; turned on for you by a successful test message |
+| `STACKNUDGE_SLACK_IDLE_MIN` | `5` | Minutes idle before Slack is used. `Always`, or 5–60 in steps of 5 |
+| `STACKNUDGE_SLACK_DETAIL` | off | Include the tool call, not just the headline |
+| `STACKNUDGE_SLACK_STOP` | off | Also DM on finished turns, not just permission prompts |
+| `STACKNUDGE_SLACK_MEMBER_ID` | — | Who to DM. Detected for you; not secret |
+
+**Setup, once per person:** Settings → **Paste Slack setup** reads your clipboard and takes either an `xoxb-…` bot token, a `U…` member ID, or a JSON blob with both — so an org can keep one password-manager entry and onboarding is a single paste. stack-nudge then looks you up from your `git config user.email` and shows who it found; that's a *suggestion*, and pasting a member ID overrides it. **Send test message** confirms the whole chain and switches delivery on.
+
+**Setup, once per org:** create a Slack app, give its **bot** token `chat:write` (plus `users:read.email` and `users:read` if you want the automatic user lookup), install it, and share the `xoxb-` token internally. There is deliberately **no default app and no embedded credentials** — every install points at its own workspace.
+
+The token lives in the **Keychain**, never `~/.stack-nudge/config`. For scripted provisioning you can plant `STACKNUDGE_SLACK_BOT_TOKEN` in the config file; stack-nudge moves it into the Keychain on next launch and deletes the line. (The config file is now written `0600` regardless — it never needed to be world-readable.)
+
+Three things worth knowing about how it behaves:
+
+- **It's idle-gated, not a mirror.** By default nothing reaches Slack until the Mac has been untouched for 5 minutes — there's no point pinging your phone about a prompt you're already looking at. Set it to `Always` if you'd rather have everything. Reminders for prompts you never answered skip the gate: you may be back at the desk and still not have seen the banner.
+- **A global mute does *not* silence Slack.** Mute means "stop interrupting me *here*", and Slack exists precisely because you're elsewhere. Use the Slack switch to stop it. A *per-session* mute does apply, same as it does to banners.
+- **Titles only, by default.** A DM reads *"Claude Code in attack-lib needs permission"*. The tool call itself (`Bash(rm -rf build/)`) stays on your machine unless you turn on **Include message text**, because command lines carry paths, hostnames, and sometimes secrets, and this is the one path that leaves the Mac.
+
+You can't approve or deny from Slack — that needs an inbound endpoint this app deliberately doesn't have.
+
+> **Why a bot token and not "Connect with Slack"?** We tried. Slack supports OAuth with PKCE, which lets a desktop app authenticate with no client secret and no server — but *"desktop redirects are not allowed to request bot scopes"*, so it only yields a **user** token, and a user token can only post *as you*. Slack never notifies you about your own messages, so those DMs arrive silently. A notifying DM requires a bot token, a bot token requires the client-secret exchange, and a desktop app can't hold a secret. Slackbot reminders were the remaining workaround and Slack retired that API in March 2023. Hence: provision the token, paste it once.
+
 #### Sessions tab
 
 Live list of running agent processes (`claude`, `gemini`, `codex` — including node-hosted variants like `gemini-cli`). Polls every 3 seconds while visible and every 15 seconds in the background for the compact widget. Sessions that exit linger for 30s with `ended Ns ago`.
@@ -224,7 +250,7 @@ Independent of quota: stack-nudge can also fire a banner when an individual Clau
 
 #### Settings tab
 
-Reachable from the tab strip or `Cmd+5`. Keyboard-driven rows for hotkey, behavior toggles (banner, mute when focused, a Mute/Resume action row with mute duration, unanswered-prompt reminder interval, stalled-session threshold, pin panel, launch at login), widget (snap-to-corners toggle, corner, mascot picker, opacity), sound picks (with preview-on-cycle), voice notifications + picker + speed (with preview-on-cycle using a random conversational phrase), usage config (quota tracking + alerts + threshold + poll frequency + context alert threshold + show-remaining), event history (recording toggle + clear), and action rows (edit phrases, check permissions, open config file, view release notes, check for updates, uninstall, quit).
+Reachable from the tab strip or `Cmd+5`. Keyboard-driven rows for hotkey, behavior toggles (banner, mute when focused, a Mute/Resume action row with mute duration, unanswered-prompt reminder interval, stalled-session threshold, pin panel, launch at login), widget (snap-to-corners toggle, corner, mascot picker, opacity), sound picks (with preview-on-cycle), voice notifications + picker + speed (with preview-on-cycle using a random conversational phrase), usage config (quota tracking + alerts + threshold + poll frequency + context alert threshold + show-remaining), event history (recording toggle + clear), Slack (paste setup, detected user, test message, notifications toggle, idle threshold, message detail, finished-turn toggle), and action rows (edit phrases, check permissions, open config file, view release notes, check for updates, uninstall, quit).
 
 | Key | Action |
 |-----|--------|

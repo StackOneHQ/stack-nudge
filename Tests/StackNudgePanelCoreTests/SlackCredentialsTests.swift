@@ -1,0 +1,114 @@
+import XCTest
+
+@testable import StackNudgePanelCore
+
+final class SlackCredentialsTests: XCTestCase {
+
+    // MARK: - Paste classification
+
+    func test_classifiesABareBotToken() {
+        XCTAssertEqual(SlackCredentials.classify("xoxb-123456789-abcdefg"),
+                       .botToken("xoxb-123456789-abcdefg"))
+    }
+
+    // Clipboards pick up trailing newlines constantly — from a terminal, a
+    // password manager, a docs page.
+    func test_tolerantOfSurroundingWhitespace() {
+        XCTAssertEqual(SlackCredentials.classify("  xoxb-123456789-abcdefg\n"),
+                       .botToken("xoxb-123456789-abcdefg"))
+        XCTAssertEqual(SlackCredentials.classify("\nU012ABCDEF  "),
+                       .memberID("U012ABCDEF"))
+    }
+
+    // A user token would store fine and then fail at send time with an error
+    // that explains nothing. This whole design exists *because* user tokens
+    // can't notify, so refusing one at the door is the honest place to say so.
+    func test_rejectsAUserToken() {
+        XCTAssertEqual(SlackCredentials.classify("xoxp-123456789-abcdefg"), .unrecognised)
+        XCTAssertNil(SlackCredentials.validBotToken("xoxp-123456789-abcdefg"))
+    }
+
+    func test_classifiesMemberIDs() {
+        XCTAssertEqual(SlackCredentials.classify("U012ABCDEF"), .memberID("U012ABCDEF"))
+        // Enterprise Grid ids start with W.
+        XCTAssertEqual(SlackCredentials.classify("W012ABCDEF"), .memberID("W012ABCDEF"))
+    }
+
+    func test_rejectsThingsThatOnlyLookLikeMemberIDs() {
+        // Lowercase, too short, and a leading letter that isn't U or W.
+        for candidate in ["u012abcdef", "U012", "X012ABCDEF", "Ubcdefghij"] {
+            XCTAssertEqual(SlackCredentials.classify(candidate), .unrecognised, candidate)
+        }
+    }
+
+    // The point of the JSON form: one password-manager entry, one paste.
+    func test_classifiesAJSONBlobCarryingBoth() {
+        let blob = #"{"bot_token": "xoxb-123456789-abcdefg", "member_id": "U012ABCDEF"}"#
+        XCTAssertEqual(SlackCredentials.classify(blob),
+                       .both(token: "xoxb-123456789-abcdefg", memberID: "U012ABCDEF"))
+    }
+
+    func test_partialJSONYieldsWhicheverHalfIsValid() {
+        XCTAssertEqual(SlackCredentials.classify(#"{"bot_token": "xoxb-123456789-abcdefg"}"#),
+                       .botToken("xoxb-123456789-abcdefg"))
+        XCTAssertEqual(SlackCredentials.classify(#"{"member_id": "U012ABCDEF"}"#),
+                       .memberID("U012ABCDEF"))
+        // A blob whose fields are present but junk shouldn't half-configure.
+        XCTAssertEqual(SlackCredentials.classify(#"{"bot_token": "nope", "member_id": "nope"}"#),
+                       .unrecognised)
+    }
+
+    func test_rejectsEmptyAndGarbage() {
+        XCTAssertEqual(SlackCredentials.classify(""), .unrecognised)
+        XCTAssertEqual(SlackCredentials.classify("   \n "), .unrecognised)
+        XCTAssertEqual(SlackCredentials.classify("hello world"), .unrecognised)
+        XCTAssertEqual(SlackCredentials.classify("{not json"), .unrecognised)
+    }
+
+    // MARK: - Config scrubbing
+
+    // The provisioning promise: a token planted for a setup script must not
+    // survive in plaintext, and nothing around it may be disturbed.
+    func test_stripRemovesOnlyTheNamedKey() {
+        let before = """
+            # StackNudge config
+            STACKNUDGE_BANNER=true
+            STACKNUDGE_SLACK_BOT_TOKEN=xoxb-secret
+            STACKNUDGE_SLACK_MEMBER_ID=U012ABCDEF
+            """
+        let after = ConfigFile.strip(before, key: "STACKNUDGE_SLACK_BOT_TOKEN")
+        XCTAssertFalse(after.contains("xoxb-secret"))
+        XCTAssertTrue(after.contains("STACKNUDGE_BANNER=true"))
+        XCTAssertTrue(after.contains("STACKNUDGE_SLACK_MEMBER_ID=U012ABCDEF"))
+        XCTAssertTrue(after.contains("# StackNudge config"))
+    }
+
+    func test_stripIsIdempotentAndSafeOnAMissingKey() {
+        let contents = "STACKNUDGE_BANNER=true\n"
+        let once = ConfigFile.strip(contents, key: "STACKNUDGE_SLACK_BOT_TOKEN")
+        XCTAssertEqual(ConfigFile.strip(once, key: "STACKNUDGE_SLACK_BOT_TOKEN"), once)
+        XCTAssertTrue(once.contains("STACKNUDGE_BANNER=true"))
+    }
+
+    // A commented-out example line isn't an assignment and shouldn't be eaten.
+    func test_stripLeavesCommentsAlone() {
+        let contents = "# STACKNUDGE_SLACK_BOT_TOKEN=xoxb-example\nSTACKNUDGE_BANNER=true\n"
+        XCTAssertTrue(ConfigFile.strip(contents, key: "STACKNUDGE_SLACK_BOT_TOKEN")
+            .contains("# STACKNUDGE_SLACK_BOT_TOKEN=xoxb-example"))
+    }
+
+    // The config file carries secrets during provisioning and is read by
+    // anything the user runs, so it must not be world-readable.
+    func test_configFileIsWrittenOwnerOnly() throws {
+        let original = try? String(contentsOfFile: ConfigFile.path, encoding: .utf8)
+        ConfigFile.write(key: "STACKNUDGE_TEST_PERMISSION_PROBE", value: "1")
+        defer {
+            ConfigFile.remove(key: "STACKNUDGE_TEST_PERMISSION_PROBE")
+            if let original {
+                try? original.write(toFile: ConfigFile.path, atomically: true, encoding: .utf8)
+            }
+        }
+        let attrs = try FileManager.default.attributesOfItem(atPath: ConfigFile.path)
+        XCTAssertEqual(attrs[.posixPermissions] as? NSNumber, 0o600)
+    }
+}

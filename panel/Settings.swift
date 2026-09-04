@@ -137,6 +137,16 @@ struct SettingsView: View {
                             row(.clearHistory,  label: "Clear event history", kind: .action, value: nav.historyRecords.isEmpty ? "empty" : "\(nav.historyRecords.count) kept")
                         }
 
+                        section("Slack") {
+                            row(.slackPaste,    label: "Paste Slack setup",   kind: .action, value: slackPasteValue)
+                            row(.slackIdentity, label: "Slack user",          kind: .action, value: slackUserValue,  enabled: nav.slackTokenPresent)
+                            row(.slackTest,     label: "Send test message",   kind: .action, value: "",              enabled: slackReady)
+                            row(.slackEnabled,  label: "Slack notifications", kind: .toggle, value: nav.slackEnabled ? "On" : "Off",       enabled: slackReady)
+                            row(.slackIdle,     label: "Notify when idle",    kind: .cycle,  value: SlackDelivery.idleLabel(nav.slackIdleMinutes), enabled: slackReady && nav.slackEnabled)
+                            row(.slackDetail,   label: "Include message text", kind: .toggle, value: nav.slackIncludeDetail ? "On" : "Off", enabled: slackReady && nav.slackEnabled)
+                            row(.slackStop,     label: "Also notify on finished turns", kind: .toggle, value: nav.slackNotifyOnStop ? "On" : "Off", enabled: slackReady && nav.slackEnabled)
+                        }
+
                         section("Actions") {
                             row(.editPhrases,      label: "Edit phrases…",         kind: .action, value: "")
                             row(.checkPermissions, label: "Check permissions…",    kind: .action, value: "")
@@ -439,6 +449,30 @@ struct SettingsView: View {
 
     private var contextAlertLabel: String {
         nav.contextAlertThresholdK == 0 ? "Off" : "\(nav.contextAlertThresholdK)K"
+    }
+
+    // Delivery needs both halves, so every row past setup keys off this rather
+    // than the token alone.
+    private var slackReady: Bool {
+        nav.slackTokenPresent && nav.slackMemberID != nil
+    }
+
+    // The paste row doubles as the status line for the whole section: the last
+    // paste/lookup/test outcome wins, then a delivery error, then the resting
+    // state. A stale "token stored" next to a broken integration would be worse
+    // than saying nothing.
+    private var slackPasteValue: String {
+        if let note = nav.slackSetupNote { return note }
+        if let error = nav.slackError { return error }
+        return nav.slackTokenPresent ? "token stored" : "not configured"
+    }
+
+    // Names who we'd DM and where that came from, because a wrong id would send
+    // your prompts to a colleague and the source is the tell.
+    private var slackUserValue: String {
+        guard let id = nav.slackMemberID else { return "not set — press ⏎ to detect" }
+        let who = nav.slackMemberLabel.map { "\($0) · \(id)" } ?? id
+        return nav.slackIdentityFromEmail ? "\(who) (from git email)" : who
     }
 
     private var checkForUpdatesStatus: String {

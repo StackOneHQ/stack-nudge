@@ -144,6 +144,7 @@ enum EventsPane: String, CaseIterable {
     case live, history
 }
 
+
 enum SettingsRow: Hashable {
     // One slot per button in the agent-reconciliation banner, so both are
     // keyboard-reachable rather than mouse-only.
@@ -153,6 +154,8 @@ enum SettingsRow: Hashable {
          pinPanel, keepOpenWhenEmpty, launchAtLogin
     case widget, snapToCorners, widgetCorner, widgetOpacity, widgetContent, mascot, theme
     case eventHistory, clearHistory
+    case slackPaste, slackIdentity, slackTest
+    case slackEnabled, slackIdle, slackDetail, slackStop
     case soundEnabled, agentDoneSound, permissionSound
     case voiceEnabled, voice, voiceSpeed, speakHotkey, downloadVoiceModel
     case quotaTracking, quotaAlerts, alertThreshold, pollFrequency, contextAlert, showRemaining
@@ -185,6 +188,10 @@ struct SettingsActions {
     // wipe the file from the Settings action row.
     let applyEventHistorySetting: () -> Void
     let clearEventHistory:        () -> Void
+    // Slack setup: read the clipboard, re-run identity discovery, send a test DM.
+    let pasteSlackSetup:  () -> Void
+    let detectSlackUser:  () -> Void
+    let sendSlackTest:    () -> Void
 }
 
 // Owns the panel's navigation state plus the live values the Settings page
@@ -728,6 +735,24 @@ final class PanelNav: ObservableObject {
     // Threshold-crossing notifications. quotaAlertsEnabled is the master
     // switch; quotaAlertThreshold is the single percent value used across
     // all tiers — banner fires once per period when any tier reaches it.
+    // Slack delivery. The credential itself lives in the Keychain (SlackAuth);
+    // these are just the switches and the connection status the Settings rows
+    // render. See SlackDelivery for what each gate means.
+    // Setup state. Delivery needs both a bot token (Keychain) and a member ID;
+    // either missing and nothing is sent, so a half-finished setup is inert
+    // rather than silently misdirected.
+    @Published var slackTokenPresent: Bool = false
+    @Published var slackMemberID: String?
+    @Published var slackMemberLabel: String?
+    @Published var slackIdentityFromEmail: Bool = false
+    // Last paste / test / delivery outcome, shown on the relevant row.
+    @Published var slackSetupNote: String?
+    @Published var slackError: String?
+    @Published var slackEnabled: Bool = false
+    @Published var slackIdleMinutes: Int = 5
+    @Published var slackIncludeDetail: Bool = false
+    @Published var slackNotifyOnStop: Bool = false
+
     // Which pane of the Events tab is showing. `live` is the triage queue —
     // capped, prunable, and gone on quit. `history` is the durable log behind
     // it. Deliberately a second pane rather than merged into the queue: the
@@ -911,6 +936,8 @@ final class PanelNav: ObservableObject {
         rows += [.quotaTracking, .quotaAlerts, .alertThreshold, .pollFrequency, .contextAlert, .showRemaining,
                  .githubLinks, .hideShipped, .disconnectGithub,
                  .historyPerSession, .eventHistory, .clearHistory,
+                 .slackPaste, .slackIdentity, .slackTest,
+                 .slackEnabled, .slackIdle, .slackDetail, .slackStop,
                  .editPhrases, .checkPermissions, .openConfig, .releaseNotes, .checkUpdates, .uninstall, .quit]
         return rows
     }
@@ -984,6 +1011,16 @@ final class PanelNav: ObservableObject {
         let rawCtx = Int(config["STACKNUDGE_CONTEXT_ALERT_THRESHOLD"] ?? "") ?? 0
         contextAlertThresholdK = Self.contextAlertThresholdOptions.min(by: { abs($0 - rawCtx) < abs($1 - rawCtx) }) ?? 0
         eventHistoryEnabled = ConfigFile.bool(config, "STACKNUDGE_EVENT_HISTORY", default: true)
+        slackEnabled       = ConfigFile.bool(config, "STACKNUDGE_SLACK", default: false)
+        slackIncludeDetail = ConfigFile.bool(config, "STACKNUDGE_SLACK_DETAIL", default: false)
+        slackNotifyOnStop  = ConfigFile.bool(config, "STACKNUDGE_SLACK_STOP", default: false)
+        let rawSlackIdle = Int(config["STACKNUDGE_SLACK_IDLE_MIN"] ?? "") ?? 5
+        slackIdleMinutes = SlackDelivery.idleMinuteOptions
+            .min(by: { abs($0 - rawSlackIdle) < abs($1 - rawSlackIdle) }) ?? 5
+        slackTokenPresent = SlackCredentials.botToken() != nil
+        let memberID = config["STACKNUDGE_SLACK_MEMBER_ID"]?
+            .trimmingCharacters(in: .whitespaces) ?? ""
+        slackMemberID = memberID.isEmpty ? nil : memberID
         let rawRemind = Int(config["STACKNUDGE_REMIND_MIN"] ?? "") ?? 2
         remindMinutes = AttentionPolicy.reminderMinuteOptions.min(by: { abs($0 - rawRemind) < abs($1 - rawRemind) }) ?? 2
         let rawStalled = Int(config["STACKNUDGE_STALLED_MIN"] ?? "") ?? 0
@@ -1246,6 +1283,9 @@ final class PanelNav: ObservableObject {
         case .checkPermissions: actions?.checkPermissions()
         case .openConfig:       actions?.openConfig()
         case .clearHistory:     actions?.clearEventHistory()
+        case .slackPaste:    actions?.pasteSlackSetup()
+        case .slackIdentity: actions?.detectSlackUser()
+        case .slackTest:     actions?.sendSlackTest()
         case .releaseNotes:     actions?.openReleaseNotes()
         case .checkUpdates:     actions?.checkForUpdates()
         case .uninstall:        actions?.beginUninstall()
@@ -1266,7 +1306,8 @@ final class PanelNav: ObservableObject {
         switch selectedRow {
         case .wireAgents, .dismissAgents,
              .disconnectGithub, .editPhrases, .checkPermissions, .openConfig,
-             .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory, .none:
+             .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
+             .slackPaste, .slackIdentity, .slackTest, .none:
             return false
         case .permissions, .update, .hotkey, .speakHotkey,
              .banner, .muteWhenFocused, .mute, .muteDuration,
@@ -1278,7 +1319,8 @@ final class PanelNav: ObservableObject {
              .quotaTracking, .quotaAlerts, .alertThreshold, .pollFrequency,
              .contextAlert, .showRemaining,
              .githubLinks, .hideShipped,
-             .historyPerSession, .eventHistory:
+             .historyPerSession, .eventHistory,
+             .slackEnabled, .slackIdle, .slackDetail, .slackStop:
             return true
         }
     }
@@ -1496,6 +1538,23 @@ final class PanelNav: ObservableObject {
             toggleGithubLinking()
         case .hideShipped:
             toggleHideShipped()
+        case .slackEnabled:
+            slackEnabled.toggle()
+            ConfigFile.write(key: "STACKNUDGE_SLACK", value: slackEnabled ? "true" : "false")
+        case .slackIdle:
+            let list = SlackDelivery.idleMinuteOptions
+            let idx = list.firstIndex(of: slackIdleMinutes) ?? 1
+            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+            slackIdleMinutes = list[next]
+            ConfigFile.write(key: "STACKNUDGE_SLACK_IDLE_MIN", value: String(slackIdleMinutes))
+        case .slackDetail:
+            slackIncludeDetail.toggle()
+            ConfigFile.write(key: "STACKNUDGE_SLACK_DETAIL",
+                             value: slackIncludeDetail ? "true" : "false")
+        case .slackStop:
+            slackNotifyOnStop.toggle()
+            ConfigFile.write(key: "STACKNUDGE_SLACK_STOP",
+                             value: slackNotifyOnStop ? "true" : "false")
         case .eventHistory:
             eventHistoryEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_EVENT_HISTORY",
@@ -1513,7 +1572,8 @@ final class PanelNav: ObservableObject {
         // neither should fire on an arrow-key graze. Enter/Space only.
         case .wireAgents, .dismissAgents,
              .disconnectGithub, .editPhrases, .checkPermissions, .openConfig,
-             .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory, .none:
+             .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
+             .slackPaste, .slackIdentity, .slackTest, .none:
             break
         }
     }
