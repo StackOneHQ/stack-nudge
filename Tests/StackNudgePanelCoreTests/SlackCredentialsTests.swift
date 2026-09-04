@@ -97,18 +97,30 @@ final class SlackCredentialsTests: XCTestCase {
             .contains("# STACKNUDGE_SLACK_BOT_TOKEN=xoxb-example"))
     }
 
-    // The config file carries secrets during provisioning and is read by
-    // anything the user runs, so it must not be world-readable.
+    // The config file carries secrets during provisioning and is read by anything
+    // the user runs, so it must not be world-readable. Writes to a temp path
+    // rather than the real config — a test has no business mutating the user's
+    // settings, and CI has no ~/.stack-nudge at all.
     func test_configFileIsWrittenOwnerOnly() throws {
-        let original = try? String(contentsOfFile: ConfigFile.path, encoding: .utf8)
-        ConfigFile.write(key: "STACKNUDGE_TEST_PERMISSION_PROBE", value: "1")
-        defer {
-            ConfigFile.remove(key: "STACKNUDGE_TEST_PERMISSION_PROBE")
-            if let original {
-                try? original.write(toFile: ConfigFile.path, atomically: true, encoding: .utf8)
-            }
-        }
-        let attrs = try FileManager.default.attributesOfItem(atPath: ConfigFile.path)
+        let dir = NSTemporaryDirectory() + "sn-cfg-\(UUID().uuidString)"
+        let path = dir + "/config"
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        ConfigFile.persist("STACKNUDGE_BANNER=true\n", to: path)
+
+        let attrs = try FileManager.default.attributesOfItem(atPath: path)
         XCTAssertEqual(attrs[.posixPermissions] as? NSNumber, 0o600)
+    }
+
+    // The parent directory won't exist before Bootstrap has run, and a write that
+    // silently no-ops there would lose a provisioned token.
+    func test_persistCreatesTheDirectory() throws {
+        let dir = NSTemporaryDirectory() + "sn-cfg-\(UUID().uuidString)"
+        let path = dir + "/nested/config"
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        ConfigFile.persist("A=1\n", to: path)
+
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), "A=1\n")
     }
 }

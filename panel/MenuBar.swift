@@ -34,7 +34,12 @@ enum ConfigFile {
     // time or it reverts to the umask default (0644 in practice). Nothing in
     // here benefits from being world-readable, and secrets pass through during
     // provisioning.
-    private static func persist(_ contents: String) {
+    static func persist(_ contents: String, to path: String = ConfigFile.path) {
+        // Create the directory first: before Bootstrap has run there is no
+        // ~/.stack-nudge, and the write would otherwise fail silently.
+        try? FileManager.default.createDirectory(
+            atPath: (path as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true)
         try? contents.write(toFile: path, atomically: true, encoding: .utf8)
         try? FileManager.default.setAttributes([.posixPermissions: 0o600],
                                                ofItemAtPath: path)
