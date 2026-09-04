@@ -136,15 +136,21 @@ final class SlackNotifier {
     func send(_ text: String,
               to memberID: String?,
               completion: ((String?) -> Void)? = nil) {
-        guard let token = SlackCredentials.botToken() else {
-            finish("No Slack bot token — paste one in Settings", completion)
-            return
-        }
         guard let memberID, !memberID.isEmpty else {
             finish("No Slack user set — run Detect or paste a member ID", completion)
             return
         }
-        post(text: text, token: token, memberID: memberID, completion: completion)
+        // SecItemCopyMatching is sub-millisecond warm but blocks outright if the
+        // keychain needs unlocking, and this runs from postBannerIfNeeded on the
+        // main thread for every event — so it stays off the hook-delivery path.
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            guard let token = SlackCredentials.botToken() else {
+                self.finish("No Slack bot token — paste one in Settings", completion)
+                return
+            }
+            self.post(text: text, token: token, memberID: memberID, completion: completion)
+        }
     }
 
     private func post(text: String, token: String, memberID: String,

@@ -65,6 +65,49 @@ final class SlackCredentialsTests: XCTestCase {
         XCTAssertEqual(SlackCredentials.classify("{not json"), .unrecognised)
     }
 
+    // MARK: - Provisioning migration
+
+    // The riskiest path a secret takes here, and previously untested because it
+    // hardcoded the real config file and the real Keychain.
+
+    func test_adoptMovesTheTokenAndScrubsTheLine() {
+        var stored: String?
+        var scrubbed: [String] = []
+        let adopted = SlackCredentials.adoptFromConfig(
+            read: { [SlackCredentials.configTokenKey: "  xoxb-EXAMPLE-NOT-A-REAL-TOKEN\n"] },
+            store: { stored = $0; return true },
+            scrub: { scrubbed.append($0) })
+
+        XCTAssertTrue(adopted)
+        XCTAssertEqual(stored, "xoxb-EXAMPLE-NOT-A-REAL-TOKEN")  // trimmed
+        XCTAssertEqual(scrubbed, [SlackCredentials.configTokenKey])
+    }
+
+    // The bug this guards: store used to be fire-and-forget, so a locked
+    // keychain at launch deleted the plaintext while failing to save it, leaving
+    // the token in neither place and Settings reading a bland "not configured".
+    func test_aFailedStoreLeavesTheConfigLineAlone() {
+        var scrubbed: [String] = []
+        let adopted = SlackCredentials.adoptFromConfig(
+            read: { [SlackCredentials.configTokenKey: "xoxb-EXAMPLE-NOT-A-REAL-TOKEN"] },
+            store: { _ in false },          // e.g. errSecInteractionNotAllowed
+            scrub: { scrubbed.append($0) })
+
+        XCTAssertFalse(adopted)
+        XCTAssertTrue(scrubbed.isEmpty, "a failed store must not destroy the only copy")
+    }
+
+    func test_adoptIsANoOpWithNothingToMigrate() {
+        var touched = false
+        for contents in [[:], [SlackCredentials.configTokenKey: "   "]] as [[String: String]] {
+            XCTAssertFalse(SlackCredentials.adoptFromConfig(
+                read: { contents },
+                store: { _ in touched = true; return true },
+                scrub: { _ in touched = true }))
+        }
+        XCTAssertFalse(touched)
+    }
+
     // MARK: - Config scrubbing
 
     // The provisioning promise: a token planted for a setup script must not

@@ -85,16 +85,23 @@ enum SlackCredentials {
     // for the minutes between provisioning and first launch rather than forever
     // — the config file is shared with non-secret settings and is read by
     // anything the user runs.
+    // `read`/`store`/`scrub` are injected so the migration — the riskiest path
+    // a secret takes here — is testable without touching the real config file or
+    // the login Keychain.
     @discardableResult
-    static func adoptFromConfig() -> Bool {
-        let raw = ConfigFile.read()[configTokenKey]?
+    static func adoptFromConfig(
+        read: () -> [String: String] = ConfigFile.read,
+        store: (String) -> Bool = { store(botToken: $0) },
+        scrub: (String) -> Void = { ConfigFile.remove(key: $0) }
+    ) -> Bool {
+        let raw = read()[configTokenKey]?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !raw.isEmpty else { return false }
         // Only scrub once the Keychain has it. Deleting the line on a failed
         // store would leave the token in neither place, with Settings reporting
         // a bland "not configured" and re-provisioning the only way back.
-        guard store(botToken: raw) else { return false }
-        ConfigFile.remove(key: configTokenKey)
+        guard store(raw) else { return false }
+        scrub(configTokenKey)
         return true
     }
 
