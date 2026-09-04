@@ -183,7 +183,12 @@ final class ClaudeCliQuotaProbe {
     private static let lineRegex = try! NSRegularExpression(
         pattern: #"^Current (.+?): (\d+)% used(?: · resets (.+))?$"#)
 
-    static func parseTierLine(_ line: String) -> (name: String, tier: QuotaTier)? {
+    // `now` is threaded through to parseResetsAt's plausibility window rather
+    // than defaulted there, so a test can pin a line to the date it was written
+    // against. Without it a fixed "resets Jun 30" line silently starts failing
+    // once it drifts more than `plausibleWindow` into the past.
+    static func parseTierLine(_ line: String,
+                              now: Date = Date()) -> (name: String, tier: QuotaTier)? {
         let ns = line as NSString
         let range = NSRange(location: 0, length: ns.length)
         guard let m = lineRegex.firstMatch(in: line, range: range) else { return nil }
@@ -192,7 +197,7 @@ final class ClaudeCliQuotaProbe {
         let resetsAt: Date? = {
             let r = m.range(at: 3)
             guard r.location != NSNotFound else { return nil }
-            return parseResetsAt(ns.substring(with: r))
+            return parseResetsAt(ns.substring(with: r), now: now)
         }()
         return (name, QuotaTier(utilization: pct, resetsAt: resetsAt))
     }
