@@ -133,6 +133,8 @@ struct SettingsView: View {
 
                         section("Events") {
                             row(.historyPerSession, label: "History per session", kind: .cycle, value: "\(nav.eventsPerSession)")
+                            row(.eventHistory,  label: "Event history",  kind: .toggle, value: nav.eventHistoryEnabled ? "On" : "Off")
+                            row(.clearHistory,  label: "Clear event history", kind: .action, value: nav.historyRecords.isEmpty ? "empty" : "\(nav.historyRecords.count) kept")
                         }
 
                         section("Actions") {

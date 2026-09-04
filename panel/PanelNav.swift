@@ -140,6 +140,10 @@ enum GithubSignIn: Equatable {
 // rendering and keyboard nav, so adding/removing/reordering a row is a one-line
 // change with no renumbering — and the applyCycle switch over this is
 // exhaustive, so the compiler flags any row left unhandled.
+enum EventsPane: String, CaseIterable {
+    case live, history
+}
+
 enum SettingsRow: Hashable {
     // One slot per button in the agent-reconciliation banner, so both are
     // keyboard-reachable rather than mouse-only.
@@ -148,6 +152,7 @@ enum SettingsRow: Hashable {
     case banner, muteWhenFocused, mute, muteDuration, remindUnanswered, stalledSessions,
          pinPanel, keepOpenWhenEmpty, launchAtLogin
     case widget, snapToCorners, widgetCorner, widgetOpacity, widgetContent, mascot, theme
+    case eventHistory, clearHistory
     case soundEnabled, agentDoneSound, permissionSound
     case voiceEnabled, voice, voiceSpeed, speakHotkey, downloadVoiceModel
     case quotaTracking, quotaAlerts, alertThreshold, pollFrequency, contextAlert, showRemaining
@@ -176,6 +181,10 @@ struct SettingsActions {
     // by PanelController, which owns the expiry timer and the menu-bar badge.
     let muteFor:             (Int) -> Void
     let resumeNotifications: () -> Void
+    // Event history: attach/detach the durable log when the toggle flips, and
+    // wipe the file from the Settings action row.
+    let applyEventHistorySetting: () -> Void
+    let clearEventHistory:        () -> Void
 }
 
 // Owns the panel's navigation state plus the live values the Settings page
@@ -719,6 +728,20 @@ final class PanelNav: ObservableObject {
     // Threshold-crossing notifications. quotaAlertsEnabled is the master
     // switch; quotaAlertThreshold is the single percent value used across
     // all tiers — banner fires once per period when any tier reaches it.
+    // Which pane of the Events tab is showing. `live` is the triage queue —
+    // capped, prunable, and gone on quit. `history` is the durable log behind
+    // it. Deliberately a second pane rather than merged into the queue: the
+    // live list is an action list, and salting it with dead records would make
+    // ⏎ and ⌫ mean different things depending on the row.
+    @Published var eventsPane: EventsPane = .live
+    @Published var historyQuery: String = ""
+    // Loaded once at launch and appended to in memory as events arrive, so the
+    // pane never re-reads the file while the panel is open.
+    @Published var historyRecords: [EventRecord] = []
+    // Settings → Event history. Off stops recording; what's already on disk
+    // stays readable until the user clears it.
+    @Published var eventHistoryEnabled: Bool = true
+
     // Minutes between reminders for a permission prompt nobody has answered,
     // and minutes of silence before a still-busy session is called stalled.
     // 0 disables each. See AttentionPolicy for what counts as unanswered.
@@ -887,7 +910,7 @@ final class PanelNav: ObservableObject {
         rows += voiceModelCached ? [.voice, .voiceSpeed] : [.downloadVoiceModel]
         rows += [.quotaTracking, .quotaAlerts, .alertThreshold, .pollFrequency, .contextAlert, .showRemaining,
                  .githubLinks, .hideShipped, .disconnectGithub,
-                 .historyPerSession,
+                 .historyPerSession, .eventHistory, .clearHistory,
                  .editPhrases, .checkPermissions, .openConfig, .releaseNotes, .checkUpdates, .uninstall, .quit]
         return rows
     }
@@ -960,6 +983,7 @@ final class PanelNav: ObservableObject {
         quotaPollMinutes = Self.quotaPollMinuteOptions.min(by: { abs($0 - rawPoll) < abs($1 - rawPoll) }) ?? 5
         let rawCtx = Int(config["STACKNUDGE_CONTEXT_ALERT_THRESHOLD"] ?? "") ?? 0
         contextAlertThresholdK = Self.contextAlertThresholdOptions.min(by: { abs($0 - rawCtx) < abs($1 - rawCtx) }) ?? 0
+        eventHistoryEnabled = ConfigFile.bool(config, "STACKNUDGE_EVENT_HISTORY", default: true)
         let rawRemind = Int(config["STACKNUDGE_REMIND_MIN"] ?? "") ?? 2
         remindMinutes = AttentionPolicy.reminderMinuteOptions.min(by: { abs($0 - rawRemind) < abs($1 - rawRemind) }) ?? 2
         let rawStalled = Int(config["STACKNUDGE_STALLED_MIN"] ?? "") ?? 0
@@ -1221,6 +1245,7 @@ final class PanelNav: ObservableObject {
         case .editPhrases:      actions?.editPhrases()
         case .checkPermissions: actions?.checkPermissions()
         case .openConfig:       actions?.openConfig()
+        case .clearHistory:     actions?.clearEventHistory()
         case .releaseNotes:     actions?.openReleaseNotes()
         case .checkUpdates:     actions?.checkForUpdates()
         case .uninstall:        actions?.beginUninstall()
@@ -1241,7 +1266,7 @@ final class PanelNav: ObservableObject {
         switch selectedRow {
         case .wireAgents, .dismissAgents,
              .disconnectGithub, .editPhrases, .checkPermissions, .openConfig,
-             .releaseNotes, .checkUpdates, .uninstall, .quit, .none:
+             .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory, .none:
             return false
         case .permissions, .update, .hotkey, .speakHotkey,
              .banner, .muteWhenFocused, .mute, .muteDuration,
@@ -1253,7 +1278,7 @@ final class PanelNav: ObservableObject {
              .quotaTracking, .quotaAlerts, .alertThreshold, .pollFrequency,
              .contextAlert, .showRemaining,
              .githubLinks, .hideShipped,
-             .historyPerSession:
+             .historyPerSession, .eventHistory:
             return true
         }
     }
@@ -1471,6 +1496,11 @@ final class PanelNav: ObservableObject {
             toggleGithubLinking()
         case .hideShipped:
             toggleHideShipped()
+        case .eventHistory:
+            eventHistoryEnabled.toggle()
+            ConfigFile.write(key: "STACKNUDGE_EVENT_HISTORY",
+                             value: eventHistoryEnabled ? "true" : "false")
+            actions?.applyEventHistorySetting()
         case .historyPerSession:
             let list = Self.eventsPerSessionOptions
             let idx = list.firstIndex(of: eventsPerSession) ?? 1
@@ -1483,7 +1513,7 @@ final class PanelNav: ObservableObject {
         // neither should fire on an arrow-key graze. Enter/Space only.
         case .wireAgents, .dismissAgents,
              .disconnectGithub, .editPhrases, .checkPermissions, .openConfig,
-             .releaseNotes, .checkUpdates, .uninstall, .quit, .none:
+             .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory, .none:
             break
         }
     }

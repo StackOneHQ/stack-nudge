@@ -169,6 +169,11 @@ final class EventStore: ObservableObject {
     /// Called on main queue after each new event is inserted.
     var onAppend: ((NudgeEvent) -> Void)?
 
+    // Durable history behind the live queue. nil disables recording (Settings →
+    // Event history), in which case nothing is written and the History pane
+    // shows only what the log already held.
+    var log: EventLog?
+
     func append(_ event: NudgeEvent) {
         // Claude Code occasionally fires the same hook twice in rapid
         // succession (observed on Stop). Drop the second event when an
@@ -189,6 +194,15 @@ final class EventStore: ObservableObject {
         // when many sessions are active in parallel.
         prune()
         if selectedID != event.id { selectedID = event.id }
+        // After the dedup check, so the log doesn't record a duplicate the
+        // panel deliberately dropped. The write itself is async.
+        log?.append(EventRecord(at: event.timestamp,
+                                agent: event.agent,
+                                kind: event.kind.rawValue,
+                                title: event.title,
+                                message: event.message,
+                                project: event.projectPath,
+                                session: event.claudeSessionID))
         onAppend?(event)
         if ProcessInfo.processInfo.environment["STACKNUDGE_PANEL_DEBUG"] != nil {
             FileHandle.standardError.write(Data(

@@ -32,6 +32,7 @@ private enum KeyCode {
     static let pKey:      UInt16 = 35
     static let mKey:      UInt16 = 46
     static let wKey:      UInt16 = 13
+    static let hKey:      UInt16 = 4
 }
 
 // Floating, non-activating panel. Shown via global hotkey; receives key
@@ -85,6 +86,10 @@ struct PanelContentView: View {
     // string — handing every row the whole session array would rebuild all of
     // them on every 3s poll.
     @EnvironmentObject private var persistence: SessionPersistence
+
+    // Owned here rather than inside historyPane so the key handler's gate
+    // (nav.historySearchFocused) and the actual first responder can't drift.
+    @FocusState private var historyFieldFocused: Bool
 
     let onGrantPermissions: () -> Void
 
@@ -262,14 +267,93 @@ struct PanelContentView: View {
             if let error = nav.listenerError {
                 listenerErrorBanner(error)
             }
-            if store.events.isEmpty {
-                emptyState
-            } else {
-                eventList
+            switch nav.eventsPane {
+            case .live:
+                if store.events.isEmpty { emptyState } else { eventList }
+            case .history:
+                historyPane
             }
             footer
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // Typing is the whole point of the pane, so claim the field on entry
+        // rather than making the user click it. Releasing on exit hands the
+        // keyboard back to the live queue's shortcuts.
+        .onChange(of: nav.eventsPane) { pane in
+            historyFieldFocused = (pane == .history)
+        }
+    }
+
+    // Durable log, newest first. Read-only by design: these records have no
+    // FIFO and no PID, so there is nothing here to approve or focus — which is
+    // exactly why they live behind the live queue rather than inside it.
+    private var historyPane: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                TextField("Filter history", text: $nav.historyQuery)
+                    .textFieldStyle(.plain)
+                    .font(.callout)
+                    .focused($historyFieldFocused)
+                if !nav.historyQuery.isEmpty {
+                    Button {
+                        nav.historyQuery = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .onAppear { historyFieldFocused = true }
+            Divider().opacity(0.4)
+
+            if filteredHistory.isEmpty {
+                historyEmptyState
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(filteredHistory) { record in
+                            HistoryRow(record: record)
+                        }
+                    }
+                    .padding(.top, 4)
+                    .padding(.bottom, 8)
+                    .background(ThinScrollers())
+                }
+                .frame(maxHeight: .infinity)
+            }
+        }
+    }
+
+    private var filteredHistory: [EventRecord] {
+        let q = nav.historyQuery.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return nav.historyRecords }
+        return nav.historyRecords.filter { $0.matches(q) }
+    }
+
+    private var historyEmptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: nav.historyQuery.isEmpty ? "clock" : "magnifyingglass")
+                .font(.system(size: 28, weight: .light))
+                .foregroundStyle(.tertiary)
+            Text(nav.historyQuery.isEmpty
+                 ? (nav.eventHistoryEnabled ? "No history yet" : "Event history is off")
+                 : "Nothing matches \"\(nav.historyQuery)\"")
+                .foregroundStyle(.secondary)
+                .font(.subheadline)
+            if nav.historyQuery.isEmpty, !nav.eventHistoryEnabled {
+                Text("Turn it on in Settings → Event history")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.vertical, 24)
     }
 
     private func listenerErrorBanner(_ error: String) -> some View {
@@ -340,11 +424,17 @@ struct PanelContentView: View {
 
     private var footer: some View {
         PageFooter {
-            if store.events.isEmpty {
+            if nav.eventsPane == .history {
+                // The search field owns the keyboard here, so the only hint
+                // worth showing is the way back out.
+                FooterHint(label: nav.historyQuery.isEmpty ? "Back" : "Clear filter",
+                           keys: ["Esc"])
+            } else if store.events.isEmpty {
                 // Mute is still useful with an empty list — it pre-silences
                 // incoming nudges (e.g. heading into a meeting), so keep the
                 // shortcut discoverable even here.
                 FooterHint(label: muteLabel, keys: ["M"])
+                FooterHint(label: "History", keys: ["H"])
                 FooterHint(label: "Hide", keys: ["Esc"])
             } else {
                 if let primary = primaryActionLabel {
@@ -360,6 +450,7 @@ struct PanelContentView: View {
                     .opacity(snoozeEnabled ? 1.0 : 0.35)
                 FooterHint(label: dismissLabel, keys: ["⌫"])
                 FooterHint(label: muteLabel, keys: ["M"])
+                FooterHint(label: "History", keys: ["H"])
                 FooterHint(label: "Hide", keys: ["Esc"])
             }
         }
@@ -388,6 +479,45 @@ struct PanelContentView: View {
     }
 }
 
+
+// One line of durable history. Flatter than EventRow on purpose — there is no
+// selection, no action, and no snooze state to render, so the row is a plain
+// read rather than a control.
+private struct HistoryRow: View {
+
+    let record: EventRecord
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: record.kind == "permission" ? "hand.raised.fill" : "checkmark.circle")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .frame(width: 14)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(record.message)
+                    .font(.callout)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 4) {
+                    if let project = record.projectName {
+                        Text(project)
+                        Text("·").foregroundStyle(.quaternary)
+                    }
+                    Text(record.agent)
+                    Text("·").foregroundStyle(.quaternary)
+                    Text(RelativeTime.string(record.at))
+                }
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
 
 struct EventRow: View {
 
@@ -742,7 +872,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             expandFromCompact: { [weak self] in self?.expandFromCompact() },
             exitCompactMode:   { [weak self] in self?.exitCompactMode() },
             muteFor:             { [weak self] minutes in self?.muteFor(minutes: minutes) },
-            resumeNotifications: { [weak self] in self?.resumeNotifications() }
+            resumeNotifications: { [weak self] in self?.resumeNotifications() },
+            applyEventHistorySetting: { [weak self] in self?.applyEventHistorySetting() },
+            clearEventHistory:        { [weak self] in self?.clearEventHistory() }
         )
         nav.setHotkey = { [weak self] spec in
             self?.registerHotkey(spec: spec) ?? false
@@ -766,6 +898,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             self?.tickAttention()
             self?.refreshTranscriptStats(for: event)
             self?.captureHandoff(for: event)
+            self?.noteHistory(event)
             self?.nav.reactToEvent(event.kind)
         }
         nav.loadFromConfig()  // populate panelPinned + other live values up-front
@@ -784,6 +917,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
         startQuotaPolling()
         startAttentionTicking()
+        startEventHistory()
         // The pill (CompactView) reads sessions.sessions for the busy/idle
         // headline and mascot state, so polling has to run as soon as the
         // app is up — not gated on the Sessions tab being visible. Sessions
@@ -2361,6 +2495,44 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         refreshStatusBadge()
     }
 
+    // MARK: - Event history
+
+    private let eventLog = EventLog()
+
+    // Load the durable log once at launch and attach it to the store if
+    // recording is on. Loading happens regardless of the toggle: turning
+    // recording off should stop new writes, not hide what's already there.
+    private func startEventHistory() {
+        nav.historyRecords = eventLog.load()
+        applyEventHistorySetting()
+    }
+
+    private func applyEventHistorySetting() {
+        store.log = nav.eventHistoryEnabled ? eventLog : nil
+    }
+
+    private func clearEventHistory() {
+        eventLog.clear()
+        nav.historyRecords = []
+        nav.historyQuery = ""
+    }
+
+    // Mirror a newly-recorded event into the in-memory list so the History
+    // pane updates live instead of only after the next launch. Cheap: the log
+    // itself is what bounds growth, and this list is capped by the same
+    // retention on the next load.
+    private func noteHistory(_ event: NudgeEvent) {
+        guard nav.eventHistoryEnabled else { return }
+        nav.historyRecords.insert(EventRecord(at: event.timestamp,
+                                              agent: event.agent,
+                                              kind: event.kind.rawValue,
+                                              title: event.title,
+                                              message: event.message,
+                                              project: event.projectPath,
+                                              session: event.claudeSessionID),
+                                  at: 0)
+    }
+
     // MARK: - Attention: unanswered prompts + stalled sessions
 
     // One entry per permission prompt still blocking its agent.
@@ -3164,6 +3336,16 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
         guard !shifted else { return false }
 
+        // History pane: the search field is the first responder, so every
+        // printable key has to reach it. Only Esc is intercepted — it steps
+        // back to the live queue (or clears a filter first), which is the one
+        // gesture a text field would otherwise swallow into "do nothing".
+        if nav.eventsPane == .history {
+            guard event.keyCode == KeyCode.escape else { return false }
+            if nav.historyQuery.isEmpty { nav.eventsPane = .live } else { nav.historyQuery = "" }
+            return true
+        }
+
         switch event.keyCode {
         case KeyCode.escape:
             hidePanel()
@@ -3179,6 +3361,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             dismissSelected()
         case KeyCode.mKey:
             toggleGlobalMute()
+        case KeyCode.hKey:
+            nav.eventsPane = .history
         default:
             return false
         }
@@ -3463,6 +3647,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // NSApp.hide hides all our windows AND deactivates the app, so the system
     // frontmost reverts to whatever was active before the panel was summoned.
     private func hidePanel() {
+        // History is a lookup, not a place to leave the panel parked — the
+        // next summon should land on the live queue. Mirrors the Outcomes tab
+        // resetting to its overview pane on each open.
+        nav.eventsPane = .live
+        nav.historyQuery = ""
         // Compact mode: "hide" means "collapse back to the pill," never
         // make the user lose their widget entirely. Esc / hotkey / focus
         // loss all funnel through here.
