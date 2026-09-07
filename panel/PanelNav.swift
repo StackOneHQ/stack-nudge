@@ -769,12 +769,59 @@ final class PanelNav: ObservableObject {
     // ⏎ and ⌫ mean different things depending on the row.
     @Published var eventsPane: EventsPane = .live
     @Published var historyQuery: String = ""
+    // Bumped when the panel's key handler wants the history filter field to take
+    // the keyboard (the user pressed / or started typing). A counter rather than
+    // a Bool because @FocusState can't be driven from an ObservableObject
+    // directly, and repeat requests have to re-fire after the view has already
+    // handled one. See PanelContentView.eventsBody.
+    @Published var historyFilterFocusRequests: Int = 0
     // Loaded once at launch and appended to in memory as events arrive, so the
     // pane never re-reads the file while the panel is open.
     @Published var historyRecords: [EventRecord] = []
+    // Selected row in the history pane. The records carry no FIFO and no PID so
+    // there is nothing to act on, but ↑↓ / ⌘↑↓ moving a selection is how every
+    // other list in the panel reads, and it's the only way to walk a 30-day log
+    // from the keyboard.
+    @Published var historySelectedID: EventRecord.ID?
     // Settings → Event history. Off stops recording; what's already on disk
     // stays readable until the user clears it.
     @Published var eventHistoryEnabled: Bool = true
+
+    func focusHistoryFilter() { historyFilterFocusRequests += 1 }
+
+    // The rows the history pane is showing. Lives here rather than in the view
+    // so the key handler moves the selection over exactly what's on screen.
+    var filteredHistory: [EventRecord] {
+        Self.filterHistory(historyRecords, query: historyQuery)
+    }
+
+    static func filterHistory(_ records: [EventRecord], query: String) -> [EventRecord] {
+        let needle = query.trimmingCharacters(in: .whitespaces)
+        guard !needle.isEmpty else { return records }
+        return records.filter { $0.matches(needle) }
+    }
+
+    // Clamped at both ends rather than wrapping, matching the live queue and the
+    // Sessions list.
+    func moveHistorySelection(_ delta: Int) {
+        let rows = filteredHistory
+        guard !rows.isEmpty else { return }
+        // No live selection — nothing picked yet, or the filter just dropped the
+        // row that was. Land on the newest row rather than stepping off it:
+        // treating "unselected" as index 0 (which is what the live queue's
+        // `?? 0` does) makes the first ↓ skip the top row.
+        guard let current = rows.firstIndex(where: { $0.id == historySelectedID }) else {
+            historySelectedID = rows.first?.id
+            return
+        }
+        historySelectedID = rows[min(max(current + delta, 0), rows.count - 1)].id
+    }
+
+    func jumpHistorySelection(toLast: Bool) {
+        let rows = filteredHistory
+        guard !rows.isEmpty else { return }
+        historySelectedID = toLast ? rows.last?.id : rows.first?.id
+    }
 
     // Minutes between reminders for a permission prompt nobody has answered,
     // and minutes of silence before a still-busy session is called stalled.

@@ -33,6 +33,7 @@ private enum KeyCode {
     static let mKey:      UInt16 = 46
     static let wKey:      UInt16 = 13
     static let hKey:      UInt16 = 4
+    static let slash:     UInt16 = 44
 }
 
 // Floating, non-activating panel. Shown via global hotkey; receives key
@@ -276,12 +277,42 @@ struct PanelContentView: View {
             footer
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        // Typing is the whole point of the pane, so claim the field on entry
-        // rather than making the user click it. Releasing on exit hands the
-        // keyboard back to the live queue's shortcuts.
+        // The pane deliberately opens with the field *unfocused*. A focused
+        // field editor consumes keys before NSWindow.keyDown sees them, so
+        // grabbing it on entry left ↑↓ / ⌘↑↓ moving the caret rather than the
+        // row selection. Typing (or /) hands the keyboard over — see
+        // PanelController's history branch — and leaving takes it back.
         .onChange(of: nav.eventsPane) { pane in
-            historyFieldFocused = (pane == .history)
+            if pane != .history { historyFieldFocused = false }
+            // A stale selection from a previous visit would scroll the pane to a
+            // row the user didn't ask for, so each visit starts at the top.
+            if pane == .history { nav.historySelectedID = nav.filteredHistory.first?.id }
         }
+        .onChange(of: nav.historyFilterFocusRequests) { _ in
+            historyFieldFocused = true
+        }
+        // AppKit selects a field's entire contents when it becomes first
+        // responder, which would throw away the character that asked for focus
+        // in the first place (type "eng", get "ng"). Collapsing to a caret at
+        // the end fixes that, but it has to happen once the field editor really
+        // is first responder — and a miss doesn't fail safe, it reintroduces the
+        // very bug, intermittently. So key off focus actually becoming true
+        // rather than predicting when it will: the editor is already installed
+        // by the time this fires (with the select-all range in place), which a
+        // scheduled hop only happened to be late enough for.
+        //
+        // It also makes / on an existing filter extend it rather than replace
+        // it, the more useful default for a box that Esc already clears.
+        .onChange(of: historyFieldFocused) { focused in
+            if focused { Self.collapseFilterSelectionToEnd() }
+        }
+    }
+
+    // The history filter is the only field focused at this point, so the key
+    // window's field editor is it.
+    private static func collapseFilterSelectionToEnd() {
+        guard let editor = NSApp.keyWindow?.firstResponder as? NSTextView else { return }
+        editor.setSelectedRange(NSRange(location: editor.string.count, length: 0))
     }
 
     // Durable log, newest first. Read-only by design: these records have no
@@ -309,6 +340,10 @@ struct PanelContentView: View {
                             nav.historyQuery = ""
                         }
                     }
+                    // Releases the field without clearing it, so you can type a
+                    // filter and then walk the results with ↑↓ / ⌘↑↓ — which the
+                    // field would otherwise swallow as caret moves.
+                    .onSubmit { historyFieldFocused = false }
                 if !nav.historyQuery.isEmpty {
                     Button {
                         nav.historyQuery = ""
@@ -321,32 +356,41 @@ struct PanelContentView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
-            .onAppear { historyFieldFocused = true }
             Divider().opacity(0.4)
 
             if filteredHistory.isEmpty {
                 historyEmptyState
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 2) {
-                        ForEach(filteredHistory) { record in
-                            HistoryRow(record: record)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 2) {
+                            ForEach(filteredHistory) { record in
+                                HistoryRow(record: record,
+                                           selected: nav.historySelectedID == record.id)
+                                    .id(record.id)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { nav.historySelectedID = record.id }
+                            }
+                        }
+                        .padding(.top, 4)
+                        .padding(.bottom, 8)
+                        .background(ThinScrollers())
+                    }
+                    .frame(maxHeight: .infinity)
+                    // Same as the live queue: arrow-key selection moves the model
+                    // but not the viewport, so mirror it back into view.
+                    .onChange(of: nav.historySelectedID) { newID in
+                        guard let newID else { return }
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            proxy.scrollTo(newID, anchor: .center)
                         }
                     }
-                    .padding(.top, 4)
-                    .padding(.bottom, 8)
-                    .background(ThinScrollers())
                 }
-                .frame(maxHeight: .infinity)
             }
         }
     }
 
-    private var filteredHistory: [EventRecord] {
-        let q = nav.historyQuery.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { return nav.historyRecords }
-        return nav.historyRecords.filter { $0.matches(q) }
-    }
+    private var filteredHistory: [EventRecord] { nav.filteredHistory }
 
     private var historyEmptyState: some View {
         VStack(spacing: 10) {
@@ -435,42 +479,99 @@ struct PanelContentView: View {
     }
 
     private var footer: some View {
-        PageFooter {
-            if nav.eventsPane == .history {
-                // The search field owns the keyboard here, so the only hint
-                // worth showing is the way back out.
-                FooterHint(label: nav.historyQuery.isEmpty ? "Back" : "Clear filter",
-                           keys: ["Esc"])
-            } else if store.events.isEmpty {
-                // Mute is still useful with an empty list — it pre-silences
-                // incoming nudges (e.g. heading into a meeting), so keep the
-                // shortcut discoverable even here.
-                FooterHint(label: muteLabel, keys: ["M"])
-                FooterHint(label: "History", keys: ["H"])
-                FooterHint(label: "Hide", keys: ["Esc"])
-            } else {
-                if let primary = primaryActionLabel {
-                    FooterHint(label: primary, keys: ["⏎"], primary: true)
-                }
-                FooterHint(label: "Select",  keys: ["↑", "↓"])
-                FooterHint(label: "Top/Bottom", keys: ["⌘↑↓"])
-                // Snooze is always rendered so the footer never reflows when
-                // selection moves between event types — dimmed when the row
-                // isn't snoozable. The S key is wired to fire only for
-                // snoozable rows, so the dim state matches behavior.
-                FooterHint(label: "Snooze",  keys: ["S"])
-                    .opacity(snoozeEnabled ? 1.0 : 0.35)
-                FooterHint(label: dismissLabel, keys: ["⌫"])
-                FooterHint(label: muteLabel, keys: ["M"])
-                FooterHint(label: "History", keys: ["H"])
-                FooterHint(label: "Hide", keys: ["Esc"])
-            }
+        let hints = Self.eventsFooterHints(
+            pane: nav.eventsPane,
+            filterFocused: historyFieldFocused,
+            filterQuery: nav.historyQuery,
+            liveQueueEmpty: store.events.isEmpty,
+            primaryAction: primaryActionLabel,
+            dismissLabel: dismissLabel,
+            snoozeEnabled: snoozeEnabled,
+            muted: nav.isMuted
+        )
+        return PageFooter {
+            ForEach(hints.indices, id: \.self) { FooterHintRow(spec: hints[$0]) }
         }
     }
 
-    // "Mute" toggles to "Resume" while a timed mute is active — mirrors the
-    // header bell and the menu-bar "Resume notifications" item.
-    private var muteLabel: String { nav.isMuted ? "Resume" : "Mute" }
+    // The Events bar, as data. It carries more hints than any other page, so it
+    // is the one bar that has to earn its width: ⌘↑↓ rides along on the Select
+    // hint instead of paying for a "Top/Bottom" label of its own, which brings
+    // the worst case (a Stop row selected while muted) to 590pt and fits the
+    // 600pt default with every shortcut still advertised. Below that only Snooze
+    // is sheddable, and ShedToFitLayout gives it up rather than run the primary
+    // action off the leading edge. Order here is left-to-right.
+    static func eventsFooterHints(pane: EventsPane,
+                                  filterFocused: Bool,
+                                  filterQuery: String,
+                                  liveQueueEmpty: Bool,
+                                  primaryAction: String?,
+                                  dismissLabel: String,
+                                  snoozeEnabled: Bool,
+                                  muted: Bool) -> [FooterHintSpec] {
+        // "Mute" toggles to "Resume" while a timed mute is active — mirrors the
+        // header bell and the menu-bar "Resume notifications" item.
+        let muteLabel = muted ? "Resume" : "Mute"
+
+        switch pane {
+        case .history:
+            // Esc is the only way out of the pane, and it means one thing:
+            // clear the filter if there is one, else step back to the live queue
+            // (where Esc then hides, as everywhere else). Advertising a separate
+            // Hide here was wrong - Esc never hid the panel from this pane.
+            //
+            // Focused, the field editor owns the keyboard and ↑↓ are caret
+            // moves, so ⏎ hands it back to the rows without clearing what's been
+            // typed. Unfocused, which is how the pane opens, the rows have the
+            // keyboard and / claims the field.
+            guard !filterFocused else {
+                return [
+                    FooterHintSpec(label: "Rows", keys: ["⏎"]),
+                    FooterHintSpec(label: filterQuery.isEmpty ? "Back" : "Clear filter",
+                                   keys: ["Esc"]),
+                ]
+            }
+            return [
+                FooterHintSpec(label: "Select", keys: ["↑↓", "⌘↑↓"]),
+                FooterHintSpec(label: "Filter", keys: ["/"]),
+                FooterHintSpec(label: "Back",   keys: ["Esc"]),
+            ]
+
+        case .live where liveQueueEmpty:
+            // Mute is still useful with an empty list — it pre-silences incoming
+            // nudges (e.g. heading into a meeting), so keep the shortcut
+            // discoverable even here.
+            return [
+                FooterHintSpec(label: muteLabel,  keys: ["M"]),
+                FooterHintSpec(label: "History",  keys: ["H"]),
+                FooterHintSpec(label: "Hide",     keys: ["Esc"]),
+            ]
+
+        case .live:
+            var hints: [FooterHintSpec] = []
+            if let primaryAction {
+                hints.append(FooterHintSpec(label: primaryAction, keys: ["⏎"], primary: true))
+            }
+            // ↑↓ pairs into one keycap (as Outcomes and Insights already do),
+            // and ⌘↑↓ joins it rather than carrying a "Top/Bottom" label of its
+            // own — "Select" covers both, and the label alone cost more width
+            // than this bar had to give. Other pages keep the separate hint;
+            // they have the room.
+            hints.append(FooterHintSpec(label: "Select", keys: ["↑↓", "⌘↑↓"]))
+            // Snooze is always rendered so the footer never reflows when
+            // selection moves between event types — dimmed when the row isn't
+            // snoozable. The S key is wired to fire only for snoozable rows, so
+            // the dim state matches behavior. The one sheddable hint here, since
+            // it's the only one that applies to a subset of rows.
+            hints.append(FooterHintSpec(label: "Snooze", keys: ["S"],
+                                        dimmed: !snoozeEnabled, shedOrder: 0))
+            hints.append(FooterHintSpec(label: dismissLabel, keys: ["⌫"]))
+            hints.append(FooterHintSpec(label: muteLabel, keys: ["M"]))
+            hints.append(FooterHintSpec(label: "History", keys: ["H"]))
+            hints.append(FooterHintSpec(label: "Hide", keys: ["Esc"]))
+            return hints
+        }
+    }
 
     private var snoozeEnabled: Bool {
         guard let selected = store.selectedEvent else { return false }
@@ -498,6 +599,7 @@ struct PanelContentView: View {
 private struct HistoryRow: View {
 
     let record: EventRecord
+    let selected: Bool
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -528,6 +630,11 @@ private struct HistoryRow: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 5)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(selected ? Color.accentColor.opacity(0.22) : Color.clear)
+                .padding(.horizontal, 6)
+        )
     }
 }
 
@@ -3529,15 +3636,33 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
         let shifted = mods.contains(.shift)
 
-        // History pane: the search field is normally first responder and
-        // handles Esc itself via .onExitCommand, because a focused field editor
-        // consumes keys before they reach NSWindow.keyDown. This branch is the
-        // fallback for when focus is elsewhere (a row was clicked, focus lost),
-        // and deliberately swallows everything else so panel shortcuts can't
-        // fire against a pane they don't apply to.
+        // History pane. The pane opens with the filter field unfocused, so this
+        // branch owns the keyboard: ↑↓ move the row selection, Esc steps back
+        // out (clearing the filter first if there is one), / hands over to the
+        // field, and any printable character seeds the filter and hands over —
+        // so type-to-filter costs no extra keystroke despite the field not
+        // grabbing focus. Once the field *is* first responder it consumes keys
+        // before NSWindow.keyDown, and its own .onExitCommand handles Esc.
+        // Everything else is swallowed so live-queue shortcuts can't fire
+        // against a pane they don't apply to.
         if nav.eventsPane == .history {
-            guard event.keyCode == KeyCode.escape else { return false }
-            if nav.historyQuery.isEmpty { nav.eventsPane = .live } else { nav.historyQuery = "" }
+            switch Self.historyKeyAction(keyCode: event.keyCode,
+                                         characters: event.charactersIgnoringModifiers,
+                                         filterIsEmpty: nav.historyQuery.isEmpty) {
+            case .back:
+                nav.eventsPane = .live
+            case .clearFilter:
+                nav.historyQuery = ""
+            case .focusFilter:
+                nav.focusHistoryFilter()
+            case .appendToFilter(let typed):
+                nav.historyQuery += typed
+                nav.focusHistoryFilter()
+            case .moveSelection(let delta):
+                nav.moveHistorySelection(delta)
+            case .swallow:
+                break
+            }
             return true
         }
 
@@ -3570,6 +3695,59 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return false
         }
         return true
+    }
+
+    // What a keystroke does in the history pane, as a value. Pure so the routing
+    // can be asserted directly: the arrow keys leaking into the filter was a
+    // routing bug, and nothing about the layout or the footer would have caught it.
+    enum HistoryKeyAction: Equatable {
+        case back
+        case clearFilter
+        case focusFilter
+        case appendToFilter(String)
+        // ↑↓ by one row. ⌘↑↓ never reaches here — it's dispatched earlier via
+        // jumpToEdge, which every page shares.
+        case moveSelection(Int)
+        // Never falls through to the live queue's shortcuts — they don't apply
+        // to a read-only log, and a → key repeat landing in the filter is
+        // exactly what this stops.
+        case swallow
+    }
+
+    static func historyKeyAction(keyCode: UInt16,
+                                 characters: String?,
+                                 filterIsEmpty: Bool) -> HistoryKeyAction {
+        switch keyCode {
+        case KeyCode.escape:
+            return filterIsEmpty ? .back : .clearFilter
+        case KeyCode.slash:
+            return .focusFilter
+        case KeyCode.upArrow:
+            return .moveSelection(-1)
+        case KeyCode.downArrow:
+            return .moveSelection(1)
+        default:
+            guard let characters, isFilterInput(characters) else { return .swallow }
+            return .appendToFilter(characters)
+        }
+    }
+
+    // A keystroke that should start filtering history rather than be swallowed.
+    // Tested for what it *is* rather than what it isn't: AppKit reports arrows,
+    // function keys and Home/End/Page as private-use codepoints from U+F700 up,
+    // and those are neither control characters nor illegal ones, so a "not a
+    // control character" test let them into the filter as invisible junk (and
+    // handed the field focus off the back of it, which killed ← as the way out).
+    // Deliberately not restricted to ASCII — the records hold branch names,
+    // tickets and session labels, so a non-Latin keyboard has to filter too.
+    static let filterInput = CharacterSet.alphanumerics
+        .union(.punctuationCharacters)
+        .union(.symbols)
+        .union(CharacterSet(charactersIn: " "))
+
+    static func isFilterInput(_ characters: String) -> Bool {
+        guard characters.count == 1, let scalar = characters.unicodeScalars.first else { return false }
+        return filterInput.contains(scalar)
     }
 
     // Events-tab keyboard toggle for the global timed mute — mirrors the
@@ -3698,7 +3876,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func jumpToEdge(top: Bool) -> Bool {
         switch nav.mode {
         case .events:
-            top ? store.selectFirst() : store.selectLast()
+            // Each pane jumps its own list; without the branch ⌘↑↓ moved the
+            // live queue's hidden selection while the user was reading history.
+            switch nav.eventsPane {
+            case .live:    top ? store.selectFirst() : store.selectLast()
+            case .history: nav.jumpHistorySelection(toLast: !top)
+            }
         case .sessions:
             guard sessions.renamingPID == nil else { return false }
             top ? selectFirstSession() : selectLastSession()
