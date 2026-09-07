@@ -9,7 +9,7 @@ enum SessionStatus: Equatable {
 struct Session: Identifiable, Equatable {
     let id: Int           // pid — pids are reusable but stable for this process's lifetime
     let pid: Int
-    let agent: String     // "claude" | "gemini" | "codex" | "agy"
+    let agent: String     // "claude" | "gemini" | "codex" | "agy" | "pi"
     let projectPath: String?
     let projectName: String?
     let terminalPID: Int?
@@ -388,7 +388,26 @@ final class SessionStore: ObservableObject {
             ))
         }
         enrichAntigravity(&found)
+        enrichPi(&found)
         return found
+    }
+
+    // pi has no per-pid sidecar (Claude) and no live-status RPC (Antigravity),
+    // but its session file is locatable on disk by the cwd stamped in its header,
+    // so we bind each pi session to its transcript at discovery. That gives the
+    // session id up front (so context stats populate the moment the panel opens,
+    // like Claude's sidecar) and a last-activity time from the file's mtime for
+    // dormancy. Live busy/idle stays nil until a pi extension pushes hook events
+    // over the socket — matching how Codex behaves before its first hook fires.
+    private static func enrichPi(_ found: inout [Session]) {
+        guard found.contains(where: { $0.agent == "pi" }) else { return }
+        for index in found.indices where found[index].agent == "pi" {
+            guard let cwd = found[index].projectPath,
+                  let ref = PiTranscriptReader.locate(cwd: cwd)
+            else { continue }
+            found[index].claudeSessionID = ref.sessionID
+            found[index].lastActivityAt = ref.lastActivityAt
+        }
     }
 
     // Antigravity has no per-pid sidecar like Claude; instead the running `agy`
@@ -436,6 +455,7 @@ final class SessionStore: ObservableObject {
         if baseName == "gemini" { return "gemini" }
         if baseName == "codex"  { return "codex"  }
         if baseName == "agy"    { return "agy"    }
+        if baseName == "pi"     { return "pi"     }
 
         // Node / Deno-hosted agents: inspect later tokens for known script paths.
         if baseName == "node" || baseName == "deno" || baseName == "bun" {
@@ -447,6 +467,11 @@ final class SessionStore: ObservableObject {
             }
             if args.range(of: #"\b(agy|antigravity(-cli)?)\b"#, options: .regularExpression) != nil {
                 return "agy"
+            }
+            // pi ships as ~/.../@earendil-works/pi-coding-agent/dist/bundle/cli.js
+            // run under node; the package path is the unambiguous signature.
+            if args.contains("pi-coding-agent") {
+                return "pi"
             }
         }
         return nil

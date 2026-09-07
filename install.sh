@@ -479,9 +479,27 @@ PY
   installed_any=true
 fi
 
+# pi (@earendil-works/pi-coding-agent). Unlike the others, pi has no hook-config
+# JSON to splice: it auto-loads extensions from ~/.pi/agent/extensions/*.ts, so
+# we install one that forwards pi's lifecycle events to notify.sh.
+if [[ -d "$HOME/.pi/agent" ]]; then
+  echo ""
+  echo "Detected pi (~/.pi/agent)"
+  PI_EXT_SRC="$SCRIPT_DIR/hooks/pi/stack-nudge.ts"
+  PI_EXT_DIR="$HOME/.pi/agent/extensions"
+  if [[ -f "$PI_EXT_SRC" ]]; then
+    mkdir -p "$PI_EXT_DIR"
+    cp "$PI_EXT_SRC" "$PI_EXT_DIR/stack-nudge.ts"
+    echo "  Installed extension    -> $PI_EXT_DIR/stack-nudge.ts"
+    installed_any=true
+  else
+    echo "  Skipped: $PI_EXT_SRC not found"
+  fi
+fi
+
 if [[ "$installed_any" == "false" ]]; then
   echo ""
-  echo "No supported agents detected (Claude Code, Cursor, Codex, Gemini CLI, Antigravity CLI)."
+  echo "No supported agents detected (Claude Code, Cursor, Codex, Gemini CLI, Antigravity CLI, pi)."
   echo "Install one, then re-run this script."
   exit 0
 fi

@@ -58,4 +58,40 @@ final class TmuxFocusTests: XCTestCase {
         XCTAssertNil(TmuxFocus.hostBundleID(forLCTerminal: "WezTerm"))
         XCTAssertNil(TmuxFocus.hostBundleID(forLCTerminal: nil))
     }
+
+    private func writeSidecar(_ json: String, pid: Int, dir: String) {
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try? json.write(toFile: "\(dir)/\(pid).json", atomically: true, encoding: .utf8)
+    }
+
+    func test_sidecarTarget_resolvesPaneSocketAndHost() {
+        // pi's env is unreadable via `ps`, so the in-process extension writes the
+        // pane here; the panel focuses by pid without any `ps` call.
+        let dir = NSTemporaryDirectory() + "pi-sessions-\(UUID().uuidString)"
+        writeSidecar(
+            #"{"pane":"%39","socket":"/private/tmp/tmux-502/default","lcTerminal":"iTerm2"}"#,
+            pid: 4242, dir: dir)
+
+        let actual = TmuxFocus.sidecarTarget(pid: 4242, dir: dir)
+
+        XCTAssertEqual(actual?.pane, "%39")
+        XCTAssertEqual(actual?.socket, "/private/tmp/tmux-502/default")
+        XCTAssertEqual(actual?.hostBundleID, "com.googlecode.iterm2")
+    }
+
+    func test_sidecarTarget_nilWhenMissingOrPaneless() {
+        let dir = NSTemporaryDirectory() + "pi-sessions-\(UUID().uuidString)"
+        XCTAssertNil(TmuxFocus.sidecarTarget(pid: 1, dir: dir))  // no file
+        writeSidecar(#"{"socket":"/tmp/s"}"#, pid: 7, dir: dir)  // no pane
+        XCTAssertNil(TmuxFocus.sidecarTarget(pid: 7, dir: dir))
+    }
+
+    func test_sidecarTarget_emptySocketBecomesNil() {
+        let dir = NSTemporaryDirectory() + "pi-sessions-\(UUID().uuidString)"
+        writeSidecar(#"{"pane":"%1","socket":""}"#, pid: 9, dir: dir)
+        let actual = TmuxFocus.sidecarTarget(pid: 9, dir: dir)
+        XCTAssertEqual(actual?.pane, "%1")
+        XCTAssertNil(actual?.socket)      // empty socket → default socket
+        XCTAssertNil(actual?.hostBundleID) // no lcTerminal → no host raise
+    }
 }
