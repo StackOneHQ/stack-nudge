@@ -4,6 +4,14 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.32.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.31.0...v1.32.0) (2026-09-07)
+
+
+### Features
+
+* **agents:** add pi coding-agent support ([#165](https://github.com/StackOneHQ/stack-nudge/issues/165)) ([acc6364](https://github.com/StackOneHQ/stack-nudge/commit/acc63641d4f7abb945d939a03433fe0fb2aec1ba))
+* **panel:** navigable history rows, and an events footer that fits the panel ([#167](https://github.com/StackOneHQ/stack-nudge/issues/167)) ([fecfb9b](https://github.com/StackOneHQ/stack-nudge/commit/fecfb9b288c2c699f3364bde85fc29ad685fbca8))
+
 ## [1.31.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.30.0...v1.31.0) (2026-09-04)
 
 
