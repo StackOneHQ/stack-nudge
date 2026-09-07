@@ -25,6 +25,7 @@ help:
 	@echo "  make dev        watch sources; auto-reload on change (ctrl-c to stop)"
 	@echo "  make test       run swift test (needs full Xcode for XCTest)"
 	@echo "  make typecheck-tests  compile-check the test sources (no Xcode needed)"
+	@echo "  make test-without-xcode  compile AND run the test sources (no Xcode needed)"
 	@echo "  make clean      remove build/ and .build/"
 
 .PHONY: build
@@ -59,6 +60,14 @@ test:
 .PHONY: typecheck-tests
 typecheck-tests:
 	@./scripts/typecheck-tests.sh
+
+# Compile and run the XCTest sources without Xcode, against the same stand-ins.
+# `make test` / CI stay the authority (real XCTest, real isolation); this is the
+# fast local loop for a machine with only Command Line Tools. Optional NAME=
+# filters to matching Class.method.
+.PHONY: test-without-xcode
+test-without-xcode:
+	@./scripts/run-tests-without-xcode.sh $(NAME)
 
 # One-shot dev cycle: rebuild, reinstall the app, refresh notify.sh in
 # ~/.stack-nudge so hook-side changes propagate, kickstart the daemon.
