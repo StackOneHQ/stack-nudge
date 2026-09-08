@@ -59,18 +59,33 @@ final class TmuxIntegration: TerminalIntegration {
             titlesBySocket[socket] = Self.paneTitles(socket: socket)
         }
 
-        return sessions.map { session in
+        return Self.apply(sessions, panes: panes, tmuxes: tmuxes,
+                          titlesBySocket: titlesBySocket)
+    }
+
+    // Pure half of enrich: given the env values and one title map per server,
+    // stamp the sessions. Split out because the property that matters most here
+    // cannot be reached through enrich() — that a title is only ever taken from
+    // the session's *own* server. Pane ids repeat across servers ("%0" exists on
+    // every one), so pooling them into a single map is a silent, plausible
+    // refactor that hands a session another tmux's title, and it needs a
+    // two-server fixture to catch.
+    static func apply(_ sessions: [Session],
+                      panes: [Int: String],
+                      tmuxes: [Int: String],
+                      titlesBySocket: [String: [String: String]]) -> [Session] {
+        sessions.map { session in
             guard session.terminalApp == "tmux", let pane = panes[session.pid] else { return session }
             var copy = session
             let tmux = tmuxes[session.pid]
-            copy.tabId = Self.tabId(pane: pane, tmux: tmux)
+            copy.tabId = tabId(pane: pane, tmux: tmux)
             // Assigned unconditionally: a failed query blanks the title for one
             // poll and it returns on the next, which is the honest behaviour.
             // Anything cleverer needs to tell "the query failed" apart from
             // "this pane's title is the hostname sentinel", and parseTitles
             // cannot — both arrive as a missing key. Preserving across polls on
             // that ambiguity is how a title that was cleared sticks forever.
-            copy.tabName = Self.socketKey(tmux).flatMap { titlesBySocket[$0]?[pane] }
+            copy.tabName = socketKey(tmux).flatMap { titlesBySocket[$0]?[pane] }
             return copy
         }
     }
@@ -140,11 +155,23 @@ final class TmuxIntegration: TerminalIntegration {
         // lowercased here and on a DHCP/corp-DNS machine can be a different name
         // entirely. Asking tmux removes the guess, the case-folding, and the
         // staleness after a runtime rename.
-        let args = ["-S", socket, "list-panes", "-a",
-                    "-F", "#{pane_id}\t#{host}\t#{pane_title}"]
-        return titles(from: ProcessOutput.read(tmux, args, timeout: 2,
-                                               env: AppActivator.tmuxEnv()),
+        return titles(from: ProcessOutput.read(tmux, listPanesArgs(socket: socket),
+                                               timeout: 2, env: AppActivator.tmuxEnv()),
                       socket: socket, now: now)
+    }
+
+    // The three fields, in order, that parseTitles expects back. Extracted from
+    // the arg vector so a test can build a line exactly the way tmux would and
+    // push it back through the parser: the format string and the parser are two
+    // halves of one contract, and nothing at runtime notices when they drift.
+    // Dropping a field here doesn't fail loudly — parseTitles' field-count guard
+    // rejects every line, so no session gets a title again, silently.
+    static let paneFormat = "#{pane_id}\t#{host}\t#{pane_title}"
+
+    // `-a` is load-bearing: without it list-panes only reports the *current*
+    // session's panes, so agents in every other tmux session lose their titles.
+    static func listPanesArgs(socket: String) -> [String] {
+        ["-S", socket, "list-panes", "-a", "-F", paneFormat]
     }
 
     // Record the outcome and parse. nil means ProcessOutput gave up — a spawn

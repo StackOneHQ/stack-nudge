@@ -197,4 +197,107 @@ final class TmuxIntegrationTests: XCTestCase {
         XCTAssertEqual(recovered["%0"], "deploy pipeline")
         XCTAssertFalse(TmuxIntegration.isBackedOff("/sockA", now: now))
     }
+
+    // MARK: - The query contract
+
+    // Mutation testing found that every pure helper here was covered while the
+    // code wiring them to tmux was covered by nothing: deleting #{host} from the
+    // format string left the whole suite green, and no session would ever get a
+    // title again, because parseTitles' field-count guard silently rejects every
+    // line. This builds a line the way tmux would — straight from the format the
+    // app actually sends — and pushes it back through the real parser, so the
+    // two halves can no longer drift apart in silence.
+    func test_formatStringAndParserAgree() {
+        let line = TmuxIntegration.paneFormat
+            .replacingOccurrences(of: "#{pane_id}", with: "%7")
+            .replacingOccurrences(of: "#{host}", with: "machine.local")
+            .replacingOccurrences(of: "#{pane_title}", with: "deploy pipeline")
+        let titles = TmuxIntegration.parseTitles(line + "\n")
+        XCTAssertEqual(titles["%7"], "deploy pipeline",
+                       "the format string and parseTitles disagree about the fields")
+    }
+
+    // The same contract for the sentinel: an untitled pane's title IS the host,
+    // so a format missing #{host} would take the filter down with it.
+    func test_formatStringCarriesTheHostForTheSentinel() {
+        let line = TmuxIntegration.paneFormat
+            .replacingOccurrences(of: "#{pane_id}", with: "%7")
+            .replacingOccurrences(of: "#{host}", with: "machine.local")
+            .replacingOccurrences(of: "#{pane_title}", with: "machine.local")
+        XCTAssertTrue(TmuxIntegration.parseTitles(line + "\n").isEmpty,
+                      "an untitled pane must still be filterable")
+    }
+
+    // Without -a, list-panes reports only the current session's panes, so every
+    // agent in another tmux session silently loses its title.
+    func test_listPanesArgs_queriesEverySessionOnTheGivenSocket() {
+        let args = TmuxIntegration.listPanesArgs(socket: "/tmp/s.sock")
+        XCTAssertTrue(args.contains("-a"), "-a is what makes this all sessions")
+        XCTAssertEqual(args.firstIndex(of: "-S").map { args[args.index(after: $0)] },
+                       "/tmp/s.sock", "the socket must be explicit")
+        XCTAssertEqual(args.firstIndex(of: "-F").map { args[args.index(after: $0)] },
+                       TmuxIntegration.paneFormat)
+    }
+
+    // The locale is not hygiene: without it tmux renders "✳ …" as "_ …" for a
+    // launchd-spawned panel, which this project already hit once on the focus
+    // path. Nothing else would notice it being dropped.
+    func test_tmuxEnvForcesAUTF8Locale() {
+        let env = AppActivator.tmuxEnv()
+        XCTAssertEqual(env["LC_ALL"]?.lowercased().contains("utf-8"), true,
+                       "tmux decides UTF-8 from LC_ALL/LC_CTYPE/LANG")
+    }
+
+    // MARK: - apply (per-server title mapping)
+
+    private func tmuxSession(pid: Int,
+                             terminalApp: String = "tmux",
+                             tabName: String? = nil) -> Session {
+        Session(id: pid, pid: pid, agent: "claude",
+                projectPath: "/Users/x/stackone", projectName: "stackone",
+                terminalPID: 2, terminalApp: terminalApp, elapsed: nil,
+                customName: nil, status: .active,
+                tabId: nil, tabName: tabName, liveTitle: nil, liveTitleSource: nil)
+    }
+
+    // The property the whole socketKey design exists for. Both servers have a
+    // pane "%0" with different titles; each session must get its own server's.
+    // Pooling the maps is a plausible-looking simplification that silently hands
+    // a session another tmux's title — and under the naming toggle, another
+    // tmux's title into a Slack DM.
+    func test_apply_takesTitlesOnlyFromTheSessionsOwnServer() {
+        let out = TmuxIntegration.apply(
+            [tmuxSession(pid: 10), tmuxSession(pid: 20)],
+            panes: [10: "%0", 20: "%0"],
+            tmuxes: [10: "/sockA,111,0", 20: "/sockB,222,0"],
+            titlesBySocket: ["/sockA": ["%0": "server A work"],
+                             "/sockB": ["%0": "server B work"]])
+        XCTAssertEqual(out.first { $0.pid == 10 }?.tabName, "server A work")
+        XCTAssertEqual(out.first { $0.pid == 20 }?.tabName, "server B work")
+        XCTAssertEqual(out.first { $0.pid == 10 }?.tabId, "111:%0")
+        XCTAssertEqual(out.first { $0.pid == 20 }?.tabId, "222:%0")
+    }
+
+    // An unknown server must yield no title rather than one borrowed from
+    // whichever server happens to be in the map.
+    func test_apply_unknownServerGetsNoTitle() {
+        let out = TmuxIntegration.apply(
+            [tmuxSession(pid: 10)],
+            panes: [10: "%0"], tmuxes: [:],
+            titlesBySocket: ["/sockA": ["%0": "not yours"]])
+        XCTAssertNil(out[0].tabName)
+        XCTAssertEqual(out[0].tabId, "%0", "identity still degrades gracefully")
+    }
+
+    // Non-tmux sessions pass through untouched — the registry runs every
+    // integration over the same array.
+    func test_apply_leavesOtherTerminalsAlone() {
+        let iterm = tmuxSession(pid: 30, terminalApp: "iTerm2", tabName: "set by iTerm2")
+        let out = TmuxIntegration.apply([iterm], panes: [30: "%0"],
+                                        tmuxes: [30: "/sockA,111,0"],
+                                        titlesBySocket: ["/sockA": ["%0": "tmux title"]])
+        XCTAssertEqual(out[0].tabName, "set by iTerm2")
+        XCTAssertNil(out[0].tabId)
+    }
+
 }
