@@ -39,9 +39,50 @@ enum Speaker {
         let config = ConfigFile.read()
         let resolvedVoice = voice ?? config["STACKNUDGE_VOICE_NAME"]  ?? "af_aoede"
         let resolvedSpeed = speed ?? config["STACKNUDGE_VOICE_SPEED"] ?? "1.1"
+        runSay(python: python, stackvox: stackvox, env: env,
+               text: text, voice: resolvedVoice, speed: resolvedSpeed,
+               normalize: normalize, attempt: 1)
+    }
+
+    // How many times a single utterance is handed to `stackvox say`. The daemon
+    // replies "busy" (CLI exit 2) when its playback queue is full, and the queue
+    // stays full forever if the worker thread is wedged inside a hung
+    // `tts.speak()` — a stale CoreAudio device (headphones yanked mid-utterance,
+    // output device swapped) is the usual cause. Left alone the app then sends
+    // every subsequent nudge into a dead daemon and the user hears nothing, with
+    // no error, until the daemon is manually cancelled or restarted. One retry —
+    // preceded by a `cancel` that aborts the stuck utterance and drains the
+    // queue — recovers that in-app without restarting the daemon.
+    static let maxSayAttempts = 2
+
+    // Beat between the recovery `cancel` and the retry `say`, so the daemon's
+    // cancel handler has unblocked its worker before the new utterance arrives.
+    private static let recoveryDelaySeconds = 0.2
+
+    enum SayOutcome: Equatable {
+        case accepted   // played (or handed off cleanly) — nothing more to do
+        case retry      // daemon refused (busy/wedged) — cancel and try once more
+        case giveUp     // killed by us, or already retried — stop
+    }
+
+    // Pure decision so the recovery policy is unit-testable without spawning a
+    // process. `terminatedBySignal` is true when we (Quit / stopAllAudio) or the
+    // user killed the `say` client — we must not resurrect audio the user is
+    // actively silencing, so that path always gives up regardless of exit code.
+    static func sayRecovery(exitCode: Int32, terminatedBySignal: Bool, attempt: Int) -> SayOutcome {
+        if terminatedBySignal { return .giveUp }
+        if exitCode == 0 { return .accepted }
+        if attempt >= maxSayAttempts { return .giveUp }
+        return .retry
+    }
+
+    private static func runSay(
+        python: String, stackvox: String, env: [String: String],
+        text: String, voice: String, speed: String, normalize: Bool, attempt: Int
+    ) {
         let say = Process()
         say.executableURL = URL(fileURLWithPath: python)
-        var sayArgs = [stackvox, "say", "--voice", resolvedVoice, "--speed", resolvedSpeed]
+        var sayArgs = [stackvox, "say", "--voice", voice, "--speed", speed]
         if normalize { sayArgs += ["--normalize", "--no-markdown"] }
         sayArgs.append(text)
         say.arguments = sayArgs
@@ -49,8 +90,24 @@ enum Speaker {
         say.standardOutput = FileHandle.nullDevice
         say.standardError = FileHandle.nullDevice
         say.terminationHandler = { ended in
-            audioLock.lock(); defer { audioLock.unlock() }
+            audioLock.lock()
             activeAudio.removeAll { $0 === ended }
+            audioLock.unlock()
+
+            let bySignal = ended.terminationReason == .uncaughtSignal
+            switch sayRecovery(exitCode: ended.terminationStatus,
+                               terminatedBySignal: bySignal, attempt: attempt) {
+            case .accepted, .giveUp:
+                return
+            case .retry:
+                NSLog("[stack-nudge] stackvox say refused (exit \(ended.terminationStatus)); cancelling wedged daemon and retrying")
+                cancel()
+                DispatchQueue.global().asyncAfter(deadline: .now() + recoveryDelaySeconds) {
+                    runSay(python: python, stackvox: stackvox, env: env,
+                           text: text, voice: voice, speed: speed,
+                           normalize: normalize, attempt: attempt + 1)
+                }
+            }
         }
         do {
             try say.run()
