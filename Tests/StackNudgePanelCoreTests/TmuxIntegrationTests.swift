@@ -239,13 +239,53 @@ final class TmuxIntegrationTests: XCTestCase {
                        TmuxIntegration.paneFormat)
     }
 
-    // The locale is not hygiene: without it tmux renders "✳ …" as "_ …" for a
-    // launchd-spawned panel, which this project already hit once on the focus
-    // path. Nothing else would notice it being dropped.
-    func test_tmuxEnvForcesAUTF8Locale() {
-        let env = AppActivator.tmuxEnv()
-        XCTAssertEqual(env["LC_ALL"]?.lowercased().contains("utf-8"), true,
+    // Asserts what paneTitles actually SENDS, not what the helpers return.
+    // Checking AppActivator.tmuxEnv() alone was useless: it still passed when
+    // the call site stopped passing the env, which is how the UTF-8 locale could
+    // be deleted with the whole suite green. The locale is not hygiene — without
+    // it tmux renders "✳ …" as "_ …" for a launchd-spawned panel, which this
+    // project already hit once on the focus path.
+    func test_paneTitles_sendsTheFullArgVectorAndAUTF8Locale() {
+        TmuxIntegration.resetBackoff()
+        defer { TmuxIntegration.resetBackoff() }
+        var sentArgs: [String]?
+        var sentEnv: [String: String]?
+        _ = TmuxIntegration.paneTitles(
+            socket: "/tmp/s.sock",
+            tmuxPath: { "/opt/homebrew/bin/tmux" },
+            run: { _, args, env in sentArgs = args; sentEnv = env; return "" })
+
+        XCTAssertEqual(sentArgs, TmuxIntegration.listPanesArgs(socket: "/tmp/s.sock"))
+        XCTAssertEqual(sentEnv?["LC_ALL"]?.lowercased().contains("utf-8"), true,
                        "tmux decides UTF-8 from LC_ALL/LC_CTYPE/LANG")
+    }
+
+    // No tmux binary means no query at all, rather than a spawn of something else.
+    func test_paneTitles_withoutATmuxBinaryDoesNotRun() {
+        TmuxIntegration.resetBackoff()
+        defer { TmuxIntegration.resetBackoff() }
+        var ran = false
+        let titles = TmuxIntegration.paneTitles(
+            socket: "/tmp/s.sock", tmuxPath: { nil },
+            run: { _, _, _ in ran = true; return "" })
+        XCTAssertFalse(ran)
+        XCTAssertTrue(titles.isEmpty)
+    }
+
+    // A parked socket must not be re-probed — that is the whole point of the
+    // backoff, and only an observed call proves the skip happens.
+    func test_paneTitles_skipsAParkedSocketWithoutSpawning() {
+        TmuxIntegration.resetBackoff()
+        defer { TmuxIntegration.resetBackoff() }
+        let when = Date(timeIntervalSince1970: 1_800_000_000)
+        _ = TmuxIntegration.titles(from: nil, socket: "/tmp/s.sock", now: when)
+
+        var ran = false
+        _ = TmuxIntegration.paneTitles(
+            socket: "/tmp/s.sock", now: when,
+            tmuxPath: { "/opt/homebrew/bin/tmux" },
+            run: { _, _, _ in ran = true; return "" })
+        XCTAssertFalse(ran, "a parked socket must not be probed again")
     }
 
     // MARK: - apply (per-server title mapping)

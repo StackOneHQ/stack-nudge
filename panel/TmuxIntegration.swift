@@ -142,8 +142,18 @@ final class TmuxIntegration: TerminalIntegration {
     // always explicit — see socketKey for why the default is never assumed.
     // Empty on any failure: no tmux binary, a server that died between the `ps`
     // read and here, or a hung query hitting the timeout.
-    static func paneTitles(socket: String, now: Date = Date()) -> [String: String] {
-        guard let tmux = AppActivator.tmuxPath(), !isBackedOff(socket, now: now) else { return [:] }
+    // `tmuxPath` and `run` are injectable so a test can assert what this
+    // actually *sends*. Asserting the helpers in isolation is not enough: a test
+    // that only checks tmuxEnv() returns a UTF-8 locale still passes when the
+    // call site stops passing it, which is exactly how the locale fix could be
+    // deleted with the suite green. Injecting the path too keeps the test off
+    // the question of whether the runner happens to have tmux installed.
+    static func paneTitles(socket: String, now: Date = Date(),
+                           tmuxPath: () -> String? = AppActivator.tmuxPath,
+                           run: (String, [String], [String: String]) -> String? = {
+                               ProcessOutput.read($0, $1, timeout: 2, env: $2)
+                           }) -> [String: String] {
+        guard let tmux = tmuxPath(), !isBackedOff(socket, now: now) else { return [:] }
         // Tab-delimited: a pane title is arbitrary program output and "|" turns
         // up in shell prompts constantly, whereas tmux accepts neither a tab nor
         // a newline into a pane title at all — it strips them from an OSC title
@@ -155,8 +165,7 @@ final class TmuxIntegration: TerminalIntegration {
         // lowercased here and on a DHCP/corp-DNS machine can be a different name
         // entirely. Asking tmux removes the guess, the case-folding, and the
         // staleness after a runtime rename.
-        return titles(from: ProcessOutput.read(tmux, listPanesArgs(socket: socket),
-                                               timeout: 2, env: AppActivator.tmuxEnv()),
+        return titles(from: run(tmux, listPanesArgs(socket: socket), AppActivator.tmuxEnv()),
                       socket: socket, now: now)
     }
 
