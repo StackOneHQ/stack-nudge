@@ -111,59 +111,102 @@ final class TmuxIntegration: TerminalIntegration {
         return field
     }
 
+    // How long a server that failed to answer is skipped for. A wedged tmux —
+    // blocked, SIGSTOPped, or a socket that accepts and never replies — does not
+    // fail fast: it hangs, and ProcessOutput then spends the timeout plus its
+    // SIGTERM/SIGKILL/drain waits (~5s all told) before giving up. Without a
+    // backoff that cost is paid again on every 3s poll, forever, with the
+    // session scan latched behind it. The happy path stays uncached — see the
+    // measurement above; this only remembers failures.
+    static let failureBackoff: TimeInterval = 30
+
+    private static let backoffLock = NSLock()
+    private static var skipUntil: [String: Date] = [:]
+
     // Pane titles for one tmux server, keyed by pane id ("%4"). The socket is
     // always explicit — see socketKey for why the default is never assumed.
     // Empty on any failure: no tmux binary, a server that died between the `ps`
     // read and here, or a hung query hitting the timeout.
-    static func paneTitles(socket: String) -> [String: String] {
-        guard let tmux = AppActivator.tmuxPath() else { return [:] }
-        var args: [String] = ["-S", socket]
-        // Tab-delimited: a pane title is arbitrary user/program text and "|"
-        // shows up in shell prompts often enough to matter, whereas tmux
-        // collapses a literal tab out of #{pane_title}.
-        args += ["list-panes", "-a", "-F", "#{pane_id}\t#{pane_title}"]
-        guard let raw = ProcessOutput.read(tmux, args, timeout: 2,
-                                           env: AppActivator.tmuxEnv())
-        else { return [:] }
-        return parseTitles(raw, hostNames: hostNames())
+    static func paneTitles(socket: String, now: Date = Date()) -> [String: String] {
+        guard let tmux = AppActivator.tmuxPath(), !isBackedOff(socket, now: now) else { return [:] }
+        // Tab-delimited: a pane title is arbitrary program output and "|" turns
+        // up in shell prompts constantly, whereas tmux accepts neither a tab nor
+        // a newline into a pane title at all — it strips them from an OSC title
+        // and rejects a `select-pane -T` carrying one outright.
+        //
+        // #{host} rides along so the sentinel comparison is tmux's own answer
+        // rather than our guess at it. tmux seeds an untitled pane from
+        // gethostname(); ProcessInfo.hostName is the mDNS spelling, which is
+        // lowercased here and on a DHCP/corp-DNS machine can be a different name
+        // entirely. Asking tmux removes the guess, the case-folding, and the
+        // staleness after a runtime rename.
+        let args = ["-S", socket, "list-panes", "-a",
+                    "-F", "#{pane_id}\t#{host}\t#{pane_title}"]
+        return titles(from: ProcessOutput.read(tmux, args, timeout: 2,
+                                               env: AppActivator.tmuxEnv()),
+                      socket: socket, now: now)
     }
 
-    // Matching is case-insensitive and `hostNames` arrives lowercased. The two
-    // sides genuinely disagree on case: tmux seeds the title from the
-    // SystemConfiguration name ("Hiskiass-MacBook-Pro-2.local") while
-    // ProcessInfo.hostName returns the mDNS spelling, which is lowercased
-    // ("hiskiass-macbook-pro-2.local"). An exact match never fires, so every
-    // untitled pane would be labelled with the machine's own name.
-    //
+    // Record the outcome and parse. nil means ProcessOutput gave up — a spawn
+    // failure or, the case that matters, a hang — and only that arms the
+    // backoff. A server that is merely *gone* is not a hang: tmux exits rc=1
+    // immediately with the message on stderr, so `raw` is "" and the poll pays
+    // nothing. Parking that would suppress titles for half a minute after a
+    // perfectly ordinary tmux restart, which is the opposite of the goal.
+    static func titles(from raw: String?, socket: String, now: Date = Date()) -> [String: String] {
+        guard let raw else {
+            noteFailure(socket, now: now)
+            return [:]
+        }
+        clearFailure(socket)
+        return parseTitles(raw)
+    }
+
+    static func isBackedOff(_ socket: String, now: Date = Date()) -> Bool {
+        backoffLock.lock(); defer { backoffLock.unlock() }
+        guard let until = skipUntil[socket] else { return false }
+        if now >= until { skipUntil[socket] = nil; return false }
+        return true
+    }
+
+    private static func noteFailure(_ socket: String, now: Date) {
+        backoffLock.lock(); defer { backoffLock.unlock() }
+        skipUntil[socket] = now.addingTimeInterval(failureBackoff)
+    }
+
+    private static func clearFailure(_ socket: String) {
+        backoffLock.lock(); defer { backoffLock.unlock() }
+        skipUntil[socket] = nil
+    }
+
+    // Test seam: forget every recorded failure.
+    static func resetBackoff() {
+        backoffLock.lock(); defer { backoffLock.unlock() }
+        skipUntil.removeAll()
+    }
+
     // Pure. tmux seeds every pane's title with the machine's hostname and only
     // replaces it once the program emits an OSC title escape, so "never set" is
-    // indistinguishable from "set to the hostname". Treating the hostname as no
-    // title is the safe read: the alternative labels every plain shell pane
-    // "Hiskiass-MacBook-Pro-2.local", which is noise in the meta row and
-    // actively wrong once the toggle lets a tab title title a Slack DM.
-    static func parseTitles(_ raw: String, hostNames: Set<String>) -> [String: String] {
+    // indistinguishable from "set to the hostname". Treating a title equal to
+    // the host as no title is the safe read: the alternative labels every plain
+    // shell pane "Hiskiass-MacBook-Pro-2.local", which is noise in the meta row
+    // and actively wrong once the toggle lets a tab title title a Slack DM.
+    //
+    // The host arrives per line from tmux itself, so the comparison is exact —
+    // no case-folding, and no matching against the bare first label, which would
+    // have swallowed every pane a user on a machine called "orion" legitimately
+    // titled "orion".
+    static func parseTitles(_ raw: String) -> [String: String] {
         var result: [String: String] = [:]
         for line in raw.split(separator: "\n") {
-            let parts = line.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
-            guard parts.count == 2 else { continue }
+            let parts = line.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
+            guard parts.count == 3 else { continue }
             let pane = String(parts[0]).trimmingCharacters(in: .whitespaces)
-            let title = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !pane.isEmpty, !title.isEmpty,
-                  !hostNames.contains(title.lowercased())
-            else { continue }
+            let host = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let title = String(parts[2]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !pane.isEmpty, !title.isEmpty, title != host else { continue }
             result[pane] = title
         }
         return result
-    }
-
-    // Both spellings tmux might have seeded a title with: ProcessInfo's
-    // hostName ("host.local") and its first label ("host"), since which one
-    // tmux picks depends on how the machine resolves its own name. Lowercased,
-    // because the comparison in parseTitles is case-insensitive — see there.
-    static func hostNames() -> Set<String> {
-        let full = ProcessInfo.processInfo.hostName.lowercased()
-        var names: Set<String> = [full]
-        if let short = full.split(separator: ".").first { names.insert(String(short)) }
-        return names
     }
 }
