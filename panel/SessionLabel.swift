@@ -31,7 +31,7 @@ import Foundation
 //
 // So it can't be trusted as *intent*, but plenty of people title their tabs
 // deliberately and want that name back. `allowTabTitle` is that choice, wired to
-// the "Name sessions from tab titles" setting and false everywhere by default.
+// the "Name from tab titles" setting and false everywhere by default.
 // It sits below both real signals — a rename in the Sessions pane and a name set
 // inside the agent still win — and above the cwd, which nobody chose either.
 // The pane's meta row shows the tab name regardless, where churn is harmless.
@@ -92,11 +92,39 @@ enum SessionLabel {
     // The window title stays visible in the row; it just can't title a Slack DM.
     private static func tabTitle(of session: Session) -> String? {
         guard !VSCodeIntegration.isVSCodeHosted(session.terminalApp),
-              let tab = session.tabName?.trimmingCharacters(in: .whitespaces),
+              let tab = session.tabName.map(strippingDecoration),
               !tab.isEmpty
         else { return nil }
         return tab
     }
+
+    // Leading/trailing symbol runs are decoration, not name. Claude Code writes
+    // its spinner into the tab title — "✳ Review repository structure" — and
+    // cycles the glyph (✳ ✻ ✽) frame by frame, so keeping it means the session's
+    // name changes on every animation tick. It is also unspeakable: `say "✳"`
+    // emits "eight spoked asterisk", a second and a quarter of it, and neither
+    // route to speech saves us — VoicePhrase.expandForSpeech splits on spaces so
+    // the glyph survives as its own word, and the reminder leg
+    // ("Still waiting on \(label)") never calls expandForSpeech at all.
+    //
+    // Trimmed from the ends only, so a symbol inside a title someone actually
+    // typed is left alone. The cost is a deliberate leading emoji ("🚀 deploy"
+    // reads as "deploy"), which is worth paying to stop an animation frame
+    // becoming a name.
+    static func strippingDecoration(_ raw: String) -> String {
+        raw.trimmingCharacters(in: decorationCharacters)
+    }
+
+    // Symbols cover most of the spinner (✳ ✻ ✽ are So, ∗ is Sm), but not all of
+    // it: Claude also cycles a middle dot, and U+00B7 is punctuation, not a
+    // symbol. A category-only rule therefore still let the name flip between
+    // "Fixing the parser" and "· Fixing the parser" as the spinner turned, which
+    // is the churn this exists to stop. The stragglers are listed explicitly
+    // rather than widening to all punctuation, which would eat the leading
+    // bracket of a title someone typed as "(wip) deploy".
+    private static let decorationCharacters = CharacterSet.symbols
+        .union(.whitespacesAndNewlines)
+        .union(CharacterSet(charactersIn: "·•∙"))
 
     // The agent's own session name, but only when the agent tells us a human
     // set it. nil source means the agent doesn't report one (older Claude Code,

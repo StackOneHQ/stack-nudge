@@ -57,6 +57,14 @@
 # Default: cyan
 #STACKNUDGE_THEME=violet
 
+# Use the terminal tab's title as the session name when nothing stronger is set
+# (a rename in the Sessions pane, or a name set inside the agent, both still
+# win). Off by default: a tab title is whatever the program in the pane wrote,
+# not proof a human chose it. Applies to on-screen labels, banners and speech;
+# the Slack DM additionally requires STACKNUDGE_SLACK_DETAIL, since a tab title
+# can carry local paths.
+#STACKNUDGE_TAB_TITLE_NAMES=true
+
 # Log a debug line (to the launchd log) explaining voice decisions — useful
 # when a notification played silently and you want to know why.
 # Default: false

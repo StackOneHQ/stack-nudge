@@ -260,6 +260,51 @@ final class SessionLabelTests: XCTestCase {
         }
     }
 
+    // Claude Code writes its spinner into the tab title and cycles the glyph
+    // frame by frame, so keeping it makes the session's name change on every
+    // animation tick — and `say "✳"` is a second and a quarter of "eight spoked
+    // asterisk". Neither speech route saves us: expandForSpeech splits on spaces
+    // so the glyph survives as its own word, and the reminder leg never calls it.
+    func test_tabTitle_stripsClaudesSpinnerGlyph() {
+        for frame in ["✳", "✻", "✽"] {
+            let s = session(tabName: "\(frame) Review repository structure")
+            XCTAssertEqual(SessionLabel.chosenName(for: s, allowTabTitle: true),
+                           "Review repository structure",
+                           "\(frame) is an animation frame, not part of the name")
+        }
+    }
+
+    // Every frame must reduce to the SAME name, or the label churns as the
+    // spinner turns — which is the actual defect, not just the pronunciation.
+    func test_tabTitle_everySpinnerFrameYieldsOneStableName() {
+        let names = ["✳", "✻", "✽", "·"].map {
+            SessionLabel.chosenName(for: session(tabName: "\($0) Fixing the parser"),
+                                    allowTabTitle: true)
+        }
+        XCTAssertEqual(Set(names).count, 1, "the name must not move with the spinner")
+    }
+
+    // Trimmed at the ends only — a symbol inside something a human typed is
+    // theirs to keep.
+    func test_tabTitle_keepsSymbolsInsideTheTitle() {
+        let s = session(tabName: "build | tee log.txt → deploy")
+        XCTAssertEqual(SessionLabel.chosenName(for: s, allowTabTitle: true),
+                       "build | tee log.txt → deploy")
+    }
+
+    // Why the stragglers are listed rather than trimming all punctuation: a
+    // leading bracket is part of a title someone typed.
+    func test_tabTitle_keepsLeadingPunctuationSomeoneTyped() {
+        let s = session(tabName: "(wip) deploy pipeline")
+        XCTAssertEqual(SessionLabel.chosenName(for: s, allowTabTitle: true),
+                       "(wip) deploy pipeline")
+    }
+
+    func test_tabTitle_glyphOnlyTitleIsNotAName() {
+        XCTAssertNil(SessionLabel.chosenName(for: session(tabName: "✳"), allowTabTitle: true))
+        XCTAssertNil(SessionLabel.chosenName(for: session(tabName: " ✳  "), allowTabTitle: true))
+    }
+
     // A VS Code session with a rename still uses it — the exclusion must only
     // remove the weakest signal, not suppress the whole cascade.
     func test_vscodeExclusionDoesNotBlockStrongerSignals() {

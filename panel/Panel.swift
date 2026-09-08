@@ -2616,6 +2616,22 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                                 allowTabTitle: nav.tabTitleNames)
     }
 
+    // The Slack leg takes a narrower label than the on-screen ones. A tab title
+    // is whatever the program in that pane wrote, and any of the common prompt
+    // frameworks (oh-my-zsh, starship, most dotfiles) put "user@host:
+    // /full/path" there via a precmd title hook. SlackDelivery.text already
+    // treats `slackIncludeDetail` as the gate for local text on the one path
+    // that leaves this machine — the tab title belongs behind that same gate,
+    // otherwise someone who turned detail off on purpose gets their paths out
+    // through a different door. Detail off ⇒ the DM falls back to the project
+    // name, exactly as it did before this setting existed.
+    private func slackSessionLabel(for event: NudgeEvent) -> String? {
+        SessionLabel.chosenName(for: event,
+                                in: sessions.sessions,
+                                persistence: SessionPersistence.shared,
+                                allowTabTitle: nav.tabTitleNames && nav.slackIncludeDetail)
+    }
+
     // `body` overrides event.message — the reminder path reuses everything else
     // (title, category, userInfo) so a re-nudge stays actionable from the
     // banner's own Allow / Deny buttons.
@@ -2803,7 +2819,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         else { return }
 
         slackNotifier.send(SlackDelivery.text(for: event,
-                                              label: sessionLabel(for: event),
+                                              label: slackSessionLabel(for: event),
                                               includeDetail: nav.slackIncludeDetail,
                                               isReminder: isReminder),
                            to: nav.slackMemberID)
