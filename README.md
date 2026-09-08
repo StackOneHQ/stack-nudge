@@ -178,7 +178,7 @@ Reminders only fire for prompts stack-nudge can *prove* are unanswered. Claude C
 
 **Setup, once per person:** Settings → **Paste Slack setup** reads your clipboard and takes either an `xoxb-…` bot token, a `U…` member ID, or a JSON blob with both — so an org can keep one password-manager entry and onboarding is a single paste. stack-nudge then looks you up from your `git config user.email` and shows who it found; that's a *suggestion*, and pasting a member ID overrides it. **Send test message** confirms the whole chain and switches delivery on.
 
-**Setup, once per org:** create a Slack app, give its **bot** token `chat:write` (plus `users:read.email` and `users:read` if you want the automatic user lookup), install it, and share the `xoxb-` token internally. There is deliberately **no default app and no embedded credentials** — every install points at its own workspace.
+**Setup, once per org:** create a Slack app, give its **bot** token `chat:write` (plus `users:read.email` and `users:read` if you want the automatic user lookup, and `reactions:read` to answer prompts from Slack), install it, and share the `xoxb-` token internally. There is deliberately **no default app and no embedded credentials** — every install points at its own workspace.
 
 The token lives in the **Keychain**, never `~/.stack-nudge/config`. For scripted provisioning you can plant `STACKNUDGE_SLACK_BOT_TOKEN` in the config file; stack-nudge moves it into the Keychain on next launch and deletes the line. (The config file is now written `0600` regardless — it never needed to be world-readable.)
 
@@ -188,7 +188,19 @@ Three things worth knowing about how it behaves:
 - **A global mute does *not* silence Slack.** Mute means "stop interrupting me *here*", and Slack exists precisely because you're elsewhere. Use the Slack switch to stop it. A *per-session* mute does apply, same as it does to banners.
 - **Titles only, by default.** A DM reads *"Claude Code in attack-lib needs permission"*. The tool call itself (`Bash(rm -rf build/)`) stays on your machine unless you turn on **Include message text**, because command lines carry paths, hostnames, and sometimes secrets, and this is the one path that leaves the Mac.
 
-You can't approve or deny from Slack — that needs an inbound endpoint this app deliberately doesn't have.
+#### Answering from Slack
+
+React to a permission DM and the prompt is answered on your Mac: ✅ allows, ❌ denies. `Settings → Respond from Slack` cycles **Off** (default) / **Deny only** / **Allow + deny** (`STACKNUDGE_SLACK_RESPOND`). Also accepts 👍 / 👎 and the other tick and cross emoji, so you don't have to hunt for the exact one.
+
+Only *your* reactions count — the ones carrying the member ID stack-nudge is configured with. If both a tick and a cross are present, it **denies**: someone who ticked and then crossed is correcting themselves, and the safe reading of an ambiguous instruction to run a command is *don't*. A reaction after the hook's 550-second timeout does nothing, so you get an "expired" DM rather than silence, and every answer is confirmed back into the DM.
+
+> **Allow needs `Include message text` on.** With detail off a DM reads only *"Claude Code in attack-lib needs permission"* — ticking that approves a command you can't see. Deny works either way, because denying blind is safe. The Settings row shows `Deny only (needs detail)` rather than claiming a capability the detail switch is withholding.
+
+**Think about this one before turning allow on.** It means a phone can run whatever an agent proposes on your laptop, so compromise of your Slack account becomes compromise of your machine. Deny-only has no such blast radius — it's the "kill a runaway agent from the pub" setting — which is why the two are separate steps on the cycle.
+
+Needs one extra bot scope, `reactions:read`. Adding a scope to an existing app is additive: reinstall the app and **existing pasted tokens keep working**, so nobody has to re-paste. There's no inbound endpoint and no app-level token — stack-nudge just reads the reactions on the message it posted, only while a prompt is actually blocking, and stops the moment it isn't.
+
+> **Why reactions and not buttons?** Buttons POST to a public HTTPS URL, which a desktop app hasn't got. Slack's answer is Socket Mode, but its docs say *"when multiple connections are active, each payload may be sent to any of the connections"* — and stack-nudge is built around one bot token shared across a team, so with several people connected a button click lands on somebody else's machine while the right one waits out its timeout. Reactions are polled per-install against your own DM, so they can't cross-talk.
 
 > **Why a bot token and not "Connect with Slack"?** We tried. Slack supports OAuth with PKCE, which lets a desktop app authenticate with no client secret and no server — but *"desktop redirects are not allowed to request bot scopes"*, so it only yields a **user** token, and a user token can only post *as you*. Slack never notifies you about your own messages, so those DMs arrive silently. A notifying DM requires a bot token, a bot token requires the client-secret exchange, and a desktop app can't hold a secret. Slackbot reminders were the remaining workaround and Slack retired that API in March 2023. Hence: provision the token, paste it once.
 

@@ -65,6 +65,14 @@
 # can carry local paths.
 #STACKNUDGE_TAB_TITLE_NAMES=true
 
+# Answer a permission prompt by reacting to its Slack DM: white_check_mark
+# allows, x denies. One of off / denyOnly / allowAndDeny, default off. Only
+# reactions from STACKNUDGE_SLACK_MEMBER_ID count, and allowAndDeny additionally
+# needs STACKNUDGE_SLACK_DETAIL — approving a DM that names no command is
+# approving something you cannot see. Needs the reactions:read bot scope.
+# Think before enabling allow: it lets a phone run what an agent proposes here.
+#STACKNUDGE_SLACK_RESPOND=denyOnly
+
 # Log a debug line (to the launchd log) explaining voice decisions — useful
 # when a notification played silently and you want to know why.
 # Default: false
