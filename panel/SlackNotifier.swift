@@ -133,11 +133,19 @@ final class SlackNotifier {
 
     // `completion` reports the outcome for the test-message row; ordinary
     // deliveries pass nil and read `lastError` on the next tick instead.
-    // `onPosted` hands back the posted message's `ts`, which is the handle
-    // reactions are read against later — a prompt DM is only answerable from
-    // Slack if we remembered which message announced it. Separate from
-    // `completion` so the existing callers, which only care whether it failed,
-    // are untouched. Fires on main, only on success.
+    // `onPosted` hands back the posted message's channel and `ts` — together the
+    // handle reactions are read against later, since a prompt DM is only
+    // answerable from Slack if we remembered which message announced it.
+    //
+    // The channel has to come from the *response*, not from what we sent.
+    // chat.postMessage accepts a user id ("U…") as `channel` and quietly
+    // resolves the DM behind it, but reactions.get demands a real channel id and
+    // answers `channel_not_found` for the same value — verified against the
+    // StackOne workspace. The response carries the resolved "D…" id, so no
+    // conversations.open round trip and no extra scope.
+    //
+    // Separate from `completion` so the existing callers, which only care
+    // whether it failed, are untouched. Fires on main, only on success.
     //
     // Declared BEFORE `completion` deliberately. Swift binds a trailing closure
     // to the last closure parameter, so appending this one silently rebound
@@ -145,7 +153,7 @@ final class SlackNotifier {
     // sites and would have quietly stopped reporting failures.
     func send(_ text: String,
               to memberID: String?,
-              onPosted: ((String) -> Void)? = nil,
+              onPosted: ((_ channel: String, _ ts: String) -> Void)? = nil,
               completion: ((String?) -> Void)? = nil) {
         guard let memberID, !memberID.isEmpty else {
             finish("No Slack user set — run Detect or paste a member ID", completion)
@@ -166,7 +174,7 @@ final class SlackNotifier {
     }
 
     private func post(text: String, token: String, memberID: String,
-                      onPosted: ((String) -> Void)?,
+                      onPosted: ((String, String) -> Void)?,
                       completion: ((String?) -> Void)?) {
         var request = URLRequest(url: Self.postMessageURL)
         request.httpMethod = "POST"
@@ -186,8 +194,10 @@ final class SlackNotifier {
                 let failure = json["ok"] as? Bool == true
                     ? nil
                     : Self.explain(json["error"] as? String ?? "unknown")
-                if failure == nil, let ts = json["ts"] as? String, !ts.isEmpty {
-                    DispatchQueue.main.async { onPosted?(ts) }
+                if failure == nil,
+                   let ts = json["ts"] as? String, !ts.isEmpty,
+                   let channel = json["channel"] as? String, !channel.isEmpty {
+                    DispatchQueue.main.async { onPosted?(channel, ts) }
                 }
                 self.finish(failure, completion)
             } else {

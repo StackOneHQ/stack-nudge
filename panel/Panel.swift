@@ -2818,11 +2818,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             idleThresholdMinutes: nav.slackIdleMinutes)
         else { return }
 
+        // Only permission prompts are answerable, and only ones with a FIFO to
+        // write the answer into — a "finished turn" DM has nothing to resolve.
+        let answerable = event.kind == .permission && event.fifoPath != nil
         slackNotifier.send(SlackDelivery.text(for: event,
                                               label: slackSessionLabel(for: event),
                                               includeDetail: nav.slackIncludeDetail,
                                               isReminder: isReminder),
-                           to: nav.slackMemberID)
+                           to: nav.slackMemberID,
+                           onPosted: answerable ? { [weak self] channel, ts in
+                               self?.slackPromptMessages[event.id] =
+                                   SlackPromptMessage(channel: channel, ts: ts)
+                           } : nil)
         // Surface a delivery failure on the Settings row. Read one tick later so
         // the in-flight request has had a chance to land; the attention ticker
         // refreshes it again on its own cadence.
@@ -2895,6 +2902,35 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private var promptWatches: [NudgeEvent.ID: PromptWatch] = [:]
     private var attentionTicker: Timer?
 
+    // The Slack message that announced each pending prompt, so its reactions can
+    // be read back. Channel and ts both come from chat.postMessage's *response*:
+    // it accepts a user id as `channel` and resolves the DM behind it, but
+    // reactions.get answers channel_not_found for that same value and needs the
+    // resolved "D…" id.
+    //
+    // A side map rather than a field on PromptWatch because the DM is sent the
+    // moment the event arrives, while the watch isn't created until the next
+    // reconcile — so at post time there is often no watch to write to. Reminders
+    // post a *new* DM, and this keeps only the newest: polling all four messages
+    // a prompt can accumulate would cost four calls per prompt per poll against
+    // a Tier 3 limit, for no gain, since the newest is the one on screen.
+    private struct SlackPromptMessage {
+        let channel: String
+        let ts: String
+    }
+    private var slackPromptMessages: [NudgeEvent.ID: SlackPromptMessage] = [:]
+    // Prompts this app answered from Slack, so the expiry notice can tell "the
+    // user never answered" from "we already acted on it".
+    private var slackResolvedPrompts: Set<NudgeEvent.ID> = []
+    private var lastSlackPollAt: Date = .distantPast
+
+    // Reaction polling cadence. Deliberately measured against the clock rather
+    // than counted in ticks: tickAttention() also runs synchronously on every
+    // event append, so a "every Nth tick" counter would speed up or slow down
+    // with unrelated event traffic. A human tapping an emoji on a phone does not
+    // need five-second latency, and ten seconds halves the call volume.
+    private static let slackPollInterval: TimeInterval = 10
+
     // 5s so the menu-bar count clears promptly after an approval. Nothing
     // explicitly deregisters a watch — see reconcilePromptWatches — so the tick
     // is also what notices a prompt was answered, and a slower cadence would
@@ -2915,7 +2951,111 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
         remindOnOldestDuePrompt(now: now)
         refreshStalledSessions(now: now)
+        pollSlackResponses(now: now)
         if nav.slackTokenPresent { refreshSlackStatus() }
+    }
+
+    // MARK: - Answering from Slack
+
+    // Read the reactions on each pending prompt's DM and act on any that carry a
+    // decision. Every gate here is cheap and checked before the network: this
+    // runs off the same ticker as everything else and must cost nothing at all
+    // when the feature is off, which is the default.
+    private func pollSlackResponses(now: Date) {
+        guard nav.slackRespondMode != .off,
+              nav.slackTokenPresent,
+              let memberID = nav.slackMemberID, !memberID.isEmpty,
+              now.timeIntervalSince(lastSlackPollAt) >= Self.slackPollInterval
+        else { return }
+
+        // Only prompts that are still blocking. A watch retires within one tick
+        // of its FIFO going away, so this stops polling promptly for anything
+        // answered at the machine.
+        let targets = slackPromptMessages.filter { promptWatches[$0.key] != nil }
+        guard !targets.isEmpty else { return }
+        lastSlackPollAt = now
+
+        let mode = nav.slackRespondMode
+        let detailOn = nav.slackIncludeDetail
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            // Same reasoning as SlackNotifier.send: the Keychain read can block
+            // outright if the keychain needs unlocking, so it never happens on
+            // the main thread.
+            guard let token = SlackCredentials.botToken() else { return }
+            for (id, message) in targets {
+                SlackResponder.poll(token: token,
+                                    channel: message.channel,
+                                    ts: message.ts,
+                                    memberID: memberID,
+                                    mode: mode,
+                                    detailOn: detailOn) { outcome in
+                    DispatchQueue.main.async { self?.applySlackPoll(outcome, for: id) }
+                }
+            }
+        }
+    }
+
+    private func applySlackPoll(_ outcome: SlackResponder.Poll, for id: NudgeEvent.ID) {
+        switch outcome {
+        case .noAnswer:
+            break
+        case .failed(let message):
+            // Surfaces on the Settings row through the same field a delivery
+            // failure uses. A tick that silently fails is the exact shape of
+            // problem this feature exists to avoid.
+            nav.slackError = message
+        case .decided(let decision):
+            resolvePromptFromSlack(decision, id: id)
+        }
+    }
+
+    // Resolve a prompt the way the notification actions do — remove the event,
+    // then write the decision to its FIFO. Deliberately does NOT touch
+    // promptWatches: reconcilePromptWatches retires the watch from observable
+    // state on the next tick, and its comment asks every resolution path to keep
+    // it that way so no future one can forget to deregister.
+    private func resolvePromptFromSlack(_ decision: SlackResponder.Decision,
+                                        id: NudgeEvent.ID) {
+        // Dropping the message first makes this idempotent: two polls in flight
+        // for one prompt can both come back decided, and writing a FIFO twice
+        // would leave the second write blocking on a reader that has gone.
+        guard let watch = promptWatches[id], slackPromptMessages[id] != nil else { return }
+        slackPromptMessages[id] = nil
+        slackResolvedPrompts.insert(id)
+
+        let event = watch.event
+        guard let fifo = event.fifoPath else { return }
+        let answer = decision == .allow ? "allow" : "deny"
+        store.remove(id: event.id)
+        DispatchQueue.global(qos: .userInitiated).async { Self.writeFIFO(fifo, answer) }
+        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+
+        // Confirm back, because a reaction that worked and one that silently did
+        // nothing look identical in Slack otherwise.
+        let label = slackSessionLabel(for: event) ?? event.agent
+        slackNotifier.send(decision == .allow ? "Allowed — \(label)" : "Denied — \(label)",
+                           to: nav.slackMemberID)
+    }
+
+    // Called for each watch as it retires. A reaction arriving after notify.sh
+    // has given up does nothing, and silence there is indistinguishable from a
+    // reaction that failed — so say so, once, and only when there was a message
+    // to react to and we did not answer it ourselves.
+    private func finishSlackTracking(id: NudgeEvent.ID, watch: PromptWatch, now: Date) {
+        let announced = slackPromptMessages[id] != nil
+        let resolvedByUs = slackResolvedPrompts.contains(id)
+        let expired = SlackResponder.shouldAnnounceExpiry(
+            age: now.timeIntervalSince(watch.firstSeenAt),
+            lifetime: AttentionPolicy.promptLifetime,
+            announced: announced,
+            resolvedByUs: resolvedByUs)
+        if expired, nav.slackRespondMode != .off {
+            let label = slackSessionLabel(for: watch.event) ?? watch.event.agent
+            slackNotifier.send("Expired — \(label) is no longer waiting. Answer in the terminal.",
+                               to: nav.slackMemberID)
+        }
+        slackPromptMessages[id] = nil
+        slackResolvedPrompts.remove(id)
     }
 
     // A permission prompt we can *prove* is still blocking: notify.sh creates
@@ -2949,10 +3089,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // The age cap is the backstop for a hook killed hard enough to skip its
         // cleanup trap: past its own timeout the prompt can't be answered from
         // the panel anyway, so a leaked FIFO must not pin the count on forever.
-        promptWatches = promptWatches.filter { _, watch in
+        let survives = { [self] (watch: PromptWatch) -> Bool in
             isBlockingPrompt(watch.event)
                 && now.timeIntervalSince(watch.firstSeenAt) < AttentionPolicy.promptLifetime
         }
+        for (id, watch) in promptWatches where !survives(watch) {
+            finishSlackTracking(id: id, watch: watch, now: now)
+        }
+        promptWatches = promptWatches.filter { _, watch in survives(watch) }
     }
 
     // Re-nudge one prompt per tick — the oldest that's due. postBanner clears

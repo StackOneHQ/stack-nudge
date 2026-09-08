@@ -146,6 +146,7 @@ struct SettingsView: View {
                             row(.slackIdle,     label: "Notify when idle",    kind: .cycle,  value: SlackDelivery.idleLabel(nav.slackIdleMinutes), enabled: slackReady && nav.slackEnabled)
                             row(.slackDetail,   label: "Include message text", kind: .toggle, value: nav.slackIncludeDetail ? "On" : "Off", enabled: slackReady && nav.slackEnabled)
                             row(.slackStop,     label: "Also notify on finished turns", kind: .toggle, value: nav.slackNotifyOnStop ? "On" : "Off", enabled: slackReady && nav.slackEnabled)
+                            row(.slackRespond, label: "Respond from Slack", kind: .cycle, value: SlackResponder.rowLabel(mode: nav.slackRespondMode, detailOn: nav.slackIncludeDetail))
                         }
 
                         section("Actions") {

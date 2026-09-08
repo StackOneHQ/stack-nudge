@@ -155,7 +155,7 @@ enum SettingsRow: Hashable {
     case widget, snapToCorners, widgetCorner, widgetOpacity, widgetContent, mascot, theme
     case eventHistory, clearHistory
     case slackPaste, slackIdentity, slackTest
-    case slackEnabled, slackIdle, slackDetail, slackStop
+    case slackEnabled, slackIdle, slackDetail, slackStop, slackRespond
     case soundEnabled, agentDoneSound, permissionSound
     case voiceEnabled, voice, voiceSpeed, speakHotkey, downloadVoiceModel
     case quotaTracking, quotaAlerts, alertThreshold, pollFrequency, contextAlert, showRemaining
@@ -218,6 +218,11 @@ final class PanelNav: ObservableObject {
     // SessionLabel — and because it feeds notifications too, where a wrong name
     // is read once and can't be corrected.
     @Published var tabTitleNames:   Bool = false
+    // Answering a permission prompt by reacting to its Slack DM. Off by default:
+    // this is the only setting that lets a phone run something on this machine,
+    // so it is opted into rather than out of. Allow additionally needs
+    // slackIncludeDetail — see SlackResponder.canAllow.
+    @Published var slackRespondMode: SlackResponder.Mode = .off
     // Timed global mute. When `muteUntil` is a future date, PanelController
     // suppresses ALL banner/sound/voice output (permission prompts included)
     // until it passes, then auto-lifts. Deliberately transient — never read
@@ -997,7 +1002,7 @@ final class PanelNav: ObservableObject {
         rows += [.quotaTracking, .quotaAlerts, .alertThreshold, .pollFrequency, .contextAlert, .showRemaining,
                  .githubLinks, .hideShipped, .disconnectGithub,
                  .historyPerSession, .eventHistory, .clearHistory,
-                 .slackPaste, .slackIdentity, .slackTest,
+                 .slackPaste, .slackIdentity, .slackTest, .slackRespond,
                  .slackEnabled, .slackIdle, .slackDetail, .slackStop,
                  .editPhrases, .checkPermissions, .openConfig, .releaseNotes, .checkUpdates, .uninstall, .quit]
         return rows
@@ -1041,6 +1046,8 @@ final class PanelNav: ObservableObject {
         voiceEnabled    = ConfigFile.bool(config, "STACKNUDGE_VOICE",     default: false)
         muteWhenFocused = ConfigFile.bool(config, "STACKNUDGE_MUTE_WHEN_FOCUSED", default: true)
         tabTitleNames   = ConfigFile.bool(config, "STACKNUDGE_TAB_TITLE_NAMES", default: false)
+        slackRespondMode = SlackResponder.Mode(rawValue: config["STACKNUDGE_SLACK_RESPOND"] ?? "")
+            ?? .off
         // Persistent default only — the live `muteUntil` is transient and
         // intentionally left untouched here so config reloads never clear it.
         let rawMuteDuration = Int(config["STACKNUDGE_MUTE_DURATION_MIN"] ?? "") ?? 30
@@ -1382,7 +1389,7 @@ final class PanelNav: ObservableObject {
              .contextAlert, .showRemaining,
              .githubLinks, .hideShipped,
              .historyPerSession, .eventHistory,
-             .slackEnabled, .slackIdle, .slackDetail, .slackStop:
+             .slackEnabled, .slackIdle, .slackDetail, .slackStop, .slackRespond:
             return true
         }
     }
@@ -1456,6 +1463,12 @@ final class PanelNav: ObservableObject {
         case .tabTitleNames:
             tabTitleNames.toggle()
             ConfigFile.write(key: "STACKNUDGE_TAB_TITLE_NAMES", value: tabTitleNames ? "true" : "false")
+        case .slackRespond:
+            let modes = SlackResponder.Mode.allCases
+            let idx = modes.firstIndex(of: slackRespondMode) ?? 0
+            let next = forward ? (idx + 1) % modes.count : (idx - 1 + modes.count) % modes.count
+            slackRespondMode = modes[next]
+            ConfigFile.write(key: "STACKNUDGE_SLACK_RESPOND", value: slackRespondMode.rawValue)
         case .mute:
             // Action row: Enter and ←/→ both toggle the timed global mute.
             // Nothing persists — the controller owns the expiry timer + the
