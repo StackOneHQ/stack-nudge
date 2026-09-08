@@ -133,8 +133,19 @@ final class SlackNotifier {
 
     // `completion` reports the outcome for the test-message row; ordinary
     // deliveries pass nil and read `lastError` on the next tick instead.
+    // `onPosted` hands back the posted message's `ts`, which is the handle
+    // reactions are read against later — a prompt DM is only answerable from
+    // Slack if we remembered which message announced it. Separate from
+    // `completion` so the existing callers, which only care whether it failed,
+    // are untouched. Fires on main, only on success.
+    //
+    // Declared BEFORE `completion` deliberately. Swift binds a trailing closure
+    // to the last closure parameter, so appending this one silently rebound
+    // every existing `send(…) { error in }` call to it — which compiled at some
+    // sites and would have quietly stopped reporting failures.
     func send(_ text: String,
               to memberID: String?,
+              onPosted: ((String) -> Void)? = nil,
               completion: ((String?) -> Void)? = nil) {
         guard let memberID, !memberID.isEmpty else {
             finish("No Slack user set — run Detect or paste a member ID", completion)
@@ -149,11 +160,13 @@ final class SlackNotifier {
                 self.finish("No Slack bot token — paste one in Settings", completion)
                 return
             }
-            self.post(text: text, token: token, memberID: memberID, completion: completion)
+            self.post(text: text, token: token, memberID: memberID,
+                      onPosted: onPosted, completion: completion)
         }
     }
 
     private func post(text: String, token: String, memberID: String,
+                      onPosted: ((String) -> Void)?,
                       completion: ((String?) -> Void)?) {
         var request = URLRequest(url: Self.postMessageURL)
         request.httpMethod = "POST"
@@ -173,6 +186,9 @@ final class SlackNotifier {
                 let failure = json["ok"] as? Bool == true
                     ? nil
                     : Self.explain(json["error"] as? String ?? "unknown")
+                if failure == nil, let ts = json["ts"] as? String, !ts.isEmpty {
+                    DispatchQueue.main.async { onPosted?(ts) }
+                }
                 self.finish(failure, completion)
             } else {
                 self.finish(error?.localizedDescription ?? "no response", completion)

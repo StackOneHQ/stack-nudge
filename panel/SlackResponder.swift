@@ -108,6 +108,57 @@ enum SlackResponder {
         return age >= lifetime - margin
     }
 
+    // MARK: - Network
+
+    static let reactionsURL = "https://slack.com/api/reactions.get"
+
+    // Outcome of one poll. `.noAnswer` and `.failed` are deliberately distinct:
+    // nobody having reacted yet is the normal case and must not light up the
+    // Settings row, whereas a scope or auth failure is the whole reason someone
+    // would be tapping a tick and seeing nothing happen.
+    enum Poll: Equatable {
+        case decided(Decision)
+        case noAnswer
+        case failed(String)
+    }
+
+    // Reads the reactions on one message. A GET with query params and a Bearer
+    // header, matching SlackDirectory.lookup — the parsing stays pure above so
+    // the whole decision matrix is testable without a token.
+    static func poll(token: String,
+                     channel: String,
+                     ts: String,
+                     memberID: String,
+                     mode: Mode,
+                     detailOn: Bool,
+                     session: URLSession = .shared,
+                     completion: @escaping (Poll) -> Void) {
+        guard var components = URLComponents(string: reactionsURL) else {
+            completion(.failed("bad url")); return
+        }
+        components.queryItems = [
+            URLQueryItem(name: "channel", value: channel),
+            URLQueryItem(name: "timestamp", value: ts),
+        ]
+        guard let url = components.url else { completion(.failed("bad url")); return }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        session.dataTask(with: request) { data, _, error in
+            guard let data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else {
+                completion(.failed(error?.localizedDescription ?? "no response")); return
+            }
+            if let failure = explain(payload: json) { completion(.failed(failure)); return }
+            guard let list = reactions(fromPayload: json) else {
+                completion(.failed("unreadable response")); return
+            }
+            let decision = self.decision(fromReactions: list, memberID: memberID,
+                                         mode: mode, detailOn: detailOn)
+            completion(decision.map(Poll.decided) ?? .noAnswer)
+        }.resume()
+    }
+
     // MARK: - Wire format
 
     // Pull the reactions array out of a reactions.get payload. The shape is
