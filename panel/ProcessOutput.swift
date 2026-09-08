@@ -28,11 +28,17 @@ enum ProcessOutput {
     // On timeout we send SIGTERM, wait briefly, then SIGKILL.
     // Optional cwd pins the child's working directory — used by the Claude CLI
     // probe so its session-jsonl files always land in a known, scrub-able dir.
-    static func read(_ path: String, _ args: [String], timeout: TimeInterval, cwd: String? = nil) -> String? {
+    // Optional env replaces (not merges into) the child's environment — tmux
+    // needs a UTF-8 locale forced on it or it renders non-ASCII pane titles as
+    // "_", so callers pass AppActivator.tmuxEnv(), which is the inherited
+    // environment plus LC_ALL. nil inherits ours unchanged.
+    static func read(_ path: String, _ args: [String], timeout: TimeInterval,
+                     cwd: String? = nil, env: [String: String]? = nil) -> String? {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: path)
         task.arguments = args
         if let cwd { task.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+        if let env { task.environment = env }
         let outPipe = Pipe()
         task.standardOutput = outPipe
         task.standardError = FileHandle.nullDevice

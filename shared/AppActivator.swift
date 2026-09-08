@@ -600,7 +600,12 @@ struct AppActivator {
     // app has a minimal PATH, so probe paths directly (same rationale as the
     // gh/claude resolvers). Self-contained here to keep shared/ independent of
     // panel/'s ProcessOutput.
-    private static func tmuxPath() -> String? {
+    //
+    // Internal rather than private: TmuxIntegration reads pane titles from the
+    // same server on the session-poll path. One resolver means the probe list
+    // can't drift between the focus path and the enrichment path — a user whose
+    // tmux lives in ~/.local/bin would otherwise get focus but no tab titles.
+    static func tmuxPath() -> String? {
         let home = NSHomeDirectory()
         return [
             "/opt/homebrew/bin/tmux",
@@ -615,7 +620,10 @@ struct AppActivator {
     // launchd-spawned panel inherits no locale, so Claude's "✳ …" titles came
     // back as "_ …" and never matched the iTerm2 session name. Force a UTF-8
     // locale on the tmux subprocess so the real bytes come through.
-    private static func tmuxEnv() -> [String: String] {
+    //
+    // Internal for the same reason as tmuxPath(): TmuxIntegration reads the very
+    // same #{pane_title} and would hit the identical mojibake without it.
+    static func tmuxEnv() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         env["LC_ALL"] = "en_US.UTF-8"
         return env

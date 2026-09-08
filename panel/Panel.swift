@@ -450,7 +450,8 @@ struct PanelContentView: View {
                                  sessionLabel: SessionLabel.displayName(
                                      for: event,
                                      in: sessions.sessions,
-                                     persistence: persistence
+                                     persistence: persistence,
+                                     allowTabTitle: nav.tabTitleNames
                                  ))
                             .id(event.id)
                             .contentShape(Rectangle())
@@ -742,11 +743,32 @@ struct EventRow: View {
     // iTerm2 tab/session label shown next to the session chip, but only
     // when it adds information — suppress it if it'd just echo the
     // session label we already showed.
+    //
+    // Equality alone isn't enough once "Name from tab titles" is on, because
+    // the two sides are different AppleScript properties of the same tab:
+    // notify.sh puts `name of s` in the payload (the *composed* title, with the
+    // running job appended — "✳ Fixing the parser (claude)") while
+    // ITerm2Integration deliberately reads `autoName` ("✳ Fixing the parser"),
+    // which is what the session label resolves to. They never compare equal, so
+    // the row rendered the same tab twice. The composed form is the plain one
+    // plus a suffix, so a prefix test is what actually catches it.
     private var secondaryTabLabel: String? {
         guard let raw = event.itermTabName?.trimmingCharacters(in: .whitespaces),
               !raw.isEmpty,
-              raw != sessionLabel else { return nil }
+              raw != sessionLabel,
+              !echoesSessionLabel(raw)
+        else { return nil }
         return raw
+    }
+
+    // True when `raw` is the session label plus iTerm2's trailing job suffix.
+    // Guards on a non-empty label so a nil/empty one can't make every tab name
+    // look like an echo.
+    private func echoesSessionLabel(_ raw: String) -> Bool {
+        guard let label = sessionLabel?.trimmingCharacters(in: .whitespaces),
+              !label.isEmpty
+        else { return false }
+        return raw.hasPrefix(label)
     }
 
     // Where the event came from. Normalises the helper-process names
@@ -2396,7 +2418,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func labelForClaudeSession(id: String) -> String {
         guard let session = sessions.sessions.first(where: { $0.claudeSessionID == id })
         else { return "a session" }
-        return SessionLabel.displayName(for: session, fallback: "a session")
+        return SessionLabel.displayName(for: session, fallback: "a session",
+                                        allowTabTitle: nav.tabTitleNames)
     }
 
     // Fired once after a notify.sh rewrite when Codex is wired: the rewrite
@@ -2580,7 +2603,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func bannerTitle(for event: NudgeEvent) -> String {
         guard let label = SessionLabel.displayName(for: event,
                                                    in: sessions.sessions,
-                                                   persistence: SessionPersistence.shared)
+                                                   persistence: SessionPersistence.shared,
+                                                   allowTabTitle: nav.tabTitleNames)
         else { return event.title }
         return "\(event.title) — \(label)"
     }
@@ -2588,7 +2612,24 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func sessionLabel(for event: NudgeEvent) -> String? {
         SessionLabel.chosenName(for: event,
                                 in: sessions.sessions,
-                                persistence: SessionPersistence.shared)
+                                persistence: SessionPersistence.shared,
+                                allowTabTitle: nav.tabTitleNames)
+    }
+
+    // The Slack leg takes a narrower label than the on-screen ones. A tab title
+    // is whatever the program in that pane wrote, and any of the common prompt
+    // frameworks (oh-my-zsh, starship, most dotfiles) put "user@host:
+    // /full/path" there via a precmd title hook. SlackDelivery.text already
+    // treats `slackIncludeDetail` as the gate for local text on the one path
+    // that leaves this machine — the tab title belongs behind that same gate,
+    // otherwise someone who turned detail off on purpose gets their paths out
+    // through a different door. Detail off ⇒ the DM falls back to the project
+    // name, exactly as it did before this setting existed.
+    private func slackSessionLabel(for event: NudgeEvent) -> String? {
+        SessionLabel.chosenName(for: event,
+                                in: sessions.sessions,
+                                persistence: SessionPersistence.shared,
+                                allowTabTitle: nav.tabTitleNames && nav.slackIncludeDetail)
     }
 
     // `body` overrides event.message — the reminder path reuses everything else
@@ -2778,7 +2819,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         else { return }
 
         slackNotifier.send(SlackDelivery.text(for: event,
-                                              label: sessionLabel(for: event),
+                                              label: slackSessionLabel(for: event),
                                               includeDetail: nav.slackIncludeDetail,
                                               isReminder: isReminder),
                            to: nav.slackMemberID)

@@ -151,7 +151,7 @@ enum SettingsRow: Hashable {
     case wireAgents, dismissAgents
     case permissions, update, hotkey
     case banner, muteWhenFocused, mute, muteDuration, remindUnanswered, stalledSessions,
-         pinPanel, keepOpenWhenEmpty, launchAtLogin
+         tabTitleNames, pinPanel, keepOpenWhenEmpty, launchAtLogin
     case widget, snapToCorners, widgetCorner, widgetOpacity, widgetContent, mascot, theme
     case eventHistory, clearHistory
     case slackPaste, slackIdentity, slackTest
@@ -213,6 +213,11 @@ final class PanelNav: ObservableObject {
     @Published var soundEnabled:    Bool = true
     @Published var voiceEnabled:    Bool = false
     @Published var muteWhenFocused: Bool = true
+    // Opt-in: let a terminal tab title name a session when nothing stronger has.
+    // Off by default because the title is not evidence a human chose it — see
+    // SessionLabel — and because it feeds notifications too, where a wrong name
+    // is read once and can't be corrected.
+    @Published var tabTitleNames:   Bool = false
     // Timed global mute. When `muteUntil` is a future date, PanelController
     // suppresses ALL banner/sound/voice output (permission prompts included)
     // until it passes, then auto-lifts. Deliberately transient — never read
@@ -984,7 +989,7 @@ final class PanelNav: ObservableObject {
         if updateAvailable != nil { rows.append(.update) }
         rows += [.hotkey,
                  .banner, .muteWhenFocused, .mute, .muteDuration, .remindUnanswered, .stalledSessions,
-                 .pinPanel, .keepOpenWhenEmpty, .launchAtLogin,
+                 .tabTitleNames, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin,
                  .widget, .snapToCorners, .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme,
                  .soundEnabled, .agentDoneSound, .permissionSound,
                  .voiceEnabled, .speakHotkey]
@@ -1035,6 +1040,7 @@ final class PanelNav: ObservableObject {
         soundEnabled    = ConfigFile.bool(config, "STACKNUDGE_SOUND",     default: true)
         voiceEnabled    = ConfigFile.bool(config, "STACKNUDGE_VOICE",     default: false)
         muteWhenFocused = ConfigFile.bool(config, "STACKNUDGE_MUTE_WHEN_FOCUSED", default: true)
+        tabTitleNames   = ConfigFile.bool(config, "STACKNUDGE_TAB_TITLE_NAMES", default: false)
         // Persistent default only — the live `muteUntil` is transient and
         // intentionally left untouched here so config reloads never clear it.
         let rawMuteDuration = Int(config["STACKNUDGE_MUTE_DURATION_MIN"] ?? "") ?? 30
@@ -1367,7 +1373,7 @@ final class PanelNav: ObservableObject {
             return false
         case .permissions, .update, .hotkey, .speakHotkey,
              .banner, .muteWhenFocused, .mute, .muteDuration,
-             .remindUnanswered, .stalledSessions, .pinPanel,
+             .remindUnanswered, .stalledSessions, .tabTitleNames, .pinPanel,
              .keepOpenWhenEmpty, .launchAtLogin,
              .widget, .snapToCorners, .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme,
              .soundEnabled, .agentDoneSound, .permissionSound,
@@ -1447,6 +1453,9 @@ final class PanelNav: ObservableObject {
         case .muteWhenFocused:
             muteWhenFocused.toggle()
             ConfigFile.write(key: "STACKNUDGE_MUTE_WHEN_FOCUSED", value: muteWhenFocused ? "true" : "false")
+        case .tabTitleNames:
+            tabTitleNames.toggle()
+            ConfigFile.write(key: "STACKNUDGE_TAB_TITLE_NAMES", value: tabTitleNames ? "true" : "false")
         case .mute:
             // Action row: Enter and ←/→ both toggle the timed global mute.
             // Nothing persists — the controller owns the expiry timer + the

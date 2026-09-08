@@ -477,7 +477,8 @@ struct CompactView: View {
     }
 
     private func displayName(_ s: Session) -> String {
-        SessionLabel.displayName(for: s, fallback: "session")
+        SessionLabel.displayName(for: s, fallback: "session",
+                                 allowTabTitle: nav.tabTitleNames)
     }
 
     private func glyph(for e: NudgeEvent) -> String {

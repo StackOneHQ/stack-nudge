@@ -13,19 +13,28 @@ import Foundation
 // Priority is by provenance, strongest intent first:
 //   1. customName — the user renamed it in the Sessions pane.
 //   2. a name the user set inside the agent (Claude Code's sidecar `name`).
-//   3. the cwd basename, which nobody chose, so callers that need a name
+//   3. the terminal tab title, but only when the caller opts in.
+//   4. the cwd basename, which nobody chose, so callers that need a name
 //      rather than a label ask for `chosenName` and get nil here.
 //
 // Which to call: on-screen surfaces (Events row, Sessions row, banner title) want
 // `displayName`. Only speech wants `chosenName` — the hook already baked the cwd
 // into its phrase, so nil there means "nothing better to say", not "no label".
 //
-// Deliberately excluded: the terminal tab name. On iTerm2 a manual rename,
-// an OSC title escape and the profile name all write the same `autoName`
-// variable, so there is no way to read "the user chose this" back out — and
-// Claude Code rewrites the tab title every turn, so a manual tab rename
-// doesn't survive anyway. The pane still shows the tab name in its meta row,
-// where churn is harmless.
+// Off by default, opt-in: the terminal tab name. On iTerm2 a manual rename, an
+// OSC title escape and the profile name all write the same `autoName` variable,
+// so there is no way to read "the user chose this" back out — and Claude Code
+// rewrites the tab title every turn, so a manual tab rename doesn't survive
+// anyway. tmux is no better: #{pane_title} is the same OSC signal, and the one
+// option that records a real rename can't be read without a subprocess per
+// window (see TmuxIntegration).
+//
+// So it can't be trusted as *intent*, but plenty of people title their tabs
+// deliberately and want that name back. `allowTabTitle` is that choice, wired to
+// the "Name from tab titles" setting and false everywhere by default.
+// It sits below both real signals — a rename in the Sessions pane and a name set
+// inside the agent still win — and above the cwd, which nobody chose either.
+// The pane's meta row shows the tab name regardless, where churn is harmless.
 enum SessionLabel {
 
     // Agent-assigned names that carry no user intent. "main-agent" is what
@@ -47,18 +56,75 @@ enum SessionLabel {
     // MARK: - Sessions
 
     // The name a human chose for this session, or nil if nobody has.
-    static func chosenName(for session: Session) -> String? {
+    //
+    // `allowTabTitle` admits the terminal tab title as a last resort before
+    // giving up. Defaulted to false so a new call site can't opt in by
+    // forgetting to think about it — the setting is off for most people, and a
+    // caller that silently inherited "on" would be the wrong default twice.
+    static func chosenName(for session: Session, allowTabTitle: Bool = false) -> String? {
         if let custom = session.customName?.trimmingCharacters(in: .whitespaces),
            !custom.isEmpty {
             return custom
         }
-        return userSetLiveTitle(of: session)
+        if let live = userSetLiveTitle(of: session) { return live }
+        guard allowTabTitle else { return nil }
+        return tabTitle(of: session)
     }
 
     // What a row/pill shows as its title.
-    static func displayName(for session: Session, fallback: String) -> String {
-        chosenName(for: session) ?? session.projectName ?? fallback
+    static func displayName(for session: Session, fallback: String,
+                            allowTabTitle: Bool = false) -> String {
+        chosenName(for: session, allowTabTitle: allowTabTitle)
+            ?? session.projectName ?? fallback
     }
+
+    // The terminal's tab title, trimmed, or nil when there isn't one. Kept
+    // separate from userSetLiveTitle so the placeholder rules stay attached to
+    // the signal they describe: "main-agent" is a Claude Code artefact and has
+    // no business filtering what someone typed into a tab.
+    //
+    // VS Code and its forks are excluded, because their `tabName` is not a tab
+    // title at all — VSCodeIntegration fills it from the OS *window* title that
+    // notify.sh captures ("Panel.swift — stackone — Cursor"), which names the
+    // file you happen to be looking at and changes every time you switch tabs in
+    // the editor. That is fine for the meta row it was built for, and unusable
+    // as a name: it would churn, and it would be read aloud em-dashes and all.
+    // The window title stays visible in the row; it just can't title a Slack DM.
+    private static func tabTitle(of session: Session) -> String? {
+        guard !VSCodeIntegration.isVSCodeHosted(session.terminalApp),
+              let tab = session.tabName.map(strippingDecoration),
+              !tab.isEmpty
+        else { return nil }
+        return tab
+    }
+
+    // Leading/trailing symbol runs are decoration, not name. Claude Code writes
+    // its spinner into the tab title — "✳ Review repository structure" — and
+    // cycles the glyph (✳ ✻ ✽) frame by frame, so keeping it means the session's
+    // name changes on every animation tick. It is also unspeakable: `say "✳"`
+    // emits "eight spoked asterisk", a second and a quarter of it, and neither
+    // route to speech saves us — VoicePhrase.expandForSpeech splits on spaces so
+    // the glyph survives as its own word, and the reminder leg
+    // ("Still waiting on \(label)") never calls expandForSpeech at all.
+    //
+    // Trimmed from the ends only, so a symbol inside a title someone actually
+    // typed is left alone. The cost is a deliberate leading emoji ("🚀 deploy"
+    // reads as "deploy"), which is worth paying to stop an animation frame
+    // becoming a name.
+    static func strippingDecoration(_ raw: String) -> String {
+        raw.trimmingCharacters(in: decorationCharacters)
+    }
+
+    // Symbols cover most of the spinner (✳ ✻ ✽ are So, ∗ is Sm), but not all of
+    // it: Claude also cycles a middle dot, and U+00B7 is punctuation, not a
+    // symbol. A category-only rule therefore still let the name flip between
+    // "Fixing the parser" and "· Fixing the parser" as the spinner turned, which
+    // is the churn this exists to stop. The stragglers are listed explicitly
+    // rather than widening to all punctuation, which would eat the leading
+    // bracket of a title someone typed as "(wip) deploy".
+    private static let decorationCharacters = CharacterSet.symbols
+        .union(.whitespacesAndNewlines)
+        .union(CharacterSet(charactersIn: "·•∙"))
 
     // The agent's own session name, but only when the agent tells us a human
     // set it. nil source means the agent doesn't report one (older Claude Code,
@@ -85,11 +151,16 @@ enum SessionLabel {
     // first, falling back to project path plus tab id. Then falls back to the
     // disk-backed store, which is the only source left once the session's
     // process is gone.
+    //
+    // `allowTabTitle` only reaches the live-session branch. The disk-backed
+    // store holds names people typed, never tab titles — once the process is
+    // gone there is no tab left to read one from.
     static func chosenName(for event: NudgeEvent,
                            in sessions: [Session],
-                           persistence: SessionPersistence) -> String? {
+                           persistence: SessionPersistence,
+                           allowTabTitle: Bool = false) -> String? {
         if let session = sessions.first(where: { sessionMatches(event: event, session: $0) }),
-           let name = chosenName(for: session) {
+           let name = chosenName(for: session, allowTabTitle: allowTabTitle) {
             return name
         }
         return persistence.customName(
@@ -103,8 +174,10 @@ enum SessionLabel {
     // project folder.
     static func displayName(for event: NudgeEvent,
                             in sessions: [Session],
-                            persistence: SessionPersistence) -> String? {
-        if let name = chosenName(for: event, in: sessions, persistence: persistence) {
+                            persistence: SessionPersistence,
+                            allowTabTitle: Bool = false) -> String? {
+        if let name = chosenName(for: event, in: sessions, persistence: persistence,
+                                 allowTabTitle: allowTabTitle) {
             return name
         }
         guard let project = event.projectPath else { return nil }

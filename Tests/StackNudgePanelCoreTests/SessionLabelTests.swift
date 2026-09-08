@@ -16,13 +16,15 @@ final class SessionLabelTests: XCTestCase {
                          customName: String? = nil,
                          liveTitle: String? = nil,
                          liveTitleSource: String? = nil,
-                         tabId: String? = nil) -> Session {
+                         tabId: String? = nil,
+                         tabName: String? = nil,
+                         terminalApp: String = "iTerm2") -> Session {
         Session(
             id: pid, pid: pid, agent: agent,
             projectPath: projectPath, projectName: projectName,
-            terminalPID: 2, terminalApp: "iTerm2", elapsed: nil,
+            terminalPID: 2, terminalApp: terminalApp, elapsed: nil,
             customName: customName, status: .active,
-            tabId: tabId, tabName: nil,
+            tabId: tabId, tabName: tabName,
             liveTitle: liveTitle, liveTitleSource: liveTitleSource
         )
     }
@@ -163,6 +165,155 @@ final class SessionLabelTests: XCTestCase {
         URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("session-label-tests-\(UUID().uuidString).json")
     }
+
+    // MARK: - Tab titles (opt-in)
+
+    // The whole point of the flag: default-off means every existing caller keeps
+    // the behaviour it had, and a new one can't opt in by forgetting to.
+    func test_tabTitle_ignoredByDefault() {
+        let s = session(tabName: "deploy pipeline")
+        XCTAssertNil(SessionLabel.chosenName(for: s))
+        XCTAssertEqual(SessionLabel.displayName(for: s, fallback: "x"), "stackone")
+    }
+
+    func test_tabTitle_usedWhenAllowed() {
+        let s = session(tabName: "deploy pipeline")
+        XCTAssertEqual(SessionLabel.chosenName(for: s, allowTabTitle: true), "deploy pipeline")
+        XCTAssertEqual(SessionLabel.displayName(for: s, fallback: "x", allowTabTitle: true),
+                       "deploy pipeline")
+    }
+
+    // Provenance order still holds with the flag on. A tab title is the weakest
+    // of the three name signals — Claude Code rewrites it every turn — so it must
+    // never displace something a human actually typed.
+    func test_tabTitle_losesToAManualRename() {
+        let s = session(customName: "my rename", tabName: "✳ Fixing the parser")
+        XCTAssertEqual(SessionLabel.chosenName(for: s, allowTabTitle: true), "my rename")
+    }
+
+    func test_tabTitle_losesToANameSetInsideTheAgent() {
+        let s = session(liveTitle: "agent-side name", tabName: "✳ Fixing the parser")
+        XCTAssertEqual(SessionLabel.chosenName(for: s, allowTabTitle: true), "agent-side name")
+    }
+
+    // ...but it still beats the cwd, which nobody chose either. This is the case
+    // the feature exists for.
+    func test_tabTitle_beatsTheProjectFolder() {
+        let s = session(tabName: "deploy pipeline")
+        XCTAssertEqual(SessionLabel.displayName(for: s, fallback: "x", allowTabTitle: true),
+                       "deploy pipeline")
+    }
+
+    // A generated agent name is filtered before the tab title is considered, so
+    // turning the toggle on rescues these sessions rather than being masked by
+    // the placeholder that displaced them.
+    func test_tabTitle_appliesWhenTheAgentNameWasGenerated() {
+        let s = session(liveTitle: "stackone-89", liveTitleSource: "derived",
+                        tabName: "deploy pipeline")
+        XCTAssertEqual(SessionLabel.chosenName(for: s, allowTabTitle: true), "deploy pipeline")
+    }
+
+    func test_tabTitle_blankIsNotAName() {
+        for blank in ["", "   "] {
+            let s = session(tabName: blank)
+            XCTAssertNil(SessionLabel.chosenName(for: s, allowTabTitle: true),
+                         "«\(blank)» should not become a name")
+        }
+    }
+
+    func test_tabTitle_isTrimmed() {
+        let s = session(tabName: "  deploy pipeline  ")
+        XCTAssertEqual(SessionLabel.chosenName(for: s, allowTabTitle: true), "deploy pipeline")
+    }
+
+    // "main-agent" is a Claude Code artefact, not a word about tabs. Someone who
+    // names a tab that meant it, and the placeholder list must not reach across
+    // and filter a different signal.
+    func test_tabTitle_notFilteredByAgentPlaceholders() {
+        let s = session(tabName: "main-agent")
+        XCTAssertEqual(SessionLabel.chosenName(for: s, allowTabTitle: true), "main-agent")
+    }
+
+    // VS Code and its forks don't report a tab title at all. VSCodeIntegration
+    // fills `tabName` from the OS *window* title notify.sh captures, which names
+    // whichever file is open and changes on every editor tab switch. Naming a
+    // session from it would churn, and would be spoken aloud em-dashes and all —
+    // so the toggle must leave these sessions on their project name.
+    func test_tabTitle_ignoredForVSCodeHostedSessions() {
+        for editor in ["Code", "Code Helper (Renderer)", "Cursor Helper (Renderer)",
+                       "Antigravity Helper (Renderer)"] {
+            let s = session(tabName: "Panel.swift — stackone — Cursor", terminalApp: editor)
+            XCTAssertNil(SessionLabel.chosenName(for: s, allowTabTitle: true),
+                         "\(editor) reports a window title, not a tab title")
+            XCTAssertEqual(SessionLabel.displayName(for: s, fallback: "x", allowTabTitle: true),
+                           "stackone", "should fall back to the project name")
+        }
+    }
+
+    // The exclusion is about the *source* of the string, not the string itself:
+    // the same text arriving from a real terminal is a legitimate tab title.
+    func test_tabTitle_sameTextIsAcceptedFromARealTerminal() {
+        for term in ["iTerm2", "tmux", "Terminal"] {
+            let s = session(tabName: "Panel.swift — stackone", terminalApp: term)
+            XCTAssertEqual(SessionLabel.chosenName(for: s, allowTabTitle: true),
+                           "Panel.swift — stackone", "\(term) reports a real tab title")
+        }
+    }
+
+    // Claude Code writes its spinner into the tab title and cycles the glyph
+    // frame by frame, so keeping it makes the session's name change on every
+    // animation tick — and `say "✳"` is a second and a quarter of "eight spoked
+    // asterisk". Neither speech route saves us: expandForSpeech splits on spaces
+    // so the glyph survives as its own word, and the reminder leg never calls it.
+    func test_tabTitle_stripsClaudesSpinnerGlyph() {
+        for frame in ["✳", "✻", "✽"] {
+            let s = session(tabName: "\(frame) Review repository structure")
+            XCTAssertEqual(SessionLabel.chosenName(for: s, allowTabTitle: true),
+                           "Review repository structure",
+                           "\(frame) is an animation frame, not part of the name")
+        }
+    }
+
+    // Every frame must reduce to the SAME name, or the label churns as the
+    // spinner turns — which is the actual defect, not just the pronunciation.
+    func test_tabTitle_everySpinnerFrameYieldsOneStableName() {
+        let names = ["✳", "✻", "✽", "·"].map {
+            SessionLabel.chosenName(for: session(tabName: "\($0) Fixing the parser"),
+                                    allowTabTitle: true)
+        }
+        XCTAssertEqual(Set(names).count, 1, "the name must not move with the spinner")
+    }
+
+    // Trimmed at the ends only — a symbol inside something a human typed is
+    // theirs to keep.
+    func test_tabTitle_keepsSymbolsInsideTheTitle() {
+        let s = session(tabName: "build | tee log.txt → deploy")
+        XCTAssertEqual(SessionLabel.chosenName(for: s, allowTabTitle: true),
+                       "build | tee log.txt → deploy")
+    }
+
+    // Why the stragglers are listed rather than trimming all punctuation: a
+    // leading bracket is part of a title someone typed.
+    func test_tabTitle_keepsLeadingPunctuationSomeoneTyped() {
+        let s = session(tabName: "(wip) deploy pipeline")
+        XCTAssertEqual(SessionLabel.chosenName(for: s, allowTabTitle: true),
+                       "(wip) deploy pipeline")
+    }
+
+    func test_tabTitle_glyphOnlyTitleIsNotAName() {
+        XCTAssertNil(SessionLabel.chosenName(for: session(tabName: "✳"), allowTabTitle: true))
+        XCTAssertNil(SessionLabel.chosenName(for: session(tabName: " ✳  "), allowTabTitle: true))
+    }
+
+    // A VS Code session with a rename still uses it — the exclusion must only
+    // remove the weakest signal, not suppress the whole cascade.
+    func test_vscodeExclusionDoesNotBlockStrongerSignals() {
+        let s = session(customName: "my rename",
+                        tabName: "Panel.swift — stackone — Cursor",
+                        terminalApp: "Cursor Helper (Renderer)")
+        XCTAssertEqual(SessionLabel.chosenName(for: s, allowTabTitle: true), "my rename")
+    }
+
 }
 
 // The hook picks the phrase but can't resolve session names, so it now sends
