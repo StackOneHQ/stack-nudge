@@ -72,6 +72,7 @@ struct SessionsView: View {
                             isMuted: nav.isMuted(session),
                             isStalled: SessionPersistence.key(for: session)
                                 .map(nav.stalledSessionKeys.contains) ?? false,
+                            allowTabTitle: nav.tabTitleNames,
                             onCommit: { store.commitRename() },
                             onCancel: { store.cancelRename() }
                         )
@@ -201,6 +202,10 @@ private struct SessionRow: View {
     // Computed by PanelController's attention tick rather than per row so every
     // row agrees on "now".
     let isStalled: Bool
+    // Mirrors nav.tabTitleNames. Passed in rather than read from nav because the
+    // row is a plain value type with no nav of its own — and keeping it a `let`
+    // means SwiftUI re-renders the row when the setting flips.
+    let allowTabTitle: Bool
     let onCommit: () -> Void
     let onCancel: () -> Void
 
@@ -392,7 +397,8 @@ private struct SessionRow: View {
     private var isActive: Bool { session.status == .active }
 
     private var displayName: String {
-        SessionLabel.displayName(for: session, fallback: "(no project)")
+        SessionLabel.displayName(for: session, fallback: "(no project)",
+                                 allowTabTitle: allowTabTitle)
     }
 
     // Full cwd with $HOME replaced by ~ for compactness. Falls back to

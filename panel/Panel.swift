@@ -450,7 +450,8 @@ struct PanelContentView: View {
                                  sessionLabel: SessionLabel.displayName(
                                      for: event,
                                      in: sessions.sessions,
-                                     persistence: persistence
+                                     persistence: persistence,
+                                     allowTabTitle: nav.tabTitleNames
                                  ))
                             .id(event.id)
                             .contentShape(Rectangle())
@@ -2396,7 +2397,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func labelForClaudeSession(id: String) -> String {
         guard let session = sessions.sessions.first(where: { $0.claudeSessionID == id })
         else { return "a session" }
-        return SessionLabel.displayName(for: session, fallback: "a session")
+        return SessionLabel.displayName(for: session, fallback: "a session",
+                                        allowTabTitle: nav.tabTitleNames)
     }
 
     // Fired once after a notify.sh rewrite when Codex is wired: the rewrite
@@ -2580,7 +2582,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func bannerTitle(for event: NudgeEvent) -> String {
         guard let label = SessionLabel.displayName(for: event,
                                                    in: sessions.sessions,
-                                                   persistence: SessionPersistence.shared)
+                                                   persistence: SessionPersistence.shared,
+                                                   allowTabTitle: nav.tabTitleNames)
         else { return event.title }
         return "\(event.title) — \(label)"
     }
@@ -2588,7 +2591,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func sessionLabel(for event: NudgeEvent) -> String? {
         SessionLabel.chosenName(for: event,
                                 in: sessions.sessions,
-                                persistence: SessionPersistence.shared)
+                                persistence: SessionPersistence.shared,
+                                allowTabTitle: nav.tabTitleNames)
     }
 
     // `body` overrides event.message — the reminder path reuses everything else

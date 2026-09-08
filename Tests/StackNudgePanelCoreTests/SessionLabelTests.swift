@@ -16,13 +16,14 @@ final class SessionLabelTests: XCTestCase {
                          customName: String? = nil,
                          liveTitle: String? = nil,
                          liveTitleSource: String? = nil,
-                         tabId: String? = nil) -> Session {
+                         tabId: String? = nil,
+                         tabName: String? = nil) -> Session {
         Session(
             id: pid, pid: pid, agent: agent,
             projectPath: projectPath, projectName: projectName,
             terminalPID: 2, terminalApp: "iTerm2", elapsed: nil,
             customName: customName, status: .active,
-            tabId: tabId, tabName: nil,
+            tabId: tabId, tabName: tabName,
             liveTitle: liveTitle, liveTitleSource: liveTitleSource
         )
     }
@@ -163,6 +164,75 @@ final class SessionLabelTests: XCTestCase {
         URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("session-label-tests-\(UUID().uuidString).json")
     }
+
+    // MARK: - Tab titles (opt-in)
+
+    // The whole point of the flag: default-off means every existing caller keeps
+    // the behaviour it had, and a new one can't opt in by forgetting to.
+    func test_tabTitle_ignoredByDefault() {
+        let s = session(tabName: "deploy pipeline")
+        XCTAssertNil(SessionLabel.chosenName(for: s))
+        XCTAssertEqual(SessionLabel.displayName(for: s, fallback: "x"), "stackone")
+    }
+
+    func test_tabTitle_usedWhenAllowed() {
+        let s = session(tabName: "deploy pipeline")
+        XCTAssertEqual(SessionLabel.chosenName(for: s, allowTabTitle: true), "deploy pipeline")
+        XCTAssertEqual(SessionLabel.displayName(for: s, fallback: "x", allowTabTitle: true),
+                       "deploy pipeline")
+    }
+
+    // Provenance order still holds with the flag on. A tab title is the weakest
+    // of the three name signals — Claude Code rewrites it every turn — so it must
+    // never displace something a human actually typed.
+    func test_tabTitle_losesToAManualRename() {
+        let s = session(customName: "my rename", tabName: "✳ Fixing the parser")
+        XCTAssertEqual(SessionLabel.chosenName(for: s, allowTabTitle: true), "my rename")
+    }
+
+    func test_tabTitle_losesToANameSetInsideTheAgent() {
+        let s = session(liveTitle: "agent-side name", tabName: "✳ Fixing the parser")
+        XCTAssertEqual(SessionLabel.chosenName(for: s, allowTabTitle: true), "agent-side name")
+    }
+
+    // ...but it still beats the cwd, which nobody chose either. This is the case
+    // the feature exists for.
+    func test_tabTitle_beatsTheProjectFolder() {
+        let s = session(tabName: "deploy pipeline")
+        XCTAssertEqual(SessionLabel.displayName(for: s, fallback: "x", allowTabTitle: true),
+                       "deploy pipeline")
+    }
+
+    // A generated agent name is filtered before the tab title is considered, so
+    // turning the toggle on rescues these sessions rather than being masked by
+    // the placeholder that displaced them.
+    func test_tabTitle_appliesWhenTheAgentNameWasGenerated() {
+        let s = session(liveTitle: "stackone-89", liveTitleSource: "derived",
+                        tabName: "deploy pipeline")
+        XCTAssertEqual(SessionLabel.chosenName(for: s, allowTabTitle: true), "deploy pipeline")
+    }
+
+    func test_tabTitle_blankIsNotAName() {
+        for blank in ["", "   "] {
+            let s = session(tabName: blank)
+            XCTAssertNil(SessionLabel.chosenName(for: s, allowTabTitle: true),
+                         "«\(blank)» should not become a name")
+        }
+    }
+
+    func test_tabTitle_isTrimmed() {
+        let s = session(tabName: "  deploy pipeline  ")
+        XCTAssertEqual(SessionLabel.chosenName(for: s, allowTabTitle: true), "deploy pipeline")
+    }
+
+    // "main-agent" is a Claude Code artefact, not a word about tabs. Someone who
+    // names a tab that meant it, and the placeholder list must not reach across
+    // and filter a different signal.
+    func test_tabTitle_notFilteredByAgentPlaceholders() {
+        let s = session(tabName: "main-agent")
+        XCTAssertEqual(SessionLabel.chosenName(for: s, allowTabTitle: true), "main-agent")
+    }
+
 }
 
 // The hook picks the phrase but can't resolve session names, so it now sends
