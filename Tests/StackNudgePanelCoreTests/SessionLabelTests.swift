@@ -17,11 +17,12 @@ final class SessionLabelTests: XCTestCase {
                          liveTitle: String? = nil,
                          liveTitleSource: String? = nil,
                          tabId: String? = nil,
-                         tabName: String? = nil) -> Session {
+                         tabName: String? = nil,
+                         terminalApp: String = "iTerm2") -> Session {
         Session(
             id: pid, pid: pid, agent: agent,
             projectPath: projectPath, projectName: projectName,
-            terminalPID: 2, terminalApp: "iTerm2", elapsed: nil,
+            terminalPID: 2, terminalApp: terminalApp, elapsed: nil,
             customName: customName, status: .active,
             tabId: tabId, tabName: tabName,
             liveTitle: liveTitle, liveTitleSource: liveTitleSource
@@ -231,6 +232,41 @@ final class SessionLabelTests: XCTestCase {
     func test_tabTitle_notFilteredByAgentPlaceholders() {
         let s = session(tabName: "main-agent")
         XCTAssertEqual(SessionLabel.chosenName(for: s, allowTabTitle: true), "main-agent")
+    }
+
+    // VS Code and its forks don't report a tab title at all. VSCodeIntegration
+    // fills `tabName` from the OS *window* title notify.sh captures, which names
+    // whichever file is open and changes on every editor tab switch. Naming a
+    // session from it would churn, and would be spoken aloud em-dashes and all —
+    // so the toggle must leave these sessions on their project name.
+    func test_tabTitle_ignoredForVSCodeHostedSessions() {
+        for editor in ["Code", "Code Helper (Renderer)", "Cursor Helper (Renderer)",
+                       "Antigravity Helper (Renderer)"] {
+            let s = session(tabName: "Panel.swift — stackone — Cursor", terminalApp: editor)
+            XCTAssertNil(SessionLabel.chosenName(for: s, allowTabTitle: true),
+                         "\(editor) reports a window title, not a tab title")
+            XCTAssertEqual(SessionLabel.displayName(for: s, fallback: "x", allowTabTitle: true),
+                           "stackone", "should fall back to the project name")
+        }
+    }
+
+    // The exclusion is about the *source* of the string, not the string itself:
+    // the same text arriving from a real terminal is a legitimate tab title.
+    func test_tabTitle_sameTextIsAcceptedFromARealTerminal() {
+        for term in ["iTerm2", "tmux", "Terminal"] {
+            let s = session(tabName: "Panel.swift — stackone", terminalApp: term)
+            XCTAssertEqual(SessionLabel.chosenName(for: s, allowTabTitle: true),
+                           "Panel.swift — stackone", "\(term) reports a real tab title")
+        }
+    }
+
+    // A VS Code session with a rename still uses it — the exclusion must only
+    // remove the weakest signal, not suppress the whole cascade.
+    func test_vscodeExclusionDoesNotBlockStrongerSignals() {
+        let s = session(customName: "my rename",
+                        tabName: "Panel.swift — stackone — Cursor",
+                        terminalApp: "Cursor Helper (Renderer)")
+        XCTAssertEqual(SessionLabel.chosenName(for: s, allowTabTitle: true), "my rename")
     }
 
 }

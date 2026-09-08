@@ -53,21 +53,24 @@ final class TmuxIntegration: TerminalIntegration {
         // can reach a banner: a cached one would name the previous turn's task.
         var titlesBySocket: [String: [String: String]] = [:]
         for pid in pids where panes[pid] != nil {
-            let key = Self.socketKey(tmuxes[pid])
-            guard titlesBySocket[key] == nil else { continue }
-            titlesBySocket[key] = Self.paneTitles(socket: key.isEmpty ? nil : key)
+            guard let socket = Self.socketKey(tmuxes[pid]),
+                  titlesBySocket[socket] == nil
+            else { continue }
+            titlesBySocket[socket] = Self.paneTitles(socket: socket)
         }
 
         return sessions.map { session in
             guard session.terminalApp == "tmux", let pane = panes[session.pid] else { return session }
             var copy = session
-            copy.tabId = Self.tabId(pane: pane, tmux: tmuxes[session.pid])
-            // Only overwrite on a hit. Assigning unconditionally would blank
-            // every tmux session's name the one poll a server is mid-restart or
-            // the query times out, making names flicker in and out of rows.
-            if let title = titlesBySocket[Self.socketKey(tmuxes[session.pid])]?[pane] {
-                copy.tabName = title
-            }
+            let tmux = tmuxes[session.pid]
+            copy.tabId = Self.tabId(pane: pane, tmux: tmux)
+            // Assigned unconditionally: a failed query blanks the title for one
+            // poll and it returns on the next, which is the honest behaviour.
+            // Anything cleverer needs to tell "the query failed" apart from
+            // "this pane's title is the hostname sentinel", and parseTitles
+            // cannot — both arrive as a missing key. Preserving across polls on
+            // that ambiguity is how a title that was cleared sticks forever.
+            copy.tabName = Self.socketKey(tmux).flatMap { titlesBySocket[$0]?[pane] }
             return copy
         }
     }
@@ -87,26 +90,34 @@ final class TmuxIntegration: TerminalIntegration {
         return "\(server):\(pane)"
     }
 
-    // The socket path from TMUX's first comma-field, or "" for the default
-    // socket. A total key, so the per-server title map never needs an optional
-    // lookup — and "" is not a path tmux could ever hand us, so it can't
-    // collide with a real socket.
-    static func socketKey(_ tmux: String?) -> String {
+    // The socket path from TMUX's first comma-field, or nil when there isn't a
+    // usable one.
+    //
+    // nil means "don't look up a title", NOT "use tmux's default socket". The
+    // default socket is a real server, so guessing it hands a session the title
+    // of whatever pane happens to share its id over there — pane ids are only
+    // unique within a server, and "%0" exists on every one. That is reachable:
+    // the standard nested-tmux idioms (`TMUX= cmd`, `env -u TMUX cmd`) clear
+    // TMUX while leaving TMUX_PANE in place, so the pane is known and the server
+    // is not. A missing title is a row that reads a little plainer; a wrong one
+    // is a Slack DM naming the wrong session. This matches what tabId already
+    // does with a malformed TMUX — fall back rather than guess.
+    static func socketKey(_ tmux: String?) -> String? {
         guard let field = tmux?
                 .split(separator: ",", omittingEmptySubsequences: false)
-                .first.map(String.init)
-        else { return "" }
+                .first.map(String.init),
+              !field.isEmpty
+        else { return nil }
         return field
     }
 
-    // Pane titles for one tmux server, keyed by pane id ("%4"). nil socket uses
-    // tmux's default socket. Empty on any failure — no tmux binary, a server
-    // that died between the `ps` read and here, or a hung query hitting the
-    // timeout. Callers degrade to "no title", never to a wrong one.
-    static func paneTitles(socket: String?) -> [String: String] {
+    // Pane titles for one tmux server, keyed by pane id ("%4"). The socket is
+    // always explicit — see socketKey for why the default is never assumed.
+    // Empty on any failure: no tmux binary, a server that died between the `ps`
+    // read and here, or a hung query hitting the timeout.
+    static func paneTitles(socket: String) -> [String: String] {
         guard let tmux = AppActivator.tmuxPath() else { return [:] }
-        var args: [String] = []
-        if let socket, !socket.isEmpty { args += ["-S", socket] }
+        var args: [String] = ["-S", socket]
         // Tab-delimited: a pane title is arbitrary user/program text and "|"
         // shows up in shell prompts often enough to matter, whereas tmux
         // collapses a literal tab out of #{pane_title}.

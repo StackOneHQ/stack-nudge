@@ -204,11 +204,22 @@ For Claude Code sessions specifically, stack-nudge reads `~/.claude/sessions/<pi
 - **Session name** from the sidecar when set to anything other than the default `main-agent` (falls back to the project name otherwise).
 - **Context-window usage** — `293K tokens · opus-4-7` beneath the project path, updated on each Claude turn.
 
-**Terminal tab titles.** Each row's meta line shows the terminal, the tab's title, and the working directory — `iTerm2 · ✳ Fixing the parser · ~/src/stackone`. Titles are read per terminal: iTerm2 and Terminal.app over AppleScript, VS Code / Cursor from the window title the hook already ships, and tmux from `#{pane_title}` on each pane. (Warp and Ghostty expose a per-tab id but no readable title, so those rows show the terminal and path only.)
+**Terminal tab titles.** Each row's meta line shows the terminal, the tab's title, and the working directory — `iTerm2 · ✳ Fixing the parser · ~/src/stackone`. Where the title comes from depends on the terminal:
+
+| Terminal | Source | Can name a session? |
+|---|---|---|
+| iTerm2 | AppleScript `autoName` | yes |
+| Terminal.app | AppleScript `custom title` (set by a human, or absent) | yes |
+| tmux | `#{pane_title}` per pane | yes |
+| VS Code / Cursor | the OS **window** title, shipped by the hook | no — see below |
+| Warp | — | no title available |
+| Ghostty | — | no title available |
+
+VS Code and Cursor are the odd one out: what's shown there is the editor's window title (`Panel.swift — stackone — Cursor`), which names whichever file is open and changes on every editor tab switch. It's useful context on the row, so it stays visible — but it's never used as a session name.
 
 By default a tab title is *shown* but never used as the session's **name**. It can't be trusted as one: on iTerm2 a manual rename, an OSC escape and the profile name all write the same value, tmux's `#{pane_title}` is the same OSC signal, and Claude Code rewrites the title every turn — so there's no way to tell "the user chose this" from "the agent just overwrote it".
 
-If you do title your tabs deliberately and want those names back, turn on `Settings → Name from tab titles` (`STACKNUDGE_TAB_TITLE_NAMES`, default off). It applies everywhere a session is named — Sessions rows, the compact widget, event rows, banner titles, spoken nudges and Slack DMs — and sits below the two signals that *are* deliberate: a rename in the Sessions pane (`n`) and a name set inside the agent both still win. It only ever replaces the fallback to the project folder.
+If you do title your tabs deliberately and want those names back, turn on `Settings → Name from tab titles` (`STACKNUDGE_TAB_TITLE_NAMES`, default off). It applies everywhere a session is named — Sessions rows, the compact widget, event rows, banner titles, spoken nudges and Slack DMs — and sits below the two signals that *are* deliberate: a rename in the Sessions pane (`n`) and a name set inside the agent both still win. It only ever replaces the fallback to the project folder, and it never applies to VS Code / Cursor sessions, per the table above.
 
 Rows are ordered busy-first, then by most-recent activity. Status label reads `busy · 2 min ago` / `idle · 1 hr ago`.
 

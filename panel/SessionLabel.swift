@@ -82,8 +82,17 @@ enum SessionLabel {
     // separate from userSetLiveTitle so the placeholder rules stay attached to
     // the signal they describe: "main-agent" is a Claude Code artefact and has
     // no business filtering what someone typed into a tab.
+    //
+    // VS Code and its forks are excluded, because their `tabName` is not a tab
+    // title at all — VSCodeIntegration fills it from the OS *window* title that
+    // notify.sh captures ("Panel.swift — stackone — Cursor"), which names the
+    // file you happen to be looking at and changes every time you switch tabs in
+    // the editor. That is fine for the meta row it was built for, and unusable
+    // as a name: it would churn, and it would be read aloud em-dashes and all.
+    // The window title stays visible in the row; it just can't title a Slack DM.
     private static func tabTitle(of session: Session) -> String? {
-        guard let tab = session.tabName?.trimmingCharacters(in: .whitespaces),
+        guard !VSCodeIntegration.isVSCodeHosted(session.terminalApp),
+              let tab = session.tabName?.trimmingCharacters(in: .whitespaces),
               !tab.isEmpty
         else { return nil }
         return tab

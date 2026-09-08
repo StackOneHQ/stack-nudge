@@ -743,11 +743,32 @@ struct EventRow: View {
     // iTerm2 tab/session label shown next to the session chip, but only
     // when it adds information — suppress it if it'd just echo the
     // session label we already showed.
+    //
+    // Equality alone isn't enough once "Name from tab titles" is on, because
+    // the two sides are different AppleScript properties of the same tab:
+    // notify.sh puts `name of s` in the payload (the *composed* title, with the
+    // running job appended — "✳ Fixing the parser (claude)") while
+    // ITerm2Integration deliberately reads `autoName` ("✳ Fixing the parser"),
+    // which is what the session label resolves to. They never compare equal, so
+    // the row rendered the same tab twice. The composed form is the plain one
+    // plus a suffix, so a prefix test is what actually catches it.
     private var secondaryTabLabel: String? {
         guard let raw = event.itermTabName?.trimmingCharacters(in: .whitespaces),
               !raw.isEmpty,
-              raw != sessionLabel else { return nil }
+              raw != sessionLabel,
+              !echoesSessionLabel(raw)
+        else { return nil }
         return raw
+    }
+
+    // True when `raw` is the session label plus iTerm2's trailing job suffix.
+    // Guards on a non-empty label so a nil/empty one can't make every tab name
+    // look like an echo.
+    private func echoesSessionLabel(_ raw: String) -> Bool {
+        guard let label = sessionLabel?.trimmingCharacters(in: .whitespaces),
+              !label.isEmpty
+        else { return false }
+        return raw.hasPrefix(label)
     }
 
     // Where the event came from. Normalises the helper-process names

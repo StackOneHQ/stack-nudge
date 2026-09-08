@@ -13,7 +13,6 @@ struct PanelConfig {
     var voiceName: String? = nil
     var voiceSpeed: String? = nil
     var muteWhenFocused: Bool = true
-    var tabTitleNames: Bool = false
 
     static func load() -> PanelConfig {
         var config = PanelConfig()
@@ -38,7 +37,6 @@ struct PanelConfig {
             case "STACKNUDGE_VOICE_NAME":           config.voiceName = value
             case "STACKNUDGE_VOICE_SPEED":          config.voiceSpeed = value
             case "STACKNUDGE_MUTE_WHEN_FOCUSED":    config.muteWhenFocused = value.lowercased() != "false"
-            case "STACKNUDGE_TAB_TITLE_NAMES":      config.tabTitleNames = value.lowercased() == "true"
             default: break
             }
         }

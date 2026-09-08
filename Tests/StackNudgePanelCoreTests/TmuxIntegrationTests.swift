@@ -38,16 +38,37 @@ final class TmuxIntegrationTests: XCTestCase {
                        "/private/tmp/tmux-502/default")
     }
 
-    func test_socketKey_isEmptyForTheDefaultSocket() {
-        // "" stands for "tmux's own default"; paneTitles turns it back into no
-        // -S flag. tmux never hands us an empty socket path, so it can't clash.
-        XCTAssertEqual(TmuxIntegration.socketKey(nil), "")
-        XCTAssertEqual(TmuxIntegration.socketKey(",111,0"), "")
+    // nil means "don't look up a title", never "use the default socket". The
+    // default socket is a real server: guessing it hands a session the title of
+    // whichever pane shares its id over there, and "%0" exists on every server.
+    // Reachable via the nested-tmux idioms (`TMUX= cmd`, `env -u TMUX cmd`),
+    // which clear TMUX but leave TMUX_PANE — pane known, server unknown.
+    func test_socketKey_isNilWhenTheServerIsUnknown() {
+        XCTAssertNil(TmuxIntegration.socketKey(nil))
+        XCTAssertNil(TmuxIntegration.socketKey(",111,0"), "empty socket field is not the default")
+        XCTAssertNil(TmuxIntegration.socketKey(""))
+    }
+
+    // The two read different fields for different jobs — tabId wants the server
+    // pid (identity), socketKey wants the socket path (where to query) — so a
+    // TMUX missing only the socket still yields a usable tabId while refusing a
+    // title lookup. That asymmetry is the point: identity degrades gracefully,
+    // the lookup refuses. What must never happen is the lookup silently
+    // resolving to the default server, which is a different tmux entirely.
+    func test_malformedTmux_keepsIdentityButRefusesTheTitleLookup() {
+        XCTAssertEqual(TmuxIntegration.tabId(pane: "%0", tmux: ",111,0"), "111:%0",
+                       "the server pid is still usable as identity")
+        XCTAssertNil(TmuxIntegration.socketKey(",111,0"),
+                     "but there is no socket to query, and the default is not a guess to make")
     }
 
     func test_socketKey_separatesServersThatShareAPaneID() {
         XCTAssertNotEqual(TmuxIntegration.socketKey("/sockA,111,0"),
                           TmuxIntegration.socketKey("/sockB,222,0"))
+    }
+
+    func test_socketKey_extractsEvenWhenLaterFieldsAreMissing() {
+        XCTAssertEqual(TmuxIntegration.socketKey("/only/socket"), "/only/socket")
     }
 
     // MARK: - parseTitles
