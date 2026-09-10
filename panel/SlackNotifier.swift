@@ -58,6 +58,41 @@ enum SlackDelivery {
         return idleSeconds >= TimeInterval(idleThresholdMinutes * 60)
     }
 
+    // MARK: - Rate limiting
+
+    // The idle threshold is a floor, not a rate limit. Once you cross it the
+    // condition stays true for the whole time you are away, so every event
+    // passes it independently — on the log this was diagnosed from, 1284 events
+    // of which 96% were `stop`, with busy hours running 50+. An hour away with
+    // "notify on finished turns" on meant fifty DMs, not one.
+    //
+    // A stop DM says "your agent finished, come back". Once you know that, the
+    // next seven say nothing new, so they are folded into a count on the next
+    // one that gets through rather than dropped silently.
+    //
+    // Permission prompts are deliberately exempt. Each blocks an agent until it
+    // is answered, they are rare (45 of those 1284), and repeats of any single
+    // one are already bounded by AttentionPolicy.maxReminders. Throttling them
+    // would withhold the notifications that are actually actionable — the more
+    // so now that a prompt can be answered from Slack.
+    static let stopCooldown: TimeInterval = 15 * 60
+
+    enum StopThrottle: Equatable {
+        case send(coalesced: Int)  // how many were swallowed since the last send
+        case suppress
+    }
+
+    static func throttleStop(now: Date,
+                             lastSentAt: Date?,
+                             suppressed: Int,
+                             cooldown: TimeInterval = stopCooldown) -> StopThrottle {
+        // No previous send means this is the first stop of an absence, which is
+        // the one worth having promptly — the cooldown starts from it.
+        guard let lastSentAt else { return .send(coalesced: suppressed) }
+        guard now.timeIntervalSince(lastSentAt) >= cooldown else { return .suppress }
+        return .send(coalesced: suppressed)
+    }
+
     // `label` is the resolved session name; falls back to the repo the event came
     // from. Detail is opt-in because a permission message is raw tool text —
     // "Bash(rm -rf build/)" — which can carry paths, hostnames, and secrets in
@@ -65,7 +100,8 @@ enum SlackDelivery {
     static func text(for event: NudgeEvent,
                      label: String?,
                      includeDetail: Bool,
-                     isReminder: Bool) -> String {
+                     isReminder: Bool,
+                     coalesced: Int = 0) -> String {
         let who = agentName(event.agent)
         let subject = (label ?? projectName(event.projectPath))
             .map { "\(who) in \($0)" } ?? who
@@ -77,7 +113,11 @@ enum SlackDelivery {
                 ? "\(subject) is still waiting for permission"
                 : "\(subject) needs permission"
         case .stop:
-            headline = "\(subject) finished a turn"
+            // Say what was folded in, so a quiet hour reads as one message about
+            // eight turns rather than looking like eight turns went missing.
+            headline = coalesced > 0
+                ? "\(subject) finished a turn · \(coalesced) more while you were away"
+                : "\(subject) finished a turn"
         case .other:
             headline = "\(subject) sent a nudge"
         }

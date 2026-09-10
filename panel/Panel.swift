@@ -2818,10 +2818,29 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             idleThresholdMinutes: nav.slackIdleMinutes)
         else { return }
 
+        // Fold a burst of finished turns into one message. A reminder is exempt
+        // because it is already capped per prompt, and a permission prompt is
+        // exempt because it blocks an agent until answered.
+        var coalesced = 0
+        if event.kind == .stop, !isReminder {
+            switch SlackDelivery.throttleStop(now: Date(),
+                                              lastSentAt: lastStopSlackAt,
+                                              suppressed: suppressedStopCount) {
+            case .suppress:
+                suppressedStopCount += 1
+                return
+            case .send(let folded):
+                coalesced = folded
+                lastStopSlackAt = Date()
+                suppressedStopCount = 0
+            }
+        }
+
         slackNotifier.send(SlackDelivery.text(for: event,
                                               label: slackSessionLabel(for: event),
                                               includeDetail: nav.slackIncludeDetail,
-                                              isReminder: isReminder),
+                                              isReminder: isReminder,
+                                              coalesced: coalesced),
                            to: nav.slackMemberID)
         // Surface a delivery failure on the Settings row. Read one tick later so
         // the in-flight request has had a chance to land; the attention ticker
@@ -2895,6 +2914,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private var promptWatches: [NudgeEvent.ID: PromptWatch] = [:]
     private var attentionTicker: Timer?
 
+    // Rate limiting for "finished a turn" DMs — see SlackDelivery.throttleStop.
+    // Reset whenever the user is back at the machine, so the first stop of each
+    // absence arrives promptly instead of being swallowed by a cooldown left
+    // running from the previous one.
+    private var lastStopSlackAt: Date?
+    private var suppressedStopCount = 0
+
     // 5s so the menu-bar count clears promptly after an approval. Nothing
     // explicitly deregisters a watch — see reconcilePromptWatches — so the tick
     // is also what notices a prompt was answered, and a slower cadence would
@@ -2915,7 +2941,21 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
         remindOnOldestDuePrompt(now: now)
         refreshStalledSessions(now: now)
+        resetStopThrottleIfPresent()
         if nav.slackTokenPresent { refreshSlackStatus() }
+    }
+
+    // Clear the finished-turn cooldown while the user is actually at the machine,
+    // so the first stop after they walk away is sent immediately rather than
+    // being swallowed by a window left over from the previous absence. With the
+    // idle gate set to Always there is no "present" to detect, so the cooldown
+    // runs continuously — which is what that setting asks for.
+    private func resetStopThrottleIfPresent() {
+        guard nav.slackIdleMinutes > 0,
+              IdleTime.seconds() < TimeInterval(nav.slackIdleMinutes * 60)
+        else { return }
+        lastStopSlackAt = nil
+        suppressedStopCount = 0
     }
 
     // A permission prompt we can *prove* is still blocking: notify.sh creates
