@@ -89,6 +89,15 @@ enum AttentionPolicy {
     // gone cannot be answered from the panel, because there is nothing left to
     // read the decision.
     //
+    // Pid reuse is the obvious objection: a SIGKILLed hook's pid can be recycled,
+    // and a recycled pid answers kill(0). It is bounded and benign. A watch is
+    // built with `firstSeenAt: event.timestamp` and retired in the same pass once
+    // that exceeds promptLifetime, so a stale event cannot be resurrected by a
+    // reused pid even if one appears — the window is 550s from the prompt, not
+    // the sweep interval. And inside that window the worst case is simply the
+    // behaviour this fix replaced: a prompt counted slightly too long. Never
+    // worse than the bug, and usually much better.
+    //
     // `hookPID` nil means the hook predates this field, so fall back to the old
     // behaviour rather than treating every prompt from an older notify.sh as
     // dead — the script self-updates, but not before the first event after an

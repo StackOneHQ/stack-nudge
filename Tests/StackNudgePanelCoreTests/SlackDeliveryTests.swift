@@ -176,6 +176,30 @@ final class SlackDeliveryTests: XCTestCase {
                        "every finished turn must be accounted for somewhere")
     }
 
+    // Returning to the machine clears the cooldown but must NOT discard turns
+    // that are still waiting to be reported. Idle is measured from the last HID
+    // event, so a stray trackpad bump reads as "present" — and an earlier cut
+    // zeroed the pending count there, so everything missed vanished and the next
+    // DM read as a bare "finished a turn" with nothing preceding it.
+    func test_pendingCountSurvivesAReturnToTheMachine() {
+        // Away: one sent, then three swallowed inside the cooldown.
+        var lastSent: Date? = t0
+        var suppressed = 3
+
+        // The user brushes the trackpad; the controller clears only the cooldown.
+        lastSent = nil
+
+        // They leave again and another turn finishes: it sends at once, and
+        // reports the three that were waiting.
+        XCTAssertEqual(SlackDelivery.throttleStop(now: t0.addingTimeInterval(60),
+                                                  lastSentAt: lastSent,
+                                                  suppressed: suppressed),
+                       .send(coalesced: 3),
+                       "turns missed while away must not be dropped on a stray keystroke")
+        suppressed = 0
+        XCTAssertEqual(suppressed, 0)
+    }
+
     // The first stop of an absence is the one worth having promptly.
     func test_firstStopSendsImmediately() {
         XCTAssertEqual(SlackDelivery.throttleStop(now: t0, lastSentAt: nil, suppressed: 0),

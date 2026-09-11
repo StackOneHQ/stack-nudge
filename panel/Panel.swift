@@ -2954,8 +2954,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         guard nav.slackIdleMinutes > 0,
               IdleTime.seconds() < TimeInterval(nav.slackIdleMinutes * 60)
         else { return }
+        // Only the cooldown is cleared. `suppressedStopCount` is deliberately
+        // kept: it holds turns that finished while the user was away and have
+        // not been reported yet, and zeroing it here threw them away. Idle is
+        // measured from the last HID event, so a stray trackpad bump — or a
+        // notification click — counts as "present" and would silently discard
+        // the record of everything missed, leaving the next DM claiming a bare
+        // "finished a turn" as though nothing had preceded it.
+        //
+        // Carrying it is accurate rather than merely safe: the counter is only
+        // ever incremented past the idle gate in notifySlack, so it can only
+        // contain turns that genuinely finished while the user was away.
         lastStopSlackAt = nil
-        suppressedStopCount = 0
     }
 
     // A permission prompt we can *prove* is still blocking: notify.sh creates
