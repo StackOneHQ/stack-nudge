@@ -69,6 +69,40 @@ enum AttentionPolicy {
         return "\(seconds / 60)m"
     }
 
+    // MARK: - Is a prompt still answerable?
+
+    // The FIFO's existence was treated as proof a prompt is still blocking, on
+    // the grounds that notify.sh removes it on exit. It doesn't always: the trap
+    // is on EXIT, which bash honours for SIGTERM but nothing honours for
+    // SIGKILL, and the agent kills the hook outright when the user answers in
+    // its own UI. Evidence from one machine: 536 leaked FIFO directories going
+    // back three months, every single one still holding a live FIFO, so the
+    // trap had not run once.
+    //
+    // The consequence is the bug this fixes. Approve a plan in the terminal and
+    // the hook is killed, the FIFO survives, and the panel goes on believing the
+    // prompt is blocking — keeping it in the menu-bar count and firing reminders
+    // at you, and at Slack, for the full 550 seconds.
+    //
+    // So the FIFO answers "was a prompt raised?" and the hook's liveness answers
+    // "is anyone still listening?". Both are required: a prompt whose hook is
+    // gone cannot be answered from the panel, because there is nothing left to
+    // read the decision.
+    //
+    // `hookPID` nil means the hook predates this field, so fall back to the old
+    // behaviour rather than treating every prompt from an older notify.sh as
+    // dead — the script self-updates, but not before the first event after an
+    // upgrade.
+    static func isAnswerable(kind: NudgeKind,
+                             fifoPath: String?,
+                             hookPID: Int?,
+                             fifoExists: (String) -> Bool,
+                             processAlive: (Int) -> Bool) -> Bool {
+        guard kind == .permission, let fifoPath, fifoExists(fifoPath) else { return false }
+        guard let hookPID else { return true }
+        return processAlive(hookPID)
+    }
+
     // MARK: - Stalled sessions
 
     // Thresholds offered in Settings, in minutes. 0 = off.

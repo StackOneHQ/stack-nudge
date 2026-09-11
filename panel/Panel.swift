@@ -2968,8 +2968,16 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // reminder we can't verify would eventually fire for prompts already
     // handled in the terminal, and a nudge that cries wolf is worse than none.
     private func isBlockingPrompt(_ event: NudgeEvent) -> Bool {
-        guard event.kind == .permission, let fifo = event.fifoPath else { return false }
-        return FileManager.default.fileExists(atPath: fifo)
+        AttentionPolicy.isAnswerable(
+            kind: event.kind,
+            fifoPath: event.fifoPath,
+            hookPID: event.hookPID,
+            fifoExists: { FileManager.default.fileExists(atPath: $0) },
+            // kill(pid, 0) asks "does this process exist and may I signal it"
+            // without sending anything. EPERM would mean it exists but isn't
+            // ours, which can't happen for a hook we spawned, so treating only
+            // success as alive is right.
+            processAlive: { kill(pid_t($0), 0) == 0 })
     }
 
     // Register newly-arrived prompts and drop answered ones. Deliberately

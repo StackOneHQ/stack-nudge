@@ -582,6 +582,7 @@ optional = {
     "window_title":  env.get("NUDGE_WINDOW"),
     "ipc_hook":      env.get("NUDGE_IPC_HOOK"),
     "fifo_path":     env.get("NUDGE_FIFO"),
+    "hook_pid":      env.get("NUDGE_HOOK_PID"),
     "agent_pid":     env.get("NUDGE_AGENT_PID"),
     "shell_pid":     env.get("NUDGE_SHELL_PID"),
     "terminal_pid":  env.get("NUDGE_TERMINAL_PID"),
@@ -718,6 +719,11 @@ notify_macos() {
   # in-app mute-when-focused check has the right value to compare
   # against the frontmost window. project_name is still derived from $PWD
   # via NUDGE_PROJECT inside post_to_panel.
+  # The hook's own pid travels with the event so the panel can tell "a prompt is
+  # still waiting" from "a FIFO outlived the process that was reading it". The
+  # EXIT trap below does not run when the agent SIGKILLs us, which it does when
+  # the user answers in its own UI — see AttentionPolicy.isAnswerable.
+  export NUDGE_HOOK_PID="$$"
   post_to_panel "${title}" "${message}" "${bundle_id}" "${win_title}" \
     "${has_action}" "${fifo_path}" "${voice_message}" "${sound}" "${bypass_mute}" &
 
@@ -732,7 +738,19 @@ notify_macos() {
 
 # Create a unique FIFO at /tmp for the user's response. Echoes the path.
 # Returns empty if mkfifo fails.
+# Remove permission FIFO dirs left by hooks that were SIGKILLed before their
+# trap could run. Bounded and best-effort: only our own mktemp pattern, only
+# entries older than 30 minutes — comfortably past the 550s (9m10s) a prompt can
+# live for, so a dir in use is never in range — and errors ignored, because a
+# sweep that fails must never delay the notification it runs alongside.
+sweep_stale_perm_fifos() {
+  local root="${TMPDIR:-/tmp}"
+  find "$root" -maxdepth 1 -name 'stack-nudge-perm.*' -type d -mmin +30 \
+    -exec rm -rf {} + 2>/dev/null || true
+}
+
 create_perm_fifo() {
+  sweep_stale_perm_fifos
   # Place the FIFO inside a private mktemp dir (mode 0700, CSPRNG-named) rather
   # than a $RANDOM-suffixed /tmp path — $RANDOM is only 16-bit, so the old name
   # was guessable, letting a local attacker pre-create the FIFO or inject a
@@ -755,7 +773,11 @@ wait_for_permission_response() {
   local fifo="$1"
   local timeout=550  # Claude Code's hook timeout defaults to 600s — leave buffer
 
-  trap 'rm -f "$fifo"; rmdir "$(dirname "$fifo")" 2>/dev/null' EXIT
+  # INT/TERM/HUP as well as EXIT: bash runs the EXIT trap for a plain SIGTERM,
+  # but naming the signals makes the intent explicit and covers the shells that
+  # don't. Nothing catches SIGKILL, which is why the panel no longer relies on
+  # this trap alone to know a prompt is over.
+  trap 'rm -f "$fifo"; rmdir "$(dirname "$fifo")" 2>/dev/null' EXIT INT TERM HUP
 
   local decision
   decision=$(NUDGE_FIFO="$fifo" NUDGE_TIMEOUT="$timeout" python3 - <<'PY' 2>/dev/null
