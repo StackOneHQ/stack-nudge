@@ -133,4 +133,159 @@ final class SlackDeliveryTests: XCTestCase {
         XCTAssertEqual(SlackDelivery.idleLabel(5), "5m")
         XCTAssertEqual(SlackDelivery.idleLabel(60), "60m")
     }
+
+    // MARK: - Finished-turn rate limiting
+
+    private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+
+    // The bug: the idle threshold is a floor, not a rate limit. Once you cross
+    // it the condition stays true for the whole absence, so every event passes
+    // independently. Diagnosed from a real log — 1284 events, 96% of them stop,
+    // busy hours running 50+ — which meant an hour away was ~50 DMs.
+    func test_burstOfFinishedTurnsCollapsesToOneMessage() {
+        let turns = 50
+        let spacing = 72.0            // ~every 72s, i.e. just under an hour total
+        var lastSent: Date?
+        var suppressed = 0
+        var sent = 0
+        var reported = 0              // events accounted for in a sent message
+
+        for i in 0..<turns {
+            let now = t0.addingTimeInterval(Double(i) * spacing)
+            switch SlackDelivery.throttleStop(now: now, lastSentAt: lastSent,
+                                              suppressed: suppressed) {
+            case .suppress:
+                suppressed += 1
+            case .send(let folded):
+                sent += 1
+                reported += folded + 1   // the folded ones, plus this one
+                lastSent = now
+                suppressed = 0
+            }
+        }
+
+        // The property that matters: a handful of messages, not one per event.
+        let span = Double(turns - 1) * spacing
+        XCTAssertEqual(sent, Int(span / SlackDelivery.stopCooldown) + 1,
+                       "one immediately, then one per cooldown window")
+        XCTAssertLessThan(sent, turns / 10, "50 turns must not be 50 DMs")
+
+        // And nothing vanishes: every turn is either reported or still pending
+        // in the suppressed count waiting for the next window.
+        XCTAssertEqual(reported + suppressed, turns,
+                       "every finished turn must be accounted for somewhere")
+    }
+
+    // Returning to the machine clears the cooldown but must NOT discard turns
+    // that are still waiting to be reported. Idle is measured from the last HID
+    // event, so a stray trackpad bump reads as "present" — and an earlier cut
+    // zeroed the pending count there, so everything missed vanished and the next
+    // DM read as a bare "finished a turn" with nothing preceding it.
+    func test_pendingCountSurvivesAReturnToTheMachine() {
+        // Away: one sent, then three swallowed inside the cooldown.
+        let suppressed = 3
+        var lastSent: Date? = t0
+
+        // The user brushes the trackpad; the controller clears only the cooldown.
+        lastSent = nil
+
+        // They leave again and another turn finishes: it sends at once, and
+        // reports the three that were waiting.
+        XCTAssertEqual(SlackDelivery.throttleStop(now: t0.addingTimeInterval(60),
+                                                  lastSentAt: lastSent,
+                                                  suppressed: suppressed),
+                       .send(coalesced: 3),
+                       "turns missed while away must not be dropped on a stray keystroke")
+    }
+
+    // The first stop of an absence is the one worth having promptly.
+    func test_firstStopSendsImmediately() {
+        XCTAssertEqual(SlackDelivery.throttleStop(now: t0, lastSentAt: nil, suppressed: 0),
+                       .send(coalesced: 0))
+    }
+
+    func test_secondStopInsideTheWindowIsSuppressed() {
+        let outcome = SlackDelivery.throttleStop(
+            now: t0.addingTimeInterval(60), lastSentAt: t0, suppressed: 0)
+        XCTAssertEqual(outcome, .suppress)
+    }
+
+    func test_stopSendsAgainOnceTheWindowPasses() {
+        let outcome = SlackDelivery.throttleStop(
+            now: t0.addingTimeInterval(SlackDelivery.stopCooldown), lastSentAt: t0, suppressed: 4)
+        XCTAssertEqual(outcome, .send(coalesced: 4))
+    }
+
+    // Nothing is dropped silently — what was swallowed is reported.
+    func test_coalescedCountReachesTheMessage() {
+        let event = NudgeEvent(agent: "claude-code", kind: .stop, title: "Claude Code",
+                               message: "", projectPath: "/Users/x/stack-nudge")
+        let text = SlackDelivery.text(for: event, label: "stack-nudge",
+                                      includeDetail: false, isReminder: false, coalesced: 7)
+        XCTAssertTrue(text.contains("7 more"), "got: \(text)")
+    }
+
+    func test_singleTurnReadsNormally() {
+        let event = NudgeEvent(agent: "claude-code", kind: .stop, title: "Claude Code",
+                               message: "", projectPath: "/Users/x/stack-nudge")
+        let text = SlackDelivery.text(for: event, label: "stack-nudge",
+                                      includeDetail: false, isReminder: false, coalesced: 0)
+        XCTAssertEqual(text, "Claude Code in stack-nudge finished a turn")
+    }
+
+    // Permission prompts must NOT be throttled: each blocks an agent until it is
+    // answered, they are rare, and repeats of one are already capped by
+    // AttentionPolicy.maxReminders. Throttling them would withhold exactly the
+    // notifications that are actionable.
+    func test_permissionPromptsAreNotRateLimited() {
+        for _ in 0..<20 {
+            XCTAssertTrue(SlackDelivery.shouldSend(
+                kind: .permission, isReminder: false, sessionMuted: false,
+                enabled: true, notifyOnStop: true,
+                idleSeconds: 3600, idleThresholdMinutes: 10),
+                "a blocking prompt must always get through")
+        }
+    }
+
+
+    // MARK: - Presence
+
+    private func effect(idle: TimeInterval, threshold: Int = 10,
+                        presentFor: TimeInterval = 0) -> SlackDelivery.PresenceEffect {
+        SlackDelivery.presenceEffect(idleSeconds: idle, idleThresholdMinutes: threshold,
+                                     presentFor: presentFor)
+    }
+
+    func test_presence_awayWhileIdlePastTheThreshold() {
+        XCTAssertEqual(effect(idle: 11 * 60), .away)
+    }
+
+    // The discriminator. A single stray HID event keeps idle under the threshold
+    // for exactly the threshold and not a second longer, so it can never reach
+    // `sustainedPresent` — which is what stops a trackpad bump discarding the
+    // record of everything missed.
+    func test_presence_oneStrayEventCanNeverLookSustained() {
+        let threshold = 10.0 * 60
+        // Walk the whole life of a single bump: idle climbs from 0, and the
+        // time "present" climbs with it, so the two are always equal.
+        for elapsed in stride(from: 0.0, to: threshold, by: 30) {
+            XCTAssertEqual(effect(idle: elapsed, presentFor: elapsed), .brieflyPresent,
+                           "at \(elapsed)s a lone event must stay 'brief'")
+        }
+        // Past the threshold the bump stops counting as present at all.
+        XCTAssertEqual(effect(idle: threshold, presentFor: threshold), .away)
+    }
+
+    // Two events far enough apart is a person: idle resets while the presence
+    // keeps running, so presentFor outgrows idle.
+    func test_presence_sustainedNeedsMoreThanOneEvent() {
+        XCTAssertEqual(effect(idle: 60, presentFor: 11 * 60), .sustainedPresent)
+    }
+
+    // "Always" removes the idle gate, so there is no presence to detect and the
+    // cooldown runs continuously.
+    func test_presence_alwaysHasNoPresenceToDetect() {
+        XCTAssertEqual(effect(idle: 0, threshold: 0, presentFor: 9999), .away)
+    }
+
 }

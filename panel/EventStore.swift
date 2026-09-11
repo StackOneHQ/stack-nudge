@@ -46,6 +46,8 @@ struct NudgeEvent: Identifiable, Equatable {
     // "allow" or "deny" to it lets stack-nudge return a PermissionRequest
     // decision to Claude Code without touching the terminal UI.
     let fifoPath: String?
+    // pid of the notify.sh hook waiting on `fifoPath`; nil from older hooks.
+    let hookPID: Int?
     // Curated phrase for the voice engine (different from the visible
     // `message` — the banner shows the tool / file context, the voice
     // speaks a conversational sentence).
@@ -79,6 +81,7 @@ struct NudgeEvent: Identifiable, Equatable {
          termProgram: String? = nil, sessionID: String? = nil,
          itermTabName: String? = nil,
          fifoPath: String? = nil,
+         hookPID: Int? = nil,
          voiceMessage: String? = nil,
          voiceTemplate: String? = nil,
          soundName: String? = nil,
@@ -106,6 +109,7 @@ struct NudgeEvent: Identifiable, Equatable {
         self.sessionID = sessionID
         self.itermTabName = itermTabName
         self.fifoPath = fifoPath
+        self.hookPID = hookPID
         self.voiceMessage = voiceMessage
         self.voiceTemplate = voiceTemplate
         self.soundName = soundName
@@ -128,6 +132,7 @@ struct NudgeEvent: Identifiable, Equatable {
             termProgram: termProgram, sessionID: sessionID,
             itermTabName: itermTabName,
             fifoPath: fifoPath,
+            hookPID: hookPID,
             voiceMessage: voiceMessage,
             voiceTemplate: voiceTemplate,
             soundName: soundName,

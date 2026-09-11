@@ -115,4 +115,33 @@ final class EventListenerTests: XCTestCase {
         XCTAssertEqual(EventListener.parseEvents(Data()).count, 0)
         XCTAssertEqual(EventListener.parseEvents(payload("\n\n\n")).count, 0)
     }
+
+    // MARK: - hookPID validation
+
+    // The pid decides whether a prompt still counts as blocking, and it arrives
+    // on the same local socket as fifo_path, which is already validated.
+    //
+    // Both rejected values were verified against the real syscall: kill(0, 0)
+    // signals the caller's whole process group and kill(-1, 0) every process it
+    // may signal, and both return 0 — so either would make every prompt read as
+    // alive and quietly undo the fix.
+    func test_hookPID_rejectsGroupAndBroadcastTargets() {
+        XCTAssertNil(AttentionPolicy.validHookPID(0))
+        XCTAssertNil(AttentionPolicy.validHookPID(-1))
+        XCTAssertNil(AttentionPolicy.validHookPID(-4242))
+    }
+
+    // pid_t is Int32, and pid_t(4_000_000_000) traps rather than wrapping, so an
+    // oversized number in the payload would crash the panel outright.
+    func test_hookPID_rejectsAnythingPidTCannotHold() {
+        XCTAssertNil(AttentionPolicy.validHookPID(Int(pid_t.max) + 1))
+        XCTAssertNil(AttentionPolicy.validHookPID(4_000_000_000))
+        XCTAssertEqual(AttentionPolicy.validHookPID(Int(pid_t.max)), Int(pid_t.max))
+    }
+
+    func test_hookPID_acceptsARealPidAndPassesNilThrough() {
+        XCTAssertEqual(AttentionPolicy.validHookPID(4242), 4242)
+        XCTAssertNil(AttentionPolicy.validHookPID(nil))
+    }
+
 }

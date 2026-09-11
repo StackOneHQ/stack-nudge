@@ -167,6 +167,7 @@ private struct NudgeEventDTO: Decodable {
     let session_id: String?
     let iterm_tab_name: String?
     let fifo_path: String?
+    let hook_pid: Int?
     let voice_message: String?
     let voice_template: String?
     let sound_name: String?
@@ -213,6 +214,7 @@ private struct NudgeEventDTO: Decodable {
             sessionID: session_id,
             itermTabName: iterm_tab_name,
             fifoPath: Self.validatedFifoPath(fifo_path),
+            hookPID: AttentionPolicy.validHookPID(hook_pid),
             voiceMessage: voice_message,
             voiceTemplate: voice_template,
             soundName: sound_name,
