@@ -750,7 +750,12 @@ sweep_stale_perm_fifos() {
 }
 
 create_perm_fifo() {
-  sweep_stale_perm_fifos
+  # Backgrounded: this sits on the path to the banner, and a cold stat of a
+  # large $TMPDIR was measured at 2.2s — two seconds before the user learns an
+  # agent is blocked, on the one path where latency is the product. The dir
+  # created just below is seconds old so it can never fall in range of -mmin
+  # +30, and the hook lives for 550s, so the sweep has all the time it needs.
+  sweep_stale_perm_fifos &
   # Place the FIFO inside a private mktemp dir (mode 0700, CSPRNG-named) rather
   # than a $RANDOM-suffixed /tmp path — $RANDOM is only 16-bit, so the old name
   # was guessable, letting a local attacker pre-create the FIFO or inject a

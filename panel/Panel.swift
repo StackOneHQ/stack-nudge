@@ -577,6 +577,7 @@ struct PanelContentView: View {
     private var snoozeEnabled: Bool {
         guard let selected = store.selectedEvent else { return false }
         return selected.kind == .permission && selected.hasActionButton
+            && selected.isStillBlocking
     }
 
     private var primaryActionLabel: String? {
@@ -588,7 +589,11 @@ struct PanelContentView: View {
     // event it's a plain dismiss. Label it to match so the gesture isn't a surprise.
     private var dismissLabel: String {
         guard let event = store.selectedEvent,
-              event.kind == .permission, event.hasActionButton else { return "Dismiss" }
+              event.kind == .permission, event.hasActionButton,
+              // A dead hook can't read a decision, so offering one would be a
+              // button that silently does nothing: writeFIFO gets ENXIO and
+              // returns. Now that the two are distinguishable, say so.
+              event.isStillBlocking else { return "Dismiss" }
         return "Deny"
     }
 }
@@ -2920,6 +2925,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // running from the previous one.
     private var lastStopSlackAt: Date?
     private var suppressedStopCount = 0
+    // When the current run of "user is at the machine" began — see
+    // SlackDelivery.presenceEffect for why the duration is what matters.
+    private var presentSince: Date?
 
     // 5s so the menu-bar count clears promptly after an approval. Nothing
     // explicitly deregisters a watch — see reconcilePromptWatches — so the tick
@@ -2941,7 +2949,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
         remindOnOldestDuePrompt(now: now)
         refreshStalledSessions(now: now)
-        resetStopThrottleIfPresent()
+        applyPresenceToStopThrottle(now: now)
         if nav.slackTokenPresent { refreshSlackStatus() }
     }
 
@@ -2950,45 +2958,39 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // being swallowed by a window left over from the previous absence. With the
     // idle gate set to Always there is no "present" to detect, so the cooldown
     // runs continuously — which is what that setting asks for.
-    private func resetStopThrottleIfPresent() {
-        guard nav.slackIdleMinutes > 0,
-              IdleTime.seconds() < TimeInterval(nav.slackIdleMinutes * 60)
-        else { return }
-        // Only the cooldown is cleared. `suppressedStopCount` is deliberately
-        // kept: it holds turns that finished while the user was away and have
-        // not been reported yet, and zeroing it here threw them away. Idle is
-        // measured from the last HID event, so a stray trackpad bump — or a
-        // notification click — counts as "present" and would silently discard
-        // the record of everything missed, leaving the next DM claiming a bare
-        // "finished a turn" as though nothing had preceded it.
-        //
-        // Carrying it is accurate rather than merely safe: the counter is only
-        // ever incremented past the idle gate in notifySlack, so it can only
-        // contain turns that genuinely finished while the user was away.
-        lastStopSlackAt = nil
+    private func applyPresenceToStopThrottle(now: Date) {
+        let presentFor = presentSince.map { now.timeIntervalSince($0) } ?? 0
+        switch SlackDelivery.presenceEffect(idleSeconds: IdleTime.seconds(),
+                                            idleThresholdMinutes: nav.slackIdleMinutes,
+                                            presentFor: presentFor) {
+        case .away:
+            presentSince = nil
+        case .brieflyPresent:
+            // Could be one stray HID event, so the cooldown restarts but
+            // anything not yet reported is kept for the next message.
+            if presentSince == nil { presentSince = now }
+            lastStopSlackAt = nil
+        case .sustainedPresent:
+            // Long enough to have been a person, so what they missed is no
+            // longer news — the panel has had it in front of them all along.
+            lastStopSlackAt = nil
+            suppressedStopCount = 0
+        }
     }
 
-    // A permission prompt we can *prove* is still blocking: notify.sh creates
-    // the FIFO before emitting the event and removes it on exit (the EXIT trap
-    // in wait_for_permission_response), so the file existing means nobody has
-    // answered yet — in the panel, on the banner, or in the terminal.
+    // A permission prompt we can *prove* is still blocking.
+    //
+    // The file existing is necessary but not sufficient, which is what this used
+    // to claim. notify.sh removes the FIFO from a trap on EXIT, and nothing runs
+    // that for SIGKILL — which is what the agent does to the hook when the user
+    // answers in its own UI — so the file routinely outlives the process. The
+    // hook's liveness is the other half: see AttentionPolicy.isAnswerable.
     //
     // Observability-only agents (Gemini, Antigravity) get no FIFO because their
     // hooks can't consume a decision, so they're never reminded about. A
     // reminder we can't verify would eventually fire for prompts already
     // handled in the terminal, and a nudge that cries wolf is worse than none.
-    private func isBlockingPrompt(_ event: NudgeEvent) -> Bool {
-        AttentionPolicy.isAnswerable(
-            kind: event.kind,
-            fifoPath: event.fifoPath,
-            hookPID: event.hookPID,
-            fifoExists: { FileManager.default.fileExists(atPath: $0) },
-            // kill(pid, 0) asks "does this process exist and may I signal it"
-            // without sending anything. EPERM would mean it exists but isn't
-            // ours, which can't happen for a hook we spawned, so treating only
-            // success as alive is right.
-            processAlive: { kill(pid_t($0), 0) == 0 })
-    }
+    private func isBlockingPrompt(_ event: NudgeEvent) -> Bool { event.isStillBlocking }
 
     // Register newly-arrived prompts and drop answered ones. Deliberately
     // reconciled from observable state rather than hooked into each resolution
@@ -3003,7 +3005,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                                                       remindersSent: 0)
             }
         }
-        // Retire on the FIFO alone, never on store membership — see PromptWatch.
+        // Retire on the FIFO *and* its hook's liveness, never on store
+        // membership — see PromptWatch.
         // The age cap is the backstop for a hook killed hard enough to skip its
         // cleanup trap: past its own timeout the prompt can't be answered from
         // the panel anyway, so a leaked FIFO must not pin the count on forever.

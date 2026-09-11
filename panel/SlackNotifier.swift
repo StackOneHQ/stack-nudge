@@ -93,6 +93,37 @@ enum SlackDelivery {
         return .send(coalesced: suppressed)
     }
 
+    // What being at the machine should do to the finished-turn throttle.
+    //
+    // Clearing the backlog on any presence was wrong in both directions. Idle is
+    // measured from the last HID event, so a single trackpad bump reads as
+    // "present" and threw away the record of everything missed; but keeping the
+    // backlog forever meant a count from yesterday's absence could be reported
+    // on tomorrow's first DM.
+    //
+    // The discriminator is how *long* the presence has lasted. One stray event
+    // keeps idle under the threshold for exactly the threshold and not a second
+    // more, so a presence that has outlasted it cannot be a single event — it
+    // takes two, far enough apart, which is a person. Only that clears what was
+    // missed; a brief one just restarts the cooldown so the next absence opens
+    // with a prompt message.
+    enum PresenceEffect: Equatable {
+        case away                // leave the throttle alone
+        case brieflyPresent      // reset the cooldown, keep what wasn't reported
+        case sustainedPresent    // they have actually been here: clear both
+    }
+
+    static func presenceEffect(idleSeconds: TimeInterval,
+                               idleThresholdMinutes: Int,
+                               presentFor: TimeInterval) -> PresenceEffect {
+        // "Always" removes the idle gate, so there is no "present" to detect and
+        // the cooldown simply runs continuously.
+        guard idleThresholdMinutes > 0 else { return .away }
+        let threshold = TimeInterval(idleThresholdMinutes * 60)
+        guard idleSeconds < threshold else { return .away }
+        return presentFor >= threshold ? .sustainedPresent : .brieflyPresent
+    }
+
     // `label` is the resolved session name; falls back to the repo the event came
     // from. Detail is opt-in because a permission message is raw tool text —
     // "Bash(rm -rf build/)" — which can carry paths, hostnames, and secrets in

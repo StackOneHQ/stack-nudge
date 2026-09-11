@@ -214,7 +214,7 @@ private struct NudgeEventDTO: Decodable {
             sessionID: session_id,
             itermTabName: iterm_tab_name,
             fifoPath: Self.validatedFifoPath(fifo_path),
-            hookPID: hook_pid,
+            hookPID: AttentionPolicy.validHookPID(hook_pid),
             voiceMessage: voice_message,
             voiceTemplate: voice_template,
             soundName: sound_name,

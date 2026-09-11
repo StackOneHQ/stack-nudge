@@ -89,6 +89,14 @@ enum AttentionPolicy {
     // gone cannot be answered from the panel, because there is nothing left to
     // read the decision.
     //
+    // A zombie — exited but not yet reaped — still answers kill(0), so there is a
+    // window where a dead hook reads as alive. It closes when the agent reaps
+    // its child, which is prompt in practice, and the next 5s tick corrects it.
+    // That reaping is load-bearing rather than incidental: a SIGKILLed child
+    // still answering kill(0) is precisely the case this exists to catch, so if
+    // an agent ever left hooks unreaped the check would degrade to the old
+    // FIFO-only behaviour — never worse, but no longer a fix.
+    //
     // Pid reuse is the obvious objection: a SIGKILLed hook's pid can be recycled,
     // and a recycled pid answers kill(0). It is bounded and benign. A watch is
     // built with `firstSeenAt: event.timestamp` and retired in the same pass once
@@ -102,6 +110,20 @@ enum AttentionPolicy {
     // behaviour rather than treating every prompt from an older notify.sh as
     // dead — the script self-updates, but not before the first event after an
     // upgrade.
+    // A pid arrives on the same local socket as fifo_path, which is validated, so
+    // this is validated too rather than hardening one half of a pair.
+    //
+    // Both rejections were checked against the real syscall. kill(0, 0) signals
+    // the caller's whole process group and kill(-1, 0) every process it may
+    // signal, and both return 0 — so a pid of 0 or a negative would make every
+    // prompt read as alive and quietly undo the liveness check. And pid_t is
+    // Int32, so pid_t(4_000_000_000) traps rather than wrapping: an oversized
+    // number in the payload would crash the panel outright.
+    static func validHookPID(_ raw: Int?) -> Int? {
+        guard let raw, raw > 0, raw <= Int(pid_t.max) else { return nil }
+        return raw
+    }
+
     static func isAnswerable(kind: NudgeKind,
                              fifoPath: String?,
                              hookPID: Int?,
@@ -142,5 +164,27 @@ enum AttentionPolicy {
     static func minuteLabel(_ minutes: Int) -> String {
         if minutes <= 0 { return "Off" }
         return minutes % 60 == 0 ? "\(minutes / 60)h" : "\(minutes)m"
+    }
+}
+
+extension NudgeEvent {
+    // "Is this prompt still waiting on me?", asked against the live system.
+    // Lives here rather than on PanelController because the view layer asks it
+    // too — a dead prompt must not keep offering Allow/Deny, since writeFIFO
+    // would get ENXIO and the button would silently do nothing.
+    var isStillBlocking: Bool {
+        AttentionPolicy.isAnswerable(
+            kind: kind,
+            fifoPath: fifoPath,
+            hookPID: hookPID,
+            fifoExists: { FileManager.default.fileExists(atPath: $0) },
+            // kill(pid, 0) asks "does this exist and may I signal it" without
+            // sending anything. `exactly:` rather than pid_t(_:) because that
+            // traps above Int32.max — the listener rejects such a pid, but a
+            // crash is not something to leave one guard away.
+            processAlive: { pid in
+                guard let pid = pid_t(exactly: pid) else { return false }
+                return kill(pid, 0) == 0
+            })
     }
 }

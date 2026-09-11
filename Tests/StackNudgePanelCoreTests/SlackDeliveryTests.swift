@@ -183,8 +183,8 @@ final class SlackDeliveryTests: XCTestCase {
     // DM read as a bare "finished a turn" with nothing preceding it.
     func test_pendingCountSurvivesAReturnToTheMachine() {
         // Away: one sent, then three swallowed inside the cooldown.
+        let suppressed = 3
         var lastSent: Date? = t0
-        var suppressed = 3
 
         // The user brushes the trackpad; the controller clears only the cooldown.
         lastSent = nil
@@ -196,8 +196,6 @@ final class SlackDeliveryTests: XCTestCase {
                                                   suppressed: suppressed),
                        .send(coalesced: 3),
                        "turns missed while away must not be dropped on a stray keystroke")
-        suppressed = 0
-        XCTAssertEqual(suppressed, 0)
     }
 
     // The first stop of an absence is the one worth having promptly.
@@ -247,6 +245,47 @@ final class SlackDeliveryTests: XCTestCase {
                 idleSeconds: 3600, idleThresholdMinutes: 10),
                 "a blocking prompt must always get through")
         }
+    }
+
+
+    // MARK: - Presence
+
+    private func effect(idle: TimeInterval, threshold: Int = 10,
+                        presentFor: TimeInterval = 0) -> SlackDelivery.PresenceEffect {
+        SlackDelivery.presenceEffect(idleSeconds: idle, idleThresholdMinutes: threshold,
+                                     presentFor: presentFor)
+    }
+
+    func test_presence_awayWhileIdlePastTheThreshold() {
+        XCTAssertEqual(effect(idle: 11 * 60), .away)
+    }
+
+    // The discriminator. A single stray HID event keeps idle under the threshold
+    // for exactly the threshold and not a second longer, so it can never reach
+    // `sustainedPresent` — which is what stops a trackpad bump discarding the
+    // record of everything missed.
+    func test_presence_oneStrayEventCanNeverLookSustained() {
+        let threshold = 10.0 * 60
+        // Walk the whole life of a single bump: idle climbs from 0, and the
+        // time "present" climbs with it, so the two are always equal.
+        for elapsed in stride(from: 0.0, to: threshold, by: 30) {
+            XCTAssertEqual(effect(idle: elapsed, presentFor: elapsed), .brieflyPresent,
+                           "at \(elapsed)s a lone event must stay 'brief'")
+        }
+        // Past the threshold the bump stops counting as present at all.
+        XCTAssertEqual(effect(idle: threshold, presentFor: threshold), .away)
+    }
+
+    // Two events far enough apart is a person: idle resets while the presence
+    // keeps running, so presentFor outgrows idle.
+    func test_presence_sustainedNeedsMoreThanOneEvent() {
+        XCTAssertEqual(effect(idle: 60, presentFor: 11 * 60), .sustainedPresent)
+    }
+
+    // "Always" removes the idle gate, so there is no presence to detect and the
+    // cooldown runs continuously.
+    func test_presence_alwaysHasNoPresenceToDetect() {
+        XCTAssertEqual(effect(idle: 0, threshold: 0, presentFor: 9999), .away)
     }
 
 }
