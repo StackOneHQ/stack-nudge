@@ -300,11 +300,17 @@ final class PanelNav: ObservableObject {
     // True while a probe is in-flight. Set by PanelController around the
     // fetch call so the UI can swap the footer status to "Syncing…".
     @Published var quotaSyncing:     Bool = false
-    // Set when a probe had a token but the request/parse failed (vs. simply
-    // having no Claude Code session). Drives the Usage tab's "quota unavailable"
-    // state so a silently-changed endpoint isn't read as "still loading".
-    // Cleared on the next successful probe.
-    @Published var quotaError:       String?
+    // Per-client probe failure, keyed by the client that produced it. Set when a
+    // client's probe ran but couldn't return a usable snapshot; cleared on that
+    // client's next success. Rendered inline on that client's own Usage detail
+    // pane, so the message names whichever client is actually failing rather than
+    // always implicating Claude. A client with an error but no snapshot to fall
+    // back on still lists itself (see availableUsageClients) so the note has
+    // somewhere to render instead of falling through to the tab's empty state.
+    // Invalidates widgetQuotaCache like the snapshots do: it feeds
+    // availableUsageClients, so a change here can move the selected client out
+    // from under a cached pill even when no snapshot changed.
+    @Published var quotaErrors:      [UsageClient: String] = [:] { didSet { widgetQuotaCache = nil } }
     // Set when the event socket failed to bind at startup — the panel is then
     // deaf to every agent notification. Drives the banner at the top of the
     // Events tab so the failure isn't silent. Cleared when the socket binds.
@@ -577,19 +583,22 @@ final class PanelNav: ObservableObject {
 
     // Connected clients that currently have quota to show, in display order.
     var availableUsageClients: [UsageClient] {
-        var clients: [UsageClient] = []
-        if let claude = quota,
-           !(claude.fiveHour == nil && claude.sevenDay == nil
-             && claude.sevenDayOpus == nil && claude.sevenDaySonnet == nil) {
-            clients.append(.claude)
+        UsageClient.allCases.filter(isUsageClientAvailable)
+    }
+
+    // A client earns a row when it has a drawable tier, or when it has an error
+    // to report — a cold rate-limit or a failed refresh with no prior snapshot —
+    // so the note renders on its own detail pane rather than the tab's global
+    // empty state. A held-stale snapshot keeps a tier, so it also stays listed.
+    // Uniform across all three so any client that populates quotaErrors can
+    // surface it, not just Claude.
+    private func isUsageClientAvailable(_ client: UsageClient) -> Bool {
+        if quotaErrors[client] != nil { return true }
+        switch client {
+        case .claude:      return quota?.hasTier == true
+        case .codex:       return codexQuota?.hasTier == true
+        case .antigravity: return antigravityQuota?.hasTier == true
         }
-        if let codex = codexQuota, codex.primary != nil || codex.secondary != nil {
-            clients.append(.codex)
-        }
-        if let agy = antigravityQuota, !agy.models.isEmpty {
-            clients.append(.antigravity)
-        }
-        return clients
     }
 
     var clampedUsageClientIndex: Int {
@@ -628,7 +637,8 @@ final class PanelNav: ObservableObject {
     // Memoised because CompactView reads it from ~16 places per body pass and
     // the pill re-renders at 10Hz while an agent is busy — recomputing meant
     // rebuilding availableUsageClients every time. Invalidated by didSet on each
-    // of the four inputs below, so the cache can't outlive its sources.
+    // of the five inputs it reads (the three snapshots, usageClientIndex, and
+    // quotaErrors), so the cache can't outlive its sources.
     private var widgetQuotaCache: WidgetQuota?
 
     var widgetQuota: WidgetQuota {
@@ -1400,7 +1410,7 @@ final class PanelNav: ObservableObject {
             quota = nil
             quotaLastUpdated = nil
             quotaClaudeLastUpdated = nil
-            quotaError = nil
+            quotaErrors.removeAll()
         }
     }
 

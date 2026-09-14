@@ -1742,42 +1742,75 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             self.nav.quotaSyncing = false
             if let snapshot {
                 self.nav.quota = snapshot
-                self.nav.quotaError = nil
+                self.nav.quotaErrors[.claude] = nil
                 self.nav.quotaLastUpdated = Date()
                 self.nav.quotaClaudeLastUpdated = Date()
                 self.evaluateQuotaThresholds(snapshot)
+            } else if self.claudeCliQuotaProbe.cliMissing {
+                // `claude` didn't resolve on PATH. With no prior snapshot, treat
+                // that as "not a Claude user" and stay silent — a Codex- or
+                // Antigravity-only user never sees a phantom Claude row. But one
+                // failed resolution isn't proof of that: PATH under a launched
+                // .app differs from a shell's, so a snapshot we already have is
+                // better evidence than a single miss. Hold it and mark it stale
+                // like every other failure here rather than discarding good data.
+                if self.nav.quota == nil {
+                    self.nav.quotaClaudeLastUpdated = nil
+                    self.nav.quotaErrors[.claude] = nil
+                } else {
+                    self.nav.quotaErrors[.claude] = "Couldn't refresh — run `claude /usage` to check your session."
+                }
             } else if self.claudeCliQuotaProbe.isRateLimited {
                 // Soft-fail: hold any prior snapshot. On a cold first probe
                 // (no snapshot yet) surface a rate-limit note so the tab shows
                 // that instead of sitting on a bare "Loading…" spinner until
                 // the backoff clears.
                 if self.nav.quota == nil {
-                    self.nav.quotaError = "Claude usage rate-limited — retrying shortly."
+                    self.nav.quotaErrors[.claude] = "Rate-limited — retrying shortly."
                 }
             } else {
-                // Hard-fail: the CLI couldn't run or its output didn't parse.
-                // Drop any stale snapshot so the Usage tab surfaces the error
-                // state instead of rendering old bars as if they were current.
-                self.nav.quota = nil
-                self.nav.quotaLastUpdated = nil
-                self.nav.quotaClaudeLastUpdated = nil
-                self.nav.quotaError = "Claude usage unavailable — run `claude /usage` to check your session."
+                // Hard-fail: the CLI ran but timed out or its output didn't
+                // parse. Hold the last-good snapshot — the error marks it stale
+                // in the pane — rather than nulling it, so a single bad tick
+                // doesn't drop Claude out of the client list and flicker it back
+                // on the next success. quotaClaudeLastUpdated is left untouched so
+                // the pane can still say how old the held data is.
+                self.nav.quotaErrors[.claude] = "Couldn't refresh — run `claude /usage` to check your session."
             }
         }
         // Codex (ChatGPT-plan) rate limits — read locally from the newest
         // rollout, no network. Independent of the Anthropic probe above so one
-        // failing/absent doesn't suppress the other.
+        // failing/absent doesn't suppress the other. No error branch: a nil here
+        // means no rollout, or API-key auth (Codex emits no rate_limits) — both
+        // "nothing to show", not a failure. There's no signal that distinguishes
+        // a genuine Codex break from simply not using it, so surfacing an error
+        // would only invent phantom rows for non-Codex users.
         codexQuotaProbe.fetch { [weak self] snapshot in
             guard let self, let snapshot else { return }
             self.nav.codexQuota = snapshot
             self.nav.quotaLastUpdated = Date()
         }
         // Antigravity (agy) usage — read from the running CLI's loopback RPC
-        // (localhost only, no auth). Independent of the probes above.
-        antigravityUsageProbe.fetch { [weak self] snapshot in
-            guard let self, let snapshot else { return }
-            self.nav.antigravityQuota = snapshot
-            self.nav.quotaLastUpdated = Date()
+        // (localhost only, no auth). Independent of the probes above. Unlike
+        // Codex, agy has a real error to tell apart: not running (unreachable)
+        // is silent, but answering with a body we can't parse is a break worth
+        // surfacing.
+        antigravityUsageProbe.fetch { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .ok(let snapshot):
+                self.nav.antigravityQuota = snapshot
+                self.nav.quotaErrors[.antigravity] = nil
+                self.nav.quotaLastUpdated = Date()
+            case .unparseable:
+                self.nav.quotaErrors[.antigravity] =
+                    "Couldn't read Antigravity usage — its local endpoint returned something unexpected."
+            case .unreachable:
+                // agy isn't running. Not in use, not an error — clear any prior
+                // note and hold the last snapshot, matching the other probes'
+                // "a dropped tick shouldn't flip the UI".
+                self.nav.quotaErrors[.antigravity] = nil
+            }
         }
     }
 
@@ -1922,7 +1955,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     private func postQuotaBanner(label: String, percent: Int, resetsAt: Date?) {
         let body: String
-        if let resetsAt, let resetLabel = QuotaReset.relativeLabel(until: resetsAt) {
+        if let resetsAt, let resetLabel = QuotaReset.fullLabel(until: resetsAt) {
             body = "\(percent)% used. Resets \(resetLabel)."
         } else {
             body = "\(percent)% used."

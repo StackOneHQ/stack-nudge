@@ -50,10 +50,65 @@ enum QuotaReset {
         return "\(max(1, seconds / 60))m"  // sub-minute is genuinely about to reset
     }
 
-    // Usage tab and banners: "in 2 hours".
+    // Countdown half of the reset line: "in 2 hours".
     static func relativeLabel(until date: Date, now: Date = Date()) -> String? {
         guard remaining(until: date, now: now) != nil else { return nil }
         return RelativeTime.string(date, style: .full, relativeTo: now)
+    }
+
+    // Clock half, in the shape Claude Code's own /usage prints: "Jun 30 at
+    // 6:50pm", or "Jul 4 at 3am" when the reset lands on the hour. Codex
+    // reports its reset as a unix timestamp and Antigravity as ISO 8601, so
+    // normalising here is what makes one client's reset read like another's.
+    //
+    // The locale and the two formats are parseResetsAt's, run in reverse: what
+    // this renders, that parser reads back.
+    //
+    // Rendered in `timeZone`, the machine's by default. Claude's CLI prints the
+    // timezone held on the account instead, so the two disagree while
+    // travelling; local is the timezone the countdown is measured against.
+    static func absoluteLabel(until date: Date,
+                              now: Date = Date(),
+                              timeZone: TimeZone = .current) -> String? {
+        guard remaining(until: date, now: now) != nil else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        // Built fresh per call rather than mutating a shared cached formatter:
+        // DateFormatter mutation isn't thread-safe, and stamping timeZone into a
+        // static on the way through would hand the next (possibly off-main)
+        // caller a quietly wrong string. Two calls per render is cheap.
+        let formatter = calendar.component(.minute, from: date) == 0
+            ? absoluteFormatter("MMM d 'at' ha")
+            : absoluteFormatter("MMM d 'at' h:mma")
+        formatter.timeZone = timeZone
+        return formatter.string(from: date)
+    }
+
+    // Both halves: "in 2 hours · Jun 30 at 6:50pm". The countdown says how long
+    // you're blocked, the clock time says when to come back; the Usage tab and
+    // the quota banner both want the pair.
+    static func fullLabel(until date: Date,
+                          now: Date = Date(),
+                          timeZone: TimeZone = .current) -> String? {
+        guard let relative = relativeLabel(until: date, now: now),
+              let absolute = absoluteLabel(until: date, now: now, timeZone: timeZone)
+        else { return nil }
+        return "\(relative) · \(absolute)"
+    }
+
+    // Claude prints "3am" on the hour and "6:50pm" otherwise, so matching it
+    // takes two formats. absoluteLabel picks the format and builds one per call
+    // so nothing shared is mutated; the caller stamps the timezone in.
+    private static func absoluteFormatter(_ format: String) -> DateFormatter {
+        let formatter = DateFormatter()
+        // Fixed English, like the CLI line this mirrors and like the parser
+        // that reads it back. The symbols have to be set after the locale,
+        // which stamps its own over them.
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = format
+        formatter.amSymbol = "am"
+        formatter.pmSymbol = "pm"
+        return formatter
     }
 }
 

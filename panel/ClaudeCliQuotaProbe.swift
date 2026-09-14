@@ -19,6 +19,11 @@ final class ClaudeCliQuotaProbe {
 
     // Main-queue only (mirrors QuotaProbe's threading model).
     private(set) var lastProbeFailed = false
+    // True when the last fetch found no `claude` on PATH, as distinct from the
+    // CLI running but failing to parse. Lets the caller stay silent for a
+    // non-Claude user instead of surfacing a "usage unavailable" error, and hold
+    // a prior snapshot on a genuine hard-fail rather than dropping it.
+    private(set) var cliMissing = false
     private var retryAfterUntil: Date?
     private var lastSubscriptionType: String?
     private var subscriptionFetched = false
@@ -32,12 +37,16 @@ final class ClaudeCliQuotaProbe {
     private let probeQueue = DispatchQueue(label: "stack-nudge.claude-cli-quota")
 
     func fetch(completion: @escaping (QuotaSnapshot?) -> Void) {
+        // Reset before the early-return gates so a rate-limited tick reports the
+        // flag from its own run, not a stale value from an earlier missing-CLI one.
+        cliMissing = false
         if isRateLimited {
             completion(nil)
             return
         }
         guard let path = ProcessOutput.claude() else {
             lastProbeFailed = true
+            cliMissing = true
             completion(nil)
             return
         }
