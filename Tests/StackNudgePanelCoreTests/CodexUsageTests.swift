@@ -79,6 +79,14 @@ final class CodexUsageTests: XCTestCase {
         XCTAssertNil(snap?.primary)
     }
 
+    // The skip case production actually hits: the key is present (so it passes
+    // parseLatestRateLimits' `contains("rate_limits")` pre-filter) but null.
+    // 4,240 such lines across 279 local rollouts.
+    func testIgnoresALineWhoseRateLimitsAreNull() {
+        XCTAssertNil(CodexQuotaProbe.snapshot(
+            fromLine: #"{"type":"event_msg","payload":{"type":"token_count","rate_limits":null}}"#))
+    }
+
     func testIgnoresALineWithoutRateLimits() {
         XCTAssertNil(CodexQuotaProbe.snapshot(
             fromLine: #"{"type":"event_msg","payload":{"type":"token_count","info":null}}"#))

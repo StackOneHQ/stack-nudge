@@ -2,7 +2,7 @@ import Foundation
 
 // Codex (ChatGPT-plan) rate limits, mirroring the shape of Claude's quota so
 // the Usage tab can render them with the same QuotaTier rows. Which window each
-// slot carries varies by account — read `windowLength`, not the slot name.
+// slot carries varies between payloads — read `windowLength`, not the slot name.
 // `planType` is the ChatGPT tier ("plus", "pro", …) when reported.
 struct CodexQuotaSnapshot: Equatable {
     let primary: QuotaTier?
@@ -116,8 +116,9 @@ final class CodexQuotaProbe {
     // Both arrive as JSON numbers, so decode via NSNumber to tolerate int/double.
     //
     // `window_minutes` (300 or 10080) is the only reliable way to tell the two
-    // windows apart: under `limit_id=codex` the weekly one occupies `primary`
-    // and there is no 5-hour window at all.
+    // windows apart. The slot carries no fixed meaning: `primary` is usually the
+    // weekly window with `secondary` absent, but the same `limit_id` also emits
+    // the 5h/weekly pair, so neither the slot nor the id can stand in for it.
     static func tier(_ raw: Any?, now: Date = Date()) -> QuotaTier? {
         guard let dict = raw as? [String: Any],
               let used = (dict["used_percent"] as? NSNumber)?.doubleValue else { return nil }

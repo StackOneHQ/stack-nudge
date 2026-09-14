@@ -565,6 +565,7 @@ struct UsageView: View {
             ProgressView(value: min(tier.utilization, 100), total: 100)
                 .tint(barColor(tier.utilization))
                 .overlay(alignment: .leading) { paceMarker(tier) }
+                .accessibilityValue(Self.paceDescription(tier, showRemaining: nav.quotaShowRemaining))
             // Hidden rather than "Resets 11 months ago" on a stale snapshot.
             if let resets = tier.resetsAt, let label = QuotaReset.fullLabel(until: resets) {
                 Text("Resets \(label)")
@@ -573,8 +574,6 @@ struct UsageView: View {
             }
         }
         .padding(.horizontal, 6)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Self.paceDescription(tier))
     }
 
     // A tick at the point the window has reached: fill past it means burning
@@ -607,10 +606,16 @@ struct UsageView: View {
     }
 
     // The marker is visual-only, so VoiceOver gets the comparison in words.
-    static func paceDescription(_ tier: QuotaTier, now: Date = Date()) -> String {
-        let used = "\(Int(tier.utilization.rounded()))% used"
-        guard let fraction = elapsedFraction(tier, now: now) else { return used }
-        return "\(used), \(Int((fraction * 100).rounded()))% of the window elapsed"
+    // Phrased from the same toggle the row renders, or the spoken number
+    // contradicts the printed one.
+    static func paceDescription(_ tier: QuotaTier,
+                                showRemaining: Bool = false,
+                                now: Date = Date()) -> String {
+        let amount = showRemaining
+            ? "\(Int(max(0, 100 - tier.utilization).rounded()))% left"
+            : "\(Int(tier.utilization.rounded()))% used"
+        guard let fraction = elapsedFraction(tier, now: now) else { return amount }
+        return "\(amount), \(Int((fraction * 100).rounded()))% of the window elapsed"
     }
 
 

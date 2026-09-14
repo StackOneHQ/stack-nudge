@@ -295,11 +295,11 @@ final class ClaudeCliQuotaProbeTests: XCTestCase {
 
     // MARK: - windowLength
 
-    // The `/usage` text carries no window length, so it's inferred from the
-    // tier name — which means the names here and the ones parseResultText
-    // switches on have to stay in step. Driven through the real parser so they
-    // can't drift apart: a weekly tier mis-assigned the 5-hour window pins its
-    // pace marker to the far left forever, with every assertion above still green.
+    // The `/usage` text carries no window length, so it's inferred from the tier
+    // name. Driven end-to-end through parseResultText rather than calling
+    // windowLength(forTier:) directly, so the mapping is pinned as the snapshot
+    // actually receives it: assigning the weekly tiers a 5-hour window pins their
+    // pace markers to the far left forever, and left the whole suite green.
     func testWindowLengthsComeThroughTheRealParser() {
         let text = """
         Current session: 2% used · resets Jun 30 at 6:50pm (Europe/London)

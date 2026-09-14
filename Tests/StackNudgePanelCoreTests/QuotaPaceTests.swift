@@ -101,6 +101,17 @@ final class QuotaPaceTests: XCTestCase {
         XCTAssertEqual(UsageView.paceDescription(tier, now: now), "62% used")
     }
 
+    // VoiceOver must not read "62% used" while the row prints "38% left".
+    func testAccessibilityLabelFollowsTheShowRemainingToggle() {
+        let tier = QuotaTier(utilization: 62,
+                             resetsAt: ahead(3 * 3600),
+                             windowLength: QuotaWindow.fiveHours)
+        XCTAssertEqual(UsageView.paceDescription(tier, showRemaining: true, now: now),
+                       "38% left, 40% of the window elapsed")
+        XCTAssertEqual(UsageView.paceDescription(tier, showRemaining: false, now: now),
+                       "62% used, 40% of the window elapsed")
+    }
+
     func testCodexTitleFallsBackWhenNoWindowReported() {
         let tier = QuotaTier(utilization: 10, resetsAt: ahead(3600))
         XCTAssertEqual(UsageView.codexTitle(tier, fallback: "Current week"), "Current week")
