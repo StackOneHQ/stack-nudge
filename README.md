@@ -247,13 +247,15 @@ Reachable from the tab strip or `Cmd+3`. Renders your Claude Code subscription q
 
 Bars are color-coded: green below 50%, yellow 50–80%, red 80%+. Reset times shown per tier.
 
+Each bar also carries a **pace marker** — a tick at the point the window has reached. Fill to the left of it means you're using quota slower than the clock is running it down; fill past it means you'll hit the cap before the reset. It answers “am I above 50% usage with 50% of the window left?” at a glance. The marker is hidden when the window length or reset time is unknown (Antigravity reports neither) or when the snapshot is stale.
+
 Numbers come straight from the `claude` CLI — stack-nudge shells out to `claude --print /usage` and parses the result. Because the CLI reads its *own* keychain grant, **stack-nudge never touches your keychain or calls the Anthropic API, so there's no password prompt**. If `claude` isn't on your `PATH` or you're signed out, the tab shows *"Claude usage unavailable — run `claude /usage` to check your session"* rather than falling back to any other source. (Codex and Antigravity usage are read from their own local files, unaffected.)
 
 Polls every 60 seconds while the full panel is open, and otherwise every 5 minutes by default (configurable via Settings → Usage → "Poll frequency"). The collapsed widget counts as background, so it polls at your configured frequency rather than the faster open-panel rate. Opening the panel syncs immediately if the last one is over a minute old. On the Usage tab: `r` triggers a manual sync, `p` pauses/resumes the poller.
 
 Claude, Codex, and Antigravity each appear in the tab's client list when they have quota to show; `↑`/`↓` switch between them. **The compact widget's gauge follows whatever you select here** — pick Codex in the Usage tab and the pill's rings, hover legend, and reset countdown all switch to Codex, with the client name shown in the legend on hover. All three are read on the same poll tick, so switching costs nothing. The selection is in-memory and resets to the first connected client on relaunch.
 
-For Claude and Codex the two rings are the 5-hour and weekly windows. Antigravity reports neither — it publishes one window per model plus a monthly credit pool — so its inner ring shows whichever model is closest to its limit and the outer ring shows monthly prompt credits. Gemini CLI has no usage counter: unlike the others it writes no rate-limit data to disk and serves no local endpoint, so there's nothing to read.
+For Claude and Codex the two rings are the 5-hour and weekly windows — though Codex reports the window length per limit rather than a fixed pair, and on some accounts publishes only a weekly one, so its Usage tab headings are named from what it actually reports. Antigravity reports neither — it publishes one window per model plus a monthly credit pool — so its inner ring shows whichever model is closest to its limit and the outer ring shows monthly prompt credits. Gemini CLI has no usage counter: unlike the others it writes no rate-limit data to disk and serves no local endpoint, so there's nothing to read.
 
 #### Threshold-crossing notifications
 

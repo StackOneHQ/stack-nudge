@@ -292,4 +292,31 @@ final class ClaudeCliQuotaProbeTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: tmp.path),
                       "removeSessionFile must reject anything outside its directory")
     }
+
+    // MARK: - windowLength
+
+    // The `/usage` text carries no window length, so it's inferred from the
+    // tier name — which means the names here and the ones parseResultText
+    // switches on have to stay in step. Driven through the real parser so they
+    // can't drift apart: a weekly tier mis-assigned the 5-hour window pins its
+    // pace marker to the far left forever, with every assertion above still green.
+    func testWindowLengthsComeThroughTheRealParser() {
+        let text = """
+        Current session: 2% used · resets Jun 30 at 6:50pm (Europe/London)
+        Current week (all models): 23% used · resets Jul 4 at 3am (Europe/London)
+        Current week (Sonnet only): 0% used
+        Current week (Opus only): 12% used · resets Jul 4 at 3am (Europe/London)
+        """
+        guard case .ok(let snap) = ClaudeCliQuotaProbe.parseResultText(text) else {
+            return XCTFail("expected a parsed snapshot")
+        }
+        XCTAssertEqual(snap.fiveHour?.windowLength, QuotaWindow.fiveHours)
+        XCTAssertEqual(snap.sevenDay?.windowLength, QuotaWindow.sevenDays)
+        XCTAssertEqual(snap.sevenDayOpus?.windowLength, QuotaWindow.sevenDays)
+        XCTAssertEqual(snap.sevenDaySonnet?.windowLength, QuotaWindow.sevenDays)
+    }
+
+    func testWindowLengthIsNilForAnUnknownTierName() {
+        XCTAssertNil(ClaudeCliQuotaProbe.windowLength(forTier: "extra_usage"))
+    }
 }

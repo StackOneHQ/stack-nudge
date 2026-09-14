@@ -5,9 +5,18 @@ import SwiftUI
 // Quota tier surfaced by the `claude` CLI's `/usage` output. Each tier
 // is a percentage of a budget with a known reset time. resetsAt is optional
 // because some tiers (extra_usage, future tiers) don't reset on a cycle.
+// windowLength says how long the window runs — `resetsAt` alone can't. Nil
+// where the source doesn't report one (Antigravity).
 struct QuotaTier: Equatable {
     let utilization: Double  // 0…100
     let resetsAt: Date?
+    let windowLength: TimeInterval?
+
+    init(utilization: Double, resetsAt: Date?, windowLength: TimeInterval? = nil) {
+        self.utilization = utilization
+        self.resetsAt = resetsAt
+        self.windowLength = windowLength
+    }
 }
 
 // Snapshot of the user's Claude Code quota at a point in time. Built from
@@ -359,11 +368,13 @@ struct UsageView: View {
             }
         case .codex:
             if let codex = nav.codexQuota {
+                // Titled from the reported window, not the slot: under
+                // `limit_id=codex` the weekly window arrives as `primary`.
                 if let tier = codex.primary {
-                    section("Current session (5h)") { tierRow(tier) }
+                    section(Self.codexTitle(tier, fallback: "Current session (5h)")) { tierRow(tier) }
                 }
                 if let tier = codex.secondary {
-                    section("Current week") { tierRow(tier) }
+                    section(Self.codexTitle(tier, fallback: "Current week")) { tierRow(tier) }
                 }
             }
         case .antigravity:
@@ -553,6 +564,7 @@ struct UsageView: View {
             }
             ProgressView(value: min(tier.utilization, 100), total: 100)
                 .tint(barColor(tier.utilization))
+                .overlay(alignment: .leading) { paceMarker(tier) }
             // Hidden rather than "Resets 11 months ago" on a stale snapshot.
             if let resets = tier.resetsAt, let label = QuotaReset.fullLabel(until: resets) {
                 Text("Resets \(label)")
@@ -561,6 +573,44 @@ struct UsageView: View {
             }
         }
         .padding(.horizontal, 6)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Self.paceDescription(tier))
+    }
+
+    // A tick at the point the window has reached: fill past it means burning
+    // faster than the clock. An overlay rather than a second bar because the
+    // pane fits only ~3 tier rows and Claude Max has 4.
+    @ViewBuilder private func paceMarker(_ tier: QuotaTier) -> some View {
+        if let fraction = Self.elapsedFraction(tier) {
+            GeometryReader { geo in
+                Rectangle()
+                    .fill(.primary)
+                    .frame(width: 1.5)
+                    // Inset so the tick stays visible at either extreme.
+                    .offset(x: min(max(fraction * geo.size.width, 0.75),
+                                   geo.size.width - 0.75) - 0.75)
+                    .opacity(0.55)
+            }
+        }
+    }
+
+    // Falls back to the slot's old title when no window is reported.
+    static func codexTitle(_ tier: QuotaTier, fallback: String) -> String {
+        guard let window = tier.windowLength else { return fallback }
+        return QuotaWindow.title(windowLength: window)
+    }
+
+    // Static so the visibility rule is reachable from tests.
+    static func elapsedFraction(_ tier: QuotaTier, now: Date = Date()) -> Double? {
+        guard let resets = tier.resetsAt, let window = tier.windowLength else { return nil }
+        return QuotaReset.elapsedFraction(until: resets, windowLength: window, now: now)
+    }
+
+    // The marker is visual-only, so VoiceOver gets the comparison in words.
+    static func paceDescription(_ tier: QuotaTier, now: Date = Date()) -> String {
+        let used = "\(Int(tier.utilization.rounded()))% used"
+        guard let fraction = elapsedFraction(tier, now: now) else { return used }
+        return "\(used), \(Int((fraction * 100).rounded()))% of the window elapsed"
     }
 
 

@@ -208,7 +208,17 @@ final class ClaudeCliQuotaProbe {
             guard r.location != NSNotFound else { return nil }
             return parseResetsAt(ns.substring(with: r), now: now)
         }()
-        return (name, QuotaTier(utilization: pct, resetsAt: resetsAt))
+        return (name, QuotaTier(utilization: pct,
+                                resetsAt: resetsAt,
+                                windowLength: windowLength(forTier: name)))
+    }
+
+    // The `/usage` text reports a reset time but never a window length, so it
+    // has to come from the tier name.
+    static func windowLength(forTier name: String) -> TimeInterval? {
+        if name == "session" { return QuotaWindow.fiveHours }
+        if name.hasPrefix("week") { return QuotaWindow.sevenDays }
+        return nil
     }
 
     // Best-effort: "Jun 30 at 6:50pm (Europe/London)" → Date.

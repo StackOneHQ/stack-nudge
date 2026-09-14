@@ -109,7 +109,39 @@ enum QuotaReset {
         formatter.amSymbol = "am"
         formatter.pmSymbol = "pm"
         return formatter
+
+    // How far through its window a tier is, 0…1. Shares `remaining`'s
+    // past-deadline rule: a stale snapshot draws no marker rather than one
+    // pinned confidently to the far right.
+    static func elapsedFraction(until date: Date,
+                                windowLength: TimeInterval,
+                                now: Date = Date()) -> Double? {
+        guard windowLength > 0, let remaining = remaining(until: date, now: now) else { return nil }
+        // Clamped, not rejected: a window longer than we assume pins to the start.
+        return min(1, max(0, 1 - remaining / windowLength))
     }
+}
+
+// Names a quota window by its length. Codex reports length, not kind, and the
+// slot→window mapping isn't fixed — see CodexUsage.tier.
+enum QuotaWindow {
+
+    static let fiveHours: TimeInterval = 5 * 3600
+    static let sevenDays: TimeInterval = 7 * 24 * 3600
+
+    static func title(windowLength: TimeInterval) -> String {
+        switch windowLength {
+        case fiveHours: return "Current session (5h)"
+        case sevenDays: return "Current week"
+        default:        return "Current window (\(describe(windowLength)))"
+        }
+    }
+
+    private static func describe(_ length: TimeInterval) -> String {
+        let minutes = Int(length.rounded() / 60)
+        if minutes % (24 * 60) == 0 { return "\(minutes / (24 * 60))d" }
+        if minutes % 60 == 0 { return "\(minutes / 60)h" }
+        return "\(minutes)m"    }
 }
 
 // Shared relative-time strings ("5m ago", "in 3 days") with per-style cached
