@@ -350,6 +350,23 @@ agent_supports_decision() {
   esac
 }
 
+# tool_name from the hook payload. Only macOS 15+ preinstalls jq, and this value
+# decides whether a prompt gets an Allow button, so fall back to python3 rather
+# than silently answering "no tool".
+hook_tool_name() {
+  [[ -z "$HOOK_JSON" ]] && return
+  if command -v jq &>/dev/null; then
+    printf '%s' "$HOOK_JSON" | jq -r '.tool_name // empty' 2>/dev/null
+    return
+  fi
+  command -v python3 &>/dev/null || return
+  printf '%s' "$HOOK_JSON" | python3 -c 'import json, sys
+try:
+    print(json.load(sys.stdin).get("tool_name") or "")
+except Exception:
+    pass' 2>/dev/null
+}
+
 # Agent-initiated question (multi-select / open prompt) or plan approval, not a
 # tool permission. Approving in the panel would write "allow" to the FIFO,
 # which CC interprets as "press Enter on the highlighted option" — making
@@ -363,10 +380,9 @@ agent_supports_decision() {
 # hook on a live FIFO, went on reminding about a plan already approved.
 is_question_event() {
   [[ "$AGENT" != "claude-code" ]] && return 1
-  command -v jq &>/dev/null || return 1
   [[ -z "$HOOK_JSON" ]] && return 1
   local tool_name
-  tool_name=$(printf '%s' "$HOOK_JSON" | jq -r '.tool_name // empty' 2>/dev/null)
+  tool_name=$(hook_tool_name)
   case "$tool_name" in
     AskUserQuestion|ExitPlanMode) return 0 ;;
     *)                            return 1 ;;
@@ -788,7 +804,10 @@ wait_for_permission_response() {
   # but naming the signals makes the intent explicit and covers the shells that
   # don't. Nothing catches SIGKILL, which is why the panel no longer relies on
   # this trap alone to know a prompt is over.
-  trap 'rm -f "$fifo"; rmdir "$(dirname "$fifo")" 2>/dev/null' EXIT INT TERM HUP
+  # Global: the trap body expands when it fires, after this function has
+  # returned, so the local above was out of scope and cleaned up nothing.
+  PERM_FIFO="$fifo"
+  trap 'rm -f "$PERM_FIFO"; rmdir "$(dirname "$PERM_FIFO")" 2>/dev/null' EXIT INT TERM HUP
 
   local decision
   decision=$(NUDGE_FIFO="$fifo" NUDGE_TIMEOUT="$timeout" python3 - <<'PY' 2>/dev/null
