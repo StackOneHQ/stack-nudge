@@ -109,6 +109,7 @@ enum QuotaReset {
         formatter.amSymbol = "am"
         formatter.pmSymbol = "pm"
         return formatter
+    }
 
     // How far through its window a tier is, 0…1. Shares `remaining`'s
     // past-deadline rule: a stale snapshot draws no marker rather than one
