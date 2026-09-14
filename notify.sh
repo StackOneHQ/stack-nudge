@@ -350,11 +350,17 @@ agent_supports_decision() {
   esac
 }
 
-# Agent-initiated question (multi-select / open prompt), not a tool
-# permission. Approving in the panel would write "allow" to the FIFO,
+# Agent-initiated question (multi-select / open prompt) or plan approval, not a
+# tool permission. Approving in the panel would write "allow" to the FIFO,
 # which CC interprets as "press Enter on the highlighted option" — making
 # it pick a default. By emitting has_action=false, panel Enter falls
 # through to focusing the editor so the user answers in the terminal.
+#
+# ExitPlanMode is the same shape: "allow" approves the plan outright, so the
+# panel would be approving a plan the user hasn't read. It also has to stay off
+# the FIFO path for a second reason — answering in CC's own UI doesn't end our
+# hook, so it blocked for its full 550s timeout while the panel, seeing a live
+# hook on a live FIFO, went on reminding about a plan already approved.
 is_question_event() {
   [[ "$AGENT" != "claude-code" ]] && return 1
   command -v jq &>/dev/null || return 1
@@ -362,8 +368,8 @@ is_question_event() {
   local tool_name
   tool_name=$(printf '%s' "$HOOK_JSON" | jq -r '.tool_name // empty' 2>/dev/null)
   case "$tool_name" in
-    AskUserQuestion) return 0 ;;
-    *)               return 1 ;;
+    AskUserQuestion|ExitPlanMode) return 0 ;;
+    *)                            return 1 ;;
   esac
 }
 
