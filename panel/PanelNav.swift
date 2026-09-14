@@ -307,7 +307,10 @@ final class PanelNav: ObservableObject {
     // always implicating Claude. A client with an error but no snapshot to fall
     // back on still lists itself (see availableUsageClients) so the note has
     // somewhere to render instead of falling through to the tab's empty state.
-    @Published var quotaErrors:      [UsageClient: String] = [:]
+    // Invalidates widgetQuotaCache like the snapshots do: it feeds
+    // availableUsageClients, so a change here can move the selected client out
+    // from under a cached pill even when no snapshot changed.
+    @Published var quotaErrors:      [UsageClient: String] = [:] { didSet { widgetQuotaCache = nil } }
     // Set when the event socket failed to bind at startup — the panel is then
     // deaf to every agent notification. Drives the banner at the top of the
     // Events tab so the failure isn't silent. Cleared when the socket binds.
@@ -580,21 +583,22 @@ final class PanelNav: ObservableObject {
 
     // Connected clients that currently have quota to show, in display order.
     var availableUsageClients: [UsageClient] {
-        var clients: [UsageClient] = []
-        // Claude lists itself when it has any tier, or when it has an error to
-        // report — a cold rate-limit or a failed refresh with no prior snapshot —
-        // so the note renders on its own detail pane rather than the tab's global
-        // empty state. A held-stale snapshot keeps a tier, so it also stays listed.
-        if quota?.hasTier == true || quotaErrors[.claude] != nil {
-            clients.append(.claude)
+        UsageClient.allCases.filter(isUsageClientAvailable)
+    }
+
+    // A client earns a row when it has a drawable tier, or when it has an error
+    // to report — a cold rate-limit or a failed refresh with no prior snapshot —
+    // so the note renders on its own detail pane rather than the tab's global
+    // empty state. A held-stale snapshot keeps a tier, so it also stays listed.
+    // Uniform across all three so any client that populates quotaErrors can
+    // surface it, not just Claude.
+    private func isUsageClientAvailable(_ client: UsageClient) -> Bool {
+        if quotaErrors[client] != nil { return true }
+        switch client {
+        case .claude:      return quota?.hasTier == true
+        case .codex:       return codexQuota?.hasTier == true
+        case .antigravity: return antigravityQuota?.hasTier == true
         }
-        if codexQuota?.hasTier == true {
-            clients.append(.codex)
-        }
-        if antigravityQuota?.hasTier == true {
-            clients.append(.antigravity)
-        }
-        return clients
     }
 
     var clampedUsageClientIndex: Int {
@@ -633,7 +637,8 @@ final class PanelNav: ObservableObject {
     // Memoised because CompactView reads it from ~16 places per body pass and
     // the pill re-renders at 10Hz while an agent is busy — recomputing meant
     // rebuilding availableUsageClients every time. Invalidated by didSet on each
-    // of the four inputs below, so the cache can't outlive its sources.
+    // of the five inputs it reads (the three snapshots, usageClientIndex, and
+    // quotaErrors), so the cache can't outlive its sources.
     private var widgetQuotaCache: WidgetQuota?
 
     var widgetQuota: WidgetQuota {

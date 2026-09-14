@@ -68,4 +68,30 @@ final class UsageAvailabilityTests: XCTestCase {
         nav.quotaErrors[.claude] = "Couldn't refresh — run `claude /usage` to check your session."
         XCTAssertEqual(nav.availableUsageClients, [.claude])
     }
+
+    // The predicate is uniform: an error lists its client whichever client it
+    // is, not only Claude. Antigravity is the one that actually populates an
+    // error today (agy running but unparseable); Codex is checked the same way
+    // so a future Codex error could display without another wiring change.
+    func test_antigravityErrorButNoSnapshot_isListed() {
+        let nav = PanelNav()
+        nav.quotaErrors[.antigravity] = "Couldn't read Antigravity usage."
+        XCTAssertEqual(nav.availableUsageClients, [.antigravity])
+    }
+
+    func test_codexErrorButNoSnapshot_isListed() {
+        let nav = PanelNav()
+        nav.quotaErrors[.codex] = "something failed"
+        XCTAssertEqual(nav.availableUsageClients, [.codex])
+    }
+
+    // Listing order follows UsageClient.allCases (claude, codex, antigravity),
+    // so a mix of data and errors stays in a stable order.
+    func test_ordering_followsDeclarationOrder() {
+        let nav = PanelNav()
+        nav.quotaErrors[.antigravity] = "err"
+        nav.codexQuota = codexSnapshot()
+        nav.quota = claudeSnapshot()
+        XCTAssertEqual(nav.availableUsageClients, [.claude, .codex, .antigravity])
+    }
 }

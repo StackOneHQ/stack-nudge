@@ -73,9 +73,13 @@ enum QuotaReset {
         guard remaining(until: date, now: now) != nil else { return nil }
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone
+        // Built fresh per call rather than mutating a shared cached formatter:
+        // DateFormatter mutation isn't thread-safe, and stamping timeZone into a
+        // static on the way through would hand the next (possibly off-main)
+        // caller a quietly wrong string. Two calls per render is cheap.
         let formatter = calendar.component(.minute, from: date) == 0
-            ? onTheHourFormatter
-            : withMinutesFormatter
+            ? absoluteFormatter("MMM d 'at' ha")
+            : absoluteFormatter("MMM d 'at' h:mma")
         formatter.timeZone = timeZone
         return formatter.string(from: date)
     }
@@ -93,11 +97,8 @@ enum QuotaReset {
     }
 
     // Claude prints "3am" on the hour and "6:50pm" otherwise, so matching it
-    // takes two formats. Reused across calls (main thread only, as with
-    // RelativeTime) with the timezone stamped in at call time.
-    private static let onTheHourFormatter   = absoluteFormatter("MMM d 'at' ha")
-    private static let withMinutesFormatter = absoluteFormatter("MMM d 'at' h:mma")
-
+    // takes two formats. absoluteLabel picks the format and builds one per call
+    // so nothing shared is mutated; the caller stamps the timezone in.
     private static func absoluteFormatter(_ format: String) -> DateFormatter {
         let formatter = DateFormatter()
         // Fixed English, like the CLI line this mirrors and like the parser

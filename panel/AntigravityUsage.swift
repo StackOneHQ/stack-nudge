@@ -29,12 +29,31 @@ struct AntigravityQuotaSnapshot: Equatable {
 
 final class AntigravityUsageProbe {
 
+    // Outcome of one probe. `unreachable` and `unparseable` are deliberately
+    // distinct: agy not running (loopback refused) is "not in use" and stays
+    // silent, whereas agy answering with a body we can't read is a genuine break
+    // worth surfacing in the Usage tab. Mirrors ClaudeCliQuotaProbe's
+    // cliMissing-vs-hardFail split.
+    enum FetchResult: Equatable {
+        case ok(AntigravityQuotaSnapshot)
+        case unreachable
+        case unparseable
+    }
+
     // Calls completion on the main queue. The loopback request runs off-main.
-    func fetch(completion: @escaping (AntigravityQuotaSnapshot?) -> Void) {
+    func fetch(completion: @escaping (FetchResult) -> Void) {
         DispatchQueue.global(qos: .utility).async {
-            let result = AntigravityLocalServer.call("GetUserStatus").flatMap(Self.parse)
+            let result = Self.classify(AntigravityLocalServer.call("GetUserStatus"))
             DispatchQueue.main.async { completion(result) }
         }
+    }
+
+    // Split out so the not-in-use / broken / ok mapping is testable without a
+    // live agy on the loopback port. nil data = the call never connected.
+    static func classify(_ data: Data?) -> FetchResult {
+        guard let data else { return .unreachable }
+        guard let snapshot = parse(data) else { return .unparseable }
+        return .ok(snapshot)
     }
 
     private static let iso: ISO8601DateFormatter = {
