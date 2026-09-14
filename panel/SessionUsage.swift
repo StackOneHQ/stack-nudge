@@ -562,9 +562,9 @@ struct UsageView: View {
                     .font(.caption.monospacedDigit().weight(.semibold))
                     .foregroundStyle(barColor(tier.utilization))
             }
-            ProgressView(value: min(tier.utilization, 100), total: 100)
-                .tint(barColor(tier.utilization))
-                .overlay(alignment: .leading) { paceMarker(tier) }
+            paceBar(tier)
+                .accessibilityElement()
+                .accessibilityLabel(Text("Quota"))
                 .accessibilityValue(Self.paceDescription(tier, showRemaining: nav.quotaShowRemaining))
             // Hidden rather than "Resets 11 months ago" on a stale snapshot.
             if let resets = tier.resetsAt, let label = QuotaReset.fullLabel(until: resets) {
@@ -576,30 +576,40 @@ struct UsageView: View {
         .padding(.horizontal, 6)
     }
 
-    // A tick at the point the window has reached: fill past it means burning
-    // faster than the clock. An overlay rather than a second bar because the
-    // pane fits only ~3 tier rows and Claude Max has 4.
-    //
-    // Dark core in a light sleeve, both fixed rather than semantic, so one edge
-    // always contrasts: a single `.primary` line measured 1.16:1 on a yellow
-    // fill in dark mode — gone in exactly the case the marker exists for.
-    @ViewBuilder private func paceMarker(_ tier: QuotaTier) -> some View {
-        if let fraction = Self.elapsedFraction(tier) {
-            GeometryReader { geo in
-                ZStack {
-                    Capsule().fill(Color.white.opacity(0.9)).frame(width: 4)
-                    Capsule().fill(Color.black.opacity(0.8)).frame(width: 1.5)
+    // Usage over how far through the window we are: a pale full-height bar for
+    // elapsed time, with the solid usage bar narrower and centred on it. Compare
+    // the two right-hand edges — usage past elapsed means you'll hit the cap
+    // early. Both stay visible whichever is longer, which a marker drawn under
+    // the fill would not.
+    private func paceBar(_ tier: QuotaTier) -> some View {
+        let color = barColor(tier.utilization)
+        let used = min(max(tier.utilization, 0), 100) / 100
+        let elapsed = Self.elapsedFraction(tier)
+        return GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.primary.opacity(0.12))
+                    .frame(height: Self.paceBarHeight)
+                if let elapsed {
+                    Capsule()
+                        .fill(color.opacity(0.3))
+                        .frame(width: max(elapsed * geo.size.width, 2),
+                               height: Self.paceBarHeight)
                 }
-                // Sized to the track, not the 20pt control around it.
-                .frame(height: Self.paceMarkerHeight)
-                .position(x: min(max(fraction * geo.size.width, 2), geo.size.width - 2),
-                          y: geo.size.height / 2)
+                Capsule()
+                    .fill(color)
+                    .frame(width: max(used * geo.size.width, used > 0 ? 2 : 0),
+                           height: elapsed == nil ? Self.paceBarHeight : Self.usageBarHeight)
             }
+            .frame(height: Self.paceBarHeight)
+            .frame(maxHeight: .infinity)
         }
+        .frame(height: Self.paceBarHeight)
     }
 
-    // Slightly proud of the ~7.5pt track, so it reads as a tick not a gap.
-    static let paceMarkerHeight: CGFloat = 9
+    static let paceBarHeight: CGFloat = 8
+    // Inset inside the elapsed bar so neither edge can hide the other.
+    static let usageBarHeight: CGFloat = 4
 
     // Falls back to the slot's old title when no window is reported.
     static func codexTitle(_ tier: QuotaTier, fallback: String) -> String {
