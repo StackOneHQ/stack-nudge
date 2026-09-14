@@ -4,6 +4,13 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.33.1](https://github.com/StackOneHQ/stack-nudge/compare/v1.33.0...v1.33.1) (2026-09-14)
+
+
+### Bug Fixes
+
+* **notify:** stop nudging about answered prompts, and rate-limit finished-turn DMs ([#173](https://github.com/StackOneHQ/stack-nudge/issues/173)) ([677ab14](https://github.com/StackOneHQ/stack-nudge/commit/677ab145dd1b727dbe822b39e6d39f4fbb2494bf))
+
 ## [1.33.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.32.0...v1.33.0) (2026-09-09)
 
 
