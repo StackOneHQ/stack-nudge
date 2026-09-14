@@ -580,11 +580,9 @@ struct UsageView: View {
     // faster than the clock. An overlay rather than a second bar because the
     // pane fits only ~3 tier rows and Claude Max has 4.
     //
-    // Dark core inside a light sleeve, both fixed rather than semantic: the tick
-    // has to stay legible against the empty track *and* against a green, yellow
-    // or red fill, in either appearance. A single `.primary` line measured
-    // 1.16:1 on yellow in dark mode — invisible in exactly the case the marker
-    // exists for, since it only lands on the fill once you're over pace.
+    // Dark core in a light sleeve, both fixed rather than semantic, so one edge
+    // always contrasts: a single `.primary` line measured 1.16:1 on a yellow
+    // fill in dark mode — gone in exactly the case the marker exists for.
     @ViewBuilder private func paceMarker(_ tier: QuotaTier) -> some View {
         if let fraction = Self.elapsedFraction(tier) {
             GeometryReader { geo in
@@ -592,9 +590,7 @@ struct UsageView: View {
                     Capsule().fill(Color.white.opacity(0.9)).frame(width: 4)
                     Capsule().fill(Color.black.opacity(0.8)).frame(width: 1.5)
                 }
-                // Sized to the track, not the ProgressView: the control is 20pt
-                // tall around a ~7.5pt bar, so an unconstrained Rectangle grew a
-                // hairline 6pt past the bar at both ends.
+                // Sized to the track, not the 20pt control around it.
                 .frame(height: Self.paceMarkerHeight)
                 .position(x: min(max(fraction * geo.size.width, 2), geo.size.width - 2),
                           y: geo.size.height / 2)
@@ -602,8 +598,7 @@ struct UsageView: View {
         }
     }
 
-    // Slightly proud of the ~7.5pt track so it reads as a tick rather than a
-    // gap in the fill.
+    // Slightly proud of the ~7.5pt track, so it reads as a tick not a gap.
     static let paceMarkerHeight: CGFloat = 9
 
     // Falls back to the slot's old title when no window is reported.
@@ -618,9 +613,8 @@ struct UsageView: View {
         return QuotaReset.elapsedFraction(until: resets, windowLength: window, now: now)
     }
 
-    // The marker is visual-only, so VoiceOver gets the comparison in words.
-    // Phrased from the same toggle the row renders, or the spoken number
-    // contradicts the printed one.
+    // Visual-only cue, so VoiceOver gets it in words — phrased from the same
+    // toggle the row renders, or the spoken number contradicts the printed one.
     static func paceDescription(_ tier: QuotaTier,
                                 showRemaining: Bool = false,
                                 now: Date = Date()) -> String {
