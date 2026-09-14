@@ -300,11 +300,14 @@ final class PanelNav: ObservableObject {
     // True while a probe is in-flight. Set by PanelController around the
     // fetch call so the UI can swap the footer status to "Syncing…".
     @Published var quotaSyncing:     Bool = false
-    // Set when a probe had a token but the request/parse failed (vs. simply
-    // having no Claude Code session). Drives the Usage tab's "quota unavailable"
-    // state so a silently-changed endpoint isn't read as "still loading".
-    // Cleared on the next successful probe.
-    @Published var quotaError:       String?
+    // Per-client probe failure, keyed by the client that produced it. Set when a
+    // client's probe ran but couldn't return a usable snapshot; cleared on that
+    // client's next success. Rendered inline on that client's own Usage detail
+    // pane, so the message names whichever client is actually failing rather than
+    // always implicating Claude. A client with an error but no snapshot to fall
+    // back on still lists itself (see availableUsageClients) so the note has
+    // somewhere to render instead of falling through to the tab's empty state.
+    @Published var quotaErrors:      [UsageClient: String] = [:]
     // Set when the event socket failed to bind at startup — the panel is then
     // deaf to every agent notification. Drives the banner at the top of the
     // Events tab so the failure isn't silent. Cleared when the socket binds.
@@ -578,15 +581,17 @@ final class PanelNav: ObservableObject {
     // Connected clients that currently have quota to show, in display order.
     var availableUsageClients: [UsageClient] {
         var clients: [UsageClient] = []
-        if let claude = quota,
-           !(claude.fiveHour == nil && claude.sevenDay == nil
-             && claude.sevenDayOpus == nil && claude.sevenDaySonnet == nil) {
+        // Claude lists itself when it has any tier, or when it has an error to
+        // report — a cold rate-limit or a failed refresh with no prior snapshot —
+        // so the note renders on its own detail pane rather than the tab's global
+        // empty state. A held-stale snapshot keeps a tier, so it also stays listed.
+        if quota?.hasTier == true || quotaErrors[.claude] != nil {
             clients.append(.claude)
         }
-        if let codex = codexQuota, codex.primary != nil || codex.secondary != nil {
+        if codexQuota?.hasTier == true {
             clients.append(.codex)
         }
-        if let agy = antigravityQuota, !agy.models.isEmpty {
+        if antigravityQuota?.hasTier == true {
             clients.append(.antigravity)
         }
         return clients
@@ -1400,7 +1405,7 @@ final class PanelNav: ObservableObject {
             quota = nil
             quotaLastUpdated = nil
             quotaClaudeLastUpdated = nil
-            quotaError = nil
+            quotaErrors.removeAll()
         }
     }
 

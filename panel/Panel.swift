@@ -1742,26 +1742,34 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             self.nav.quotaSyncing = false
             if let snapshot {
                 self.nav.quota = snapshot
-                self.nav.quotaError = nil
+                self.nav.quotaErrors[.claude] = nil
                 self.nav.quotaLastUpdated = Date()
                 self.nav.quotaClaudeLastUpdated = Date()
                 self.evaluateQuotaThresholds(snapshot)
+            } else if self.claudeCliQuotaProbe.cliMissing {
+                // No `claude` on PATH. That's "not a Claude user", not a failure
+                // worth reporting — clear any snapshot and stay silent so a
+                // Codex- or Antigravity-only user never sees a Claude row appear
+                // just to complain about a CLI they don't use.
+                self.nav.quota = nil
+                self.nav.quotaClaudeLastUpdated = nil
+                self.nav.quotaErrors[.claude] = nil
             } else if self.claudeCliQuotaProbe.isRateLimited {
                 // Soft-fail: hold any prior snapshot. On a cold first probe
                 // (no snapshot yet) surface a rate-limit note so the tab shows
                 // that instead of sitting on a bare "Loading…" spinner until
                 // the backoff clears.
                 if self.nav.quota == nil {
-                    self.nav.quotaError = "Claude usage rate-limited — retrying shortly."
+                    self.nav.quotaErrors[.claude] = "Rate-limited — retrying shortly."
                 }
             } else {
-                // Hard-fail: the CLI couldn't run or its output didn't parse.
-                // Drop any stale snapshot so the Usage tab surfaces the error
-                // state instead of rendering old bars as if they were current.
-                self.nav.quota = nil
-                self.nav.quotaLastUpdated = nil
-                self.nav.quotaClaudeLastUpdated = nil
-                self.nav.quotaError = "Claude usage unavailable — run `claude /usage` to check your session."
+                // Hard-fail: the CLI ran but timed out or its output didn't
+                // parse. Hold the last-good snapshot — the error marks it stale
+                // in the pane — rather than nulling it, so a single bad tick
+                // doesn't drop Claude out of the client list and flicker it back
+                // on the next success. quotaClaudeLastUpdated is left untouched so
+                // the pane can still say how old the held data is.
+                self.nav.quotaErrors[.claude] = "Couldn't refresh — run `claude /usage` to check your session."
             }
         }
         // Codex (ChatGPT-plan) rate limits — read locally from the newest
@@ -1922,7 +1930,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     private func postQuotaBanner(label: String, percent: Int, resetsAt: Date?) {
         let body: String
-        if let resetsAt, let resetLabel = QuotaReset.relativeLabel(until: resetsAt) {
+        if let resetsAt, let resetLabel = QuotaReset.fullLabel(until: resetsAt) {
             body = "\(percent)% used. Resets \(resetLabel)."
         } else {
             body = "\(percent)% used."

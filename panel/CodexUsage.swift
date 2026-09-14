@@ -8,6 +8,11 @@ struct CodexQuotaSnapshot: Equatable {
     let primary: QuotaTier?
     let secondary: QuotaTier?
     let planType: String?
+
+    // See QuotaSnapshot.hasTier. Reachable here too: `tier` drops a window whose
+    // reset has already passed, so a rollout left over from last week parses into
+    // a snapshot with both windows nil.
+    var hasTier: Bool { primary != nil || secondary != nil }
 }
 
 // Reads Codex's account-level rate limits from the newest rollout JSONL under

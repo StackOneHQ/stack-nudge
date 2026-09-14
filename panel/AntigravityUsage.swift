@@ -20,6 +20,11 @@ struct AntigravityQuotaSnapshot: Equatable {
         let available: Int
         let monthly: Int
     }
+
+    // See QuotaSnapshot.hasTier. `parse` already refuses to build a snapshot with
+    // no models, so this holds by construction; stated anyway so all three
+    // clients answer the question the same way.
+    var hasTier: Bool { !models.isEmpty }
 }
 
 final class AntigravityUsageProbe {

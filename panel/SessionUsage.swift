@@ -25,6 +25,15 @@ struct QuotaSnapshot: Equatable {
     // Subscription tier from the claudeAiOauth blob (e.g. "max", "pro"); nil
     // when the field is absent. Shown next to the agent name in the Usage tab.
     let planType: String?
+
+    // Whether there is anything to draw. A snapshot can exist and still carry no
+    // tier: parseResultText returns .ok as soon as any "Current …" line parsed,
+    // including a bucket name we don't map yet, so "non-nil" is not the same
+    // question. Asked in two places that have to agree (which clients get a row,
+    // and whether an error replaces the bars or sits above them).
+    var hasTier: Bool {
+        fiveHour != nil || sevenDay != nil || sevenDayOpus != nil || sevenDaySonnet != nil
+    }
 }
 
 // A connected client shown in the Usage tab's left-hand list. Each renders its
@@ -220,7 +229,21 @@ struct UsageView: View {
     private func quotaPane(for client: UsageClient) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                tiers(for: client)
+                if let message = nav.quotaErrors[client] {
+                    if hasTier(client) {
+                        // Held-stale: mark the bars as not-current, but keep
+                        // showing them so a single bad tick doesn't blank the pane.
+                        staleNote(message)
+                        tiers(for: client)
+                    } else {
+                        // No snapshot to fall back on — this pane stands in for the
+                        // tab's old global error state, named for the client that
+                        // actually failed rather than always saying Claude.
+                        clientErrorState(client, message)
+                    }
+                } else {
+                    tiers(for: client)
+                }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 14)
@@ -229,6 +252,58 @@ struct UsageView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .scrollIndicators(.visible)
+    }
+
+    // Is there anything behind the error to keep showing? Deliberately the same
+    // predicate availableUsageClients lists on: a snapshot that parsed but holds
+    // no recognised tier would otherwise draw a stale-warning above zero bars,
+    // with nothing left to say what actually failed.
+    private func hasTier(_ client: UsageClient) -> Bool {
+        switch client {
+        case .claude:      return nav.quota?.hasTier ?? false
+        case .codex:       return nav.codexQuota?.hasTier ?? false
+        case .antigravity: return nav.antigravityQuota?.hasTier ?? false
+        }
+    }
+
+    // Shown above a client's bars when its latest refresh failed but a prior
+    // snapshot is being held. Keeps the held numbers visible without letting them
+    // read as current.
+    private func staleNote(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 6)
+    }
+
+    // Full-pane error for a client that has nothing to fall back on. The message
+    // is client-specific (carried in quotaErrors), and the heading names the
+    // client, so the copy no longer hardcodes Claude regardless of what failed.
+    private func clientErrorState(_ client: UsageClient, _ message: String) -> some View {
+        VStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.title2)
+                .foregroundStyle(.orange)
+            Text("\(client.displayName) usage unavailable")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 280)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.vertical, 24)
     }
 
     private func clientRow(_ client: UsageClient, isSelected: Bool) -> some View {
@@ -479,7 +554,7 @@ struct UsageView: View {
             ProgressView(value: min(tier.utilization, 100), total: 100)
                 .tint(barColor(tier.utilization))
             // Hidden rather than "Resets 11 months ago" on a stale snapshot.
-            if let resets = tier.resetsAt, let label = QuotaReset.relativeLabel(until: resets) {
+            if let resets = tier.resetsAt, let label = QuotaReset.fullLabel(until: resets) {
                 Text("Resets \(label)")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
@@ -489,35 +564,23 @@ struct UsageView: View {
     }
 
 
+    // No client has any data yet. A probe failure isn't shown here any more —
+    // once a client can report an error it lists itself and renders that error on
+    // its own detail pane (see clientErrorState), which names the failing client
+    // rather than always pointing at Claude. So this is purely the cold-load case.
     private var emptyState: some View {
         VStack(spacing: 10) {
-            if let error = nav.quotaError {
-                Image(systemName: "exclamationmark.triangle")
-                    .font(.title2)
-                    .foregroundStyle(.orange)
-                Text(error)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                Text("StackNudge reads your usage by running `claude /usage`. This clears on its own once the CLI is on PATH, signed in, and its output is parseable again.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 280)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                ProgressView()
-                    .controlSize(.small)
-                Text("Loading usage…")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                Text("Requires the `claude` CLI signed in (Claude reads usage via `claude /usage`), or a Codex session on a ChatGPT plan.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 280)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            ProgressView()
+                .controlSize(.small)
+            Text("Loading usage…")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Text("Requires the `claude` CLI signed in (Claude reads usage via `claude /usage`), or a Codex session on a ChatGPT plan.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 280)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.vertical, 24)
