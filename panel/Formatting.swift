@@ -122,6 +122,24 @@ enum QuotaReset {
     }
 }
 
+extension QuotaReset {
+
+    // Below this the warning would toggle on and off around the boundary while
+    // telling the user nothing — a tier at 46% with 45% elapsed is on pace.
+    static let paceWarningPoints: Double = 5
+
+    // Percentage points by which usage leads the clock, or nil when it doesn't
+    // lead by enough to be worth saying. Points, not a ratio: the row already
+    // shows both numbers as percentages, so the gap between them reads in the
+    // same unit.
+    static func paceOvershoot(utilization: Double, elapsedFraction: Double) -> Double? {
+        let used = min(max(utilization, 0), 100)
+        let elapsed = min(max(elapsedFraction, 0), 1) * 100
+        let overshoot = used - elapsed
+        return overshoot >= paceWarningPoints ? overshoot : nil
+    }
+}
+
 // Names a quota window by its length. Codex reports length, not kind, and the
 // slot→window mapping isn't fixed — see CodexUsage.tier.
 enum QuotaWindow {

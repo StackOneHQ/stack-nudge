@@ -88,12 +88,14 @@ final class QuotaPaceTests: XCTestCase {
         XCTAssertNil(UsageView.elapsedFraction(tier, now: now))
     }
 
+    // Under pace deliberately, so this pins the two numbers and nothing else —
+    // the warning suffix has its own test.
     func testAccessibilityLabelCarriesBothNumbers() {
-        let tier = QuotaTier(utilization: 62,
+        let tier = QuotaTier(utilization: 30,
                              resetsAt: ahead(3 * 3600),
                              windowLength: QuotaWindow.fiveHours)
         XCTAssertEqual(UsageView.paceDescription(tier, now: now),
-                       "62% used, 40% of the window elapsed")
+                       "30% used, 40% of the window elapsed")
     }
 
     func testAccessibilityLabelOmitsPaceWhenUnknown() {
@@ -103,13 +105,13 @@ final class QuotaPaceTests: XCTestCase {
 
     // VoiceOver must not read "62% used" while the row prints "38% left".
     func testAccessibilityLabelFollowsTheShowRemainingToggle() {
-        let tier = QuotaTier(utilization: 62,
+        let tier = QuotaTier(utilization: 30,
                              resetsAt: ahead(3 * 3600),
                              windowLength: QuotaWindow.fiveHours)
         XCTAssertEqual(UsageView.paceDescription(tier, showRemaining: true, now: now),
-                       "38% left, 40% of the window elapsed")
+                       "70% left, 40% of the window elapsed")
         XCTAssertEqual(UsageView.paceDescription(tier, showRemaining: false, now: now),
-                       "62% used, 40% of the window elapsed")
+                       "30% used, 40% of the window elapsed")
     }
 
     // Distinct fallback string, so this can't pass by echoing the expected value.
@@ -124,6 +126,64 @@ final class QuotaPaceTests: XCTestCase {
                              windowLength: QuotaWindow.sevenDays)
         XCTAssertEqual(UsageView.codexTitle(tier, fallback: "Current session (5h)"),
                        "Current week")
+    }
+
+    // MARK: - Pace warning
+
+    // The row shows the warning only when usage is meaningfully ahead of the
+    // clock; a tier that is merely on pace must stay quiet, or the orange
+    // becomes something to learn to ignore.
+    func testWarnsWhenUsageIsAheadOfTheClock() {
+        // 62% used, 40% of a 5h window gone.
+        let tier = QuotaTier(utilization: 62,
+                             resetsAt: ahead(3 * 3600),
+                             windowLength: QuotaWindow.fiveHours)
+        XCTAssertEqual(UsageView.paceWarning(tier, now: now), "22% ahead of pace")
+    }
+
+    func testStaysQuietWhenOnPace() {
+        // 46% used, 45% elapsed — 1 point apart.
+        let tier = QuotaTier(utilization: 46,
+                             resetsAt: ahead(0.55 * QuotaWindow.sevenDays),
+                             windowLength: QuotaWindow.sevenDays)
+        XCTAssertNil(UsageView.paceWarning(tier, now: now))
+    }
+
+    func testStaysQuietWhenUnderPace() {
+        let tier = QuotaTier(utilization: 11,
+                             resetsAt: ahead(0.64 * QuotaWindow.sevenDays),
+                             windowLength: QuotaWindow.sevenDays)
+        XCTAssertNil(UsageView.paceWarning(tier, now: now))
+    }
+
+    func testThresholdBoundary() {
+        XCTAssertNil(QuotaReset.paceOvershoot(utilization: 44.9, elapsedFraction: 0.40))
+        XCTAssertEqual(QuotaReset.paceOvershoot(utilization: 45, elapsedFraction: 0.40) ?? 0,
+                       5, accuracy: 0.0001)
+    }
+
+    // No window or no reset time means no elapsed fraction, so nothing to
+    // compare against — silence, not a warning derived from a missing number.
+    func testNoWarningWithoutAWindow() {
+        XCTAssertNil(UsageView.paceWarning(QuotaTier(utilization: 99, resetsAt: ahead(3600)),
+                                           now: now))
+        XCTAssertNil(UsageView.paceWarning(QuotaTier(utilization: 99, resetsAt: nil,
+                                                     windowLength: QuotaWindow.fiveHours),
+                                           now: now))
+    }
+
+    func testOvershootClampsOutOfRangeInputs() {
+        XCTAssertNil(QuotaReset.paceOvershoot(utilization: -20, elapsedFraction: 0.5))
+        XCTAssertEqual(QuotaReset.paceOvershoot(utilization: 140, elapsedFraction: -1) ?? 0,
+                       100, accuracy: 0.0001)
+    }
+
+    func testAccessibilityLabelCarriesTheWarning() {
+        let tier = QuotaTier(utilization: 62,
+                             resetsAt: ahead(3 * 3600),
+                             windowLength: QuotaWindow.fiveHours)
+        XCTAssertEqual(UsageView.paceDescription(tier, now: now),
+                       "62% used, 40% of the window elapsed, 22% ahead of pace")
     }
 
     // MARK: - Widget ring labels

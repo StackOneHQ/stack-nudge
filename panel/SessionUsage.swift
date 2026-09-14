@@ -572,8 +572,29 @@ struct UsageView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
+            // Only the warning state — no "on track" line. Nothing to learn to
+            // ignore, so the orange still means something when it appears.
+            if let warning = Self.paceWarning(tier) {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 9))
+                    Text(warning)
+                }
+                .font(.caption2)
+                .foregroundStyle(.orange)
+            }
         }
         .padding(.horizontal, 6)
+    }
+
+    // "22% ahead of pace", or nil when usage isn't meaningfully ahead of the
+    // clock. Reachable from tests; the view around it is not.
+    static func paceWarning(_ tier: QuotaTier, now: Date = Date()) -> String? {
+        guard let elapsed = elapsedFraction(tier, now: now),
+              let overshoot = QuotaReset.paceOvershoot(utilization: tier.utilization,
+                                                       elapsedFraction: elapsed)
+        else { return nil }
+        return "\(Int(overshoot.rounded()))% ahead of pace"
     }
 
     // Usage over how far through the window we are: a pale full-height bar for
@@ -632,7 +653,9 @@ struct UsageView: View {
             ? "\(Int(max(0, 100 - tier.utilization).rounded()))% left"
             : "\(Int(tier.utilization.rounded()))% used"
         guard let fraction = elapsedFraction(tier, now: now) else { return amount }
-        return "\(amount), \(Int((fraction * 100).rounded()))% of the window elapsed"
+        let base = "\(amount), \(Int((fraction * 100).rounded()))% of the window elapsed"
+        guard let warning = paceWarning(tier, now: now) else { return base }
+        return "\(base), \(warning)"
     }
 
 
