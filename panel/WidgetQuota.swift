@@ -103,12 +103,12 @@ struct WidgetQuota: Equatable {
 }
 
 extension UsageClient {
-    // Short tag naming the client in the pill's hover legend. nil for Claude:
-    // it's the default selection, so labelling it would put a line on every
-    // pill belonging to a user who never switches client.
-    var widgetTag: String? {
+    // Short tag naming the client in the pill's hover legend. Claude carries one
+    // too: leaving it blank made absence the label, so switching to Codex read
+    // as a line appearing rather than as a change of client.
+    var widgetTag: String {
         switch self {
-        case .claude:      return nil
+        case .claude:      return "Claude"
         case .codex:       return "Codex"
         case .antigravity: return "Agy"
         }

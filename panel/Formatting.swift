@@ -38,10 +38,19 @@ enum QuotaReset {
         return seconds > 0 ? seconds : nil
     }
 
-    // Widget pill: "2h24m", "2h", "14m".
+    // Widget pill: "4d15h", "2h24m", "2h", "14m".
+    //
+    // Days matter because the pill counts down whichever window is the shorter
+    // of the pair, and Codex often publishes only a weekly one — which this
+    // rendered as "111h41m" while the format was written for a 5-hour window.
     static func shortLabel(until date: Date, now: Date = Date()) -> String? {
         guard let remaining = remaining(until: date, now: now) else { return nil }
         let seconds = Int(remaining)
+        if seconds >= 86400 {
+            let days = seconds / 86400
+            let hours = (seconds % 86400) / 3600
+            return hours > 0 ? "\(days)d\(hours)h" : "\(days)d"
+        }
         if seconds >= 3600 {
             let hours = seconds / 3600
             let minutes = (seconds % 3600) / 60

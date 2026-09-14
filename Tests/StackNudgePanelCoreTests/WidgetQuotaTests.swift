@@ -158,9 +158,14 @@ final class WidgetQuotaTests: XCTestCase {
 
     // Claude is the default selection, so tagging it would put a name line on
     // every pill belonging to someone who never switches client.
-    func test_widgetTag_absentForClaudeOnly() {
-        XCTAssertNil(UsageClient.claude.widgetTag)
+    // Every client is named, Claude included: with Claude blank, absence was the
+    // label, so switching clients read as a line appearing rather than a change.
+    func test_widgetTag_namesEveryClient() {
+        XCTAssertEqual(UsageClient.claude.widgetTag, "Claude")
         XCTAssertEqual(UsageClient.codex.widgetTag, "Codex")
         XCTAssertEqual(UsageClient.antigravity.widgetTag, "Agy")
+        for client in UsageClient.allCases {
+            XCTAssertFalse(client.widgetTag.isEmpty, "\(client) has no widget tag")
+        }
     }
 }

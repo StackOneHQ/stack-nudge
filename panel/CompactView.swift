@@ -225,19 +225,22 @@ struct CompactView: View {
     }
 
     private var hoverLegend: some View {
-        let shortText = quota.short.map { "\(quota.shortLabel) \(Int($0.utilization.rounded()))%" }
-            ?? "\(quota.shortLabel) —"
-        let longText  = quota.long.map  { "\(quota.longLabel) \(Int($0.utilization.rounded()))%" }
-            ?? "\(quota.longLabel) —"
+        // A ring with no tier gets no row. It used to render "7d —", which said
+        // nothing and — once the labels started coming from the reported window
+        // — could repeat the row above it verbatim when a client publishes only
+        // one window. hasData already keeps the legend off entirely when both
+        // rings are empty.
+        func row(_ tier: QuotaTier?, _ label: String) -> String? {
+            tier.map { "\(label) \(Int($0.utilization.rounded()))%" }
+        }
         return VStack(alignment: .leading, spacing: 1) {
-            // Only non-Claude clients get a name line — see UsageClient.widgetTag.
             // Every tag is narrower than the "5h 50%" below it, so this never
-            // widens the reserved legend slot.
-            if let tag = quota.client?.widgetTag {
-                Text(tag).foregroundStyle(.tertiary)
+            // widens the reserved legend slot ("Claude" measures 31pt to its 35pt).
+            if let client = quota.client {
+                Text(client.widgetTag).foregroundStyle(.tertiary)
             }
-            Text(shortText)
-            Text(longText)
+            if let shortText = row(quota.short, quota.shortLabel) { Text(shortText) }
+            if let longText = row(quota.long, quota.longLabel) { Text(longText) }
         }
         .font(.system(size: 9, weight: .medium).monospacedDigit())
         .foregroundStyle(.secondary)
