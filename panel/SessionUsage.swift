@@ -592,7 +592,7 @@ struct UsageView: View {
                     .frame(height: Self.paceBarHeight)
                 if let elapsed {
                     Capsule()
-                        .fill(color.opacity(0.3))
+                        .fill(color.opacity(0.2))
                         .frame(width: max(elapsed * geo.size.width, 2),
                                height: Self.paceBarHeight)
                 }
