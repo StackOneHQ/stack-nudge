@@ -194,4 +194,67 @@ final class AttentionPolicyTests: XCTestCase {
             XCTAssertEqual(list.first, 0, "each list needs an Off entry at index 0")
         }
     }
+
+    // MARK: - isAnswerable
+
+    private func answerable(kind: NudgeKind = .permission,
+                            fifo: String? = "/tmp/x/fifo",
+                            hookPID: Int? = 4242,
+                            fifoExists: Bool = true,
+                            alive: Bool = true) -> Bool {
+        AttentionPolicy.isAnswerable(kind: kind, fifoPath: fifo, hookPID: hookPID,
+                                     fifoExists: { _ in fifoExists },
+                                     processAlive: { _ in alive })
+    }
+
+    func test_answerable_whenTheHookIsStillWaiting() {
+        XCTAssertTrue(answerable())
+    }
+
+    // The bug this exists for. The FIFO's trap is on EXIT, which nothing honours
+    // for SIGKILL, and the agent kills the hook when the user answers in its own
+    // UI — so the file outlives the process. Evidence from one machine: 536
+    // leaked FIFO dirs over three months, every one still holding a live FIFO.
+    // Treating the file alone as proof kept the prompt in the menu-bar count and
+    // fired reminders, at the user and at Slack, for the full 550 seconds after
+    // they had already answered.
+    func test_notAnswerable_whenTheFifoOutlivedItsHook() {
+        XCTAssertFalse(answerable(fifoExists: true, alive: false),
+                       "a FIFO nobody is reading cannot carry a decision")
+    }
+
+    func test_notAnswerable_onceTheFifoIsGone() {
+        XCTAssertFalse(answerable(fifoExists: false))
+    }
+
+    // Observability-only agents get no FIFO, and a finished turn has nothing to
+    // answer — neither should ever be counted or reminded about.
+    func test_notAnswerable_withoutAFifo() {
+        XCTAssertFalse(answerable(fifo: nil))
+    }
+
+    func test_notAnswerable_forNonPermissionEvents() {
+        XCTAssertFalse(answerable(kind: .stop))
+        XCTAssertFalse(answerable(kind: .other))
+    }
+
+    // A hook from before this field existed reports no pid. Treating that as
+    // dead would silently disable the panel's Allow/Deny for the first event
+    // after an upgrade, which is worse than the leak it protects against.
+    func test_missingHookPIDFallsBackToTheOldBehaviour() {
+        XCTAssertTrue(answerable(hookPID: nil, alive: false),
+                      "no pid reported means we cannot judge liveness, so trust the FIFO")
+        XCTAssertFalse(answerable(hookPID: nil, fifoExists: false))
+    }
+
+    // Liveness is only consulted when there is a FIFO to answer — otherwise a
+    // dead-process check would be doing work for events that can never qualify.
+    func test_livenessIsNotConsultedWithoutAFifo() {
+        var asked = false
+        _ = AttentionPolicy.isAnswerable(kind: .permission, fifoPath: nil, hookPID: 1,
+                                         fifoExists: { _ in true },
+                                         processAlive: { _ in asked = true; return true })
+        XCTAssertFalse(asked)
+    }
+
 }
