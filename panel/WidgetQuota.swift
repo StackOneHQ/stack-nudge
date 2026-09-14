@@ -47,6 +47,16 @@ struct WidgetQuota: Equatable {
         }
     }
 
+    // "5h" / "7d" for the two windows Codex publishes; the slot's old label when
+    // it reports none.
+    static func ringLabel(_ tier: QuotaTier?, fallback: String) -> String {
+        switch tier?.windowLength {
+        case QuotaWindow.fiveHours: return "5h"
+        case QuotaWindow.sevenDays: return "7d"
+        default:                    return fallback
+        }
+    }
+
     static func make(client: UsageClient?,
                      claude: QuotaSnapshot?,
                      codex: CodexQuotaSnapshot?,
@@ -57,9 +67,14 @@ struct WidgetQuota: Equatable {
                                short: claude?.fiveHour, long: claude?.sevenDay,
                                shortLabel: "5h", longLabel: "7d")
         case .codex:
+            // Named from the window each slot actually reports. Codex's slots
+            // carry no fixed window, so a hardcoded "5h" labelled a weekly ring
+            // as a session one — and once the Usage tab started naming them
+            // correctly the pill openly contradicted it.
             return WidgetQuota(client: .codex,
                                short: codex?.primary, long: codex?.secondary,
-                               shortLabel: "5h", longLabel: "7d")
+                               shortLabel: ringLabel(codex?.primary, fallback: "5h"),
+                               longLabel: ringLabel(codex?.secondary, fallback: "7d"))
         case .antigravity:
             // agy reports no 5h/weekly pair — one window per model plus a
             // monthly credit pool. The model closest to its limit is the one

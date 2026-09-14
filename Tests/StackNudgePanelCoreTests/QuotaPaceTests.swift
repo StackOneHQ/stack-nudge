@@ -112,8 +112,39 @@ final class QuotaPaceTests: XCTestCase {
                        "62% used, 40% of the window elapsed")
     }
 
+    // Distinct fallback string, so this can't pass by echoing the expected value.
     func testCodexTitleFallsBackWhenNoWindowReported() {
         let tier = QuotaTier(utilization: 10, resetsAt: ahead(3600))
-        XCTAssertEqual(UsageView.codexTitle(tier, fallback: "Current week"), "Current week")
+        XCTAssertEqual(UsageView.codexTitle(tier, fallback: "slot default"), "slot default")
+    }
+
+    func testCodexTitlePrefersTheReportedWindowOverTheFallback() {
+        let tier = QuotaTier(utilization: 10,
+                             resetsAt: ahead(3600),
+                             windowLength: QuotaWindow.sevenDays)
+        XCTAssertEqual(UsageView.codexTitle(tier, fallback: "Current session (5h)"),
+                       "Current week")
+    }
+
+    // MARK: - Widget ring labels
+
+    // The pill named Codex's rings by slot too, so a weekly window in `primary`
+    // read "5h" on the pill while the Usage tab read "Current week".
+    func testWidgetRingLabelFollowsTheReportedWindow() {
+        let weekly = QuotaTier(utilization: 13,
+                               resetsAt: ahead(3600),
+                               windowLength: QuotaWindow.sevenDays)
+        XCTAssertEqual(WidgetQuota.ringLabel(weekly, fallback: "5h"), "7d")
+
+        let session = QuotaTier(utilization: 13,
+                                resetsAt: ahead(3600),
+                                windowLength: QuotaWindow.fiveHours)
+        XCTAssertEqual(WidgetQuota.ringLabel(session, fallback: "7d"), "5h")
+    }
+
+    func testWidgetRingLabelFallsBackWithNoWindow() {
+        XCTAssertEqual(WidgetQuota.ringLabel(nil, fallback: "5h"), "5h")
+        XCTAssertEqual(
+            WidgetQuota.ringLabel(QuotaTier(utilization: 1, resetsAt: nil), fallback: "7d"), "7d")
     }
 }

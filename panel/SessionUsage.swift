@@ -579,19 +579,32 @@ struct UsageView: View {
     // A tick at the point the window has reached: fill past it means burning
     // faster than the clock. An overlay rather than a second bar because the
     // pane fits only ~3 tier rows and Claude Max has 4.
+    //
+    // Dark core inside a light sleeve, both fixed rather than semantic: the tick
+    // has to stay legible against the empty track *and* against a green, yellow
+    // or red fill, in either appearance. A single `.primary` line measured
+    // 1.16:1 on yellow in dark mode — invisible in exactly the case the marker
+    // exists for, since it only lands on the fill once you're over pace.
     @ViewBuilder private func paceMarker(_ tier: QuotaTier) -> some View {
         if let fraction = Self.elapsedFraction(tier) {
             GeometryReader { geo in
-                Rectangle()
-                    .fill(.primary)
-                    .frame(width: 1.5)
-                    // Inset so the tick stays visible at either extreme.
-                    .offset(x: min(max(fraction * geo.size.width, 0.75),
-                                   geo.size.width - 0.75) - 0.75)
-                    .opacity(0.55)
+                ZStack {
+                    Capsule().fill(Color.white.opacity(0.9)).frame(width: 4)
+                    Capsule().fill(Color.black.opacity(0.8)).frame(width: 1.5)
+                }
+                // Sized to the track, not the ProgressView: the control is 20pt
+                // tall around a ~7.5pt bar, so an unconstrained Rectangle grew a
+                // hairline 6pt past the bar at both ends.
+                .frame(height: Self.paceMarkerHeight)
+                .position(x: min(max(fraction * geo.size.width, 2), geo.size.width - 2),
+                          y: geo.size.height / 2)
             }
         }
     }
+
+    // Slightly proud of the ~7.5pt track so it reads as a tick rather than a
+    // gap in the fill.
+    static let paceMarkerHeight: CGFloat = 9
 
     // Falls back to the slot's old title when no window is reported.
     static func codexTitle(_ tier: QuotaTier, fallback: String) -> String {
