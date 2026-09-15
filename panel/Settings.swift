@@ -21,9 +21,11 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            settingsBanners
-
             categorySplit
+
+            aboutFooter
+                .padding(.horizontal, 14)
+                .padding(.bottom, 6)
 
             PageFooter {
                 if nav.recordingHotkey || nav.recordingSpeakHotkey {
@@ -465,100 +467,97 @@ struct SettingsView: View {
         .padding(.bottom, 4)
     }
 
-    @ViewBuilder private var notificationRows: some View {
-        row(.banner,           label: "Banner notifications", kind: .toggle, value: nav.bannerEnabled    ? "On" : "Off")
-        row(.muteWhenFocused,  label: "Mute when focused",    kind: .toggle, value: nav.muteWhenFocused  ? "On" : "Off")
-        row(.mute,             label: nav.isMuted ? "Resume notifications" : "Mute notifications", kind: .mute, value: muteRowValue)
-        row(.muteDuration,     label: "Mute duration",        kind: .cycle,  value: "\(nav.muteDurationMinutes) min")
-        row(.remindUnanswered, label: "Remind unanswered",    kind: .cycle,  value: AttentionPolicy.minuteLabel(nav.remindMinutes))
-        row(.stalledSessions,  label: "Flag stalled after",   kind: .cycle,  value: AttentionPolicy.minuteLabel(nav.stalledMinutes))
-        row(.soundEnabled,     label: "Sound enabled",        kind: .toggle, value: nav.soundEnabled ? "On" : "Off")
-        row(.agentDoneSound,   label: "Agent done",           kind: .cycle,  value: nav.soundStop,       enabled: nav.soundEnabled)
-        row(.permissionSound,  label: "Permission",           kind: .cycle,  value: nav.soundPermission, enabled: nav.soundEnabled)
-    }
+    // One renderer over nav.rows(in:), rather than eight hand-kept lists beside
+    // nav's eight. They agreed, but nothing made them: a row present in
+    // rows(in:) and missing from its group would be keyboard-selectable and
+    // invisible, and no test could see it. Exhaustive, so a new row has to be
+    // given a home here too.
+    @ViewBuilder private func settingRow(_ id: SettingsRow) -> some View {
+        switch id {
+        // Notifications
+        case .banner:           row(.banner, label: "Banner notifications", kind: .toggle, value: nav.bannerEnabled ? "On" : "Off")
+        case .muteWhenFocused:  row(.muteWhenFocused, label: "Mute when focused", kind: .toggle, value: nav.muteWhenFocused ? "On" : "Off")
+        case .mute:             row(.mute, label: nav.isMuted ? "Resume notifications" : "Mute notifications", kind: .mute, value: muteRowValue)
+        case .muteDuration:     row(.muteDuration, label: "Mute duration", kind: .cycle, value: "\(nav.muteDurationMinutes) min")
+        case .remindUnanswered: row(.remindUnanswered, label: "Remind unanswered", kind: .cycle, value: AttentionPolicy.minuteLabel(nav.remindMinutes))
+        case .stalledSessions:  row(.stalledSessions, label: "Flag stalled after", kind: .cycle, value: AttentionPolicy.minuteLabel(nav.stalledMinutes))
+        case .soundEnabled:     row(.soundEnabled, label: "Sound enabled", kind: .toggle, value: nav.soundEnabled ? "On" : "Off")
+        case .agentDoneSound:   row(.agentDoneSound, label: "Agent done", kind: .cycle, value: nav.soundStop, enabled: nav.soundEnabled)
+        case .permissionSound:  row(.permissionSound, label: "Permission", kind: .cycle, value: nav.soundPermission, enabled: nav.soundEnabled)
 
-    @ViewBuilder private var voiceRows: some View {
-        row(.voiceEnabled, label: "Voice notifications", kind: .toggle, value: nav.voiceEnabled ? "On" : "Off")
-        row(.speakHotkey, label: "Read aloud shortcut", kind: .cycle,
-            value: nav.recordingSpeakHotkey ? "Press combo…" : nav.speakHotkeyDisplay)
-        if let error = nav.speakHotkeyError {
-            Text(error)
-                .font(.caption)
-                .foregroundStyle(.red)
-                .padding(.horizontal, 14)
-                .padding(.top, 2)
+        // Voice
+        case .voiceEnabled: row(.voiceEnabled, label: "Voice notifications", kind: .toggle, value: nav.voiceEnabled ? "On" : "Off")
+        case .speakHotkey:
+            row(.speakHotkey, label: "Read aloud shortcut", kind: .cycle,
+                value: nav.recordingSpeakHotkey ? "Press combo…" : nav.speakHotkeyDisplay)
+            if let error = nav.speakHotkeyError {
+                Text(error).font(.caption).foregroundStyle(.red)
+                    .padding(.horizontal, 14).padding(.top, 2)
+            }
+        case .voice:      row(.voice, label: "Voice", kind: .cycle, value: voiceLabel, enabled: nav.voiceEnabled)
+        case .voiceSpeed: row(.voiceSpeed, label: "Speed", kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed), enabled: nav.voiceEnabled)
+        case .downloadVoiceModel: voiceModelDownloadRow(index: nav.index(of: .downloadVoiceModel))
+
+        // Appearance
+        case .widget:        row(.widget, label: "Widget", kind: .toggle, value: nav.compactMode ? "On" : "Off")
+        case .snapToCorners: row(.snapToCorners, label: "Snap to corners", kind: .toggle, value: nav.compactSnap ? "On" : "Off", enabled: nav.compactMode)
+        case .widgetCorner:  row(.widgetCorner, label: "Widget corner", kind: .cycle, value: nav.compactCorner.label, enabled: nav.compactMode && nav.compactSnap)
+        case .widgetOpacity: row(.widgetOpacity, label: "Widget opacity", kind: .cycle, value: "\(Int(nav.compactAlpha * 100))%", enabled: nav.compactMode)
+        case .widgetContent: row(.widgetContent, label: "Widget type", kind: .cycle, value: nav.compactContent.label, enabled: nav.compactMode)
+        case .mascot:        row(.mascot, label: "Mascot", kind: .cycle, value: nav.mascot.label, enabled: nav.compactMode)
+        case .theme:         row(.theme, label: "Accent color", kind: .cycle, value: nav.theme.label, enabled: nav.compactMode)
+
+        // Usage
+        case .quotaTracking:  row(.quotaTracking, label: "Quota tracking", kind: .toggle, value: nav.quotaTrackingEnabled ? "On" : "Off")
+        case .quotaAlerts:    row(.quotaAlerts, label: "Quota alerts", kind: .toggle, value: nav.quotaAlertsEnabled ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
+        case .alertThreshold: row(.alertThreshold, label: "Alert threshold", kind: .cycle, value: "\(nav.quotaAlertThreshold)%", enabled: nav.quotaTrackingEnabled && nav.quotaAlertsEnabled)
+        case .pollFrequency:  row(.pollFrequency, label: "Poll frequency", kind: .cycle, value: "\(nav.quotaPollMinutes) min", enabled: nav.quotaTrackingEnabled)
+        case .contextAlert:   row(.contextAlert, label: "Context alert at", kind: .cycle, value: contextAlertLabel)
+        case .showRemaining:  row(.showRemaining, label: "Show remaining", kind: .toggle, value: nav.quotaShowRemaining ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
+
+        // Integrations
+        case .slackPaste:      row(.slackPaste, label: "Paste Slack setup", kind: .action, value: slackPasteValue)
+        case .slackIdentity:   row(.slackIdentity, label: "Slack user", kind: .action, value: slackUserValue, enabled: nav.slackTokenPresent)
+        case .slackTest:       row(.slackTest, label: "Send test message", kind: .action, value: "", enabled: slackReady)
+        case .slackEnabled:    row(.slackEnabled, label: "Slack notifications", kind: .toggle, value: nav.slackEnabled ? "On" : "Off", enabled: slackReady)
+        case .slackIdle:       row(.slackIdle, label: "Notify when idle", kind: .cycle, value: SlackDelivery.idleLabel(nav.slackIdleMinutes), enabled: slackReady && nav.slackEnabled)
+        case .slackDetail:     row(.slackDetail, label: "Include message text", kind: .toggle, value: nav.slackIncludeDetail ? "On" : "Off", enabled: slackReady && nav.slackEnabled)
+        case .slackStop:       row(.slackStop, label: "Also notify on finished turns", kind: .toggle, value: nav.slackNotifyOnStop ? "On" : "Off", enabled: slackReady && nav.slackEnabled)
+        case .githubLinks:     row(.githubLinks, label: "GitHub PR links", kind: .toggle, value: nav.githubLinkingEnabled ? "On" : "Off")
+        case .hideShipped:     row(.hideShipped, label: "Hide shipped", kind: .toggle, value: nav.hideShippedTickets ? "On" : "Off", enabled: nav.githubLinkingEnabled)
+        case .disconnectGithub: row(.disconnectGithub, label: "Disconnect GitHub…", kind: .action, value: nav.githubSignedIn ? "Signed in" : "", enabled: nav.githubSignedIn)
+
+        // Panel
+        case .hotkey:
+            row(.hotkey, label: "Panel shortcut", kind: .cycle,
+                value: nav.recordingHotkey ? "Press combo…" : nav.hotkeyDisplay)
+            if let error = nav.hotkeyError {
+                Text(error).font(.caption).foregroundStyle(.red)
+                    .padding(.horizontal, 14).padding(.top, 2)
+            }
+        case .pinPanel:          row(.pinPanel, label: "Pin panel", kind: .toggle, value: nav.panelPinned ? "On" : "Off")
+        case .keepOpenWhenEmpty: row(.keepOpenWhenEmpty, label: "Keep open when empty", kind: .toggle, value: nav.keepOpenWhenEmpty ? "On" : "Off")
+        case .launchAtLogin:     row(.launchAtLogin, label: "Launch at login", kind: .toggle, value: nav.launchAtLogin ? "On" : "Off")
+        case .tabTitleNames:     row(.tabTitleNames, label: "Name from tab titles", kind: .toggle, value: nav.tabTitleNames ? "On" : "Off")
+
+        // Events
+        case .historyPerSession: row(.historyPerSession, label: "History per session", kind: .cycle, value: "\(nav.eventsPerSession)")
+        case .eventHistory:      row(.eventHistory, label: "Event history", kind: .toggle, value: nav.eventHistoryEnabled ? "On" : "Off")
+        case .clearHistory:      row(.clearHistory, label: "Clear event history", kind: .action, value: nav.historyRecords.isEmpty ? "empty" : "\(nav.historyRecords.count) kept")
+
+        // Actions
+        case .editPhrases:      row(.editPhrases, label: "Edit phrases…", kind: .action, value: "")
+        case .checkPermissions: row(.checkPermissions, label: "Check permissions…", kind: .action, value: "")
+        case .openConfig:       row(.openConfig, label: "Open config file…", kind: .action, value: "")
+        case .releaseNotes:     row(.releaseNotes, label: "View release notes…", kind: .action, value: "")
+        case .checkUpdates:     row(.checkUpdates, label: "Check for updates…", kind: .action, value: checkForUpdatesStatus)
+        case .uninstall:        row(.uninstall, label: "Uninstall StackNudge…", kind: .action, value: "")
+        case .quit:             row(.quit, label: "Quit panel", kind: .action, value: "")
+
+        // Drawn by settingsBanners, above the category's rows.
+        case .wireAgents, .dismissAgents, .permissions, .update:
+            EmptyView()
         }
-        if nav.voiceModelCached {
-            row(.voice,      label: "Voice", kind: .cycle, value: voiceLabel,                              enabled: nav.voiceEnabled)
-            row(.voiceSpeed, label: "Speed", kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed), enabled: nav.voiceEnabled)
-        } else {
-            voiceModelDownloadRow(index: nav.index(of: .downloadVoiceModel))
-        }
-    }
-
-    @ViewBuilder private var appearanceRows: some View {
-        row(.widget,        label: "Widget",          kind: .toggle, value: nav.compactMode ? "On" : "Off")
-        row(.snapToCorners, label: "Snap to corners", kind: .toggle, value: nav.compactSnap ? "On" : "Off",   enabled: nav.compactMode)
-        row(.widgetCorner,  label: "Widget corner",   kind: .cycle,  value: nav.compactCorner.label,           enabled: nav.compactMode && nav.compactSnap)
-        row(.widgetOpacity, label: "Widget opacity",  kind: .cycle,  value: "\(Int(nav.compactAlpha * 100))%", enabled: nav.compactMode)
-        row(.widgetContent, label: "Widget type",     kind: .cycle,  value: nav.compactContent.label,          enabled: nav.compactMode)
-        row(.mascot,        label: "Mascot",          kind: .cycle,  value: nav.mascot.label,                  enabled: nav.compactMode)
-        row(.theme,         label: "Accent color",    kind: .cycle,  value: nav.theme.label,                   enabled: nav.compactMode)
-    }
-
-    @ViewBuilder private var usageRows: some View {
-        row(.quotaTracking, label: "Quota tracking",  kind: .toggle, value: nav.quotaTrackingEnabled ? "On" : "Off")
-        row(.quotaAlerts,   label: "Quota alerts",    kind: .toggle, value: nav.quotaAlertsEnabled    ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
-        row(.alertThreshold, label: "Alert threshold", kind: .cycle,  value: "\(nav.quotaAlertThreshold)%",            enabled: nav.quotaTrackingEnabled && nav.quotaAlertsEnabled)
-        row(.pollFrequency, label: "Poll frequency",  kind: .cycle,  value: "\(nav.quotaPollMinutes) min",            enabled: nav.quotaTrackingEnabled)
-        row(.contextAlert,  label: "Context alert at", kind: .cycle, value: contextAlertLabel)
-        row(.showRemaining, label: "Show remaining",   kind: .toggle, value: nav.quotaShowRemaining ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
-    }
-
-    @ViewBuilder private var integrationRows: some View {
-        row(.slackPaste,    label: "Paste Slack setup",   kind: .action, value: slackPasteValue)
-        row(.slackIdentity, label: "Slack user",          kind: .action, value: slackUserValue,  enabled: nav.slackTokenPresent)
-        row(.slackTest,     label: "Send test message",   kind: .action, value: "",              enabled: slackReady)
-        row(.slackEnabled,  label: "Slack notifications", kind: .toggle, value: nav.slackEnabled ? "On" : "Off",       enabled: slackReady)
-        row(.slackIdle,     label: "Notify when idle",    kind: .cycle,  value: SlackDelivery.idleLabel(nav.slackIdleMinutes), enabled: slackReady && nav.slackEnabled)
-        row(.slackDetail,   label: "Include message text", kind: .toggle, value: nav.slackIncludeDetail ? "On" : "Off", enabled: slackReady && nav.slackEnabled)
-        row(.slackStop,     label: "Also notify on finished turns", kind: .toggle, value: nav.slackNotifyOnStop ? "On" : "Off", enabled: slackReady && nav.slackEnabled)
-        row(.githubLinks,     label: "GitHub PR links",  kind: .toggle, value: nav.githubLinkingEnabled ? "On" : "Off")
-        row(.hideShipped,     label: "Hide shipped",     kind: .toggle, value: nav.hideShippedTickets ? "On" : "Off", enabled: nav.githubLinkingEnabled)
-        row(.disconnectGithub, label: "Disconnect GitHub…", kind: .action, value: nav.githubSignedIn ? "Signed in" : "", enabled: nav.githubSignedIn)
-    }
-
-    @ViewBuilder private var panelRows: some View {
-        row(.hotkey, label: "Panel shortcut",
-            kind: .cycle,
-            value: nav.recordingHotkey ? "Press combo…" : nav.hotkeyDisplay)
-        if let error = nav.hotkeyError {
-            Text(error)
-                .font(.caption)
-                .foregroundStyle(.red)
-                .padding(.horizontal, 14)
-                .padding(.top, 2)
-        }
-        row(.pinPanel,          label: "Pin panel",            kind: .toggle, value: nav.panelPinned      ? "On" : "Off")
-        row(.keepOpenWhenEmpty, label: "Keep open when empty", kind: .toggle, value: nav.keepOpenWhenEmpty ? "On" : "Off")
-        row(.launchAtLogin,     label: "Launch at login",      kind: .toggle, value: nav.launchAtLogin    ? "On" : "Off")
-        row(.tabTitleNames,     label: "Name from tab titles", kind: .toggle, value: nav.tabTitleNames    ? "On" : "Off")
-    }
-
-    @ViewBuilder private var eventRows: some View {
-        row(.historyPerSession, label: "History per session", kind: .cycle, value: "\(nav.eventsPerSession)")
-        row(.eventHistory,  label: "Event history",  kind: .toggle, value: nav.eventHistoryEnabled ? "On" : "Off")
-        row(.clearHistory,  label: "Clear event history", kind: .action, value: nav.historyRecords.isEmpty ? "empty" : "\(nav.historyRecords.count) kept")
-    }
-
-    @ViewBuilder private var actionRows: some View {
-        row(.editPhrases,      label: "Edit phrases…",         kind: .action, value: "")
-        row(.checkPermissions, label: "Check permissions…",    kind: .action, value: "")
-        row(.openConfig,       label: "Open config file…",     kind: .action, value: "")
-        row(.releaseNotes,     label: "View release notes…",   kind: .action, value: "")
-        row(.checkUpdates,     label: "Check for updates…",    kind: .action, value: checkForUpdatesStatus)
-        row(.uninstall,        label: "Uninstall StackNudge…", kind: .action, value: "")
-        row(.quit,             label: "Quit panel",            kind: .action, value: "")
     }
 
     // Attention items stay above the split and outside any category, so they're
@@ -601,8 +600,14 @@ struct SettingsView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 2) {
+                        // Inside the scroller, not pinned above it: on first
+                        // launch the unwired-agents and permissions banners
+                        // together are taller than the pane, and pinned they
+                        // left two rows visible with no way to scroll past.
+                        // They index ahead of the category's rows, so this is
+                        // also the order the keyboard walks.
+                        settingsBanners
                         detailRows
-                        aboutFooter
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 12)
@@ -619,7 +624,7 @@ struct SettingsView: View {
                 // Same focus ring the Usage tab uses when you step into its detail.
                 if nav.settingsDetailFocused {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .strokeBorder(Color.accentColor.opacity(0.35), lineWidth: 1)
+                        .strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 2)
                         .padding(2)
                         .allowsHitTesting(false)
                 }
@@ -648,16 +653,9 @@ struct SettingsView: View {
             }
     }
 
-    @ViewBuilder private var detailRows: some View {
-        switch nav.settingsCategory {
-        case .notifications: notificationRows
-        case .voice:         voiceRows
-        case .appearance:    appearanceRows
-        case .usage:         usageRows
-        case .integrations:  integrationRows
-        case .panel:         panelRows
-        case .events:        eventRows
-        case .actions:       actionRows
+    private var detailRows: some View {
+        ForEach(nav.rows(in: nav.settingsCategory), id: \.self) { id in
+            settingRow(id)
         }
     }
 
@@ -668,7 +666,7 @@ struct SettingsView: View {
             label: label,
             value: value,
             kind: kind,
-            selected: nav.selectedSettingIndex == nav.index(of: id)
+            selected: nav.settingsDetailFocused && nav.selectedSettingIndex == nav.index(of: id)
         )
         // Visual-only dimming when a row is gated by another setting
         // (Sound section's deps when Sound is off; Usage deps when

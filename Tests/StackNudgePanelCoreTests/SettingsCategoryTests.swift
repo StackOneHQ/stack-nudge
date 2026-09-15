@@ -127,9 +127,10 @@ final class SettingsCategoryTests: XCTestCase {
         }
     }
 
-    // The largest category has to fit the pane without scrolling, which was the
-    // point of splitting a 51-row list up.
-    func testNoCategoryIsAsLongAsTheOldFlatList() {
+    // A cap, not a fits-without-scrolling guarantee: roughly six rows fit the
+    // pane, so the longer categories do scroll. The point is that none grows
+    // back toward the 51-row list this replaced.
+    func testNoCategoryGrowsBackTowardTheOldFlatList() {
         let nav = PanelNav()
         let largest = SettingsCategory.allCases.map { nav.rows(in: $0).count }.max() ?? 0
         XCTAssertLessThanOrEqual(largest, 10, "a category grew back into a long list")
