@@ -72,12 +72,13 @@ enum AttentionPolicy {
     // MARK: - Is a prompt still answerable?
 
     // The FIFO's existence was treated as proof a prompt is still blocking, on
-    // the grounds that notify.sh removes it on exit. It doesn't always: the trap
-    // is on EXIT, which bash honours for SIGTERM but nothing honours for
-    // SIGKILL, and the agent kills the hook outright when the user answers in
-    // its own UI. Evidence from one machine: 536 leaked FIFO directories going
-    // back three months, every single one still holding a live FIFO, so the
-    // trap had not run once.
+    // the grounds that notify.sh removes it on exit. It doesn't always. SIGKILL
+    // — what the agent sends when you answer in its own UI — runs no trap at
+    // all. And on a clean exit the trap body referenced a local that had gone
+    // out of scope by the time it fired, so it cleaned up nothing there either
+    // (fixed in notify.sh). The 536 leaked directories found on one machine
+    // don't distinguish those two causes, so treat them as evidence the FIFO
+    // outlives the hook, not as evidence about which path did it.
     //
     // The consequence is the bug this fixes. Approve a plan in the terminal and
     // the hook is killed, the FIFO survives, and the panel goes on believing the

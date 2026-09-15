@@ -350,20 +350,42 @@ agent_supports_decision() {
   esac
 }
 
-# Agent-initiated question (multi-select / open prompt), not a tool
-# permission. Approving in the panel would write "allow" to the FIFO,
+# tool_name from the hook payload. Only macOS 15+ preinstalls jq, and this value
+# decides whether a prompt gets an Allow button, so fall back to python3 rather
+# than silently answering "no tool".
+hook_tool_name() {
+  [[ -z "$HOOK_JSON" ]] && return
+  if command -v jq &>/dev/null; then
+    printf '%s' "$HOOK_JSON" | jq -r '.tool_name // empty' 2>/dev/null
+    return
+  fi
+  command -v python3 &>/dev/null || return
+  printf '%s' "$HOOK_JSON" | python3 -c 'import json, sys
+try:
+    print(json.load(sys.stdin).get("tool_name") or "")
+except Exception:
+    pass' 2>/dev/null
+}
+
+# Agent-initiated question (multi-select / open prompt) or plan approval, not a
+# tool permission. Approving in the panel would write "allow" to the FIFO,
 # which CC interprets as "press Enter on the highlighted option" — making
 # it pick a default. By emitting has_action=false, panel Enter falls
 # through to focusing the editor so the user answers in the terminal.
+#
+# ExitPlanMode is the same shape: "allow" approves the plan outright, so the
+# panel would be approving a plan the user hasn't read. It also has to stay off
+# the FIFO path for a second reason — answering in CC's own UI doesn't end our
+# hook, so it blocked for its full 550s timeout while the panel, seeing a live
+# hook on a live FIFO, went on reminding about a plan already approved.
 is_question_event() {
   [[ "$AGENT" != "claude-code" ]] && return 1
-  command -v jq &>/dev/null || return 1
   [[ -z "$HOOK_JSON" ]] && return 1
   local tool_name
-  tool_name=$(printf '%s' "$HOOK_JSON" | jq -r '.tool_name // empty' 2>/dev/null)
+  tool_name=$(hook_tool_name)
   case "$tool_name" in
-    AskUserQuestion) return 0 ;;
-    *)               return 1 ;;
+    AskUserQuestion|ExitPlanMode) return 0 ;;
+    *)                            return 1 ;;
   esac
 }
 
@@ -778,11 +800,18 @@ wait_for_permission_response() {
   local fifo="$1"
   local timeout=550  # Claude Code's hook timeout defaults to 600s — leave buffer
 
-  # INT/TERM/HUP as well as EXIT: bash runs the EXIT trap for a plain SIGTERM,
-  # but naming the signals makes the intent explicit and covers the shells that
-  # don't. Nothing catches SIGKILL, which is why the panel no longer relies on
-  # this trap alone to know a prompt is over.
-  trap 'rm -f "$fifo"; rmdir "$(dirname "$fifo")" 2>/dev/null' EXIT INT TERM HUP
+  # INT/TERM/HUP as well as EXIT, though they buy less than they look: a trapped
+  # signal doesn't terminate bash, and one arriving while we block below is held
+  # until the read finishes — so the hook runs on to its timeout either way and
+  # still answers kill(0). Nothing catches SIGKILL at all, which is why the panel
+  # no longer relies on this trap to know a prompt is over.
+  # Global because the trap body expands when it FIRES. On a signal that lands
+  # while we're blocked below, bash defers the handler until the child exits, so
+  # it runs inside this function and a local would still be in scope. On a clean
+  # exit it runs after the function returned, where a local is gone — that path
+  # cleaned up nothing.
+  PERM_FIFO="$fifo"
+  trap 'rm -f "$PERM_FIFO"; rmdir "$(dirname "$PERM_FIFO")" 2>/dev/null' EXIT INT TERM HUP
 
   local decision
   decision=$(NUDGE_FIFO="$fifo" NUDGE_TIMEOUT="$timeout" python3 - <<'PY' 2>/dev/null
