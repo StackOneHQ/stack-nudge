@@ -149,11 +149,30 @@ final class QuotaPaceTests: XCTestCase {
         XCTAssertNil(UsageView.paceWarning(tier, now: now))
     }
 
-    func testStaysQuietWhenUnderPace() {
-        let tier = QuotaTier(utilization: 11,
-                             resetsAt: ahead(0.64 * QuotaWindow.sevenDays),
-                             windowLength: QuotaWindow.sevenDays)
+    // Just under the threshold through the tier path, not just the raw helper.
+    func testStaysQuietJustBelowTheThreshold() {
+        let tier = QuotaTier(utilization: 44,
+                             resetsAt: ahead(0.6 * QuotaWindow.fiveHours),
+                             windowLength: QuotaWindow.fiveHours)
         XCTAssertNil(UsageView.paceWarning(tier, now: now))
+    }
+
+    // Pins the rounding: 40% elapsed against 62.6% used is 22.6 points, which
+    // must read "23%", not "22%". Every other case here lands on a whole number
+    // and would pass under floor, ceil or truncation alike.
+    func testWarningRoundsTheOvershoot() {
+        let tier = QuotaTier(utilization: 62.6,
+                             resetsAt: ahead(3 * 3600),
+                             windowLength: QuotaWindow.fiveHours)
+        XCTAssertEqual(UsageView.paceWarning(tier, now: now), "23% ahead of pace")
+    }
+
+    // Over 100% has to survive the tier path too, not just paceOvershoot.
+    func testWarningAgreesWithAnOver100Reading() {
+        let tier = QuotaTier(utilization: 113,
+                             resetsAt: ahead(0.5 * QuotaWindow.fiveHours),
+                             windowLength: QuotaWindow.fiveHours)
+        XCTAssertEqual(UsageView.paceWarning(tier, now: now), "63% ahead of pace")
     }
 
     func testThresholdBoundary() {
@@ -210,6 +229,14 @@ final class QuotaPaceTests: XCTestCase {
                                 resetsAt: ahead(3600),
                                 windowLength: QuotaWindow.fiveHours)
         XCTAssertEqual(WidgetQuota.ringLabel(session, fallback: "7d"), "5h")
+    }
+
+    // The pill and the tab name the same tier, so an unmapped window must not
+    // read "5h" in one and "Current window (1d)" in the other.
+    func testWidgetRingLabelNamesAnUnmappedWindow() {
+        let daily = QuotaTier(utilization: 10, resetsAt: ahead(3600), windowLength: 24 * 3600)
+        XCTAssertEqual(WidgetQuota.ringLabel(daily, fallback: "5h"), "1d")
+        XCTAssertEqual(QuotaWindow.title(windowLength: 24 * 3600), "Current window (1d)")
     }
 
     func testWidgetRingLabelFallsBackWithNoWindow() {

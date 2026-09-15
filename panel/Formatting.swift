@@ -163,15 +163,19 @@ enum QuotaWindow {
         switch windowLength {
         case fiveHours: return "Current session (5h)"
         case sevenDays: return "Current week"
-        default:        return "Current window (\(describe(windowLength)))"
+        default:        return "Current window (\(shortName(windowLength)))"
         }
     }
 
-    private static func describe(_ length: TimeInterval) -> String {
+    // "5h" / "7d" / "1d" — the widget's ring label and the tab's title both name
+    // windows from this, so an unmapped length can't read one way in the pill
+    // and another in the tab.
+    static func shortName(_ length: TimeInterval) -> String {
         let minutes = Int(length.rounded() / 60)
         if minutes % (24 * 60) == 0 { return "\(minutes / (24 * 60))d" }
         if minutes % 60 == 0 { return "\(minutes / 60)h" }
-        return "\(minutes)m"    }
+        return "\(minutes)m"
+    }
 }
 
 // Shared relative-time strings ("5m ago", "in 3 days") with per-style cached

@@ -207,10 +207,12 @@ struct CompactView: View {
         .animation(.easeInOut(duration: 0.18), value: show)
     }
 
-    // Worst-case countdown footprint: shortLabel emits "Xh"/"XhYm"/"Ym" and the
-    // 5h window caps the leading digit, so "0h00m" covers every shape.
+    // Worst-case countdown footprint. The short slot no longer caps at 5 hours —
+    // Codex often publishes only a weekly window and it lands here — so the
+    // widest shape is a two-digit hour ("23h59m"), not "0h00m". Days are
+    // narrower again ("4d15h").
     private var countdownSizer: some View {
-        Text("0h00m")
+        Text("23h59m")
             .font(.system(size: 9, weight: .medium).monospacedDigit())
             .fixedSize()
     }
