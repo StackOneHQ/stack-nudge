@@ -3694,9 +3694,33 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         if nav.mode == .settings {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             let shiftOnly = mods.intersection([.command, .control, .option, .shift]) == .shift
+
+            // Sidebar level: ↑↓ walk categories, →/Enter step into the rows.
+            if !nav.settingsDetailFocused {
+                switch event.keyCode {
+                case KeyCode.escape where plain:
+                    hidePanel()
+                case KeyCode.upArrow where plain:
+                    nav.selectPrevCategory()
+                case KeyCode.downArrow where plain:
+                    nav.selectNextCategory()
+                case KeyCode.rightArrow where plain,
+                     KeyCode.returnKey where plain,
+                     KeyCode.numpadEnter where plain,
+                     KeyCode.tab where plain:
+                    nav.settingsDetailFocused = true
+                    nav.selectFirstCategoryRow()
+                default:
+                    return false
+                }
+                return true
+            }
+
             switch event.keyCode {
             case KeyCode.escape where plain:
-                hidePanel()
+                // Steps back to the categories first. ←/→ cycle values here, so
+                // they can't double as the way out the Usage tab uses.
+                nav.settingsDetailFocused = false
             case KeyCode.upArrow where plain:
                 nav.selectPrevRow()
             case KeyCode.downArrow where plain:
@@ -4110,7 +4134,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             if nav.outcomesPane == .overview { scrollDetailToEdge(top: top) }
             else { nav.jumpOutcomeSelection(toLast: !top) }
         case .settings:
-            top ? nav.selectFirstRow() : nav.selectLastRow()
+            // ⌘↑↓ walks categories rather than jumping to the first or last row:
+            // the list is one category's worth now, so that was a short trip.
+            top ? nav.selectPrevCategory() : nav.selectNextCategory()
         case .phrases:
             top ? phrases.selectFirst() : phrases.selectLast()
         default:

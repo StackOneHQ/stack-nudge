@@ -149,7 +149,9 @@ enum EventsPane: String, CaseIterable {
 }
 
 
-enum SettingsRow: Hashable {
+// CaseIterable so a row can't be dropped when categories are reshuffled — the
+// completeness test enumerates this.
+enum SettingsRow: Hashable, CaseIterable {
     // One slot per button in the agent-reconciliation banner, so both are
     // keyboard-reachable rather than mouse-only.
     case wireAgents, dismissAgents
@@ -865,6 +867,14 @@ final class PanelNav: ObservableObject {
     @Published var quotaAlertsEnabled:   Bool = true
     @Published var quotaShowRemaining:   Bool = false
 
+    // Which Settings category the sidebar has selected, and whether focus has
+    // stepped into its rows. Changing category resets the row selection, or the
+    // index would point into the previous category's list.
+    @Published var settingsCategory: SettingsCategory = .notifications {
+        didSet { if oldValue != settingsCategory { selectFirstCategoryRow() } }
+    }
+    @Published var settingsDetailFocused = false
+
     // ⌘1…⌘9. Tabs past this are reachable by ←/→ only.
     static let maxNumberedTabs = 9
 
@@ -1035,27 +1045,80 @@ final class PanelNav: ObservableObject {
     // top, permissions first), and Voice collapses to a single Download row
     // until the model is cached — no hand-maintained indices, no off-by-one to
     // chase.
-    var settingsRows: [SettingsRow] {
+    // Rows that need attention now. They render pinned above the split and
+    // repeat across every category, so they stay reachable whichever one you're
+    // in — and they index first, matching that render order.
+    var settingsAttentionRows: [SettingsRow] {
         var rows: [SettingsRow] = []
-        // The reconciliation banner renders above the permissions and update
-        // rows, so it indexes above them too — Set up first, then Not now.
         if !unwiredAgents.isEmpty { rows += [.wireAgents, .dismissAgents] }
         if !missingPermissions.isEmpty { rows.append(.permissions) }
         if updateAvailable != nil { rows.append(.update) }
-        rows += [.hotkey,
-                 .banner, .muteWhenFocused, .mute, .muteDuration, .remindUnanswered, .stalledSessions,
-                 .tabTitleNames, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin,
-                 .widget, .snapToCorners, .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme,
-                 .soundEnabled, .agentDoneSound, .permissionSound,
-                 .voiceEnabled, .speakHotkey]
-        rows += voiceModelCached ? [.voice, .voiceSpeed] : [.downloadVoiceModel]
-        rows += [.quotaTracking, .quotaAlerts, .alertThreshold, .pollFrequency, .contextAlert, .showRemaining,
-                 .githubLinks, .hideShipped, .disconnectGithub,
-                 .historyPerSession, .eventHistory, .clearHistory,
-                 .slackPaste, .slackIdentity, .slackTest,
-                 .slackEnabled, .slackIdle, .slackDetail, .slackStop,
-                 .editPhrases, .checkPermissions, .openConfig, .releaseNotes, .checkUpdates, .uninstall, .quit]
         return rows
+    }
+
+    // The rows the keyboard can currently reach: the attention rows, then the
+    // selected category's. Everything downstream — selectedSettingIndex,
+    // index(of:), activate, applyCycle — keeps working against this unchanged.
+    var settingsRows: [SettingsRow] {
+        settingsAttentionRows + rows(in: settingsCategory)
+    }
+
+    func rows(in category: SettingsCategory) -> [SettingsRow] {
+        switch category {
+        case .notifications:
+            return [.banner, .muteWhenFocused, .mute, .muteDuration,
+                    .remindUnanswered, .stalledSessions,
+                    .soundEnabled, .agentDoneSound, .permissionSound]
+        case .voice:
+            return [.voiceEnabled, .speakHotkey]
+                + (voiceModelCached ? [.voice, .voiceSpeed] : [.downloadVoiceModel])
+        case .appearance:
+            return [.widget, .snapToCorners, .widgetCorner, .widgetOpacity,
+                    .widgetContent, .mascot, .theme]
+        case .usage:
+            return [.quotaTracking, .quotaAlerts, .alertThreshold,
+                    .pollFrequency, .contextAlert, .showRemaining]
+        case .integrations:
+            return [.slackPaste, .slackIdentity, .slackTest,
+                    .slackEnabled, .slackIdle, .slackDetail, .slackStop,
+                    .githubLinks, .hideShipped, .disconnectGithub]
+        case .panel:
+            return [.hotkey, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin, .tabTitleNames]
+        case .events:
+            return [.historyPerSession, .eventHistory, .clearHistory]
+        case .actions:
+            return [.editPhrases, .checkPermissions, .openConfig,
+                    .releaseNotes, .checkUpdates, .uninstall, .quit]
+        }
+    }
+
+    // The first row the detail actually renders. Index 0 is an attention row
+    // whenever one exists, and those render above the split — so selecting 0
+    // put the selection on a row the pane wasn't showing, and Enter fired it.
+    // With an update pending that starts the updater; with unwired agents it
+    // rewrites every detected agent's hook config. ↑ from here still walks up
+    // into the banners, which is where they're drawn.
+    func selectFirstCategoryRow() {
+        selectedSettingIndex = settingsAttentionRows.count
+    }
+
+    // Which category holds a row. index(of:) answers 0 for a row outside the
+    // selected category, so anything reaching for a row by identity has to land
+    // on its category first.
+    func category(containing row: SettingsRow) -> SettingsCategory? {
+        SettingsCategory.allCases.first { rows(in: $0).contains(row) }
+    }
+
+    func selectNextCategory() {
+        let all = SettingsCategory.allCases
+        guard let i = all.firstIndex(of: settingsCategory) else { return }
+        settingsCategory = all[(i + 1) % all.count]
+    }
+
+    func selectPrevCategory() {
+        let all = SettingsCategory.allCases
+        guard let i = all.firstIndex(of: settingsCategory) else { return }
+        settingsCategory = all[(i - 1 + all.count) % all.count]
     }
 
     var rowCount: Int { settingsRows.count }
@@ -1376,8 +1439,6 @@ final class PanelNav: ObservableObject {
     }
 
     // ⌘↑/↓ — jump to the first / last settings row.
-    func selectFirstRow() { guard rowCount > 0 else { return }; selectedSettingIndex = 0 }
-    func selectLastRow()  { guard rowCount > 0 else { return }; selectedSettingIndex = rowCount - 1 }
 
     // MARK: - Cycle / activate
 
@@ -1761,4 +1822,25 @@ final class PanelNav: ObservableObject {
 struct ExtensionTab: Equatable, Identifiable {
     let id: String
     let label: String
+}
+
+// Settings grouped by subject. The old sections named control types rather than
+// subjects — "Toggles" held ten rows spanning notifications, panel behaviour and
+// session naming, while "Hotkey" was a category of one.
+enum SettingsCategory: String, CaseIterable {
+    case notifications, voice, appearance, usage, integrations, panel, events, actions
+
+    // Kept short: the sidebar is ~120pt.
+    var label: String {
+        switch self {
+        case .notifications: return "Notifications"
+        case .voice:         return "Voice"
+        case .appearance:    return "Appearance"
+        case .usage:         return "Usage"
+        case .integrations:  return "Integrations"
+        case .panel:         return "Panel"
+        case .events:        return "Events"
+        case .actions:       return "Actions"
+        }
+    }
 }
