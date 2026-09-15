@@ -849,6 +849,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private let codexQuotaProbe = CodexQuotaProbe()
     private let derbyProbe = TokenDerbyProbe()
     private var lastDerbyFetch: Date?
+    private var derbyOpenedAt: Date?
     private let antigravityUsageProbe = AntigravityUsageProbe()
     private var quotaTimer: Timer?
     // Last outcome derived per repo+branch, alongside the git values it was
@@ -2996,12 +2997,36 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     // The derby is a third-party service, so it's polled only while you're
     // actually looking at it: panel open, on the Derby tab, and off entirely
-    // without an org configured. A race runs for hours — 30s is plenty.
-    private static let derbyPollInterval: TimeInterval = 30
+    // without an org configured. Closing the tab stops it dead — there is no
+    // background refresh to decay, because there is no background refresh.
+    //
+    // While it IS open the interval grows. Opening the tab is the signal that
+    // you care; a tab left open all afternoon isn't, and a twelve-hour race
+    // doesn't reward a fast poll.
+    static func derbyPollInterval(openFor: TimeInterval) -> TimeInterval {
+        switch openFor {
+        case ..<120:  return 20
+        case ..<600:  return 60
+        case ..<1800: return 180
+        default:      return 600
+        }
+    }
 
     private func pollDerbyIfNeeded(now: Date) {
-        guard nav.derbyEnabled, nav.mode == .derby, panel.isVisible else { return }
-        if let last = lastDerbyFetch, now.timeIntervalSince(last) < Self.derbyPollInterval { return }
+        let showing = nav.derbyEnabled && nav.mode == .derby && panel.isVisible
+        guard showing else {
+            // Next open counts as a fresh one, so it fetches immediately rather
+            // than inheriting the interval this session had decayed to.
+            derbyOpenedAt = nil
+            return
+        }
+        guard let openedAt = derbyOpenedAt else {
+            derbyOpenedAt = now
+            syncDerby(now: now)
+            return
+        }
+        let interval = Self.derbyPollInterval(openFor: now.timeIntervalSince(openedAt))
+        if let last = lastDerbyFetch, now.timeIntervalSince(last) < interval { return }
         syncDerby(now: now)
     }
 
@@ -3713,6 +3738,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         if nav.mode == .derby {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             if plain, event.keyCode == KeyCode.rKey {
+                derbyOpenedAt = Date()
                 syncDerby()
                 return true
             }
