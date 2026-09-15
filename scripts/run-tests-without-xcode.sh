@@ -54,8 +54,13 @@ for source in "$TESTS_DIR"/*.swift; do
       "$source" > "$stage/$(basename "$source")"
   declared=$((declared + $(grep -cE '^    func test' "$source" || true)))
 
-  # Emit a call per test method, in file order. `throws` variants get a try?;
-  # setUp/tearDown bracket each one, as real XCTest does.
+  # Emit a call per test method, in file order. Both setUp pairs bracket each
+  # one, as real XCTest does — the shim has always declared setUpWithError and
+  # this used to skip it, so a fixture built there silently never ran and every
+  # test over it passed against an empty world.
+  #
+  # A throwing test body is a failure, not a pass. It was a `try?`, which meant
+  # a fixture that failed to write reported "ok".
   awk '
     /^final class .* XCTestCase \{|^class .* XCTestCase \{/ {
       match($0, /class [A-Za-z0-9_]+/)
@@ -65,9 +70,9 @@ for source in "$TESTS_DIR"/*.swift; do
     /^    func test[A-Za-z0-9_]*\(\)/ {
       match($0, /test[A-Za-z0-9_]*/)
       fn = substr($0, RSTART, RLENGTH)
-      call = (index($0, "throws") > 0) ? "try? " : ""
+      call = (index($0, "throws") > 0) ? "try " : ""
       if (cls != "") {
-        printf "        run(\"%s.%s\") { let c = %s(); c.setUp(); %sc.%s(); c.tearDown() }\n", \
+        printf "        run(\"%s.%s\") { let c = %s(); try c.setUpWithError(); c.setUp(); %sc.%s(); c.tearDown(); try c.tearDownWithError() }\n", \
                cls, fn, cls, call, fn
       }
     }
@@ -78,11 +83,11 @@ done
   echo "        report()"
   echo "    }"
   echo ""
-  echo "    @MainActor static func run(_ name: String, _ body: () -> Void) {"
+  echo "    @MainActor static func run(_ name: String, _ body: () throws -> Void) {"
   echo "        if !filter.isEmpty, !name.contains(filter) { return }"
   echo "        let before = xctFailures.count"
   echo "        xctTeardowns = []"
-  echo "        body()"
+  echo "        do { try body() } catch { xctFailures.append(\"\\(name) threw \\(error)\") }"
   echo "        for block in xctTeardowns.reversed() { try? block() }"
   echo "        xctTeardowns = []"
   echo "        ran += 1"
