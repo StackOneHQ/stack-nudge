@@ -2,19 +2,18 @@ import XCTest
 
 @testable import StackNudgePanelCore
 
-// The Settings list is now data-driven: one ordered `settingsRows` array feeds
-// both rendering and keyboard nav. These pin the order, the conditional rows
-// (update prepend, voice collapse), and the index ⇄ row round-trip the view and
-// dispatch both rely on.
+// settingsRows feeds both rendering and keyboard nav. It is now the attention
+// rows plus the selected category's, so anything reaching for a row by identity
+// selects that row's category first — index(of:) answers 0 for a row that isn't
+// in the current list.
 @MainActor
 final class SettingsRowTests: XCTestCase {
 
-    func test_defaultOrder() {
+    func test_defaultCategoryIsNotifications() {
         let nav = PanelNav()
-        let rows = nav.settingsRows
-        XCTAssertEqual(rows.first, .hotkey)            // no update pending
-        XCTAssertEqual(rows.last, .quit)
-        XCTAssertEqual(nav.rowCount, rows.count)
+        XCTAssertEqual(nav.settingsCategory, .notifications)
+        XCTAssertEqual(nav.settingsRows.first, .banner)  // no attention rows pending
+        XCTAssertEqual(nav.rowCount, nav.settingsRows.count)
     }
 
     func test_selectFirstRow_andLastRow_jumpToEnds() {
@@ -27,7 +26,7 @@ final class SettingsRowTests: XCTestCase {
 
     func test_keepOpenWhenEmpty_followsPinPanel() {
         let nav = PanelNav()
-        let rows = nav.settingsRows
+        let rows = nav.rows(in: .panel)
         let pin = rows.firstIndex(of: .pinPanel)
         XCTAssertNotNil(pin)
         XCTAssertEqual(rows[pin! + 1], .keepOpenWhenEmpty)
@@ -36,13 +35,13 @@ final class SettingsRowTests: XCTestCase {
     func test_voiceCollapsesUntilCached() {
         let nav = PanelNav()
         nav.voiceModelCached = false
-        XCTAssertTrue(nav.settingsRows.contains(.downloadVoiceModel))
-        XCTAssertFalse(nav.settingsRows.contains(.voice))
+        XCTAssertTrue(nav.rows(in: .voice).contains(.downloadVoiceModel))
+        XCTAssertFalse(nav.rows(in: .voice).contains(.voice))
 
         nav.voiceModelCached = true
-        XCTAssertTrue(nav.settingsRows.contains(.voice))
-        XCTAssertTrue(nav.settingsRows.contains(.voiceSpeed))
-        XCTAssertFalse(nav.settingsRows.contains(.downloadVoiceModel))
+        XCTAssertTrue(nav.rows(in: .voice).contains(.voice))
+        XCTAssertTrue(nav.rows(in: .voice).contains(.voiceSpeed))
+        XCTAssertFalse(nav.rows(in: .voice).contains(.downloadVoiceModel))
     }
 
     func test_updateRow_prependedWhenAvailable() {
@@ -122,27 +121,37 @@ final class SettingsRowTests: XCTestCase {
         nav.unwiredAgents = [.codex]
         nav.missingPermissions = [.accessibility]
 
+        func select(_ row: SettingsRow) {
+            if let category = nav.category(containing: row) { nav.settingsCategory = category }
+            nav.selectedSettingIndex = nav.index(of: row)
+        }
+
         for row in [SettingsRow.wireAgents, .dismissAgents, .quit, .editPhrases,
                     .openConfig, .releaseNotes, .checkUpdates, .checkPermissions,
                     .uninstall, .disconnectGithub] {
-            nav.selectedSettingIndex = nav.index(of: row)
+            select(row)
             XCTAssertEqual(nav.selectedRow, row)
             XCTAssertFalse(nav.selectedRowRespondsToArrows, "\(row) should ignore arrows")
         }
 
         for row in [SettingsRow.banner, .muteDuration, .theme, .historyPerSession,
                     .permissions, .hotkey] {
-            nav.selectedSettingIndex = nav.index(of: row)
+            select(row)
             XCTAssertEqual(nav.selectedRow, row)
             XCTAssertTrue(nav.selectedRowRespondsToArrows, "\(row) should act on arrows")
         }
     }
 
+    // Round-trips every row in every category, not just the one that happens
+    // to be selected.
     func test_indexRowRoundTrip() {
         let nav = PanelNav()
-        for row in nav.settingsRows {
-            nav.selectedSettingIndex = nav.index(of: row)
-            XCTAssertEqual(nav.selectedRow, row)
+        for category in SettingsCategory.allCases {
+            nav.settingsCategory = category
+            for row in nav.settingsRows {
+                nav.selectedSettingIndex = nav.index(of: row)
+                XCTAssertEqual(nav.selectedRow, row)
+            }
         }
     }
 
@@ -151,7 +160,7 @@ final class SettingsRowTests: XCTestCase {
     }
 
     func test_snapToCorners_sitsRightAfterWidget() {
-        let rows = PanelNav().settingsRows
+        let rows = PanelNav().rows(in: .appearance)
         let widget = rows.firstIndex(of: .widget)
         XCTAssertNotNil(widget)
         XCTAssertEqual(rows[widget! + 1], .snapToCorners)
