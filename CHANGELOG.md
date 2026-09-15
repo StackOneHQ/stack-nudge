@@ -4,6 +4,19 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.34.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.33.1...v1.34.0) (2026-09-15)
+
+
+### Features
+
+* **panel:** per-client usage errors and reset clock times ([#175](https://github.com/StackOneHQ/stack-nudge/issues/175)) ([0faf006](https://github.com/StackOneHQ/stack-nudge/commit/0faf00605ef9b3a1436715947ffea9ab1abcdd87))
+* **panel:** show a pace marker on Usage tab quota bars ([#176](https://github.com/StackOneHQ/stack-nudge/issues/176)) ([97d9ac4](https://github.com/StackOneHQ/stack-nudge/commit/97d9ac425343ceeead35d5008a191b6378561a71))
+
+
+### Bug Fixes
+
+* **notify:** stop nudging about plans already approved in the terminal ([#177](https://github.com/StackOneHQ/stack-nudge/issues/177)) ([427f764](https://github.com/StackOneHQ/stack-nudge/commit/427f7640cba3b9bdd1c8d3ba90e8c627c6a3a1e2))
+
 ## [1.33.1](https://github.com/StackOneHQ/stack-nudge/compare/v1.33.0...v1.33.1) (2026-09-14)
 
 
