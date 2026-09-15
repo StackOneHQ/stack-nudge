@@ -3391,6 +3391,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     // MARK: - PanelKeyDelegate
 
+    // A function, not an inline check, so widening the set is a visible edit.
+    static func eventsOwnsKeyboard(_ mode: PanelMode) -> Bool { mode == .events }
+
     func panelHandlesKey(_ event: NSEvent) -> Bool {
         let mods = event.modifierFlags
         let blockingMods: NSEvent.ModifierFlags = [.control, .option]
@@ -3781,6 +3784,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             }
             return true
         }
+
+        // Only Events gets what follows. Without this, a mode that declined a
+        // key fell through to bindings that include Return → approve.
+        guard Self.eventsOwnsKeyboard(nav.mode) else { return false }
 
         // Events mode: filter out cmd/ctrl/opt-modified keys so app-level
         // shortcuts pass through to the responder chain. Shift is allowed
