@@ -64,9 +64,17 @@ final class ClaudeCliQuotaProbe {
                     fetchedPlan = plan
                 }
             }
+            // /usage is a client-side intercept that needs no MCP servers, so
+            // --strict-mcp-config loads none. Without it every spawn boots the
+            // user's whole MCP config (60+ servers on a heavy setup), and that
+            // variable startup tail is what pushed an otherwise-fine probe past
+            // a 10s timeout under load — surfacing a spurious hard-fail on the
+            // Usage tab. The intercept's own local-session scan also slows on a
+            // busy machine, so 20s leaves headroom rather than sitting on the edge.
             let raw = ProcessOutput.read(
-                path, ["--print", "--output-format", "json", "/usage"],
-                timeout: 10, cwd: Self.probeCwd)
+                path,
+                ["--print", "--strict-mcp-config", "--output-format", "json", "/usage"],
+                timeout: 20, cwd: Self.probeCwd)
             let result = Self.parseEnvelope(raw)
             // Every `claude --print` spawns a new session rollout under
             // ~/.claude/projects/<cwd-encoded>/<uuid>.jsonl. At a 60s poll
