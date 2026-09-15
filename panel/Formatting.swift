@@ -143,7 +143,9 @@ extension QuotaReset {
     // shows both numbers as percentages, so the gap between them reads in the
     // same unit.
     static func paceOvershoot(utilization: Double, elapsedFraction: Double) -> Double? {
-        let used = min(max(utilization, 0), 100)
+        // Not clamped to 100: the row prints utilization unclamped, so clamping
+        // here put "50% ahead of pace" beside "113% used" — numbers that don't add up.
+        let used = max(utilization, 0)
         let elapsed = min(max(elapsedFraction, 0), 1) * 100
         let overshoot = used - elapsed
         return overshoot >= paceWarningPoints ? overshoot : nil

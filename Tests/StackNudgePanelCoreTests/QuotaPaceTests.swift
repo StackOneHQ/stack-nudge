@@ -172,18 +172,28 @@ final class QuotaPaceTests: XCTestCase {
                                            now: now))
     }
 
-    func testOvershootClampsOutOfRangeInputs() {
+    func testOvershootClampsNegativeInputs() {
         XCTAssertNil(QuotaReset.paceOvershoot(utilization: -20, elapsedFraction: 0.5))
-        XCTAssertEqual(QuotaReset.paceOvershoot(utilization: 140, elapsedFraction: -1) ?? 0,
-                       100, accuracy: 0.0001)
+        XCTAssertEqual(QuotaReset.paceOvershoot(utilization: 40, elapsedFraction: -1) ?? 0,
+                       40, accuracy: 0.0001)
     }
 
-    func testAccessibilityLabelCarriesTheWarning() {
+    // The row prints utilization unclamped, so the overshoot has to agree with
+    // it: "113% used" beside "50% ahead of pace" is arithmetic that fails.
+    func testOvershootAgreesWithAnOver100Reading() {
+        XCTAssertEqual(QuotaReset.paceOvershoot(utilization: 113, elapsedFraction: 0.50) ?? 0,
+                       63, accuracy: 0.0001)
+    }
+
+    // The warning is visible text with its own a11y element, so repeating it in
+    // the bar's accessibilityValue made VoiceOver announce it twice.
+    func testAccessibilityValueDoesNotRepeatTheWarning() {
         let tier = QuotaTier(utilization: 62,
                              resetsAt: ahead(3 * 3600),
                              windowLength: QuotaWindow.fiveHours)
+        XCTAssertEqual(UsageView.paceWarning(tier, now: now), "22% ahead of pace")
         XCTAssertEqual(UsageView.paceDescription(tier, now: now),
-                       "62% used, 40% of the window elapsed, 22% ahead of pace")
+                       "62% used, 40% of the window elapsed")
     }
 
     // MARK: - Widget ring labels

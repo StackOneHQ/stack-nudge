@@ -568,20 +568,27 @@ struct UsageView: View {
                 .accessibilityValue(Self.paceDescription(tier, showRemaining: nav.quotaShowRemaining))
             // Hidden rather than "Resets 11 months ago" on a stale snapshot.
             if let resets = tier.resetsAt, let label = QuotaReset.fullLabel(until: resets) {
-                Text("Resets \(label)")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-            // Only the warning state — no "on track" line. Nothing to learn to
-            // ignore, so the orange still means something when it appears.
-            if let warning = Self.paceWarning(tier) {
+                // The warning shares this line rather than adding its own. It
+                // sits on a bare threshold and can cross back over it as the
+                // window advances, and a line that appears and vanishes reflows
+                // every row beneath it each time. Widest case measures 291pt
+                // against the ~453pt the pane gets.
+                //
+                // Only the warning state — no "on track" text to learn to
+                // ignore. The glyph carries the colour rather than the text:
+                // .orange is already a severity step on the widget's ramp, and
+                // orange text under a red bar reads as less urgent than the bar
+                // it describes.
                 HStack(spacing: 4) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 9))
-                    Text(warning)
+                    Text("Resets \(label)").foregroundStyle(.tertiary)
+                    if let warning = Self.paceWarning(tier) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.orange)
+                        Text(warning).foregroundStyle(.secondary)
+                    }
                 }
                 .font(.caption2)
-                .foregroundStyle(.orange)
             }
         }
         .padding(.horizontal, 6)
@@ -611,16 +618,19 @@ struct UsageView: View {
                 Capsule()
                     .fill(Color.primary.opacity(0.12))
                     .frame(height: Self.paceBarHeight)
-                if let elapsed {
+                if let elapsed, elapsed > 0 {
                     Capsule()
                         .fill(color.opacity(0.2))
                         .frame(width: max(elapsed * geo.size.width, 2),
                                height: Self.paceBarHeight)
                 }
+                // One height whether or not an elapsed bar sits behind it, so a
+                // tier with no window — Claude's 0%-and-no-reset Sonnet row —
+                // doesn't render fatter than its neighbours in the same list.
                 Capsule()
                     .fill(color)
                     .frame(width: max(used * geo.size.width, used > 0 ? 2 : 0),
-                           height: elapsed == nil ? Self.paceBarHeight : Self.usageBarHeight)
+                           height: Self.usageBarHeight)
             }
             .frame(height: Self.paceBarHeight)
             .frame(maxHeight: .infinity)
@@ -652,10 +662,10 @@ struct UsageView: View {
         let amount = showRemaining
             ? "\(Int(max(0, 100 - tier.utilization).rounded()))% left"
             : "\(Int(tier.utilization.rounded()))% used"
+        // Deliberately without the pace warning: that renders as visible text
+        // beside the reset caption, which VoiceOver already reads on its own.
         guard let fraction = elapsedFraction(tier, now: now) else { return amount }
-        let base = "\(amount), \(Int((fraction * 100).rounded()))% of the window elapsed"
-        guard let warning = paceWarning(tier, now: now) else { return base }
-        return "\(base), \(warning)"
+        return "\(amount), \(Int((fraction * 100).rounded()))% of the window elapsed"
     }
 
 
