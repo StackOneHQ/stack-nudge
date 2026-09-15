@@ -75,7 +75,28 @@ final class SettingsCategoryTests: XCTestCase {
         nav.settingsCategory = .integrations
         nav.selectedSettingIndex = 6
         nav.settingsCategory = .events
-        XCTAssertEqual(nav.selectedSettingIndex, 0)
+        XCTAssertEqual(nav.selectedRow, nav.rows(in: .events).first)
+    }
+
+    // With no attention rows the first rendered row is index 0; with them it
+    // isn't, and asserting 0 outright cemented the bug rather than catching it.
+    func testResetLandsPastAnyAttentionRows() {
+        let nav = PanelNav()
+        nav.updateAvailable = "1.35.0"
+        nav.missingPermissions = [.accessibility]
+        nav.settingsCategory = .usage
+        XCTAssertEqual(nav.selectedSettingIndex, 2)
+        XCTAssertEqual(nav.selectedRow, nav.rows(in: .usage).first)
+    }
+
+    // They're still reachable — ↑ from the first row walks up into the banners,
+    // which is where they're drawn.
+    func testAttentionRowsRemainReachableAbove() {
+        let nav = PanelNav()
+        nav.updateAvailable = "1.35.0"
+        nav.settingsCategory = .usage
+        nav.selectPrevRow()
+        XCTAssertEqual(nav.selectedRow, .update)
     }
 
     func testReselectingTheSameCategoryKeepsTheSelection() {
@@ -112,5 +133,21 @@ final class SettingsCategoryTests: XCTestCase {
         let nav = PanelNav()
         let largest = SettingsCategory.allCases.map { nav.rows(in: $0).count }.max() ?? 0
         XCTAssertLessThanOrEqual(largest, 10, "a category grew back into a long list")
+    }
+}
+
+// Proves the reported defect: attention rows prepend to settingsRows but render
+// above the split, not in the detail. Resetting the index to a literal 0 on
+// category change therefore selects an invisible row, and Enter fires it.
+@MainActor
+final class SettingsAttentionSelectionTests: XCTestCase {
+
+    func testEnteringACategoryDoesNotSelectAnInvisibleAttentionRow() {
+        let nav = PanelNav()
+        nav.unwiredAgents = [.codex]
+        nav.settingsCategory = .appearance
+        XCTAssertNotEqual(nav.selectedRow, .wireAgents,
+                          "Enter here would wire every detected agent's hooks")
+        XCTAssertEqual(nav.selectedRow, nav.rows(in: .appearance).first)
     }
 }

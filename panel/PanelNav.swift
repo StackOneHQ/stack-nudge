@@ -871,7 +871,7 @@ final class PanelNav: ObservableObject {
     // stepped into its rows. Changing category resets the row selection, or the
     // index would point into the previous category's list.
     @Published var settingsCategory: SettingsCategory = .notifications {
-        didSet { if oldValue != settingsCategory { selectedSettingIndex = 0 } }
+        didSet { if oldValue != settingsCategory { selectFirstCategoryRow() } }
     }
     @Published var settingsDetailFocused = false
 
@@ -1090,6 +1090,16 @@ final class PanelNav: ObservableObject {
             return [.editPhrases, .checkPermissions, .openConfig,
                     .releaseNotes, .checkUpdates, .uninstall, .quit]
         }
+    }
+
+    // The first row the detail actually renders. Index 0 is an attention row
+    // whenever one exists, and those render above the split — so selecting 0
+    // put the selection on a row the pane wasn't showing, and Enter fired it.
+    // With an update pending that starts the updater; with unwired agents it
+    // rewrites every detected agent's hook config. ↑ from here still walks up
+    // into the banners, which is where they're drawn.
+    func selectFirstCategoryRow() {
+        selectedSettingIndex = settingsAttentionRows.count
     }
 
     // Which category holds a row. index(of:) answers 0 for a row outside the
@@ -1429,8 +1439,6 @@ final class PanelNav: ObservableObject {
     }
 
     // ⌘↑/↓ — jump to the first / last settings row.
-    func selectFirstRow() { guard rowCount > 0 else { return }; selectedSettingIndex = 0 }
-    func selectLastRow()  { guard rowCount > 0 else { return }; selectedSettingIndex = rowCount - 1 }
 
     // MARK: - Cycle / activate
 

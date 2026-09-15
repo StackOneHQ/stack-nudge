@@ -32,21 +32,21 @@ struct SettingsView: View {
                 } else {
                     if nav.settingsDetailFocused {
                         FooterHint(label: "Move", keys: ["↑", "↓"])
-                        // Only worth advertising from in here; on the sidebar
-                        // it duplicates the plain arrows.
+                        // Works at both levels, but only worth advertising
+                        // here — on the sidebar it duplicates plain ↑↓.
                         FooterHint(label: "Category", keys: ["⌘↑↓"])
+                        // Always rendered so the footer doesn't reflow as
+                        // selection moves, dimmed on the rows where ←/→ do
+                        // nothing — the same treatment the events page gives
+                        // its Snooze hint. Enter acts on every row, so "Act"
+                        // never dims.
+                        FooterHint(label: "Cycle", keys: ["←", "→"])
+                            .opacity(nav.selectedRowRespondsToArrows ? 1.0 : 0.35)
+                        FooterHint(label: "Act", keys: ["⏎"])
                     } else {
                         FooterHint(label: "Category", keys: ["↑", "↓"])
                         FooterHint(label: "Open", keys: ["→"])
                     }
-                    // Always rendered so the footer doesn't reflow as selection
-                    // moves, dimmed on the rows where ←/→ do nothing (the
-                    // banner's buttons and the action rows) — same treatment
-                    // the events page gives its Snooze hint. Enter acts on
-                    // every row, so "Act" never dims.
-                    FooterHint(label: "Cycle", keys: ["←", "→"])
-                        .opacity(nav.selectedRowRespondsToArrows ? 1.0 : 0.35)
-                    FooterHint(label: "Act",   keys: ["⏎"])
                     // One Esc hint, naming where it actually goes from here.
                     FooterHint(label: nav.settingsDetailFocused ? "Categories" : "Hide",
                                keys: ["Esc"])
@@ -55,6 +55,11 @@ struct SettingsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
+            // Matching UsageView: never land back inside the detail from a
+            // previous visit, where ↑↓ move rows rather than categories and the
+            // attention-row count may have changed while away.
+            nav.settingsDetailFocused = false
+            nav.selectFirstCategoryRow()
             nav.loadFromConfig()
             nav.refreshVoiceModelCached()
             if nav.voiceModelCached, nav.voicesAvailable.isEmpty {

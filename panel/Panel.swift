@@ -3709,6 +3709,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                      KeyCode.numpadEnter where plain,
                      KeyCode.tab where plain:
                     nav.settingsDetailFocused = true
+                    nav.selectFirstCategoryRow()
                 default:
                     return false
                 }

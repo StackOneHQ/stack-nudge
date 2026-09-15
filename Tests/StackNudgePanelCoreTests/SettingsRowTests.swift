@@ -16,14 +16,6 @@ final class SettingsRowTests: XCTestCase {
         XCTAssertEqual(nav.rowCount, nav.settingsRows.count)
     }
 
-    func test_selectFirstRow_andLastRow_jumpToEnds() {
-        let nav = PanelNav()
-        nav.selectLastRow()
-        XCTAssertEqual(nav.selectedSettingIndex, nav.rowCount - 1)
-        nav.selectFirstRow()
-        XCTAssertEqual(nav.selectedSettingIndex, 0)
-    }
-
     func test_keepOpenWhenEmpty_followsPinPanel() {
         let nav = PanelNav()
         let rows = nav.rows(in: .panel)
