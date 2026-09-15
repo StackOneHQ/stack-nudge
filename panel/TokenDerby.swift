@@ -28,14 +28,33 @@ struct DerbyRace: Equatable {
     let name: String
     let status: String          // pending | live | finished
     let timeLeftSeconds: Int?
+    let durationSeconds: Double?
     let divisionNames: [String]
     let horses: [DerbyHorse]
 
     var isLive: Bool { status == "live" }
 
-    // The bar scale. Ranks come from the server, but the leader's total is what
-    // every other bar is drawn against.
     var leaderTokens: Double { horses.map(\.tokens).max() ?? 0 }
+
+    // How much of the race has run, 0…1. A finished race is fully run whatever
+    // the clock says; a pending one hasn't started, so the field is at the gate.
+    var elapsedFraction: Double {
+        if status == "finished" { return 1 }
+        guard status == "live",
+              let duration = durationSeconds, duration > 0,
+              let left = timeLeftSeconds else { return 0 }
+        return min(1, max(0, 1 - Double(left) / duration))
+    }
+
+    // Where a horse sits on the track. Scaled by elapsed time, not just by the
+    // leader: leader-relative alone pins the front-runner to the finish line
+    // from the first minute, which makes a twelve-hour race look permanently
+    // over. This way the leader's position *is* the race's progress, the field
+    // keeps its relative gaps, and the winner reaches the line at the bell.
+    func position(_ horse: DerbyHorse) -> Double {
+        guard leaderTokens > 0 else { return 0 }
+        return (horse.tokens / leaderTokens) * elapsedFraction
+    }
 }
 
 // One entry in an org's race list, enough to choose which race to show.
@@ -65,6 +84,29 @@ enum DerbyParse {
     // list arrives newest-first, so "first" is the fallback rather than a sort.
     static func pick(_ summaries: [DerbySummary]) -> DerbySummary? {
         summaries.first(where: { $0.status == "live" }) ?? summaries.first
+    }
+
+    private static let iso: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        // The service stamps milliseconds; without this the parse just fails.
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    // Race length, for scaling the track by elapsed time.
+    static func duration(_ start: String?, _ end: String?) -> Double? {
+        guard let start, let end,
+              let s = parseDate(start), let e = parseDate(end) else { return nil }
+        let seconds = e.timeIntervalSince(s)
+        return seconds > 0 ? seconds : nil
+    }
+
+    static func parseDate(_ s: String) -> Date? {
+        if let d = iso.date(from: s) { return d }
+        // Fall back for a stamp without fractional seconds.
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: s)
     }
 
     // `GET /api/races/{join_code}`
@@ -97,6 +139,7 @@ enum DerbyParse {
             name: obj["name"] as? String ?? "Race",
             status: obj["status"] as? String ?? "",
             timeLeftSeconds: (obj["time_left_seconds"] as? NSNumber)?.intValue,
+            durationSeconds: duration(obj["start_time"] as? String, obj["end_time"] as? String),
             divisionNames: obj["league_division_names"] as? [String] ?? [],
             // Server order is the ranking; don't re-sort and risk disagreeing with it.
             horses: horses)

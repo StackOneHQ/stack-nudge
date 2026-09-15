@@ -61,13 +61,16 @@ struct DerbyView: View {
     }
 
     private func row(_ horse: DerbyHorse, leader: Double, race: DerbyRace) -> some View {
-        let fraction = leader > 0 ? horse.tokens / leader : 0
+        let fraction = race.position(horse)
         return VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
+                // Leading, not trailing: right-aligning the rank in its column
+                // indented the whole line relative to the track beneath it.
+                // Monospaced digits keep 1 and 14 sharing a left edge anyway.
                 Text(horse.rank.map(String.init) ?? "–")
                     .font(.caption2.monospacedDigit().weight(.bold))
                     .foregroundStyle(.tertiary)
-                    .frame(width: 16, alignment: .trailing)
+                    .frame(width: 16, alignment: .leading)
                 Text(horse.name)
                     .font(.caption.weight(.semibold))
                     .lineLimit(1)

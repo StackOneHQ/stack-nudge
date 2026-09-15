@@ -11,7 +11,8 @@ final class TokenDerbyTests: XCTestCase {
 
     private let raceJSON = """
     {"race_id":"r1","name":"StackOne Token League","join_code":"AEGEMQ","status":"live",
-     "time_left_seconds":22157,"server_time":"2026-09-15T10:50:42.199Z",
+     "start_time":"2026-09-15T05:00:00.000Z","end_time":"2026-09-15T17:00:00.000Z",
+     "time_left_seconds":21600,"server_time":"2026-09-15T11:00:00.000Z",
      "league_division_names":["Premier Division","Token Munchers","Claude Casuals"],
      "horses":[
        {"horse_id":"h1","name":"black & white","user_name":"Yashika","rank":1,
@@ -31,7 +32,7 @@ final class TokenDerbyTests: XCTestCase {
         let race = DerbyParse.race(from: data(raceJSON))
         XCTAssertEqual(race?.joinCode, "AEGEMQ")
         XCTAssertTrue(race?.isLive == true)
-        XCTAssertEqual(race?.timeLeftSeconds, 22157)
+        XCTAssertEqual(race?.timeLeftSeconds, 21600)
         XCTAssertEqual(race?.horses.count, 3)
         XCTAssertEqual(race?.divisionNames.first, "Premier Division")
     }
@@ -67,6 +68,46 @@ final class TokenDerbyTests: XCTestCase {
         XCTAssertNil(DerbyParse.race(from: data("{}")))
         XCTAssertNil(DerbyParse.race(from: data("not json")))
         XCTAssertNil(DerbyParse.race(from: data("[]")))
+    }
+
+    // MARK: - Track position
+
+    // Leader-relative alone pinned the front-runner to the finish line from the
+    // first minute. Scaling by elapsed time makes the leader's position the
+    // race's progress, so the field runs the track instead of sitting on it.
+    func testLeaderSitsAtTheRaceProgressNotTheFinishLine() {
+        guard let race = DerbyParse.race(from: data(raceJSON)) else { return XCTFail("no race") }
+        XCTAssertEqual(race.durationSeconds ?? 0, 12 * 3600, accuracy: 1)
+        XCTAssertEqual(race.elapsedFraction, 0.5, accuracy: 0.0001)  // 6h left of 12h
+        let leader = race.horses.first { $0.rank == 1 }!
+        XCTAssertEqual(race.position(leader), 0.5, accuracy: 0.0001)
+    }
+
+    func testTrailingHorsesKeepTheirGapToTheLeader() {
+        guard let race = DerbyParse.race(from: data(raceJSON)) else { return XCTFail("no race") }
+        let gandalf = race.horses.first { $0.name == "gandalf" }!
+        // 6282480 / 13735759 of the way to the leader, at half-distance.
+        XCTAssertEqual(race.position(gandalf),
+                       (6282480.0 / 13735759.0) * 0.5, accuracy: 0.0001)
+    }
+
+    // A finished race is fully run whatever the clock says, and a pending one
+    // hasn't started — the field belongs at the gate, not scattered.
+    func testFinishedRaceRunsTheFullTrackAndPendingRunsNone() {
+        let finished = raceJSON.replacingOccurrences(of: "\"status\":\"live\"", with: "\"status\":\"finished\"")
+        XCTAssertEqual(DerbyParse.race(from: data(finished))?.elapsedFraction, 1)
+        let pending = raceJSON.replacingOccurrences(of: "\"status\":\"live\"", with: "\"status\":\"pending\"")
+        XCTAssertEqual(DerbyParse.race(from: data(pending))?.elapsedFraction, 0)
+    }
+
+    // No usable timestamps: don't scatter the field on a guess.
+    func testMissingTimestampsLeaveTheFieldAtTheGate() {
+        let noTimes = raceJSON
+            .replacingOccurrences(of: "\"start_time\":\"2026-09-15T05:00:00.000Z\",", with: "")
+            .replacingOccurrences(of: "\"end_time\":\"2026-09-15T17:00:00.000Z\",", with: "")
+        let race = DerbyParse.race(from: data(noTimes))
+        XCTAssertNil(race?.durationSeconds)
+        XCTAssertEqual(race?.elapsedFraction, 0)
     }
 
     // MARK: - Which race to show
