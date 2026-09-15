@@ -186,7 +186,10 @@ struct PanelContentView: View {
         case .outcomes: return "Outcomes"
         case .settings: return "Settings"
         case .extensionTab(let id): return nav.extensionTab(id: id)?.label ?? id
-        default:        return ""
+        // Listed, not defaulted: a new tab should fail to compile here rather
+        // than render an unlabelled one.
+        case .phrases, .updateConfirm, .updating, .postUpdate, .bootstrap, .uninstall:
+            return ""
         }
     }
 
@@ -3707,10 +3710,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return true
         }
 
-        // Usage tab: two focus levels. In the client list, ↑/↓ switch the
-        // connected client and →/Enter steps into the detail pane. Inside the
-        // detail, ↑/↓ scroll it and ←/Esc step back out. Other keys are
-        // swallowed so they don't leak through to the events store.
         if case .extensionTab = nav.mode {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             if plain, event.keyCode == KeyCode.escape {
@@ -3720,6 +3719,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return false
         }
 
+        // Usage tab: two focus levels. In the client list, ↑/↓ switch the
+        // connected client and →/Enter steps into the detail pane. Inside the
+        // detail, ↑/↓ scroll it and ←/Esc step back out. Other keys are
+        // swallowed so they don't leak through to the events store.
         if nav.mode == .usage {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain else { return false }

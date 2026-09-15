@@ -864,13 +864,21 @@ final class PanelNav: ObservableObject {
 
     // Tabs contributed by installed extensions, in install order. Empty until
     // the extension runtime populates it.
-    @Published var extensionTabs: [ExtensionTab] = []
+    // didSet rather than a call site: a reconcile you have to remember to call
+    // is one you forget, and its tests pass either way.
+    @Published var extensionTabs: [ExtensionTab] = [] {
+        didSet { reconcileModeWithTabs() }
+    }
 
     // The tab order, and the only source of it: ⌘-number, ←/→ and the strip all
     // read this, so a tab can't be drawn fifth and answer to ⌘6.
     var orderedTabs: [PanelMode] {
         var tabs: [PanelMode] = [.events, .sessions, .usage, .outcomes]
-        tabs += extensionTabs.map { .extensionTab($0.id) }
+        // First id wins. Two tabs sharing one id are structurally equal, so
+        // ForEach drops a row, firstIndex(of:) can never reach the second, and
+        // the lookup returns the first one's label for both.
+        var seen = Set<String>()
+        tabs += extensionTabs.compactMap { seen.insert($0.id).inserted ? .extensionTab($0.id) : nil }
         tabs.append(.settings)
         return tabs
     }
