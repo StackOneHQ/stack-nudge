@@ -1778,6 +1778,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self.nav.quotaErrors[.claude] = nil
                 self.nav.quotaLastUpdated = Date()
                 self.nav.quotaClaudeLastUpdated = Date()
+                self.nav.quotaUpdatedAt[.claude] = Date()
                 self.evaluateQuotaThresholds(snapshot)
             } else if self.claudeCliQuotaProbe.cliMissing {
                 // `claude` didn't resolve on PATH. With no prior snapshot, treat
@@ -1791,7 +1792,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                     self.nav.quotaClaudeLastUpdated = nil
                     self.nav.quotaErrors[.claude] = nil
                 } else {
-                    self.nav.quotaErrors[.claude] = "Couldn't refresh — run `claude /usage` to check your session."
+                    // Naming the real fault: the old text blamed the session, so
+                    // a user whose `claude /usage` works fine in a terminal saw
+                    // the app contradict them. Set STACKNUDGE_CLAUDE_PATH when
+                    // it lives somewhere the probe doesn't look.
+                    self.nav.quotaErrors[.claude] =
+                        "Can't find the claude CLI — set STACKNUDGE_CLAUDE_PATH if it's installed elsewhere."
                 }
             } else if self.claudeCliQuotaProbe.isRateLimited {
                 // Soft-fail: hold any prior snapshot. On a cold first probe
@@ -1822,6 +1828,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             guard let self, let snapshot else { return }
             self.nav.codexQuota = snapshot
             self.nav.quotaLastUpdated = Date()
+            self.nav.quotaUpdatedAt[.codex] = Date()
         }
         // Antigravity (agy) usage — read from the running CLI's loopback RPC
         // (localhost only, no auth). Independent of the probes above. Unlike
@@ -1835,6 +1842,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self.nav.antigravityQuota = snapshot
                 self.nav.quotaErrors[.antigravity] = nil
                 self.nav.quotaLastUpdated = Date()
+                self.nav.quotaUpdatedAt[.antigravity] = Date()
             case .unparseable:
                 self.nav.quotaErrors[.antigravity] =
                     "Couldn't read Antigravity usage — its local endpoint returned something unexpected."

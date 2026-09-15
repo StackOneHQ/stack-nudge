@@ -173,7 +173,7 @@ struct UsageView: View {
                 // describes the whole tab (not one carousel pane), and the
                 // footer had run out of room once the carousel added its own
                 // hints. The column already ended in slack space.
-                syncStatus
+                syncStatus(for: selected)
             }
             .frame(width: 104)
             .padding(.vertical, 10)
@@ -720,8 +720,8 @@ struct UsageView: View {
 
     // Foot of the client column. Wraps rather than truncating — the column is
     // 104pt wide and "Updated 15m ago" doesn't fit on one line there.
-    private var syncStatus: some View {
-        Text(syncStatusLabel)
+    private func syncStatus(for client: UsageClient) -> some View {
+        Text(syncStatusLabel(for: client))
             .font(.caption2)
             .foregroundStyle(.tertiary)
             .fixedSize(horizontal: false, vertical: true)
@@ -731,9 +731,9 @@ struct UsageView: View {
 
     // No "tracking off" case: the column only renders inside clientSplit, which
     // is gated on quotaTrackingEnabled — trackingDisabledState owns that message.
-    private var syncStatusLabel: String {
+    private func syncStatusLabel(for client: UsageClient) -> String {
         if nav.quotaSyncing { return "Syncing…" }
-        guard let updated = nav.quotaLastUpdated else { return "Never synced" }
+        guard let updated = nav.quotaUpdatedAt[client] else { return "Never synced" }
         return "Updated \(RelativeTime.string(updated, style: .abbreviated))"
     }
 

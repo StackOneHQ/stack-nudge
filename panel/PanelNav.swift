@@ -301,6 +301,12 @@ final class PanelNav: ObservableObject {
     // on every tick, so they keep the shared timestamp looking fresh while the
     // `claude` shell-out is failing; the sync-on-open check needs this one.
     @Published var quotaClaudeLastUpdated: Date?
+
+    // When each client last refreshed successfully. quotaLastUpdated is stamped
+    // by whichever client succeeded, so on its own it reported another client's
+    // freshness: a failing Claude read "Updated 12s ago" because Codex had just
+    // polled, next to the error saying it hadn't refreshed.
+    @Published var quotaUpdatedAt: [UsageClient: Date] = [:]
     // True while a probe is in-flight. Set by PanelController around the
     // fetch call so the UI can swap the footer status to "Syncing…".
     @Published var quotaSyncing:     Bool = false

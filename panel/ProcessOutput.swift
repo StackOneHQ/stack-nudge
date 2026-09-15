@@ -93,13 +93,24 @@ enum ProcessOutput {
     // Resolve the `claude` CLI. Same minimal-PATH rationale as gh(). The
     // native installer (current default) symlinks into ~/.local/bin; the
     // ~/.claude/local fallback covers the older curl-bash/migration installer.
+    // A launchd-spawned .app gets a minimal PATH, so the binary is resolved from
+    // absolute candidates rather than looked up. Version managers (volta, mise,
+    // asdf, bun) and custom npm prefixes all land outside this list, which is
+    // what STACKNUDGE_CLAUDE_PATH is for.
     static func claude() -> String? {
+        if let override = ConfigFile.read()["STACKNUDGE_CLAUDE_PATH"], !override.isEmpty {
+            return FileManager.default.isExecutableFile(atPath: override) ? override : nil
+        }
         let home = NSHomeDirectory()
         return [
             "\(home)/.local/bin/claude",
             "/opt/homebrew/bin/claude",
             "/usr/local/bin/claude",
             "\(home)/.claude/local/claude",
+            "\(home)/.volta/bin/claude",
+            "\(home)/.bun/bin/claude",
+            "\(home)/.local/share/mise/shims/claude",
+            "\(home)/.asdf/shims/claude",
         ].first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 }
