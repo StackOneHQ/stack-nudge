@@ -136,3 +136,39 @@ final class TokenDerbyTests: XCTestCase {
         XCTAssertNil(DerbyParse.pick(DerbyParse.summaries(from: data("nonsense"))))
     }
 }
+
+// The tab strip, ⌘-number and ←/→ all read one ordered list. They used to be
+// written out separately, which put Derby fifth on screen and on ⌘6.
+@MainActor
+final class DerbyTabOrderTests: XCTestCase {
+
+    func testDerbySitsBeforeSettingsWhenEnabled() {
+        let nav = PanelNav()
+        nav.derbyOrg = "StackOne"
+        XCTAssertEqual(nav.orderedTabs, [.events, .sessions, .usage, .outcomes, .derby, .settings])
+        // ⌘5 is whatever is drawn fifth.
+        XCTAssertEqual(nav.orderedTabs[4], .derby)
+        XCTAssertEqual(nav.orderedTabs[5], .settings)
+    }
+
+    func testSettingsKeepsItsPositionWithoutTheDerby() {
+        let nav = PanelNav()
+        nav.derbyOrg = nil
+        XCTAssertEqual(nav.orderedTabs, [.events, .sessions, .usage, .outcomes, .settings])
+        XCTAssertEqual(nav.orderedTabs[4], .settings)
+    }
+
+    func testAnEmptyOrgDoesNotConjureATab() {
+        let nav = PanelNav()
+        nav.derbyOrg = ""
+        XCTAssertFalse(nav.derbyEnabled)
+        XCTAssertFalse(nav.orderedTabs.contains(.derby))
+    }
+
+    // Six digits, so the list must never outgrow them.
+    func testTabCountFitsTheNumberRow() {
+        let nav = PanelNav()
+        nav.derbyOrg = "StackOne"
+        XCTAssertLessThanOrEqual(nav.orderedTabs.count, 6)
+    }
+}

@@ -3493,22 +3493,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // ordered tab list without wrapping.
         if cmdOnly {
             switch event.keyCode {
-            case KeyCode.one:
-                nav.mode = .events; return true
-            case KeyCode.two:
-                nav.mode = .sessions; return true
-            case KeyCode.three:
-                nav.mode = .usage; return true
-            case KeyCode.four:
-                nav.mode = .outcomes; return true
-            case KeyCode.five:
-                nav.mode = .settings; return true
-            case KeyCode.six:
-                guard nav.derbyEnabled else { return false }
-                nav.mode = .derby; return true
+            case KeyCode.one, KeyCode.two, KeyCode.three,
+                 KeyCode.four, KeyCode.five, KeyCode.six:
+                // Numbered off the same ordered list the strip draws, so the
+                // digit always matches the position you can see. Hardcoding
+                // them separately put Derby on 6 while it sat fifth on screen.
+                let digits = [KeyCode.one, KeyCode.two, KeyCode.three,
+                              KeyCode.four, KeyCode.five, KeyCode.six]
+                guard let digit = digits.firstIndex(of: event.keyCode),
+                      nav.orderedTabs.indices.contains(digit) else { return false }
+                nav.mode = nav.orderedTabs[digit]
+                return true
             case KeyCode.leftArrow, KeyCode.rightArrow:
-                var tabs: [PanelMode] = [.events, .sessions, .usage, .outcomes, .settings]
-                if nav.derbyEnabled { tabs.append(.derby) }
+                let tabs = nav.orderedTabs
                 if let idx = tabs.firstIndex(of: nav.mode) {
                     let next = event.keyCode == KeyCode.leftArrow ? idx - 1 : idx + 1
                     if tabs.indices.contains(next) {

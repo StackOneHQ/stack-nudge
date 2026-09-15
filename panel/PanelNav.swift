@@ -861,6 +861,15 @@ final class PanelNav: ObservableObject {
     @Published var derbyRace: DerbyRace?
     @Published var derbySyncing = false
     var derbyEnabled: Bool { !(derbyOrg ?? "").isEmpty }
+
+    // The tab order, and the only source of it: ⌘-number, ←/→ and the strip all
+    // read this, so a tab can't be drawn fifth and answer to ⌘6.
+    var orderedTabs: [PanelMode] {
+        var tabs: [PanelMode] = [.events, .sessions, .usage, .outcomes]
+        if derbyEnabled { tabs.append(.derby) }
+        tabs.append(.settings)
+        return tabs
+    }
     @Published var quotaAlertThreshold:  Int  = 80
     // Background poll interval in minutes when the panel is hidden.
     // Visible-panel polling is fixed at 60s (see Panel.swift). Cycle
