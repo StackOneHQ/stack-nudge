@@ -38,10 +38,19 @@ enum QuotaReset {
         return seconds > 0 ? seconds : nil
     }
 
-    // Widget pill: "2h24m", "2h", "14m".
+    // Widget pill: "4d15h", "2h24m", "2h", "14m".
+    //
+    // Days matter because the pill counts down whichever window is the shorter
+    // of the pair, and Codex often publishes only a weekly one — which this
+    // rendered as "111h41m" while the format was written for a 5-hour window.
     static func shortLabel(until date: Date, now: Date = Date()) -> String? {
         guard let remaining = remaining(until: date, now: now) else { return nil }
         let seconds = Int(remaining)
+        if seconds >= 86400 {
+            let days = seconds / 86400
+            let hours = (seconds % 86400) / 3600
+            return hours > 0 ? "\(days)d\(hours)h" : "\(days)d"
+        }
         if seconds >= 3600 {
             let hours = seconds / 3600
             let minutes = (seconds % 3600) / 60
@@ -109,6 +118,63 @@ enum QuotaReset {
         formatter.amSymbol = "am"
         formatter.pmSymbol = "pm"
         return formatter
+    }
+
+    // How far through its window a tier is, 0…1. Shares `remaining`'s
+    // past-deadline rule: a stale snapshot draws no marker rather than one
+    // pinned confidently to the far right.
+    static func elapsedFraction(until date: Date,
+                                windowLength: TimeInterval,
+                                now: Date = Date()) -> Double? {
+        guard windowLength > 0, let remaining = remaining(until: date, now: now) else { return nil }
+        // Clamped, not rejected: a window longer than we assume pins to the start.
+        return min(1, max(0, 1 - remaining / windowLength))
+    }
+}
+
+extension QuotaReset {
+
+    // Below this the warning would toggle on and off around the boundary while
+    // telling the user nothing — a tier at 46% with 45% elapsed is on pace.
+    static let paceWarningPoints: Double = 5
+
+    // Percentage points by which usage leads the clock, or nil when it doesn't
+    // lead by enough to be worth saying. Points, not a ratio: the row already
+    // shows both numbers as percentages, so the gap between them reads in the
+    // same unit.
+    static func paceOvershoot(utilization: Double, elapsedFraction: Double) -> Double? {
+        // Not clamped to 100: the row prints utilization unclamped, so clamping
+        // here put "50% ahead of pace" beside "113% used" — numbers that don't add up.
+        let used = max(utilization, 0)
+        let elapsed = min(max(elapsedFraction, 0), 1) * 100
+        let overshoot = used - elapsed
+        return overshoot >= paceWarningPoints ? overshoot : nil
+    }
+}
+
+// Names a quota window by its length. Codex reports length, not kind, and the
+// slot→window mapping isn't fixed — see CodexUsage.tier.
+enum QuotaWindow {
+
+    static let fiveHours: TimeInterval = 5 * 3600
+    static let sevenDays: TimeInterval = 7 * 24 * 3600
+
+    static func title(windowLength: TimeInterval) -> String {
+        switch windowLength {
+        case fiveHours: return "Current session (5h)"
+        case sevenDays: return "Current week"
+        default:        return "Current window (\(shortName(windowLength)))"
+        }
+    }
+
+    // "5h" / "7d" / "1d" — the widget's ring label and the tab's title both name
+    // windows from this, so an unmapped length can't read one way in the pill
+    // and another in the tab.
+    static func shortName(_ length: TimeInterval) -> String {
+        let minutes = Int(length.rounded() / 60)
+        if minutes % (24 * 60) == 0 { return "\(minutes / (24 * 60))d" }
+        if minutes % 60 == 0 { return "\(minutes / 60)h" }
+        return "\(minutes)m"
     }
 }
 

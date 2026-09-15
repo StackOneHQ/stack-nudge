@@ -19,6 +19,22 @@ final class QuotaResetTests: XCTestCase {
         XCTAssertEqual(QuotaReset.shortLabel(until: ahead(2 * 3600 + 24 * 60), now: now), "2h24m")
     }
 
+    // Regression: the pill counts down whichever window is shorter, and Codex
+    // frequently publishes only a weekly one — which rendered as "111h41m"
+    // because the format was written for a 5-hour window.
+    func testShortLabelRollsIntoDays() {
+        XCTAssertEqual(QuotaReset.shortLabel(until: ahead(4 * 86400 + 15 * 3600), now: now), "4d15h")
+    }
+
+    func testShortLabelDropsZeroHoursOnAWholeDay() {
+        XCTAssertEqual(QuotaReset.shortLabel(until: ahead(3 * 86400), now: now), "3d")
+    }
+
+    // Just under a day stays in hours rather than rounding up to "1d".
+    func testShortLabelBelowADayStaysInHours() {
+        XCTAssertEqual(QuotaReset.shortLabel(until: ahead(23 * 3600 + 59 * 60), now: now), "23h59m")
+    }
+
     func testShortLabelDropsZeroMinutes() {
         XCTAssertEqual(QuotaReset.shortLabel(until: ahead(2 * 3600), now: now), "2h")
     }

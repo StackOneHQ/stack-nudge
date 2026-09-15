@@ -7,9 +7,17 @@ final class WidgetQuotaTests: XCTestCase {
     private let soon = Date(timeIntervalSince1970: 1_800_000_000)
     private let later = Date(timeIntervalSince1970: 1_800_100_000)
 
+    // windowLength is set here because ClaudeCliQuotaProbe sets it — a fixture
+    // without it exercised the unnamed-window path the real probe never takes.
     private func claudeSnapshot(five: Double? = nil, seven: Double? = nil) -> QuotaSnapshot {
-        QuotaSnapshot(fiveHour: five.map { QuotaTier(utilization: $0, resetsAt: soon) },
-                      sevenDay: seven.map { QuotaTier(utilization: $0, resetsAt: later) },
+        QuotaSnapshot(fiveHour: five.map {
+                          QuotaTier(utilization: $0, resetsAt: soon,
+                                    windowLength: QuotaWindow.fiveHours)
+                      },
+                      sevenDay: seven.map {
+                          QuotaTier(utilization: $0, resetsAt: later,
+                                    windowLength: QuotaWindow.sevenDays)
+                      },
                       sevenDayOpus: nil, sevenDaySonnet: nil, planType: "max")
     }
 
@@ -156,11 +164,12 @@ final class WidgetQuotaTests: XCTestCase {
             .ringDescription.contains("monthly prompt credits"))
     }
 
-    // Claude is the default selection, so tagging it would put a name line on
-    // every pill belonging to someone who never switches client.
-    func test_widgetTag_absentForClaudeOnly() {
-        XCTAssertNil(UsageClient.claude.widgetTag)
+    func test_widgetTag_namesEveryClient() {
+        XCTAssertEqual(UsageClient.claude.widgetTag, "Claude")
         XCTAssertEqual(UsageClient.codex.widgetTag, "Codex")
         XCTAssertEqual(UsageClient.antigravity.widgetTag, "Agy")
+        for client in UsageClient.allCases {
+            XCTAssertFalse(client.widgetTag.isEmpty, "\(client) has no widget tag")
+        }
     }
 }

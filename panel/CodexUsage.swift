@@ -1,9 +1,9 @@
 import Foundation
 
 // Codex (ChatGPT-plan) rate limits, mirroring the shape of Claude's quota so
-// the Usage tab can render them with the same QuotaTier rows. `primary` is the
-// 5-hour rolling window, `secondary` the weekly one. `planType` is the ChatGPT
-// tier ("plus", "pro", …) when reported.
+// the Usage tab can render them with the same QuotaTier rows. Which window each
+// slot carries varies between payloads — read `windowLength`, not the slot name.
+// `planType` is the ChatGPT tier ("plus", "pro", …) when reported.
 struct CodexQuotaSnapshot: Equatable {
     let primary: QuotaTier?
     let secondary: QuotaTier?
@@ -17,8 +17,8 @@ struct CodexQuotaSnapshot: Equatable {
 
 // Reads Codex's account-level rate limits from the newest rollout JSONL under
 // ~/.codex/sessions. Codex records them on each `token_count` event at
-// `payload.rate_limits` (primary = 5h, secondary = weekly), with `used_percent`
-// on a 0–100 scale and a unix `resets_at`. Local-only — no network, no auth.
+// `payload.rate_limits`, with `used_percent` on a 0–100 scale, a unix
+// `resets_at` and a `window_minutes`. Local-only — no network, no auth.
 //
 // The limits are account-wide (not per-session), so the most-recently-written
 // rollout holds the freshest values. Returns nil for API-key auth (no
@@ -90,34 +90,48 @@ final class CodexQuotaProbe {
 
         for line in text.split(separator: "\n", omittingEmptySubsequences: true).reversed() {
             guard line.contains("rate_limits"),
-                  let lineData = line.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
-                  let payload = obj["payload"] as? [String: Any],
-                  let rateLimits = payload["rate_limits"] as? [String: Any]
-            else { continue }
-
-            return CodexQuotaSnapshot(
-                primary: tier(rateLimits["primary"]),
-                secondary: tier(rateLimits["secondary"]),
-                planType: rateLimits["plan_type"] as? String
-            )
+                  let snapshot = snapshot(fromLine: String(line)) else { continue }
+            return snapshot
         }
         return nil
     }
 
+    // Split out so tests can push a verbatim rollout line through the same
+    // decode the app uses, pinning payload shape and parser together.
+    static func snapshot(fromLine line: String, now: Date = Date()) -> CodexQuotaSnapshot? {
+        guard let lineData = line.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+              let payload = obj["payload"] as? [String: Any],
+              let rateLimits = payload["rate_limits"] as? [String: Any]
+        else { return nil }
+
+        return CodexQuotaSnapshot(
+            primary: tier(rateLimits["primary"], now: now),
+            secondary: tier(rateLimits["secondary"], now: now),
+            planType: rateLimits["plan_type"] as? String
+        )
+    }
+
     // `used_percent` is already on a 0–100 scale; `resets_at` is unix seconds.
     // Both arrive as JSON numbers, so decode via NSNumber to tolerate int/double.
-    private static func tier(_ raw: Any?) -> QuotaTier? {
+    //
+    // `window_minutes` (300 or 10080) is the only reliable way to tell the two
+    // windows apart. The slot carries no fixed meaning: `primary` is usually the
+    // weekly window with `secondary` absent, but the same `limit_id` also emits
+    // the 5h/weekly pair, so neither the slot nor the id can stand in for it.
+    static func tier(_ raw: Any?, now: Date = Date()) -> QuotaTier? {
         guard let dict = raw as? [String: Any],
               let used = (dict["used_percent"] as? NSNumber)?.doubleValue else { return nil }
         let resetsAt = (dict["resets_at"] as? NSNumber)
             .map { Date(timeIntervalSince1970: $0.doubleValue) }
+        let windowLength = (dict["window_minutes"] as? NSNumber)
+            .map { $0.doubleValue * 60 }
         // A window whose reset time has already passed has since rolled over;
         // the captured used_percent is stale and no longer reflects the current
         // window. Drop it so the Usage tab doesn't show old numbers with a
         // "resets N days ago" (happens when Codex hasn't run recently and the
         // newest rollout is older than its own rate-limit window).
-        if let resetsAt, resetsAt < Date() { return nil }
-        return QuotaTier(utilization: used, resetsAt: resetsAt)
+        if let resetsAt, resetsAt < now { return nil }
+        return QuotaTier(utilization: used, resetsAt: resetsAt, windowLength: windowLength)
     }
 }

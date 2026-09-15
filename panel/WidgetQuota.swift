@@ -38,13 +38,37 @@ struct WidgetQuota: Equatable {
     // Tooltip describing what the two rings mean for this client. Claude and
     // Codex share a 5h/weekly shape; Antigravity's rings mean something else
     // entirely, so the help text can't be a constant.
+    // Built from the same labels the legend shows. Hardcoding "5h session" here
+    // meant the tooltip contradicted the legend above it on any account whose
+    // slots don't carry the windows we used to assume.
     var ringDescription: String {
         switch client {
         case .antigravity:
             return "Inner ring: model closest to its limit · Outer ring: monthly prompt credits"
         default:
-            return "Inner ring: 5h session quota · Outer ring: 7d weekly quota"
+            let inner = "Inner ring: \(Self.ringPhrase(shortLabel, short))"
+            guard long != nil else { return inner }
+            return "\(inner) · Outer ring: \(Self.ringPhrase(longLabel, long))"
         }
+    }
+
+    // "5h session quota" / "7d weekly quota", and just "1d quota" for a window
+    // we have no word for — rather than calling it a session because of which
+    // slot it arrived in.
+    static func ringPhrase(_ label: String, _ tier: QuotaTier?) -> String {
+        switch tier?.windowLength {
+        case QuotaWindow.fiveHours: return "\(label) session quota"
+        case QuotaWindow.sevenDays: return "\(label) weekly quota"
+        default:                    return "\(label) quota"
+        }
+    }
+
+    // The slot's old label only when no window is reported at all. A window we
+    // haven't special-cased still gets named from its length, or the pill would
+    // say "5h" while the Usage tab said "Current window (1d)" for one tier.
+    static func ringLabel(_ tier: QuotaTier?, fallback: String) -> String {
+        guard let length = tier?.windowLength else { return fallback }
+        return QuotaWindow.shortName(length)
     }
 
     static func make(client: UsageClient?,
@@ -57,9 +81,12 @@ struct WidgetQuota: Equatable {
                                short: claude?.fiveHour, long: claude?.sevenDay,
                                shortLabel: "5h", longLabel: "7d")
         case .codex:
+            // Named from the reported window: a hardcoded "5h" labelled a weekly
+            // ring as a session one, contradicting the Usage tab.
             return WidgetQuota(client: .codex,
                                short: codex?.primary, long: codex?.secondary,
-                               shortLabel: "5h", longLabel: "7d")
+                               shortLabel: ringLabel(codex?.primary, fallback: "5h"),
+                               longLabel: ringLabel(codex?.secondary, fallback: "7d"))
         case .antigravity:
             // agy reports no 5h/weekly pair — one window per model plus a
             // monthly credit pool. The model closest to its limit is the one
@@ -91,12 +118,12 @@ struct WidgetQuota: Equatable {
 }
 
 extension UsageClient {
-    // Short tag naming the client in the pill's hover legend. nil for Claude:
-    // it's the default selection, so labelling it would put a line on every
-    // pill belonging to a user who never switches client.
-    var widgetTag: String? {
+    // Short tag naming the client in the pill's hover legend. Claude carries one
+    // too: leaving it blank made absence the label, so switching to Codex read
+    // as a line appearing rather than as a change of client.
+    var widgetTag: String {
         switch self {
-        case .claude:      return nil
+        case .claude:      return "Claude"
         case .codex:       return "Codex"
         case .antigravity: return "Agy"
         }

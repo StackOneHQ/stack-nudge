@@ -54,8 +54,8 @@ enum AttentionPolicy {
             : "Still waiting \(waited) · \(original)"
     }
 
-    // "45s", "4m", "1h2m" — same vocabulary as QuotaReset.shortLabel, but
-    // counting up. Sub-minute stays in seconds: the first reminder can land
+    // "45s", "4m", "1h2m" — close to QuotaReset.shortLabel but counting up, and
+    // without its day unit, which a wait capped at promptLifetime can't reach. Sub-minute stays in seconds: the first reminder can land
     // under a minute after the prompt when the interval is 1m and the tick
     // lands early, and "0m" would read as a bug.
     static func elapsedLabel(since: Date, now: Date = Date()) -> String {
