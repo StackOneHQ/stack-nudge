@@ -28,6 +28,10 @@ private enum KeyCode {
     static let three:     UInt16 = 20
     static let four:      UInt16 = 21
     static let five:      UInt16 = 23
+    static let six:       UInt16 = 22
+    static let seven:     UInt16 = 26
+    static let eight:     UInt16 = 28
+    static let nine:      UInt16 = 25
     static let nKey:      UInt16 = 45
     static let pKey:      UInt16 = 35
     static let mKey:      UInt16 = 46
@@ -140,6 +144,7 @@ struct PanelContentView: View {
                 case .sessions: SessionsView(store: sessions, events: store, nav: nav)
                 case .usage:    UsageView(nav: nav)
                 case .outcomes: OutcomesTabView(nav: nav)
+                case .extensionTab(let id): ExtensionTabView(nav: nav, id: id)
                 case .settings: SettingsView(nav: nav)
                 case .phrases:  PhrasesView(model: phrases) { nav.mode = .settings }
                 case .updateConfirm:
@@ -173,19 +178,44 @@ struct PanelContentView: View {
         return nav.visibleOutcomeGroups().count
     }
 
+    private func tabLabel(_ mode: PanelMode) -> String {
+        switch mode {
+        case .events:   return "Events"
+        case .sessions: return "Sessions"
+        case .usage:    return "Usage"
+        case .outcomes: return "Outcomes"
+        case .settings: return "Settings"
+        case .extensionTab(let id): return nav.extensionTab(id: id)?.label ?? id
+        default:        return ""
+        }
+    }
+
+    private func tabCount(_ mode: PanelMode) -> Int {
+        switch mode {
+        case .events:   return store.events.count
+        case .sessions: return sessions.liveSessions.count
+        case .outcomes: return ticketGroupCount
+        default:        return 0
+        }
+    }
+
+    private func tabDot(_ mode: PanelMode) -> Color? {
+        guard mode == .settings else { return nil }
+        if !nav.missingPermissions.isEmpty { return .orange }
+        return nav.updateAvailable != nil ? .accentColor : nil
+    }
+
     private var tabStrip: some View {
         HStack(spacing: 4) {
             Image(nsImage: MenuBarController.brandMarkImage(height: 14))
                 .padding(.trailing, 4)
 
-            tab(.events,   label: "Events",   count: store.events.count)
-            tab(.sessions, label: "Sessions", count: sessions.liveSessions.count)
-            tab(.usage,    label: "Usage",    count: 0)
-            tab(.outcomes, label: "Outcomes", count: ticketGroupCount)
-            tab(.settings, label: "Settings", count: 0,
-                dotColor: !nav.missingPermissions.isEmpty ? .orange
-                        : nav.updateAvailable != nil ? .accentColor
-                        : nil)
+            // Driven off orderedTabs rather than listed here, so the strip and
+            // the shortcuts can't disagree about what sits where.
+            ForEach(nav.orderedTabs, id: \.self) { mode in
+                tab(mode, label: tabLabel(mode), count: tabCount(mode),
+                    dotColor: tabDot(mode))
+            }
 
             Spacer()
 
@@ -195,7 +225,7 @@ struct PanelContentView: View {
             // uncluttered while still surfacing the shortcut range.
             HStack(spacing: 2) {
                 KeyCapView(symbol: "⌘")
-                KeyCapView(symbol: "1-5")
+                KeyCapView(symbol: "1-\(min(nav.orderedTabs.count, PanelNav.maxNumberedTabs))")
             }
             .opacity(0.7)
         }
@@ -3392,6 +3422,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // MARK: - PanelKeyDelegate
 
     // A function, not an inline check, so widening the set is a visible edit.
+    // Nine is the ceiling: orderedTabs beyond this are reachable by ←/→ only.
+    static let tabDigits: [UInt16] = [
+        KeyCode.one, KeyCode.two, KeyCode.three, KeyCode.four, KeyCode.five,
+        KeyCode.six, KeyCode.seven, KeyCode.eight, KeyCode.nine,
+    ]
+
     static func eventsOwnsKeyboard(_ mode: PanelMode) -> Bool { mode == .events }
 
     func panelHandlesKey(_ event: NSEvent) -> Bool {
@@ -3448,18 +3484,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // ordered tab list without wrapping.
         if cmdOnly {
             switch event.keyCode {
-            case KeyCode.one:
-                nav.mode = .events; return true
-            case KeyCode.two:
-                nav.mode = .sessions; return true
-            case KeyCode.three:
-                nav.mode = .usage; return true
-            case KeyCode.four:
-                nav.mode = .outcomes; return true
-            case KeyCode.five:
-                nav.mode = .settings; return true
+            case KeyCode.one, KeyCode.two, KeyCode.three, KeyCode.four,
+                 KeyCode.five, KeyCode.six, KeyCode.seven, KeyCode.eight, KeyCode.nine:
+                guard let digit = Self.tabDigits.firstIndex(of: event.keyCode),
+                      nav.orderedTabs.indices.contains(digit) else { return false }
+                nav.mode = nav.orderedTabs[digit]
+                return true
             case KeyCode.leftArrow, KeyCode.rightArrow:
-                let tabs: [PanelMode] = [.events, .sessions, .usage, .outcomes, .settings]
+                let tabs = nav.orderedTabs
                 if let idx = tabs.firstIndex(of: nav.mode) {
                     let next = event.keyCode == KeyCode.leftArrow ? idx - 1 : idx + 1
                     if tabs.indices.contains(next) {
@@ -3679,6 +3711,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // connected client and →/Enter steps into the detail pane. Inside the
         // detail, ↑/↓ scroll it and ←/Esc step back out. Other keys are
         // swallowed so they don't leak through to the events store.
+        if case .extensionTab = nav.mode {
+            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            if plain, event.keyCode == KeyCode.escape {
+                hidePanel()
+                return true
+            }
+            return false
+        }
+
         if nav.mode == .usage {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain else { return false }

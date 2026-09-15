@@ -1,11 +1,15 @@
 import AppKit
 import SwiftUI
 
-enum PanelMode {
+// Hashable is declared rather than synthesised: extensionTab's associated value
+// removes the implicit conformance that `nav.mode == x` relies on everywhere.
+enum PanelMode: Hashable {
     case events
     case sessions
     case usage
     case outcomes
+    // A tab contributed by an installed extension, keyed by its id.
+    case extensionTab(String)
     case settings
     case phrases
     // Confirmation step after the user clicks the "Update available" row.
@@ -854,6 +858,33 @@ final class PanelNav: ObservableObject {
     @Published var quotaTrackingEnabled: Bool = true
     @Published var quotaAlertsEnabled:   Bool = true
     @Published var quotaShowRemaining:   Bool = false
+
+    // ⌘1…⌘9. Tabs past this are reachable by ←/→ only.
+    static let maxNumberedTabs = 9
+
+    // Tabs contributed by installed extensions, in install order. Empty until
+    // the extension runtime populates it.
+    @Published var extensionTabs: [ExtensionTab] = []
+
+    // The tab order, and the only source of it: ⌘-number, ←/→ and the strip all
+    // read this, so a tab can't be drawn fifth and answer to ⌘6.
+    var orderedTabs: [PanelMode] {
+        var tabs: [PanelMode] = [.events, .sessions, .usage, .outcomes]
+        tabs += extensionTabs.map { .extensionTab($0.id) }
+        tabs.append(.settings)
+        return tabs
+    }
+
+    func extensionTab(id: String) -> ExtensionTab? {
+        extensionTabs.first { $0.id == id }
+    }
+
+    // An extension removed while its tab is open leaves mode on a tab that no
+    // longer exists, which renders nothing.
+    func reconcileModeWithTabs() {
+        guard case .extensionTab = mode, !orderedTabs.contains(mode) else { return }
+        mode = .events
+    }
     @Published var quotaAlertThreshold:  Int  = 80
     // Background poll interval in minutes when the panel is hidden.
     // Visible-panel polling is fixed at 60s (see Panel.swift). Cycle
@@ -1709,4 +1740,11 @@ final class PanelNav: ObservableObject {
         ConfigFile.write(key: "STACKNUDGE_SPEAK_HOTKEY", value: spec)
         recordingSpeakHotkey = false
     }
+}
+
+// A tab an extension contributes. Identity and label only — the document it
+// renders arrives separately, so a tab can exist before its first fetch.
+struct ExtensionTab: Equatable, Identifiable {
+    let id: String
+    let label: String
 }
