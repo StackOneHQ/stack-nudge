@@ -28,6 +28,7 @@ private enum KeyCode {
     static let three:     UInt16 = 20
     static let four:      UInt16 = 21
     static let five:      UInt16 = 23
+    static let six:       UInt16 = 22
     static let nKey:      UInt16 = 45
     static let pKey:      UInt16 = 35
     static let mKey:      UInt16 = 46
@@ -140,6 +141,7 @@ struct PanelContentView: View {
                 case .sessions: SessionsView(store: sessions, events: store, nav: nav)
                 case .usage:    UsageView(nav: nav)
                 case .outcomes: OutcomesTabView(nav: nav)
+                case .derby:    DerbyView(nav: nav)
                 case .settings: SettingsView(nav: nav)
                 case .phrases:  PhrasesView(model: phrases) { nav.mode = .settings }
                 case .updateConfirm:
@@ -182,6 +184,9 @@ struct PanelContentView: View {
             tab(.sessions, label: "Sessions", count: sessions.liveSessions.count)
             tab(.usage,    label: "Usage",    count: 0)
             tab(.outcomes, label: "Outcomes", count: ticketGroupCount)
+            if nav.derbyEnabled {
+                tab(.derby, label: "Derby", count: 0)
+            }
             tab(.settings, label: "Settings", count: 0,
                 dotColor: !nav.missingPermissions.isEmpty ? .orange
                         : nav.updateAvailable != nil ? .accentColor
@@ -195,7 +200,7 @@ struct PanelContentView: View {
             // uncluttered while still surfacing the shortcut range.
             HStack(spacing: 2) {
                 KeyCapView(symbol: "⌘")
-                KeyCapView(symbol: "1-5")
+                KeyCapView(symbol: nav.derbyEnabled ? "1-6" : "1-5")
             }
             .opacity(0.7)
         }
@@ -842,6 +847,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private var updater: Updater?
     private let claudeCliQuotaProbe = ClaudeCliQuotaProbe()
     private let codexQuotaProbe = CodexQuotaProbe()
+    private let derbyProbe = TokenDerbyProbe()
+    private var lastDerbyFetch: Date?
     private let antigravityUsageProbe = AntigravityUsageProbe()
     private var quotaTimer: Timer?
     // Last outcome derived per repo+branch, alongside the git values it was
@@ -2984,6 +2991,31 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         refreshStalledSessions(now: now)
         applyPresenceToStopThrottle(now: now)
         if nav.slackTokenPresent { refreshSlackStatus() }
+        pollDerbyIfNeeded(now: now)
+    }
+
+    // The derby is a third-party service, so it's polled only while you're
+    // actually looking at it: panel open, on the Derby tab, and off entirely
+    // without an org configured. A race runs for hours — 30s is plenty.
+    private static let derbyPollInterval: TimeInterval = 30
+
+    private func pollDerbyIfNeeded(now: Date) {
+        guard nav.derbyEnabled, nav.mode == .derby, panel.isVisible else { return }
+        if let last = lastDerbyFetch, now.timeIntervalSince(last) < Self.derbyPollInterval { return }
+        syncDerby(now: now)
+    }
+
+    func syncDerby(now: Date = Date()) {
+        guard let org = nav.derbyOrg, !org.isEmpty else { return }
+        lastDerbyFetch = now
+        nav.derbySyncing = true
+        derbyProbe.fetch(org: org) { [weak self] race in
+            guard let self else { return }
+            self.nav.derbySyncing = false
+            // Hold the previous field on a failed poll rather than blanking the
+            // tab; the empty state is for "never loaded", not "one bad request".
+            if let race { self.nav.derbyRace = race }
+        }
     }
 
     // Clear the finished-turn cooldown while the user is actually at the machine,
@@ -3455,8 +3487,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 nav.mode = .outcomes; return true
             case KeyCode.five:
                 nav.mode = .settings; return true
+            case KeyCode.six:
+                guard nav.derbyEnabled else { return false }
+                nav.mode = .derby; return true
             case KeyCode.leftArrow, KeyCode.rightArrow:
-                let tabs: [PanelMode] = [.events, .sessions, .usage, .outcomes, .settings]
+                var tabs: [PanelMode] = [.events, .sessions, .usage, .outcomes, .settings]
+                if nav.derbyEnabled { tabs.append(.derby) }
                 if let idx = tabs.firstIndex(of: nav.mode) {
                     let next = event.keyCode == KeyCode.leftArrow ? idx - 1 : idx + 1
                     if tabs.indices.contains(next) {
@@ -3670,6 +3706,16 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 return false
             }
             return true
+        }
+
+        // Derby tab: R re-fetches. Everything else falls through rather than
+        // being swallowed, since the tab has no selection of its own.
+        if nav.mode == .derby {
+            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            if plain, event.keyCode == KeyCode.rKey {
+                syncDerby()
+                return true
+            }
         }
 
         // Usage tab: two focus levels. In the client list, ↑/↓ switch the

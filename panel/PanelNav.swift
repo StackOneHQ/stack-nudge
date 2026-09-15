@@ -6,6 +6,7 @@ enum PanelMode {
     case sessions
     case usage
     case outcomes
+    case derby
     case settings
     case phrases
     // Confirmation step after the user clicks the "Update available" row.
@@ -854,6 +855,12 @@ final class PanelNav: ObservableObject {
     @Published var quotaTrackingEnabled: Bool = true
     @Published var quotaAlertsEnabled:   Bool = true
     @Published var quotaShowRemaining:   Bool = false
+    // Token Derby: the org name gates the whole feature — no org, no tab, no
+    // network. Read-only; nothing about this machine is ever sent.
+    @Published var derbyOrg: String?
+    @Published var derbyRace: DerbyRace?
+    @Published var derbySyncing = false
+    var derbyEnabled: Bool { !(derbyOrg ?? "").isEmpty }
     @Published var quotaAlertThreshold:  Int  = 80
     // Background poll interval in minutes when the panel is hidden.
     // Visible-panel polling is fixed at 60s (see Panel.swift). Cycle
@@ -1073,6 +1080,7 @@ final class PanelNav: ObservableObject {
         quotaTrackingEnabled = ConfigFile.bool(config, "STACKNUDGE_QUOTA_TRACKING", default: true)
         quotaAlertsEnabled   = ConfigFile.bool(config, "STACKNUDGE_QUOTA_ALERTS",   default: true)
         quotaShowRemaining   = ConfigFile.bool(config, "STACKNUDGE_QUOTA_SHOW_REMAINING", default: false)
+        derbyOrg             = config["STACKNUDGE_DERBY_ORG"]
         // Coerce out-of-list values to the nearest valid threshold so a
         // hand-edited config can't desync the cycle row's selection.
         let rawThreshold = Int(config["STACKNUDGE_QUOTA_THRESHOLD"] ?? "") ?? 80
