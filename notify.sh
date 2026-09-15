@@ -800,12 +800,16 @@ wait_for_permission_response() {
   local fifo="$1"
   local timeout=550  # Claude Code's hook timeout defaults to 600s — leave buffer
 
-  # INT/TERM/HUP as well as EXIT: bash runs the EXIT trap for a plain SIGTERM,
-  # but naming the signals makes the intent explicit and covers the shells that
-  # don't. Nothing catches SIGKILL, which is why the panel no longer relies on
-  # this trap alone to know a prompt is over.
-  # Global: the trap body expands when it fires, after this function has
-  # returned, so the local above was out of scope and cleaned up nothing.
+  # INT/TERM/HUP as well as EXIT, though they buy less than they look: a trapped
+  # signal doesn't terminate bash, and one arriving while we block below is held
+  # until the read finishes — so the hook runs on to its timeout either way and
+  # still answers kill(0). Nothing catches SIGKILL at all, which is why the panel
+  # no longer relies on this trap to know a prompt is over.
+  # Global because the trap body expands when it FIRES. On a signal that lands
+  # while we're blocked below, bash defers the handler until the child exits, so
+  # it runs inside this function and a local would still be in scope. On a clean
+  # exit it runs after the function returned, where a local is gone — that path
+  # cleaned up nothing.
   PERM_FIFO="$fifo"
   trap 'rm -f "$PERM_FIFO"; rmdir "$(dirname "$PERM_FIFO")" 2>/dev/null' EXIT INT TERM HUP
 
