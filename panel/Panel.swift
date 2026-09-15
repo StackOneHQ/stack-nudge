@@ -84,6 +84,7 @@ struct PanelContentView: View {
     @ObservedObject var sessions: SessionStore
     @ObservedObject var nav: PanelNav
     @ObservedObject var phrases: PhrasesViewModel
+    @ObservedObject var extensions: ExtensionHost
 
     // The disk-backed name store. Observed here (rather than inside EventRow)
     // so resolving a nudge's session label stays a render-time lookup that
@@ -144,7 +145,7 @@ struct PanelContentView: View {
                 case .sessions: SessionsView(store: sessions, events: store, nav: nav)
                 case .usage:    UsageView(nav: nav)
                 case .outcomes: OutcomesTabView(nav: nav)
-                case .extensionTab(let id): ExtensionTabView(nav: nav, id: id)
+                case .extensionTab(let id): ExtensionTabView(host: extensions, id: id)
                 case .settings: SettingsView(nav: nav)
                 case .phrases:  PhrasesView(model: phrases) { nav.mode = .settings }
                 case .updateConfirm:
@@ -868,6 +869,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private let sessions = SessionStore()
     let nav = PanelNav()
     private let phrases = PhrasesViewModel()
+    // Extensions publish their tabs through nav, so nav stays the single source
+    // of tab order and this stays the single source of what's in them.
+    private lazy var extensions = ExtensionHost(onTabsChanged: { [weak self] tabs in
+        self?.nav.extensionTabs = tabs
+    })
     private var listener: EventListener?
     private var menuBar: MenuBarController?
     private var permissionsWC: PermissionsWindowController?
@@ -986,6 +992,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
         let host = NSHostingView(rootView: PanelContentView(
             store: store, sessions: sessions, nav: nav, phrases: phrases,
+            extensions: extensions,
             onGrantPermissions: { [weak self] in self?.handleGrantPermissions() }
         ).environmentObject(SessionPersistence.shared))
         // Don't let SwiftUI's preferred / intrinsic content size drive
@@ -1099,6 +1106,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
         startQuotaPolling()
         startAttentionTicking()
+        // Discovery is a directory listing and a few small JSON reads, so it
+        // runs inline; nothing is spawned until a tab is opened.
+        extensions.load()
         startEventHistory()
         startSlack()
         // The pill (CompactView) reads sessions.sessions for the busy/idle
@@ -3025,6 +3035,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         refreshStalledSessions(now: now)
         applyPresenceToStopThrottle(now: now)
         if nav.slackTokenPresent { refreshSlackStatus() }
+        extensions.tick(visibleTab: visibleExtensionTab)
+    }
+
+    // The extension whose tab is both open and on screen. nil when the panel is
+    // hidden, so a `whileFocusedOnly` extension stops polling the moment the
+    // panel goes away rather than when the tab changes.
+    private var visibleExtensionTab: String? {
+        guard panel?.isVisible == true, case .extensionTab(let id) = nav.mode else { return nil }
+        return id
     }
 
     // Clear the finished-turn cooldown while the user is actually at the machine,
@@ -3718,13 +3737,30 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return true
         }
 
-        if case .extensionTab = nav.mode {
+        // Extension tab: ↑/↓ move the row selection and ⏎ runs the selected
+        // row's return-bound action; every other plain key is offered to the
+        // document's own bindings. Unbound keys are swallowed rather than
+        // passed on — an extension tab must never be able to answer a
+        // permission prompt on the Events tab by accident.
+        if case .extensionTab(let id) = nav.mode {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
-            if plain, event.keyCode == KeyCode.escape {
+            guard plain else { return false }
+            switch event.keyCode {
+            case KeyCode.escape:
                 hidePanel()
-                return true
+            case KeyCode.upArrow:
+                extensions.moveSelection(on: id, by: -1)
+            case KeyCode.downArrow:
+                extensions.moveSelection(on: id, by: 1)
+            case KeyCode.returnKey, KeyCode.numpadEnter:
+                extensions.handle(key: "return", on: id)
+            default:
+                if let typed = event.charactersIgnoringModifiers?.lowercased(),
+                   typed.count == 1 {
+                    extensions.handle(key: typed, on: id)
+                }
             }
-            return false
+            return true
         }
 
         // Usage tab: two focus levels. In the client list, ↑/↓ switch the

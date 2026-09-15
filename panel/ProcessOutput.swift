@@ -34,6 +34,21 @@ enum ProcessOutput {
     // environment plus LC_ALL. nil inherits ours unchanged.
     static func read(_ path: String, _ args: [String], timeout: TimeInterval,
                      cwd: String? = nil, env: [String: String]? = nil) -> String? {
+        run(path, args, timeout: timeout, cwd: cwd, env: env)?.output
+    }
+
+    // What the child actually did. `read` is this minus the exit status, which
+    // most callers don't want: a probe that prints nothing useful is the same
+    // failure whether it exited 0 or 1. Extensions do want it — a non-zero exit
+    // is how a script says "I couldn't", and that reads differently from stdout
+    // that didn't parse.
+    struct Completion: Equatable {
+        let status: Int32
+        let output: String
+    }
+
+    static func run(_ path: String, _ args: [String], timeout: TimeInterval,
+                    cwd: String? = nil, env: [String: String]? = nil) -> Completion? {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: path)
         task.arguments = args
@@ -79,7 +94,8 @@ enum ProcessOutput {
         // EOF arrives when the write end closes at exit; the group's ordering
         // is what publishes `output` to this thread.
         guard drained.wait(timeout: .now() + timeout) != .timedOut else { return nil }
-        return String(data: output, encoding: .utf8) ?? ""
+        return Completion(status: task.terminationStatus,
+                          output: String(data: output, encoding: .utf8) ?? "")
     }
 
     // Resolve the `gh` CLI from common install locations. A launchd-spawned app
