@@ -110,36 +110,6 @@ final class TokenDerbyTests: XCTestCase {
         XCTAssertEqual(race?.elapsedFraction, 0)
     }
 
-    // MARK: - Poll cadence
-
-    // Opening the tab is the signal that you care. A tab left open all
-    // afternoon isn't, so the interval decays rather than hammering a third
-    // party for a race that runs twelve hours.
-    func testPollIntervalDecaysTheLongerTheTabStaysOpen() {
-        XCTAssertEqual(PanelController.derbyPollInterval(openFor: 0), 20)
-        XCTAssertEqual(PanelController.derbyPollInterval(openFor: 119), 20)
-        XCTAssertEqual(PanelController.derbyPollInterval(openFor: 120), 60)
-        XCTAssertEqual(PanelController.derbyPollInterval(openFor: 599), 60)
-        XCTAssertEqual(PanelController.derbyPollInterval(openFor: 600), 180)
-        XCTAssertEqual(PanelController.derbyPollInterval(openFor: 1799), 180)
-        XCTAssertEqual(PanelController.derbyPollInterval(openFor: 1800), 600)
-        XCTAssertEqual(PanelController.derbyPollInterval(openFor: 8 * 3600), 600)
-    }
-
-    // Never faster than the first step, never slower than the cap, and always
-    // increasing — a non-monotonic schedule would make the tab speed up the
-    // longer it sat there.
-    func testPollIntervalIsMonotonicAndBounded() {
-        var previous: TimeInterval = 0
-        for seconds in stride(from: 0.0, through: 4 * 3600, by: 30) {
-            let interval = PanelController.derbyPollInterval(openFor: seconds)
-            XCTAssertGreaterThanOrEqual(interval, previous, "went faster at \(seconds)s")
-            XCTAssertGreaterThanOrEqual(interval, 20)
-            XCTAssertLessThanOrEqual(interval, 600)
-            previous = interval
-        }
-    }
-
     // MARK: - Which race to show
 
     private let listJSON = """
