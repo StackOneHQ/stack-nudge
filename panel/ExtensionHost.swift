@@ -78,6 +78,11 @@ final class ExtensionHost: ObservableObject {
 
     func pane(_ id: String) -> Pane { panes[id] ?? Pane() }
 
+    // Plants pane state so a test can exercise a gate that only opens mid-flight
+    // — the busy guard in particular, which is otherwise only reachable through
+    // a race. Production state always goes through invoke/finish.
+    func replacePaneForTesting(_ pane: Pane, on id: String) { panes[id] = pane }
+
     func manifest(_ id: String) -> ExtensionManifest? { manifests.first { $0.id == id } }
 
     // MARK: - Discovery

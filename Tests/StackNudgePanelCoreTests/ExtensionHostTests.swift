@@ -229,6 +229,60 @@ final class ExtensionHostTests: XCTestCase {
         XCTAssertTrue(recorder.calls.isEmpty)
     }
 
+    // The case a user actually hits: holding a key while a slow spawn is out.
+    // Covered only for the no-document half of the same guard until now.
+    func testAKeyIsNotHandledWhileAnInvocationIsInFlight() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby")], recorder: recorder)
+        host.finish("derby", .ok(twoRows))
+        host.selectRow("a", on: "derby")
+
+        var pane = host.pane("derby")
+        pane.busy = true
+        host.replacePaneForTesting(pane, on: "derby")
+
+        XCTAssertFalse(host.handle(key: "return", on: "derby"))
+        XCTAssertTrue(recorder.calls.isEmpty, "a keypress must not queue a second spawn")
+    }
+
+    // MARK: - The scheduled tick
+
+    // isDue is tested as a predicate; this is the wiring that consults it.
+    func testTickRefreshesOnlyTheExtensionsThatAreDue() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("due", refresh: "{\"intervalSeconds\":30}"),
+                                 manifest("fresh", refresh: "{\"intervalSeconds\":30}"),
+                                 manifest("nointerval")],
+                                recorder: recorder)
+        let now = Date()
+        for (id, age) in [("due", -600.0), ("fresh", -1.0), ("nointerval", -600.0)] {
+            var pane = host.pane(id)
+            pane.attemptedAt = now.addingTimeInterval(age)
+            pane.updatedAt = pane.attemptedAt
+            host.replacePaneForTesting(pane, on: id)
+        }
+        host.tick(visibleTab: "due", now: now)
+        XCTAssertEqual(recorder.calls.map(\.id), ["due"])
+    }
+
+    // whileFocusedOnly defaults on, so an extension whose tab isn't the visible
+    // one must not be spawned by the tick at all.
+    func testTickSkipsAFocusedOnlyExtensionThatIsNotTheVisibleTab() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":30}")],
+                                recorder: recorder)
+        let now = Date()
+        var pane = host.pane("derby")
+        pane.attemptedAt = now.addingTimeInterval(-600)
+        host.replacePaneForTesting(pane, on: "derby")
+
+        host.tick(visibleTab: nil, now: now)
+        XCTAssertTrue(recorder.calls.isEmpty)
+
+        host.tick(visibleTab: "derby", now: now)
+        XCTAssertEqual(recorder.calls.map(\.id), ["derby"])
+    }
+
     func testAnUnboundKeyIsNotHandled() {
         let (host, _, _) = host([manifest("derby")])
         host.finish("derby", .ok(twoRows))
@@ -314,6 +368,23 @@ final class ExtensionHostTests: XCTestCase {
         let m = manifest("derby", refresh: "{\"intervalSeconds\":30}")
         XCTAssertFalse(ExtensionHost.isDue(m, pane: pane(updatedAt: nil),
                                               visible: true, now: now))
+    }
+
+    // A manifest is floored at parse time, but isDue is a pure static that has
+    // to hold on its own — a zero interval makes `now - attemptedAt >= 0`
+    // unconditionally true, so the extension re-spawns on every single tick.
+    func testANonPositiveIntervalNeverBecomesDue() {
+        let now = Date()
+        for interval in [0, -5] {
+            let m = ExtensionManifest(
+                id: "derby", name: "D", version: "1", schema: 1,
+                tab: .init(label: "D"), run: "./run", requires: [], config: [],
+                refresh: .init(onOpen: true, intervalSeconds: interval, whileFocusedOnly: false))
+            XCTAssertFalse(ExtensionHost.isDue(m,
+                                               pane: pane(updatedAt: now.addingTimeInterval(-600)),
+                                               visible: true, now: now),
+                           "interval \(interval) must never schedule")
+        }
     }
 
     func testABusyPaneIsNotDue() {

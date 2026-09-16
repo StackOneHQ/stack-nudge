@@ -56,10 +56,13 @@ final class ExtensionRuntimeTests: XCTestCase {
 
     // MARK: - Discovery
 
+    // Created in reverse-alphabetical order on purpose. Two entries weren't
+    // enough to force the sort — the filesystem happened to hand them back
+    // already ordered, so the assertion passed without the sort doing anything.
     func testInstalledReadsEveryValidManifestInNameOrder() throws {
-        try install("radar")
-        try install("derby")
-        XCTAssertEqual(ExtensionRuntime.installed(in: root).map(\.id), ["derby", "radar"])
+        for id in ["zebra", "radar", "derby", "apex"] { try install(id) }
+        XCTAssertEqual(ExtensionRuntime.installed(in: root).map(\.id),
+                       ["apex", "derby", "radar", "zebra"])
     }
 
     func testADirectoryWithNoManifestIsSkipped() throws {

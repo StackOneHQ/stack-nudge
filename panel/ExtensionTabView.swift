@@ -318,22 +318,54 @@ struct ExtensionTabView: View {
     // fixed palette, so a colour that reads well in one theme isn't dulled in
     // the other.
     static func readable(_ color: Color?) -> Color? {
-        guard let color else { return nil }
-        let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        // NSApp is nil outside a running application — under the test runner,
+        // and briefly at launch — and it is an implicitly unwrapped optional, so
+        // reading it unguarded is a crash rather than a wrong colour.
+        readable(color, dark: NSApp?.effectiveAppearance
+            .bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
+    }
+
+    // How dark a colour may be on a dark background, and how light on a light
+    // one, before it is pulled back toward legibility.
+    static let luminanceFloor = 0.35
+    static let luminanceCeiling = 0.75
+
+    static func luminance(_ color: Color) -> Double {
         let rgb = NSColor(color).usingColorSpace(.sRGB) ?? .white
-        let luminance = 0.2126 * rgb.redComponent
-            + 0.7152 * rgb.greenComponent
-            + 0.0722 * rgb.blueComponent
-        // Blended toward the opposite end rather than clamped to it, so hue
-        // survives — a pale yellow stays yellow, it just stops being white.
-        let floor = 0.35, ceiling = 0.75
-        if dark, luminance < floor {
-            return Color(nsColor: rgb.blended(withFraction: floor - luminance, of: .white) ?? rgb)
+        return 0.2126 * rgb.redComponent + 0.7152 * rgb.greenComponent + 0.0722 * rgb.blueComponent
+    }
+
+    static func readable(_ color: Color?, dark: Bool) -> Color? {
+        guard let color else { return nil }
+        guard let rgb = NSColor(color).usingColorSpace(.sRGB) else { return color }
+        let light = luminance(color)
+
+        // Solved in luminance terms rather than handed to NSColor.blended,
+        // which mixes through its own colour space and overshot the target by
+        // enough to matter. Both branches move every channel the same way, so
+        // hue survives: a pale yellow stops being white and stays yellow.
+        let adjusted: NSColor
+        if dark, light < luminanceFloor {
+            // Toward white: c' = c + f(1 - c) lifts luminance to L + f(1 - L),
+            // so the fraction follows directly. Guard the degenerate L == 1.
+            guard light < 1 else { return color }
+            let fraction = (luminanceFloor - light) / (1 - light)
+            adjusted = NSColor(srgbRed: rgb.redComponent + fraction * (1 - rgb.redComponent),
+                               green: rgb.greenComponent + fraction * (1 - rgb.greenComponent),
+                               blue: rgb.blueComponent + fraction * (1 - rgb.blueComponent),
+                               alpha: rgb.alphaComponent)
+        } else if !dark, light > luminanceCeiling {
+            // Toward black is a plain scale, and luminance scales with it.
+            guard light > 0 else { return color }
+            let scale = luminanceCeiling / light
+            adjusted = NSColor(srgbRed: rgb.redComponent * scale,
+                               green: rgb.greenComponent * scale,
+                               blue: rgb.blueComponent * scale,
+                               alpha: rgb.alphaComponent)
+        } else {
+            return color
         }
-        if !dark, luminance > ceiling {
-            return Color(nsColor: rgb.blended(withFraction: luminance - ceiling, of: .black) ?? rgb)
-        }
-        return color
+        return Color(nsColor: adjusted)
     }
 }
 

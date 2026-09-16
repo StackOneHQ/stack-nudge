@@ -80,6 +80,57 @@ final class ExtensionDocumentTests: XCTestCase {
         XCTAssertEqual(d?.rows.count, 1)
     }
 
+    // MARK: - Unknown enum values
+
+    // Every enum-ish field falls back rather than failing, but nothing pinned
+    // the fallbacks — the fixtures always sent a valid value, so the defaults
+    // could be changed to anything without a test noticing.
+    func testAnUnknownBadgeToneFallsBackToNeutral() {
+        let json = """
+            {"schema":1,"header":{"title":"T","badge":{"text":"X","tone":"critical"}}}
+            """
+        XCTAssertEqual(document(json)?.header?.badge?.tone, .neutral)
+    }
+
+    // Case-sensitive, so a capitalised tone is an unknown one.
+    func testToneMatchingIsCaseSensitive() {
+        let json = """
+            {"schema":1,"header":{"title":"T","badge":{"text":"X","tone":"DANGER"}}}
+            """
+        XCTAssertEqual(document(json)?.header?.badge?.tone, .neutral)
+    }
+
+    func testAMissingBadgeToneIsNeutral() {
+        let json = """
+            {"schema":1,"header":{"title":"T","badge":{"text":"X"}}}
+            """
+        XCTAssertEqual(document(json)?.header?.badge?.tone, .neutral)
+    }
+
+    // fill-edge is the default because it is what makes a bar read as a race;
+    // the other two anchors also have to actually parse.
+    func testEveryAnchorParsesAndUnknownFallsBackToFillEdge() {
+        let expected: [String: ExtensionDocument.Ornament.Anchor] = [
+            "fill-edge": .fillEdge, "leading": .leading, "trailing": .trailing,
+            "middle": .fillEdge, "FILL-EDGE": .fillEdge, "": .fillEdge,
+        ]
+        for (raw, anchor) in expected {
+            let json = """
+                {"schema":1,"rows":[{"id":"a","title":"A","ornament":
+                    {"anchor":"\(raw)","palette":{"H":"#fff"},"frames":[["H"]]}}]}
+                """
+            XCTAssertEqual(document(json)?.rows.first?.ornament?.anchor, anchor, raw)
+        }
+    }
+
+    func testAMissingAnchorIsFillEdge() {
+        let json = """
+            {"schema":1,"rows":[{"id":"a","title":"A","ornament":
+                {"palette":{"H":"#fff"},"frames":[["H"]]}}]}
+            """
+        XCTAssertEqual(document(json)?.rows.first?.ornament?.anchor, .fillEdge)
+    }
+
     // MARK: - Schema
 
     func testANewerSchemaIsRefused() {
