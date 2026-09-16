@@ -123,17 +123,23 @@ struct ExtensionDocument: Equatable {
         // ambiguous — the action payload names a row by id and nothing else.
         var seen = Set<String>()
         let rows = decoded.rows?.compactMap { row -> Row? in
-            guard !row.id.isEmpty, seen.insert(row.id).inserted else { return nil }
-            return Row(id: row.id,
+            // id and title are what a row *is* — one addresses it, the other is
+            // the only thing guaranteed to be drawn. Everything else degrades.
+            guard let id = row.id, !id.isEmpty, seen.insert(id).inserted,
+                  let title = row.title
+            else { return nil }
+            return Row(id: id,
                        lead: row.lead,
-                       title: row.title,
+                       title: title,
                        subtitle: row.subtitle,
                        value: row.value,
                        footnote: row.footnote,
-                       track: row.track.map {
-                           Track(fill: clampFraction($0.fill),
-                                 ghost: $0.ghost.map(clampFraction),
-                                 tint: $0.tint)
+                       track: row.track.flatMap { track in
+                           track.fill.map {
+                               Track(fill: clampFraction($0),
+                                     ghost: track.ghost.map(clampFraction),
+                                     tint: track.tint)
+                           }
                        },
                        ornament: row.ornament.flatMap(ornament(from:)),
                        actions: actions(from: row.actions))
@@ -143,11 +149,15 @@ struct ExtensionDocument: Equatable {
             schema: decoded.schema,
             state: state,
             message: decoded.message,
-            header: decoded.header.map {
-                Header(title: $0.title,
-                       badge: $0.badge.map { Badge(text: $0.text,
-                                                   tone: Tone(rawValue: $0.tone ?? "") ?? .neutral) },
-                       trailing: $0.trailing)
+            header: decoded.header.flatMap { header in
+                header.title.map {
+                    Header(title: $0,
+                           badge: header.badge?.text.map {
+                               Badge(text: $0,
+                                     tone: Tone(rawValue: header.badge?.tone ?? "") ?? .neutral)
+                           },
+                           trailing: header.trailing)
+                }
             },
             rows: rows,
             actions: actions(from: decoded.actions)))
@@ -167,17 +177,31 @@ struct ExtensionDocument: Equatable {
     // `kind` is read but currently only "sprite" exists; anything else is
     // dropped rather than guessed at, so adding a second kind later can't be
     // mistaken for one the old host silently mis-rendered.
+    // A sprite is decoration on a 6pt bar, so these are generous rather than
+    // tight. Capping fps alone was pointless: rows, columns and frame count were
+    // all unbounded, and a single million-column frame parses happily and then
+    // asks Canvas to fill a million cells on every tick.
+    static let maxSpriteFrames = 32
+    static let maxSpriteRows = 24
+    static let maxSpriteColumns = 64
+    static let maxSpriteFPS: Double = 30
+
     private static func ornament(from raw: Decoded.Ornament) -> Ornament? {
         guard (raw.kind ?? "sprite") == "sprite" else { return nil }
-        let frames = (raw.frames ?? []).filter { !$0.isEmpty }
+        let frames = (raw.frames ?? [])
+            .prefix(maxSpriteFrames)
+            .map { frame in
+                frame.prefix(maxSpriteRows).map { String($0.prefix(maxSpriteColumns)) }
+            }
+            .filter { !$0.isEmpty }
         guard !frames.isEmpty else { return nil }
         // Zero or negative fps would divide by zero in the frame clock; a
         // single-frame sprite legitimately wants no animation at all.
-        let fps = (raw.fps ?? 0) > 0 ? min(raw.fps ?? 0, 30) : 0
+        let fps = (raw.fps ?? 0) > 0 ? min(raw.fps ?? 0, maxSpriteFPS) : 0
         return Ornament(fps: fps,
                         anchor: Ornament.Anchor(rawValue: raw.anchor ?? "") ?? .fillEdge,
                         palette: raw.palette ?? [:],
-                        frames: frames)
+                        frames: Array(frames))
     }
 
     // Actions with no id can't be dispatched and actions sharing one are
@@ -185,9 +209,10 @@ struct ExtensionDocument: Equatable {
     private static func actions(from raw: [Decoded.Action]?) -> [Action] {
         var seen = Set<String>()
         return (raw ?? []).compactMap { action in
-            guard !action.id.isEmpty, seen.insert(action.id).inserted else { return nil }
-            return Action(id: action.id, label: action.label,
-                          key: ExtensionKey.grant(action.key))
+            guard let id = action.id, !id.isEmpty, seen.insert(id).inserted,
+                  let label = action.label
+            else { return nil }
+            return Action(id: id, label: label, key: ExtensionKey.grant(action.key))
         }
     }
 
@@ -205,9 +230,11 @@ struct ExtensionDocument: Equatable {
     }
 
     private struct Decoded: Decodable {
-        struct Badge: Decodable { let text: String; let tone: String? }
-        struct Header: Decodable { let title: String; let badge: Badge?; let trailing: String? }
-        struct Track: Decodable { let fill: Double; let ghost: Double?; let tint: String? }
+        struct Badge: Decodable { let text: String?; let tone: String? }
+        struct Header: Decodable { let title: String?; let badge: Badge?; let trailing: String? }
+        // `fill` optional so a malformed track costs the track, not the row —
+        // and so a future track that isn't a fraction isn't foreclosed.
+        struct Track: Decodable { let fill: Double?; let ghost: Double?; let tint: String? }
         struct Ornament: Decodable {
             let kind: String?
             let fps: Double?
@@ -215,11 +242,17 @@ struct ExtensionDocument: Equatable {
             let palette: [String: String]?
             let frames: [[String]]?
         }
-        struct Action: Decodable { let id: String; let label: String; let key: String? }
+        struct Action: Decodable { let id: String?; let label: String?; let key: String? }
+        // Every field optional, including the two the model requires. A row
+        // that can't be read drops that row; it does not cost the pane the
+        // other forty-nine. Strictness here used to be per-*field* rather than
+        // per-row: an empty id dropped one row, but a missing title, a null, an
+        // empty track object or an action without a label rejected the whole
+        // document — so one malformed item in an API response blanked the tab.
         struct Row: Decodable {
-            let id: String
+            let id: String?
             let lead: String?
-            let title: String
+            let title: String?
             let subtitle: String?
             let value: String?
             let footnote: String?
@@ -239,15 +272,26 @@ struct ExtensionDocument: Equatable {
 // Key bindings are requested, not granted. An extension asking for Esc would
 // take away the only way out of the panel; ⌘-anything collides with the tab
 // numbers; arrows are how you move between rows and tabs. So the host maps an
-// allowlist and silently ignores the rest — the action still runs from its
-// button, it just has no shortcut.
+// allowlist and ignores the rest.
+//
+// A refused key costs the action its shortcut, and — since extension panes are
+// keyboard-driven and nothing here renders a button — that makes the action
+// unreachable. That is a known limitation of the current pane, not a property
+// of the schema: the action stays in the document, and giving it a reachable
+// home is follow-up work.
 enum ExtensionKey {
     static func grant(_ requested: String?) -> String? {
         guard let requested else { return nil }
         let key = requested.lowercased()
         if key == "return" { return key }
-        guard key.count == 1, let scalar = key.unicodeScalars.first,
-              CharacterSet.alphanumerics.contains(scalar), scalar.isASCII
+        // Scalars, not Characters. `count` is a grapheme count, so "a" plus a
+        // variation selector, a ZWJ or a combining mark is one Character — and
+        // inspecting only `unicodeScalars.first` left everything after the base
+        // unexamined, including the isASCII test. Those all used to be granted,
+        // producing a binding that can never fire (the key handler sees a plain
+        // "a") and a footer hint advertising it anyway.
+        guard key.unicodeScalars.count == 1, let scalar = key.unicodeScalars.first,
+              scalar.isASCII, CharacterSet.alphanumerics.contains(scalar)
         else { return nil }
         return key
     }

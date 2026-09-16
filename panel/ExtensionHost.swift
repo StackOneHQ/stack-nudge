@@ -29,7 +29,12 @@ final class ExtensionHost: ObservableObject {
     struct Pane: Equatable {
         var document: ExtensionDocument?
         var status: Status = .idle
+        // When the last fetch *succeeded*, and when one was last *tried*. They
+        // have to be separate: scheduling off updatedAt alone meant a failing
+        // extension was permanently overdue, so a 30s interval collapsed to the
+        // 5s ticker cadence and stayed there — 18 spawns in 120s, forever.
         var updatedAt: Date?
+        var attemptedAt: Date?
         // Survives a refresh by id rather than index, so a row that moves up
         // the list stays selected and a row that disappears deselects instead
         // of silently pointing at whatever took its place.
@@ -42,6 +47,9 @@ final class ExtensionHost: ObservableObject {
 
     @Published private(set) var panes: [String: Pane] = [:]
     @Published private(set) var manifests: [ExtensionManifest] = []
+    // Directories that looked like extensions and weren't loadable. Surfaced
+    // rather than dropped — see ExtensionRuntime.Discovery.
+    @Published private(set) var refused: [ExtensionRuntime.Refusal] = []
 
     private let runner: (ExtensionManifest, String?, String?) -> ExtensionRuntime.Fetch
     private let onTabsChanged: ([ExtensionTab]) -> Void
@@ -74,8 +82,18 @@ final class ExtensionHost: ObservableObject {
 
     // MARK: - Discovery
 
-    func load(_ found: [ExtensionManifest]? = nil) {
-        manifests = found ?? ExtensionRuntime.installed()
+    func load(_ discovery: ExtensionRuntime.Discovery? = nil) {
+        let found = discovery ?? ExtensionRuntime.discover()
+        manifests = found.installed
+        refused = found.refused
+        // Reported to stderr as well as published. The Settings browser that
+        // will render these properly arrives with distribution; until then a
+        // refusal that only lives in a @Published nobody reads is the same
+        // silence this was meant to end.
+        for refusal in found.refused {
+            FileHandle.standardError.write(Data(
+                "stack-nudge: extension \"\(refusal.id)\" not loaded — \(refusal.reason)\n".utf8))
+        }
         // Drop state for anything no longer installed, so reinstalling an
         // extension doesn't resurrect the document from its previous life.
         let live = Set(manifests.map(\.id))
@@ -114,10 +132,13 @@ final class ExtensionHost: ObservableObject {
         guard let interval = manifest.refresh.intervalSeconds, interval > 0 else { return false }
         guard !pane.busy else { return false }
         if manifest.refresh.whileFocusedOnly && !visible { return false }
-        // No successful fetch yet: onOpen (or the user) owns the first one, so
-        // the interval doesn't start until there is something to age.
-        guard let updatedAt = pane.updatedAt else { return false }
-        return now.timeIntervalSince(updatedAt) >= TimeInterval(interval)
+        // No fetch yet at all: onOpen (or the user) owns the first one, so the
+        // interval doesn't start until something has been tried.
+        guard let attemptedAt = pane.attemptedAt else { return false }
+        // Measured from the last *attempt*, not the last success — otherwise a
+        // broken extension is overdue on every tick and polls at the ticker's
+        // cadence instead of its own.
+        return now.timeIntervalSince(attemptedAt) >= TimeInterval(interval)
     }
 
     func tick(visibleTab: String?, now: Date = Date()) {
@@ -195,6 +216,7 @@ final class ExtensionHost: ObservableObject {
     func finish(_ id: String, _ result: ExtensionRuntime.Fetch) {
         var pane = self.pane(id)
         pane.busy = false
+        pane.attemptedAt = Date()
         switch result {
         case .ok(let document):
             pane.document = document

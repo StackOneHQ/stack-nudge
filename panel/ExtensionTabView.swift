@@ -13,6 +13,11 @@ struct ExtensionTabView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // A marker for anything that isn't a clean, current document. It sits
+            // above the header rather than inside it because `header` is
+            // optional: a headerless document used to go stale, or spin, with
+            // nothing on screen to say so.
+            if let note = statusNote { statusStrip(note) }
             if let document = pane.document {
                 content(document)
             } else {
@@ -22,6 +27,38 @@ struct ExtensionTabView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear { host.tabAppeared(id) }
+    }
+
+    // MARK: - Status
+
+    // Any status worth showing over a live document. `.broken` belongs here too:
+    // it used to be rendered only by `cold`, which is the no-document branch, so
+    // a script that started erroring left last hour's numbers on screen with no
+    // marker at all — the exact failure the stale/broken split exists to prevent.
+    private var statusNote: (text: String, spinning: Bool)? {
+        guard pane.document != nil else { return nil }
+        switch pane.status {
+        case .idle:            return pane.busy ? ("Refreshing…", true) : nil
+        case .loading:         return ("Refreshing…", true)
+        case .stale(let why):  return ("Showing older data · \(why)", false)
+        case .broken(let why): return (why, false)
+        }
+    }
+
+    private func statusStrip(_ note: (text: String, spinning: Bool)) -> some View {
+        HStack(spacing: 5) {
+            if note.spinning {
+                ProgressView().controlSize(.small).scaleEffect(0.5).frame(width: 10, height: 10)
+            } else {
+                Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 9))
+            }
+            Text(note.text).font(.system(size: 10)).lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: - Body
@@ -34,16 +71,28 @@ struct ExtensionTabView: View {
                 message(placeholder, icon: document.state == .error
                         ? "exclamationmark.triangle" : "tray")
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 6) {
-                        ForEach(document.rows, id: \.id) { row in
-                            rowView(row)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 6) {
+                            ForEach(document.rows, id: \.id) { row in
+                                rowView(row).id(row.id)
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                    }
+                    .background(ThinScrollers())
+                    // Keyboard selection has to bring its row with it; ↑/↓ past
+                    // the fold otherwise move an invisible highlight, and ⏎ acts
+                    // on a row the user can't see. Every other list pane here
+                    // does this (see OutcomesView, Sessions, Phrases).
+                    .onChange(of: pane.selectedRow) { selected in
+                        guard let selected else { return }
+                        withAnimation(.easeOut(duration: 0.12)) {
+                            proxy.scrollTo(selected, anchor: .center)
                         }
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
                 }
-                .background(ThinScrollers())
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -72,41 +121,38 @@ struct ExtensionTabView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                // Bounded: `message` comes from the extension, and an unbounded
+                // one would push the pane apart with no scroller to catch it.
+                .lineLimit(6)
                 .padding(.horizontal, 24)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    // Rows are line-limited; the header used to not be, so a long title wrapped
+    // and pushed the list down inside a fixed-height panel, and a long badge
+    // wrapped inside its own capsule.
     private func headerView(_ header: ExtensionDocument.Header) -> some View {
         HStack(spacing: 6) {
-            Text(header.title).font(.system(size: 12, weight: .semibold))
+            Text(header.title).font(.system(size: 12, weight: .semibold)).lineLimit(1)
             if let badge = header.badge {
                 Text(badge.text)
                     .font(.system(size: 9, weight: .semibold))
+                    .lineLimit(1)
                     .padding(.horizontal, 5).padding(.vertical, 1)
                     .background(Capsule().fill(Self.color(badge.tone).opacity(0.18)))
                     .foregroundStyle(Self.color(badge.tone))
             }
             Spacer(minLength: 8)
-            // The stale marker sits with the header's own trailing text rather
-            // than in a banner of its own: it's a qualifier on what's shown,
-            // and a banner would reflow the list every time a refresh blipped.
-            if let why = staleNote {
-                Text(why).font(.system(size: 10)).foregroundStyle(.tertiary)
-            } else if let trailing = header.trailing {
+            if let trailing = header.trailing {
                 Text(trailing).font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            if pane.busy { ProgressView().controlSize(.small).scaleEffect(0.6) }
         }
         .padding(.horizontal, 12)
         .padding(.top, 8)
         .padding(.bottom, 4)
-    }
-
-    private var staleNote: String? {
-        if case .stale(let why) = pane.status { return why }
-        return nil
     }
 
     // MARK: - Rows
@@ -120,6 +166,7 @@ struct ExtensionTabView: View {
                         .font(.system(size: 10, weight: .semibold, design: .monospaced))
                         .foregroundStyle(.tertiary)
                         .frame(minWidth: 14, alignment: .trailing)
+                        .lineLimit(1)
                 }
                 Text(row.title).font(.system(size: 12, weight: .medium)).lineLimit(1)
                 if let subtitle = row.subtitle {
@@ -127,11 +174,14 @@ struct ExtensionTabView: View {
                 }
                 Spacer(minLength: 8)
                 if let value = row.value {
-                    Text(value).font(.system(size: 11, design: .monospaced))
+                    Text(value).font(.system(size: 11, design: .monospaced)).lineLimit(1)
                 }
             }
-            if let track = row.track {
-                trackView(track, ornament: row.ornament)
+            // The ornament no longer rides on the track's existence — it used to
+            // be passed only into trackView, so a row without a bar silently
+            // dropped a sprite that had parsed perfectly well.
+            if row.track != nil || row.ornament != nil {
+                trackView(row.track, ornament: row.ornament, label: row.title, value: row.value)
             }
             if let footnote = row.footnote {
                 Text(footnote).font(.system(size: 9)).foregroundStyle(.tertiary).lineLimit(1)
@@ -143,32 +193,55 @@ struct ExtensionTabView: View {
             .fill(selected ? Color.primary.opacity(0.08) : .clear))
         .contentShape(Rectangle())
         .onTapGesture { host.selectRow(row.id, on: id) }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 
     // The bar, and the paler bar behind it. Same shape as the Usage tab's pace
-    // marker, which is where the ghost came from.
-    private func trackView(_ track: ExtensionDocument.Track,
-                           ornament: ExtensionDocument.Ornament?) -> some View {
-        let tint = Self.hexColor(track.tint) ?? .accentColor
+    // marker — including the second frame, which centres the capsules in their
+    // slot; without it the bar hugs the top of a 12pt band and sits visibly
+    // closer to the title than to the footnote.
+    private func trackView(_ track: ExtensionDocument.Track?,
+                           ornament: ExtensionDocument.Ornament?,
+                           label: String,
+                           value: String?) -> some View {
+        let tint = Self.readable(Self.hexColor(track?.tint)) ?? .accentColor
+        let fill = track?.fill ?? 0
         return GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.primary.opacity(0.12)).frame(height: 6)
-                if let ghost = track.ghost, ghost > 0 {
-                    Capsule().fill(tint.opacity(0.2))
-                        .frame(width: max(ghost * geo.size.width, 2), height: 6)
+                if track != nil {
+                    Capsule().fill(Color.primary.opacity(0.12)).frame(height: 6)
+                    if let ghost = track?.ghost, ghost > 0 {
+                        Capsule().fill(tint.opacity(0.2))
+                            .frame(width: max(ghost * geo.size.width, 2), height: 6)
+                    }
+                    Capsule().fill(tint)
+                        .frame(width: max(fill * geo.size.width, fill > 0 ? 2 : 0), height: 3)
                 }
-                Capsule().fill(tint)
-                    .frame(width: max(track.fill * geo.size.width, track.fill > 0 ? 2 : 0),
-                           height: 3)
                 if let ornament {
                     SpriteView(ornament: ornament)
-                        .offset(x: Self.spriteOffset(ornament, fill: track.fill,
-                                                     width: geo.size.width))
+                        .offset(x: Self.spriteOffset(ornament, fill: fill, width: geo.size.width))
+                        // Decoration only, and it is taller than its band: an
+                        // uncapped sprite used to spill into the title above and
+                        // the row below.
+                        .accessibilityHidden(true)
                 }
             }
             .frame(height: 6)
+            .frame(maxHeight: .infinity)
+            .clipped()
         }
         .frame(height: 12)
+        // The bar *is* the information when a row has no `value` — the Usage tab
+        // annotates exactly this widget the same way (see SessionUsage.paceBar).
+        .accessibilityElement()
+        .accessibilityLabel(Text(label))
+        .accessibilityValue(Text(value ?? Self.percentLabel(fill)))
+        .accessibilityHidden(track == nil)
+    }
+
+    static func percentLabel(_ fill: Double) -> String {
+        "\(Int((min(max(fill, 0), 1) * 100).rounded()))%"
     }
 
     // "fill-edge" parks the sprite at the head of the bar, which is what makes a
@@ -176,8 +249,7 @@ struct ExtensionTabView: View {
     // inside the track rather than half off the pane.
     static func spriteOffset(_ ornament: ExtensionDocument.Ornament,
                              fill: Double, width: CGFloat) -> CGFloat {
-        let columns = ornament.frames.flatMap { $0 }.map(\.count).max() ?? 0
-        let sprite = CGFloat(columns) * SpriteView.cell
+        let sprite = CGFloat(SpriteView.columns(ornament)) * SpriteView.cell
         switch ornament.anchor {
         case .leading:  return 0
         case .trailing: return max(width - sprite, 0)
@@ -194,8 +266,9 @@ struct ExtensionTabView: View {
             if let document = pane.document, !document.rows.isEmpty {
                 FooterHint(label: "Select", keys: ["↑", "↓"])
             }
-            // Only bound actions get a hint; an action with no key is reachable
-            // by click and would be a lie in the footer.
+            // Only bound actions get a hint. An action whose key request was
+            // refused has no shortcut and no button, so advertising it would be
+            // a lie — see the note on ExtensionKey.
             ForEach(hintedActions, id: \.id) { action in
                 FooterHint(label: action.label, keys: [Self.keyCap(action.key ?? "")])
             }
@@ -237,6 +310,31 @@ struct ExtensionTabView: View {
                      green: Double((value >> 8) & 0xFF) / 255,
                      blue: Double(value & 0xFF) / 255)
     }
+
+    // Keep an extension's colour distinguishable from the surface behind it.
+    // A well-formed #FFFFFF is an invisible bar in light mode and #111111 is
+    // invisible in dark, so rejecting only *malformed* hex left the interesting
+    // half of the problem open. Resolved per-appearance rather than clamped to a
+    // fixed palette, so a colour that reads well in one theme isn't dulled in
+    // the other.
+    static func readable(_ color: Color?) -> Color? {
+        guard let color else { return nil }
+        let dark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let rgb = NSColor(color).usingColorSpace(.sRGB) ?? .white
+        let luminance = 0.2126 * rgb.redComponent
+            + 0.7152 * rgb.greenComponent
+            + 0.0722 * rgb.blueComponent
+        // Blended toward the opposite end rather than clamped to it, so hue
+        // survives — a pale yellow stays yellow, it just stops being white.
+        let floor = 0.35, ceiling = 0.75
+        if dark, luminance < floor {
+            return Color(nsColor: rgb.blended(withFraction: floor - luminance, of: .white) ?? rgb)
+        }
+        if !dark, luminance > ceiling {
+            return Color(nsColor: rgb.blended(withFraction: luminance - ceiling, of: .black) ?? rgb)
+        }
+        return color
+    }
 }
 
 // An animated pixel grid. Generic on purpose: "a grid of coloured cells" is a
@@ -247,6 +345,18 @@ struct SpriteView: View {
     static let cell: CGFloat = 1.5
 
     let ornament: ExtensionDocument.Ornament
+
+    // One width for the whole sprite, taken across every frame. Sizing the
+    // canvas from the *current* frame while anchoring from the global maximum
+    // made a ragged sprite resize and jump on every tick, and park left of the
+    // fill edge.
+    static func columns(_ ornament: ExtensionDocument.Ornament) -> Int {
+        ornament.frames.flatMap { $0 }.map(\.count).max() ?? 0
+    }
+
+    static func rows(_ ornament: ExtensionDocument.Ornament) -> Int {
+        ornament.frames.map(\.count).max() ?? 0
+    }
 
     var body: some View {
         // A still sprite doesn't get a timeline at all — a TimelineView that
@@ -269,12 +379,14 @@ struct SpriteView: View {
     }
 
     private func grid(_ rows: [String]) -> some View {
-        let width = rows.map(\.count).max() ?? 0
-        return Canvas { context, _ in
+        Canvas { context, _ in
             for (y, row) in rows.enumerated() {
                 for (x, key) in row.enumerated() where key != "." {
-                    guard let color = ExtensionTabView.hexColor(ornament.palette[String(key)])
-                    else { continue }
+                    // A palette entry that doesn't parse falls back rather than
+                    // skipping the cell: a whole sprite silently failing to draw
+                    // reads as a rendering bug, not as a bad colour string.
+                    let color = ExtensionTabView.readable(
+                        ExtensionTabView.hexColor(ornament.palette[String(key)])) ?? .accentColor
                     context.fill(Path(CGRect(x: CGFloat(x) * Self.cell,
                                              y: CGFloat(y) * Self.cell,
                                              width: Self.cell, height: Self.cell)),
@@ -282,7 +394,9 @@ struct SpriteView: View {
                 }
             }
         }
-        .frame(width: CGFloat(width) * Self.cell,
-               height: CGFloat(rows.count) * Self.cell)
+        // Sized from the sprite as a whole, so the frame doesn't change size
+        // under a ragged animation.
+        .frame(width: CGFloat(Self.columns(ornament)) * Self.cell,
+               height: CGFloat(Self.rows(ornament)) * Self.cell)
     }
 }

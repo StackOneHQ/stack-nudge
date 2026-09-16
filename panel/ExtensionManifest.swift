@@ -36,6 +36,24 @@ struct ExtensionManifest: Equatable {
     // fields are the only compatible change, so a bump means "this host can't".
     static let supportedSchema = 1
 
+    // Floor on a manifest-declared poll interval. Each tick is a process spawn,
+    // so an extension asking for 1s would be spawning a script sixty times a
+    // minute for as long as its tab is open. Nothing legitimate needs that, and
+    // the value arrives from the package rather than from us.
+    static let minimumIntervalSeconds = 5
+
+    // The tab strip is a row of buttons across a fixed-width panel, and the id
+    // is strictly validated while the label was not — so an empty or 300-character
+    // label went straight into the strip and pushed every other tab off it.
+    // Falls back to the id rather than rendering a nameless tab.
+    static let maxTabLabelLength = 16
+
+    static func tabLabel(_ raw: String, id: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return id }
+        return String(trimmed.prefix(maxTabLabelLength))
+    }
+
     // An id becomes a directory name under ~/.stack-nudge/extensions, so it is
     // validated before it ever reaches a path — the same shape guard as
     // ClaudeCliQuotaProbe.removeSessionFile, for the same reason. "..", a
@@ -95,12 +113,13 @@ struct ExtensionManifest: Equatable {
             name: decoded.name,
             version: decoded.version,
             schema: decoded.schema,
-            tab: Tab(label: decoded.tab?.label ?? decoded.name),
+            tab: Tab(label: Self.tabLabel(decoded.tab?.label ?? decoded.name, id: decoded.id)),
             run: run,
             requires: decoded.requires ?? [],
             config: decoded.config ?? [],
             refresh: Refresh(onOpen: decoded.refresh?.onOpen ?? true,
-                             intervalSeconds: decoded.refresh?.intervalSeconds,
+                             intervalSeconds: decoded.refresh?.intervalSeconds
+                                 .map { max($0, minimumIntervalSeconds) },
                              whileFocusedOnly: decoded.refresh?.whileFocusedOnly ?? true)))
     }
 

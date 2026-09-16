@@ -59,6 +59,25 @@ final class ExtensionManifestTests: XCTestCase {
         XCTAssertFalse(m.refresh.whileFocusedOnly)
     }
 
+    // The tab strip is a fixed-width row of buttons, and the label went into it
+    // unvalidated while the id beside it was strictly checked — so an empty or
+    // very long label pushed the other tabs off the strip.
+    func testTabLabelsAreBounded() {
+        let long = String(repeating: "wide", count: 40)
+        let json = """
+            {"id":"derby","name":"D","version":"1","schema":1,"tab":{"label":"\(long)"}}
+            """
+        XCTAssertEqual(manifest(json)?.tab.label.count, ExtensionManifest.maxTabLabelLength)
+    }
+
+    // A nameless tab is unclickable in practice; the id is always a real word.
+    func testAnEmptyTabLabelFallsBackToTheID() {
+        let json = """
+            {"id":"derby","name":"  ","version":"1","schema":1,"tab":{"label":"   "}}
+            """
+        XCTAssertEqual(manifest(json)?.tab.label, "derby")
+    }
+
     // MARK: - Ids
 
     func testValidIDs() {

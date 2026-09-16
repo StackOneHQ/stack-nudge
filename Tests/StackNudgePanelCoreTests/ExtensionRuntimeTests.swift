@@ -90,6 +90,48 @@ final class ExtensionRuntimeTests: XCTestCase {
         XCTAssertEqual(ExtensionRuntime.installed(in: root), [])
     }
 
+    // MARK: - Refusals
+
+    // A refusal used to be dropped on the floor: no tab, no message, no log, no
+    // stderr. That is indistinguishable from putting the folder in the wrong
+    // place, and it made the schema policy unfalsifiable — the one message that
+    // could say "update Stack Nudge" was unreachable from production.
+    func testANewerSchemaIsReportedRatherThanSilentlySkipped() throws {
+        try install("derby", manifest: """
+            {"id":"derby","name":"Derby","version":"1","schema":2}
+            """)
+        let discovery = ExtensionRuntime.discover(in: root)
+        XCTAssertEqual(discovery.installed, [])
+        XCTAssertEqual(discovery.refused.map(\.id), ["derby"])
+        guard let reason = discovery.refused.first?.reason else { return }
+        XCTAssertTrue(reason.contains("2"), reason)
+        XCTAssertTrue(reason.contains("\(ExtensionManifest.supportedSchema)"), reason)
+    }
+
+    func testAManifestClaimingAnotherIDSaysSo() throws {
+        try install("derby", manifest: """
+            {"id":"radar","name":"Impostor","version":"1","schema":1}
+            """)
+        let refused = ExtensionRuntime.discover(in: root).refused
+        XCTAssertEqual(refused.count, 1)
+        XCTAssertTrue(refused.first?.reason.contains("radar") == true, "\(refused)")
+    }
+
+    func testADirectoryWithNoManifestIsReportedRatherThanIgnored() throws {
+        try FileManager.default.createDirectory(atPath: "\(root)/empty",
+                                                withIntermediateDirectories: true)
+        XCTAssertEqual(ExtensionRuntime.discover(in: root).refused.map(\.id), ["empty"])
+    }
+
+    // Dotfiles and stray files aren't failed extensions, so they aren't news.
+    func testNonExtensionEntriesAreNotReportedAsRefusals() throws {
+        try "x".write(toFile: "\(root)/.DS_Store", atomically: true, encoding: .utf8)
+        try install("derby")
+        let discovery = ExtensionRuntime.discover(in: root)
+        XCTAssertEqual(discovery.installed.map(\.id), ["derby"])
+        XCTAssertEqual(discovery.refused, [])
+    }
+
     func testAMissingRootIsEmptyRatherThanAFailure() {
         XCTAssertEqual(ExtensionRuntime.installed(in: "\(root)/absent"), [])
     }
@@ -101,6 +143,75 @@ final class ExtensionRuntimeTests: XCTestCase {
         XCTAssertNil(ExtensionRuntime.directory(for: ""))
         XCTAssertEqual(ExtensionRuntime.directory(for: "derby"),
                        "\(ExtensionRuntime.root)/derby")
+    }
+
+    // The one the lexical guard missed. `URL.standardized` collapses ".." and
+    // "." textually and never touches the filesystem, so a run path whose
+    // *spelling* stays inside the package can still resolve out of it through a
+    // symlinked directory — and isExecutableFile and Process both follow links.
+    // A tarball carries symlinks fine, so without this the manifest a reviewer
+    // approved is not the thing that runs.
+    func testARunPathThatEscapesThroughASymlinkedDirectoryIsNotSpawned() throws {
+        try install("derby")
+        let outside = "\(root)/outside"
+        try FileManager.default.createDirectory(atPath: outside, withIntermediateDirectories: true)
+        let canary = "\(outside)/canary"
+        try "#!/bin/sh\necho pwned".write(toFile: canary, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: canary)
+        try FileManager.default.createSymbolicLink(atPath: "\(root)/derby/vendor",
+                                                   withDestinationPath: outside)
+
+        // The manifest parser accepts this spelling — no ".." anywhere — so the
+        // spawn guard is the only thing standing in the way.
+        XCTAssertTrue(ExtensionManifest.isValidRunPath("vendor/canary"))
+        guard case .missing = fetch("derby", run: "vendor/canary") else {
+            return XCTFail("spawned a binary outside the extension directory")
+        }
+    }
+
+    // A symlinked run file itself, rather than a symlinked parent directory.
+    func testARunFileThatIsASymlinkOutOfTheDirectoryIsNotSpawned() throws {
+        try install("derby")
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/whoami") else { return }
+        try FileManager.default.createSymbolicLink(atPath: "\(root)/derby/run",
+                                                   withDestinationPath: "/usr/bin/whoami")
+        guard case .missing = fetch("derby") else {
+            return XCTFail("spawned /usr/bin/whoami through a symlinked run file")
+        }
+    }
+
+    // A symlink that stays *inside* the package is legitimate and must still run
+    // — the guard is about containment, not about banning links.
+    func testASymlinkThatStaysInsideTheDirectoryStillRuns() throws {
+        try install("derby", script: """
+            #!/bin/sh
+            echo '{"schema":1,"rows":[{"id":"a","title":"A"}]}'
+            """, run: "real")
+        try FileManager.default.createSymbolicLink(atPath: "\(root)/derby/run",
+                                                   withDestinationPath: "\(root)/derby/real")
+        guard case .ok = fetch("derby") else {
+            return XCTFail("an in-package symlink must still spawn")
+        }
+    }
+
+    // Both sides of the containment check are resolved, not just the executable.
+    // A user's extensions root can itself sit behind a symlink — a relocated or
+    // symlinked home directory is ordinary — and resolving only one side would
+    // then make the prefix test fail for every legitimate extension, reporting
+    // the whole install as missing.
+    func testAnExtensionRootBehindASymlinkStillSpawns() throws {
+        try install("derby", script: """
+            #!/bin/sh
+            echo '{"schema":1,"rows":[{"id":"a","title":"A"}]}'
+            """)
+        let link = NSTemporaryDirectory() + "stack-nudge-link-\(UUID().uuidString)"
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: root)
+        addTeardownBlock { try? FileManager.default.removeItem(atPath: link) }
+
+        guard case .ok = ExtensionRuntime.fetch(manifest("derby"),
+                                                directory: "\(link)/derby") else {
+            return XCTFail("a symlinked extensions root must still spawn")
+        }
     }
 
     // Belt and braces over the manifest's own run-path guard: even if a path
@@ -217,6 +328,8 @@ final class ExtensionRuntimeTests: XCTestCase {
         XCTAssertEqual(env["HOME"], "/Users/test")
         XCTAssertEqual(env["STACKNUDGE_EXTENSION_ID"], "derby")
         XCTAssertNotNil(env["PATH"])
+        // The only way a script can adapt to an older host before it prints.
+        XCTAssertEqual(env["STACKNUDGE_SCHEMA"], "\(ExtensionManifest.supportedSchema)")
     }
 
     // A manifest can only pass through our own namespace, so declaring PATH or

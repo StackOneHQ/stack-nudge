@@ -201,6 +201,69 @@ final class ExtensionDocumentTests: XCTestCase {
         XCTAssertEqual(document(json)?.actions.map(\.label), ["One"])
     }
 
+    // MARK: - Leniency is per row
+
+    // One malformed item in an API response used to cost the whole pane. Row
+    // failures drop the row, matching how duplicate and empty ids already
+    // behave — a partial list beats a blank tab.
+    func testAMalformedRowDropsThatRowAndKeepsTheRest() {
+        let json = """
+            {"schema":1,"rows":[{"id":"a","title":"A"},
+                                {"id":"b"},
+                                {"id":"c","title":null},
+                                {"id":"d","title":"D"}]}
+            """
+        XCTAssertEqual(document(json)?.rows.map(\.id), ["a", "d"])
+    }
+
+    // A row is its id and its title: one addresses it, the other is the only
+    // thing guaranteed to be drawn. Everything else degrades rather than drops.
+    func testAMalformedTrackCostsTheTrackNotTheRow() {
+        let json = """
+            {"schema":1,"rows":[{"id":"a","title":"A","track":{}}]}
+            """
+        guard let row = document(json)?.rows.first else { return XCTFail("row was dropped") }
+        XCTAssertNil(row.track)
+        XCTAssertEqual(row.title, "A")
+    }
+
+    func testAnActionWithoutALabelDropsTheActionNotTheDocument() {
+        let json = """
+            {"schema":1,"rows":[{"id":"a","title":"A"}],"actions":[{"id":"r"}]}
+            """
+        XCTAssertEqual(document(json)?.rows.count, 1)
+        XCTAssertEqual(document(json)?.actions, [])
+    }
+
+    // A header missing its title loses the header, not the list behind it.
+    func testAMalformedHeaderDropsTheHeaderNotTheDocument() {
+        let json = """
+            {"schema":1,"header":{"badge":{"text":"LIVE"}},"rows":[{"id":"a","title":"A"}]}
+            """
+        XCTAssertNil(document(json)?.header)
+        XCTAssertEqual(document(json)?.rows.count, 1)
+    }
+
+    // MARK: - Sprite bounds
+
+    // fps was capped so a sprite couldn't spin the render loop, but rows,
+    // columns and frame count were unbounded — and a single million-column frame
+    // parses happily, then asks Canvas to fill a million cells every tick.
+    func testSpriteDimensionsAreCapped() {
+        let wide = String(repeating: "H", count: 5_000)
+        let frames = (0..<200).map { _ in
+            "[" + (0..<200).map { _ in "\"\(wide)\"" }.joined(separator: ",") + "]"
+        }.joined(separator: ",")
+        let json = """
+            {"schema":1,"rows":[{"id":"a","title":"A","ornament":{"fps":7,"frames":[\(frames)]}}]}
+            """
+        guard let o = document(json)?.rows.first?.ornament else { return XCTFail("no ornament") }
+        XCTAssertLessThanOrEqual(o.frames.count, ExtensionDocument.maxSpriteFrames)
+        XCTAssertLessThanOrEqual(o.frames.map(\.count).max() ?? 0, ExtensionDocument.maxSpriteRows)
+        XCTAssertLessThanOrEqual(o.frames.flatMap { $0 }.map(\.count).max() ?? 0,
+                                 ExtensionDocument.maxSpriteColumns)
+    }
+
     // MARK: - Key allowlist
 
     func testGrantedKeys() {
@@ -216,10 +279,37 @@ final class ExtensionDocumentTests: XCTestCase {
     // extension's to take.
     func testRefusedKeys() {
         for key in ["esc", "escape", "cmd+r", "up", "down", "left", "right",
-                    "tab", "space", " ", "", "delete", "é", "ab"] {
+                    "tab", "space", " ", "", "delete", "ab"] {
             XCTAssertNil(ExtensionKey.grant(key), key)
         }
         XCTAssertNil(ExtensionKey.grant(nil))
+    }
+
+    // Built from explicit scalars rather than written as literals. `count` is a
+    // grapheme count, so every one of these is one Character with more than one
+    // scalar, and the old guard inspected only the base — granting a binding the
+    // key handler can never match (it sees a plain "a") while the footer
+    // advertised it. Spelling them out also means an editor normalising this
+    // file can't silently flip the test: a literal "é" passes either way
+    // precomposed and fails decomposed.
+    func testMultiScalarKeysAreRefused() {
+        let cases: [(String, String)] = [
+            ("e\u{0301}", "decomposed é"),
+            ("a\u{FE0F}", "a + variation selector"),
+            ("a\u{200D}", "a + zero-width joiner"),
+            ("a\u{20DD}", "a + enclosing circle"),
+            ("1\u{FE0F}\u{20E3}", "keycap 1"),
+            ("\u{0130}", "İ, which lowercases to two scalars"),
+        ]
+        for (key, what) in cases {
+            XCTAssertNil(ExtensionKey.grant(key), what)
+        }
+    }
+
+    // The precomposed form is a single scalar and still has to be refused for
+    // being non-ASCII — the two guards catch different things.
+    func testPrecomposedNonASCIIIsRefused() {
+        XCTAssertNil(ExtensionKey.grant("\u{00E9}"), "precomposed é")
     }
 
     // A refused key doesn't cost the action its button — it just has no

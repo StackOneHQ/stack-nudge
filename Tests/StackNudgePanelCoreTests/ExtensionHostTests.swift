@@ -47,7 +47,7 @@ final class ExtensionHostTests: XCTestCase {
                                      recorder.calls.append((manifest.id, action, row))
                                      return result()
                                  })
-        host.load(manifests)
+        host.load(.init(installed: manifests))
         return (host, recorder, published)
     }
 
@@ -66,7 +66,7 @@ final class ExtensionHostTests: XCTestCase {
         let (host, _, _) = host([manifest("derby")])
         host.finish("derby", .ok(twoRows))
         XCTAssertNotNil(host.pane("derby").document)
-        host.load([])
+        host.load(.init())
         XCTAssertNil(host.pane("derby").document)
     }
 
@@ -204,7 +204,7 @@ final class ExtensionHostTests: XCTestCase {
                                                                   rows: [], actions: []))
                                  })
         host = made
-        made.load([manifest("derby")])
+        made.load(.init(installed: [manifest("derby")]))
         made.perform(action: "first", row: nil, on: "derby")
 
         XCTAssertEqual(recorder.calls.map(\.action), ["first"])
@@ -237,9 +237,13 @@ final class ExtensionHostTests: XCTestCase {
 
     // MARK: - Scheduled refresh
 
-    private func pane(updatedAt: Date?, busy: Bool = false) -> ExtensionHost.Pane {
+    // `attemptedAt` is what scheduling reads; `updatedAt` defaults to matching
+    // it so the common "last fetch succeeded" case stays readable at call sites.
+    private func pane(updatedAt: Date?, attemptedAt: Date?? = nil,
+                      busy: Bool = false) -> ExtensionHost.Pane {
         var pane = ExtensionHost.Pane()
         pane.updatedAt = updatedAt
+        pane.attemptedAt = attemptedAt ?? updatedAt
         pane.busy = busy
         return pane
     }
@@ -278,6 +282,33 @@ final class ExtensionHostTests: XCTestCase {
 
     // The first fetch belongs to onOpen or to the user; the interval measures
     // the age of a document, and a pane with none has nothing to age.
+    // The bug this split exists for: scheduling off updatedAt alone left a
+    // failing extension permanently overdue, so its interval collapsed to the
+    // ticker's 5s cadence and stayed there — measured at 18 spawns in 120s for a
+    // 30s interval. A failed attempt has to restart the clock like a successful
+    // one.
+    func testAFailedFetchStillRestartsTheInterval() {
+        let now = Date()
+        let m = manifest("derby", refresh: "{\"intervalSeconds\":30}")
+        var pane = ExtensionHost.Pane()
+        pane.updatedAt = now.addingTimeInterval(-3600)   // last success, long ago
+        pane.attemptedAt = now.addingTimeInterval(-5)    // just failed
+        XCTAssertFalse(ExtensionHost.isDue(m, pane: pane, visible: true, now: now),
+                       "a just-failed extension must wait out its interval, not retry every tick")
+
+        pane.attemptedAt = now.addingTimeInterval(-31)
+        XCTAssertTrue(ExtensionHost.isDue(m, pane: pane, visible: true, now: now))
+    }
+
+    // Driven through the real path rather than the predicate, so the wiring in
+    // finish() is what's under test.
+    func testFinishRecordsAnAttemptWhateverTheOutcome() {
+        let (host, _, _) = host([manifest("derby")])
+        host.finish("derby", .transient("exited 3"))
+        XCTAssertNotNil(host.pane("derby").attemptedAt, "a failure is still an attempt")
+        XCTAssertNil(host.pane("derby").updatedAt, "but it is not a success")
+    }
+
     func testAPaneThatHasNeverSucceededIsNotDue() {
         let now = Date()
         let m = manifest("derby", refresh: "{\"intervalSeconds\":30}")

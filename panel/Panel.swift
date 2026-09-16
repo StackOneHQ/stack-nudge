@@ -145,7 +145,13 @@ struct PanelContentView: View {
                 case .sessions: SessionsView(store: sessions, events: store, nav: nav)
                 case .usage:    UsageView(nav: nav)
                 case .outcomes: OutcomesTabView(nav: nav)
-                case .extensionTab(let id): ExtensionTabView(host: extensions, id: id)
+                // .id(id) or the two extension tabs share one view identity: a
+                // ViewBuilder switch case is a single branch, and the associated
+                // value isn't part of identity, so switching between them reused
+                // the view and never fired onAppear — leaving the second tab
+                // permanently unfetched.
+                case .extensionTab(let id):
+                    ExtensionTabView(host: extensions, id: id).id(id)
                 case .settings: SettingsView(nav: nav)
                 case .phrases:  PhrasesView(model: phrases) { nav.mode = .settings }
                 case .updateConfirm:
@@ -3038,11 +3044,20 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         extensions.tick(visibleTab: visibleExtensionTab)
     }
 
-    // The extension whose tab is both open and on screen. nil when the panel is
-    // hidden, so a `whileFocusedOnly` extension stops polling the moment the
-    // panel goes away rather than when the tab changes.
+    // The extension whose tab is both open and actually on screen. nil when the
+    // panel is hidden, so a `whileFocusedOnly` extension stops polling the moment
+    // the panel goes away rather than when the tab changes.
+    //
+    // isVisible alone isn't enough: hiding in compact mode collapses to the pill
+    // and returns before orderOut, and applyCompactLayout then orderFronts the
+    // same window. So the window is visible, nav.mode is still the extension tab,
+    // and PanelContentView is rendering CompactView instead of it — the exact
+    // case this guard exists to exclude.
     private var visibleExtensionTab: String? {
-        guard panel?.isVisible == true, case .extensionTab(let id) = nav.mode else { return nil }
+        guard panel?.isVisible == true,
+              !(nav.compactMode && !nav.compactExpanded),
+              case .extensionTab(let id) = nav.mode
+        else { return nil }
         return id
     }
 
