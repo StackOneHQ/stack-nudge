@@ -35,7 +35,7 @@ jobs:
       # The fallback `workflow_dispatch` trigger on release.yml stays —
       # if `RELEASE_PAT` is unset, the action uses GITHUB_TOKEN and you
       # can still dispatch the build manually.
-      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           token: ${{ secrets.RELEASE_PAT }}
           config-file: .release-please-config.json
