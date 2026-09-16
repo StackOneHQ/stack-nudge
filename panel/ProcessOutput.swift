@@ -45,7 +45,22 @@ enum ProcessOutput {
     struct Completion: Equatable {
         let status: Int32
         let output: String
+        // A signalled child reports the signal number in `status` — not an exit
+        // code, and not 128+n. Without this flag a SIGSEGV reads as "exited 11".
+        let signalled: Bool
+
+        init(status: Int32, output: String, signalled: Bool = false) {
+            self.status = status
+            self.output = output
+            self.signalled = signalled
+        }
     }
+
+    // How long to keep reading after the child is gone. Once it has exited, a
+    // pipe still held open means a *grandchild* inherited stdout — an extension
+    // that backgrounded something — not a slow child. Waiting the full timeout
+    // there turned a successful run into a fabricated timeout.
+    static let drainGrace: TimeInterval = 1
 
     static func run(_ path: String, _ args: [String], timeout: TimeInterval,
                     cwd: String? = nil, env: [String: String]? = nil) -> Completion? {
@@ -56,6 +71,8 @@ enum ProcessOutput {
         if let env { task.environment = env }
         let outPipe = Pipe()
         task.standardOutput = outPipe
+        // nullDevice rather than a Pipe nobody reads: an undrained pipe blocks
+        // the child forever once it writes past the ~64KB buffer.
         task.standardError = FileHandle.nullDevice
 
         let exited = DispatchGroup()
@@ -71,31 +88,110 @@ enum ProcessOutput {
         // Drain stdout concurrently with the wait, never after it. Waiting for
         // exit first deadlocks any child that outgrows the ~64KB pipe buffer:
         // it blocks writing, we block waiting, and the timeout fires on a
-        // command that was working fine. `ps -axo args=` clears 250KB on a
-        // busy machine, which is how this emptied the whole sessions pane.
-        let drained = DispatchGroup()
+        // command that was working fine. `ps -axo args=` clears 250KB on a busy
+        // machine, which is how this emptied the whole sessions pane.
+        //
+        // A read *source* rather than readDataToEndOfFile, because a blocking
+        // read on a pool thread can never be abandoned. EOF needs every holder
+        // of the write end to close it, and a child that backgrounds anything
+        // hands that end to a grandchild we never see — so the read blocked
+        // forever, leaking a thread and the pipe with it. At around 64 of those
+        // the global utility pool is starved and unrelated work stops being
+        // scheduled: the sessions poll, the quota probes, everything.
+        //
+        // The fd is duplicated so the source owns a descriptor it can close in
+        // its cancel handler; the Pipe's own FileHandle closes the original. A
+        // dup shares the file description, so reading from it drains the same
+        // pipe.
+        let readFD = dup(outPipe.fileHandleForReading.fileDescriptor)
+        guard readFD >= 0 else { return nil }
+        _ = fcntl(readFD, F_SETFL, O_NONBLOCK)
+
+        let lock = NSLock()
         var output = Data()
+        let drained = DispatchGroup()
         drained.enter()
-        DispatchQueue.global(qos: .utility).async {
-            output = outPipe.fileHandleForReading.readDataToEndOfFile()
+
+        let source = DispatchSource.makeReadSource(fileDescriptor: readFD,
+                                                   queue: .global(qos: .utility))
+        source.setEventHandler {
+            var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+            let count = buffer.withUnsafeMutableBytes { raw in
+                Foundation.read(readFD, raw.baseAddress, raw.count)
+            }
+            if count > 0 {
+                lock.lock()
+                output.append(contentsOf: buffer[0..<count])
+                lock.unlock()
+            } else if count == 0 {
+                source.cancel()  // EOF
+            } else if errno != EINTR && errno != EAGAIN {
+                source.cancel()
+            }
+        }
+        // Runs exactly once, whether cancellation came from EOF or from us, so
+        // it is the single place the fd is closed and the group is balanced.
+        source.setCancelHandler {
+            close(readFD)
             drained.leave()
         }
+        source.resume()
 
-        if exited.wait(timeout: .now() + timeout) == .timedOut {
-            task.terminate()
-            if exited.wait(timeout: .now() + 1) == .timedOut, task.isRunning {
-                kill(task.processIdentifier, SIGKILL)
-                _ = exited.wait(timeout: .now() + 1)
-            }
-            // Death closes the child's write end, so the drain unblocks.
-            _ = drained.wait(timeout: .now() + 1)
-            return nil
+        // One deadline for the whole call. The old shape waited `timeout` for
+        // exit and then a further `timeout` for the drain, so the worst case was
+        // double what the budget — and the user-facing message — claimed.
+        let timedOut = exited.wait(timeout: .now() + timeout) == .timedOut
+        if timedOut {
+            terminateTree(task, exited: exited)
         }
-        // EOF arrives when the write end closes at exit; the group's ordering
-        // is what publishes `output` to this thread.
-        guard drained.wait(timeout: .now() + timeout) != .timedOut else { return nil }
+        // Either way, give whatever is still open a bounded grace, then stop.
+        _ = drained.wait(timeout: .now() + drainGrace)
+        source.cancel()
+
+        lock.lock()
+        let collected = output
+        lock.unlock()
+
+        // Close the Pipe's own descriptors rather than waiting for its
+        // FileHandles to deallocate. They don't, promptly — measured one FIFO
+        // left open per call, which is the leak that eventually starves the
+        // pool. The write end is already closed by Foundation during spawn
+        // (EOF could never arrive otherwise), so that one throws and is
+        // swallowed; the read end is the one that accumulates.
+        try? outPipe.fileHandleForReading.close()
+        try? outPipe.fileHandleForWriting.close()
+
+        guard !timedOut else { return nil }
         return Completion(status: task.terminationStatus,
-                          output: String(data: output, encoding: .utf8) ?? "")
+                          output: String(data: collected, encoding: .utf8) ?? "",
+                          signalled: task.terminationReason == .uncaughtSignal)
+    }
+
+    // SIGTERM, a moment, then SIGKILL — to the child's whole process group, not
+    // just the child. Foundation spawns into a new group, so a script that
+    // backgrounds `curl &` and then hangs used to leave the curl running after
+    // every timeout, forever. The group is read back rather than assumed, and
+    // our own is never signalled: killpg on the wrong id would take out the app.
+    //
+    // Waiting on the termination group rather than polling isRunning, so a child
+    // that refuses to die costs a bounded wait instead of a spinning thread.
+    private static func terminateTree(_ task: Process, exited: DispatchGroup) {
+        let pid = task.processIdentifier
+        let group = getpgid(pid)
+        let ourGroup = getpgrp()
+
+        func signalAll(_ signal: Int32) {
+            if group > 0, group != ourGroup {
+                killpg(group, signal)
+            } else {
+                kill(pid, signal)
+            }
+        }
+
+        signalAll(SIGTERM)
+        guard exited.wait(timeout: .now() + 1) == .timedOut else { return }
+        signalAll(SIGKILL)
+        _ = exited.wait(timeout: .now() + 1)
     }
 
     // Resolve the `gh` CLI from common install locations. A launchd-spawned app

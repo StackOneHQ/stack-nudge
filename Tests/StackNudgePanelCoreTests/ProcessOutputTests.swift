@@ -43,4 +43,106 @@ final class ProcessOutputTests: XCTestCase {
         let actual = ProcessOutput.read("/usr/bin/true", [], timeout: 5)
         XCTAssertEqual(actual, "", "a successful run with no output is an empty string, not nil")
     }
+
+    // MARK: - Children that outlive their parent
+
+    // EOF on the pipe needs *every* holder of the write end to close it, and a
+    // child that backgrounds anything hands that end to a grandchild we never
+    // see. The read used to block on that forever: a script that printed its
+    // output and exited in milliseconds was reported as a full-timeout failure,
+    // and the blocked thread was never reclaimed.
+    func test_read_withTimeout_returnsPromptlyWhenAGrandchildHoldsStdout() throws {
+        let script = try fixture("""
+            #!/bin/sh
+            sleep 300 &
+            echo done
+            exit 0
+            """)
+        let started = Date()
+        let completion = ProcessOutput.run("/bin/sh", [script], timeout: 10)
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertEqual(completion?.output.trimmingCharacters(in: .whitespacesAndNewlines), "done",
+                       "the child exited 0 with valid output; that is a success")
+        XCTAssertEqual(completion?.status, 0)
+        XCTAssertLessThan(elapsed, 5, "must not wait out the full timeout for a child that exited")
+    }
+
+    // The leak that starved the shared utility pool. File descriptors are the
+    // observable proxy: one pipe per call, never reclaimed.
+    func test_run_doesNotLeakDescriptorsAcrossGrandchildHolds() throws {
+        let script = try fixture("""
+            #!/bin/sh
+            sleep 300 &
+            echo done
+            exit 0
+            """)
+        _ = ProcessOutput.run("/bin/sh", [script], timeout: 5)  // warm up
+        let before = Self.openDescriptorCount()
+        for _ in 0..<5 { _ = ProcessOutput.run("/bin/sh", [script], timeout: 5) }
+        let after = Self.openDescriptorCount()
+        XCTAssertLessThanOrEqual(after - before, 2,
+                                 "descriptors must not accumulate per call (was +1 each)")
+    }
+
+    // A timeout used to signal only the direct child, so anything it had
+    // backgrounded survived every invocation — forever, once on a timer.
+    func test_read_withTimeout_killsTheWholeProcessGroup() throws {
+        let marker = NSTemporaryDirectory() + "po-pid-\(UUID().uuidString)"
+        let script = try fixture("""
+            #!/bin/sh
+            sleep 300 &
+            echo $! > \(marker)
+            sleep 300
+            """)
+        XCTAssertNil(ProcessOutput.read("/bin/sh", [script], timeout: 1))
+
+        guard let raw = try? String(contentsOfFile: marker, encoding: .utf8),
+              let orphan = pid_t(raw.trimmingCharacters(in: .whitespacesAndNewlines))
+        else { return XCTFail("fixture never recorded a background pid") }
+
+        // The group gets SIGTERM then SIGKILL; give the kernel a moment to reap.
+        var alive = true
+        for _ in 0..<50 where alive {
+            usleep(20_000)
+            alive = kill(orphan, 0) == 0
+        }
+        XCTAssertFalse(alive, "backgrounded grandchild survived the timeout")
+    }
+
+    // MARK: - Signals
+
+    // terminationStatus after a signal is the signal number — not an exit code,
+    // and not 128+n. Callers that word it as "exited \(status)" are wrong.
+    func test_run_distinguishesASignalFromAnExitCode() throws {
+        let script = try fixture("""
+            #!/bin/sh
+            kill -SEGV $$
+            """)
+        let completion = ProcessOutput.run("/bin/sh", [script], timeout: 5)
+        XCTAssertEqual(completion?.status, SIGSEGV)
+        XCTAssertEqual(completion?.signalled, true)
+    }
+
+    func test_run_aCleanNonZeroExitIsNotReportedAsASignal() {
+        let completion = ProcessOutput.run("/usr/bin/false", [], timeout: 5)
+        XCTAssertEqual(completion?.status, 1)
+        XCTAssertEqual(completion?.signalled, false)
+    }
+
+    // MARK: - Helpers
+
+    private func fixture(_ body: String) throws -> String {
+        let path = NSTemporaryDirectory() + "po-\(UUID().uuidString).sh"
+        try body.write(toFile: path, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+        addTeardownBlock { try? FileManager.default.removeItem(atPath: path) }
+        return path
+    }
+
+    private static func openDescriptorCount() -> Int {
+        (0..<512).reduce(into: 0) { total, fd in
+            if fcntl(Int32(fd), F_GETFD) != -1 { total += 1 }
+        }
+    }
 }
