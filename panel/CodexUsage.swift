@@ -15,15 +15,23 @@ struct CodexQuotaSnapshot: Equatable {
     var hasTier: Bool { primary != nil || secondary != nil }
 }
 
-// Reads Codex's account-level rate limits from the newest rollout JSONL under
-// ~/.codex/sessions. Codex records them on each `token_count` event at
-// `payload.rate_limits`, with `used_percent` on a 0–100 scale, a unix
-// `resets_at` and a `window_minutes`. Local-only — no network, no auth.
+// Codex account rate limits, from `codex app-server` where it's available and
+// the newest rollout JSONL under ~/.codex/sessions where it isn't.
 //
-// The limits are account-wide (not per-session), so the most-recently-written
-// rollout holds the freshest values. Returns nil for API-key auth (no
-// rate_limits emitted) or when no rollout exists, which the Usage tab treats as
-// "no Codex usage to show".
+// The rollout is the older source and the weaker one. Codex records limits on
+// each `token_count` event at `payload.rate_limits`, with `used_percent` on a
+// 0–100 scale, a unix `resets_at` and a `window_minutes` — but only while a CLI
+// turn runs on this machine. Quota spent on the web, in the IDE, in the desktop
+// app or on another Mac never reaches it, so the file drifts behind the account
+// it claims to describe, and once its own window expires `tier` drops it and the
+// tab goes blank. Measured here: a two-day-old rollout reported the weekly window
+// at 29% against a live 36%, inside the same window instance, and offered no
+// 5-hour window at all.
+//
+// So the app-server goes first (see CodexAppServer) and the rollout stays as the
+// fallback for a `codex` too old to serve it. Returns nil for API-key auth (no
+// limits reported either way) or when neither source has anything, which the
+// Usage tab treats as "no Codex usage to show".
 final class CodexQuotaProbe {
 
     private let sessionsDir = "\(NSHomeDirectory())/.codex/sessions"
@@ -34,12 +42,20 @@ final class CodexQuotaProbe {
     private var cacheKey: String?
     private var cached: CodexQuotaSnapshot?
 
+    // Latched off once `codex app-server` spawns and dies without a line of
+    // stdout, which is the shape an unknown subcommand makes. Same reasoning as
+    // ClaudeCliQuotaProbe's --strict-mcp-config latch: detect it once, then stop
+    // paying for a spawn that can't work on this install. Only ever touched on
+    // probeQueue.
+    private var appServerSupported = true
+
     // Serialises read() so overlapping polls — the 60s/5min timer firing while a
     // prior fetch is still doing disk I/O on a large ~/.codex/sessions tree —
     // can't race on cacheKey/cached. These are only ever touched on this queue.
     private let probeQueue = DispatchQueue(label: "stack-nudge.codex-quota")
 
-    // Calls completion on the main queue. File IO runs off-main.
+    // Calls completion on the main queue. The app-server exchange and file IO
+    // both run off-main.
     func fetch(completion: @escaping (CodexQuotaSnapshot?) -> Void) {
         let dir = sessionsDir
         probeQueue.async { [weak self] in
@@ -49,6 +65,24 @@ final class CodexQuotaProbe {
     }
 
     private func read(dir: String) -> CodexQuotaSnapshot? {
+        if appServerSupported {
+            switch CodexAppServer.fetch() {
+            case .ok(let snapshot):
+                return snapshot
+            case .unsupported:
+                appServerSupported = false
+            // `empty` is the binary answering with nothing usable and `cliMissing`
+            // is not being a Codex user. Neither says anything about whether the
+            // subcommand exists, so neither latches — but both fall through to
+            // the rollout, which on a cold `empty` may still hold a live window.
+            case .empty, .cliMissing:
+                break
+            }
+        }
+        return rollout(dir: dir)
+    }
+
+    private func rollout(dir: String) -> CodexQuotaSnapshot? {
         guard let newest = Self.newestRollout(in: dir) else { return nil }
         let key = "\(newest.path)|\(newest.size)|\(newest.mtime)"
         if key == cacheKey { return cached }

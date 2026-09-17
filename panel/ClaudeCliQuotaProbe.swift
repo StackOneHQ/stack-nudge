@@ -35,6 +35,25 @@ final class ClaudeCliQuotaProbe {
     // of the process, and stop paying for the check.
     private var strictMcpConfigSupported = true
 
+    // How fresh Claude Code's own usage cache has to be before the probe serves
+    // it instead of spawning the CLI. Matched to PanelController's fastest quota
+    // poll: within one interval the cache is, by definition, no older than the
+    // reading the spawn it replaces would have produced.
+    //
+    // Deliberately tight. Measured against a live account, `claude /usage` does
+    // NOT serve its own cache on a normal run — it refreshes and writes back —
+    // and Claude Code only rewrites the file every several minutes, so a 464s-old
+    // cache read 6%/62% where the CLI read 9%/63%. Widening this would trade a
+    // spawn for numbers that are visibly wrong during active use.
+    static let cacheMaxAge: TimeInterval = 60
+
+    // When the reported snapshot was actually measured. Date() for a CLI read,
+    // the cache's own `fetchedAt` when the snapshot came from disk. The panel
+    // dates the Usage tab from this, so a fallback reading can't be presented as
+    // if it had just been taken. Read after the completion fires, like
+    // cliMissing and lastProbeFailed.
+    private(set) var snapshotAsOf: Date?
+
     var isRateLimited: Bool {
         guard let until = retryAfterUntil else { return false }
         return until > Date()
@@ -74,27 +93,52 @@ final class ClaudeCliQuotaProbe {
                     fetchedPlan = plan
                 }
             }
-            // /usage is a client-side intercept that needs no MCP servers, so
-            // usageArgs adds --strict-mcp-config to load none: without it every
-            // spawn boots the user's whole MCP config (60+ servers on a heavy
-            // setup), and that variable startup tail is what pushed an otherwise
-            // -fine probe past a 10s timeout under load — a spurious hard-fail on
-            // the Usage tab. The intercept's own local-session scan also slows on
-            // a busy machine, so 20s leaves headroom rather than sitting on the
-            // edge. runUsage drops the flag and retries once if this CLI is too
-            // old to know it (see strictMcpConfigSupported).
-            let (raw, strictRejected) = Self.runUsage(strictMcpConfig: strictSupported) {
-                ProcessOutput.read(path, $0, timeout: 20, cwd: Self.probeCwd)
+            // Claude Code caches this exact payload to ~/.claude.json whenever it
+            // refreshes its own bars, so while a session is running the answer is
+            // already on disk and the spawn below buys nothing. Skip it while the
+            // cache is younger than a poll interval — that is the window in which
+            // it cannot be staler than what a fresh spawn would return anyway.
+            // See ClaudeUsageCache for why `fetchedAt` gates this rather than
+            // the file merely existing.
+            var strictRejected = false
+            var measuredAt = Date()
+            let result: ParseResult
+            if let cached = ClaudeUsageCache.read(maxAge: Self.cacheMaxAge) {
+                result = .ok(cached.snapshot)
+                measuredAt = cached.fetchedAt
+            } else {
+                // /usage is a client-side intercept that needs no MCP servers, so
+                // usageArgs adds --strict-mcp-config to load none: without it every
+                // spawn boots the user's whole MCP config (60+ servers on a heavy
+                // setup), and that variable startup tail is what pushed an otherwise
+                // -fine probe past a 10s timeout under load — a spurious hard-fail on
+                // the Usage tab. The intercept's own local-session scan also slows on
+                // a busy machine, so 20s leaves headroom rather than sitting on the
+                // edge. runUsage drops the flag and retries once if this CLI is too
+                // old to know it (see strictMcpConfigSupported).
+                let (raw, rejected) = Self.runUsage(strictMcpConfig: strictSupported) {
+                    ProcessOutput.read(path, $0, timeout: 20, cwd: Self.probeCwd)
+                }
+                strictRejected = rejected
+                result = Self.parseEnvelope(raw)
+                // Every `claude --print` spawns a new session rollout under
+                // ~/.claude/projects/<cwd-encoded>/<uuid>.jsonl. At a 60s poll
+                // cadence that's ~1.4k files/day — clutters `claude --resume`
+                // and burns inodes for zero benefit (num_turns = 0). Pinning
+                // cwd above means we know the exact directory; this scrubs the
+                // single file the probe just produced.
+                if let sid = Self.extractSessionId(raw) {
+                    Self.removeSessionFile(sid)
+                }
             }
-            let result = Self.parseEnvelope(raw)
-            // Every `claude --print` spawns a new session rollout under
-            // ~/.claude/projects/<cwd-encoded>/<uuid>.jsonl. At a 60s poll
-            // cadence that's ~1.4k files/day — clutters `claude --resume`
-            // and burns inodes for zero benefit (num_turns = 0). Pinning
-            // cwd above means we know the exact directory; this scrubs the
-            // single file the probe just produced.
-            if let sid = Self.extractSessionId(raw) {
-                Self.removeSessionFile(sid)
+
+            // The CLI broke. Claude Code may still have left a usable reading on
+            // disk from before it did — at any age, since the alternative here is
+            // "Couldn't refresh" over nothing at all. Read off-main and only on
+            // the failing path, so the common case never parses the file twice.
+            var fallback: ClaudeUsageCache.Reading?
+            if case .hardFail = result {
+                fallback = ClaudeUsageCache.read(maxAge: .infinity)
             }
 
             DispatchQueue.main.async {
@@ -107,6 +151,7 @@ final class ClaudeCliQuotaProbe {
                 case .ok(let snap):
                     self.lastProbeFailed = false
                     self.retryAfterUntil = nil
+                    self.snapshotAsOf = measuredAt
                     completion(QuotaSnapshot(
                         fiveHour:       snap.fiveHour,
                         sevenDay:       snap.sevenDay,
@@ -119,10 +164,34 @@ final class ClaudeCliQuotaProbe {
                     completion(nil)
                 case .hardFail:
                     self.lastProbeFailed = true
-                    completion(nil)
+                    guard let usable = Self.fallbackReading(
+                        fallback, lastReportedAt: self.snapshotAsOf) else {
+                        completion(nil)
+                        return
+                    }
+                    self.snapshotAsOf = usable.fetchedAt
+                    completion(QuotaSnapshot(
+                        fiveHour:       usable.snapshot.fiveHour,
+                        sevenDay:       usable.snapshot.sevenDay,
+                        sevenDayOpus:   usable.snapshot.sevenDayOpus,
+                        sevenDaySonnet: usable.snapshot.sevenDaySonnet,
+                        planType:       fetchedPlan))
                 }
             }
         }
+    }
+
+    // Whether a disk reading should stand in after the CLI hard-failed. It has to
+    // beat what we last reported, or a file left over from an earlier session
+    // would walk a good snapshot backwards the first time the CLI timed out —
+    // turning one bad tick into visibly wrong numbers instead of a held-stale
+    // note. With nothing reported yet (cold start, broken CLI) any reading wins,
+    // which is the case this exists for.
+    static func fallbackReading(_ reading: ClaudeUsageCache.Reading?,
+                                lastReportedAt: Date?) -> ClaudeUsageCache.Reading? {
+        guard let reading,
+              reading.fetchedAt > (lastReportedAt ?? .distantPast) else { return nil }
+        return reading
     }
 
     // MARK: - Invocation

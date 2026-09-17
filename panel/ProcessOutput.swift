@@ -113,4 +113,23 @@ enum ProcessOutput {
             "\(home)/.asdf/shims/claude",
         ].first { FileManager.default.isExecutableFile(atPath: $0) }
     }
+
+    // Resolve the `codex` CLI. Same minimal-PATH rationale as claude() above,
+    // and the same escape hatch for version managers that install outside these
+    // paths. The npm install lands in ~/.local/bin; Homebrew covers the cask.
+    static func codex() -> String? {
+        if let override = ConfigFile.read()["STACKNUDGE_CODEX_PATH"], !override.isEmpty {
+            return FileManager.default.isExecutableFile(atPath: override) ? override : nil
+        }
+        let home = NSHomeDirectory()
+        return [
+            "\(home)/.local/bin/codex",
+            "/opt/homebrew/bin/codex",
+            "/usr/local/bin/codex",
+            "\(home)/.volta/bin/codex",
+            "\(home)/.bun/bin/codex",
+            "\(home)/.local/share/mise/shims/codex",
+            "\(home)/.asdf/shims/codex",
+        ].first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
 }
