@@ -103,17 +103,27 @@ if [ "$mem_total" -gt 0 ]; then
         /^Pages occupied by compressor/ { compressed = $5 }
         END {
             gsub(/\./, "", active); gsub(/\./, "", wired); gsub(/\./, "", compressed)
-            # Active + wired + compressed is what macOS itself counts as used:
-            # inactive pages are reclaimable and counting them reads as a leak.
-            printf "%.0f", (active + wired + compressed) * page
+            # Print nothing rather than zero when the header or the fields are
+            # missing. vm_stat absent, or reformatted, otherwise multiplied by an
+            # unset page size and reported a confident "0% used, all free" —
+            # which is worse than saying nothing, because it looks like an answer.
+            if (page > 0 && active != "" && wired != "") {
+                # Active + wired + compressed is what macOS itself counts as
+                # used: inactive pages are reclaimable and counting them reads
+                # as a leak.
+                printf "%.0f", (active + wired + compressed) * page
+            }
         }
     ')
-    [ -n "$mem_used" ] || mem_used=0
+    # No usable reading means no memory row, the same way a volume reporting a
+    # zero total is skipped rather than drawn as empty.
+    if [ -n "$mem_used" ] && [ "$mem_used" -gt 0 ] 2>/dev/null; then
     mem_pct=$(awk -v u="$mem_used" -v t="$mem_total" 'BEGIN {printf "%d", (u * 100 / t) + 0.5}')
     mem_free_label=$(human "$(awk -v u="$mem_used" -v t="$mem_total" 'BEGIN {printf "%d", (t - u) / 1024}')")
     append_row mem "" "Memory" "$(human "$(awk -v t="$mem_total" 'BEGIN {printf "%d", t / 1024}')") installed" \
         "$mem_free_label free" "$mem_pct% used" \
         "$(awk -v p="$mem_pct" 'BEGIN {printf "%.4f", p / 100}')" "$mem_pct"
+    fi
 fi
 
 # -P for POSIX output (one line per filesystem, never wrapped); -k for KiB so

@@ -70,7 +70,11 @@ struct ExtensionManifest: Equatable {
     // ClaudeCliQuotaProbe.removeSessionFile, for the same reason. "..", a
     // leading slash and an empty string all fail this, which is the point.
     static func isValidID(_ id: String) -> Bool {
-        id.range(of: "^[a-z0-9-]{1,32}$", options: .regularExpression) != nil
+        // Must start with a letter or digit. A leading dash is read as an
+        // option by anything that takes the id as an argument — the packaging
+        // script handed it to tar, which refused with "Can't specify both -x
+        // and -c" after validation had already passed it.
+        id.range(of: "^[a-z0-9][a-z0-9-]{0,31}$", options: .regularExpression) != nil
     }
 
     // `run` is joined onto the extension's own directory, so it must stay

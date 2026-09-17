@@ -86,6 +86,41 @@ final class ExtensionInstallerTests: XCTestCase {
         XCTAssertFalse(ExtensionInstaller.isSafeAssetName(".."))
     }
 
+    // MARK: - Staging
+
+    // The defer that cleans up only runs on a normal return, so a quit or crash
+    // mid-install leaves a staging directory behind for good.
+    func testStaleStagingDirectoriesAreSwept() throws {
+        let root = NSTemporaryDirectory() + "sweep-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        let stale = "\(root)/\(ExtensionInstaller.stagingPrefix)abandoned"
+        let unrelated = "\(root)/somebody-elses-temp"
+        for path in [stale, unrelated] {
+            try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        }
+
+        ExtensionInstaller.sweepStaleStaging(in: root)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stale))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelated),
+                      "the sweep must only claim its own directories")
+    }
+
+    // MARK: - Ids
+
+    // An id reaches tar as an operand, so a leading dash is read as an option —
+    // the packaging script validated one and then failed with "Can't specify
+    // both -x and -c".
+    func testAnIDMayNotBeginWithADash() {
+        XCTAssertFalse(ExtensionManifest.isValidID("-x"))
+        XCTAssertFalse(ExtensionManifest.isValidID("--"))
+        XCTAssertTrue(ExtensionManifest.isValidID("x-y"))
+        XCTAssertTrue(ExtensionManifest.isValidID("a"))
+        XCTAssertTrue(ExtensionManifest.isValidID("9lives"))
+    }
+
     // MARK: - Reaching the release
 
     // The anonymous GitHub API is sixty requests an hour per machine, shared
@@ -173,7 +208,9 @@ final class ExtensionInstallerTests: XCTestCase {
     }
 
     func testAnUnusableSidecarIsNotTreatedAsAHash() {
-        for raw in ["", "   ", "not-a-hash  file", String(repeating: "a", count: 63),
+        for raw in ["", "   ", "not-a-hash  file",
+                    String(repeating: "a", count: 63),
+                    String(repeating: "a", count: 65),
                     String(repeating: "z", count: 64)] {
             XCTAssertNil(ExtensionInstaller.expectedHex(fromSidecar: raw), raw)
         }

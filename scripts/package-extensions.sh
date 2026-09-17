@@ -81,8 +81,10 @@ validate_one() {
   declared_id="$(manifest_field "$manifest" id)"
   [[ "$declared_id" == "$id" ]] || fail "$id: manifest declares id '$declared_id'" || rc=1
 
-  # Mirrors ExtensionManifest.isValidID — it becomes a directory name.
-  [[ "$id" =~ ^[a-z0-9-]{1,32}$ ]] || fail "$id: id is not ^[a-z0-9-]{1,32}\$" || rc=1
+  # Mirrors ExtensionManifest.isValidID — it becomes a directory name, and a
+  # tar operand, so it may not begin with a dash.
+  [[ "$id" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] \
+    || fail "$id: id is not ^[a-z0-9][a-z0-9-]{0,31}\$" || rc=1
 
   schema="$(manifest_field "$manifest" schema)"
   [[ "$schema" == "1" ]] || fail "$id: schema is '$schema', expected 1" || rc=1
@@ -134,7 +136,9 @@ package_one() {
 
   # -C so the archive root is the id directory, matching what the installer
   # expects to find after extraction.
-  tar czf "$outdir/$asset" -C "$ext_root" "$id"
+  # -- so an id can never be read as an option, belt and braces alongside the
+  # validator's leading-dash rule.
+  tar czf "$outdir/$asset" -C "$ext_root" -- "$id"
   # Run from $outdir with a bare basename, shasum already prints exactly
   # "<hash>  <basename>" — so there is nothing for awk to do, and no program
   # text for a manifest value to reach. The awk that used to be here was
@@ -148,11 +152,28 @@ extension_dirs() {
   find "$ext_root" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z
 }
 
+# Enumeration failing must not read as "nothing to validate". A process
+# substitution does not propagate its status — pipefail does not reach inside
+# one and nothing checked it — so an unreadable extensions/ turned the curation
+# gate into a green check with a find error scrolled past above it.
+list_extension_dirs() {
+  if [[ -d "$ext_root" ]] && ! find "$ext_root" -mindepth 1 -maxdepth 1 -type d > /dev/null; then
+    echo "cannot read $ext_root" >&2
+    return 1
+  fi
+  extension_dirs
+}
+
 main() {
   local dirs=() rc=0
   while IFS= read -r -d '' dir; do
     dirs+=("$dir")
-  done < <(extension_dirs)
+  done < <(list_extension_dirs)
+  # The subshell's failure is invisible to the loop, so ask again.
+  if [[ -d "$ext_root" ]] && ! find "$ext_root" -mindepth 1 -maxdepth 1 -type d > /dev/null 2>&1; then
+    echo "refusing to $mode: cannot read $ext_root" >&2
+    return 1
+  fi
 
   if [[ "${#dirs[@]}" -eq 0 ]]; then
     # Not an error. Until the first extension lands, a release still publishes an
@@ -176,7 +197,9 @@ main() {
 
       mkdir -p "$outdir"
       for dir in ${dirs[@]+"${dirs[@]}"}; do
-        package_one "$dir"
+        # Without this a tar failure printed an error and the job still exited
+        # 0, publishing a release that looked successful and was not.
+        package_one "$dir" || { echo "failed to package $dir" >&2; return 1; }
       done
       write_index "${dirs[@]+"${dirs[@]}"}"
       echo "  → extensions-index.json"

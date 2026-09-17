@@ -264,8 +264,9 @@ enum ExtensionInstaller {
                                               actual: expected))
         }
 
+        sweepStaleStaging(fileManager: fileManager)
         let staging = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("stack-nudge-extension-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("\(stagingPrefix)\(UUID().uuidString)", isDirectory: true)
         defer { try? fileManager.removeItem(at: staging) }
         do {
             try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
@@ -330,6 +331,21 @@ enum ExtensionInstaller {
             return .failure(.installFailed(error.localizedDescription))
         }
         return .success(entry.id)
+    }
+
+    static let stagingPrefix = "stack-nudge-extension-"
+
+    // The defer that removes a staging directory only runs on a normal return,
+    // so a quit or a crash mid-install leaves one behind for good. Updater has
+    // sweepStaleTempDirs for precisely this; this path copied its steps and not
+    // its cleanup. Swept on the way in, since that is the moment we know no
+    // install of ours is using one.
+    static func sweepStaleStaging(fileManager: FileManager = .default,
+                                  in directory: String = NSTemporaryDirectory()) {
+        guard let names = try? fileManager.contentsOfDirectory(atPath: directory) else { return }
+        for name in names where name.hasPrefix(stagingPrefix) {
+            try? fileManager.removeItem(atPath: "\(directory)/\(name)")
+        }
     }
 
     static func remove(_ id: String,

@@ -171,8 +171,10 @@ final class ExtensionRenderingTests: XCTestCase {
         XCTAssertEqual(ExtensionTabView.fillHeight(inset: false), ExtensionTabView.barHeight)
     }
 
-    func testAFillWithAGhostBehindItIsInset() {
-        XCTAssertLessThan(ExtensionTabView.fillHeight(inset: true), ExtensionTabView.barHeight)
+    // Asserting "less than" passed for any value below the bar height, which
+    // left the actual inset unpinned.
+    func testAFillWithAGhostBehindItIsInsetToHalfTheTrack() {
+        XCTAssertEqual(ExtensionTabView.fillHeight(inset: true), ExtensionTabView.barHeight / 2)
     }
 
     private func document(_ json: String) -> ExtensionDocument {
