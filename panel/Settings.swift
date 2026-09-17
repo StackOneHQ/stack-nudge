@@ -472,6 +472,13 @@ struct SettingsView: View {
     // rows(in:) and missing from its group would be keyboard-selectable and
     // invisible, and no test could see it. Exhaustive, so a new row has to be
     // given a home here too.
+    private var extensionsRowValue: String {
+        let installed = nav.extensionTabs.count
+        let refused = nav.refusedExtensionCount
+        if refused > 0 { return "\(refused) not loaded" }
+        return installed == 0 ? "None" : "\(installed) installed"
+    }
+
     @ViewBuilder private func settingRow(_ id: SettingsRow) -> some View {
         switch id {
         // Notifications
@@ -547,6 +554,10 @@ struct SettingsView: View {
 
         // Actions
         case .editPhrases:      row(.editPhrases, label: "Edit phrases…", kind: .action, value: "")
+        // The count is the useful part at a glance; a refusal is worth surfacing
+        // here too, since the whole point of the sub-page is that it explains one.
+        case .browseExtensions: row(.browseExtensions, label: "Extensions…", kind: .action,
+                                    value: extensionsRowValue)
         case .checkPermissions: row(.checkPermissions, label: "Check permissions…", kind: .action, value: "")
         case .openConfig:       row(.openConfig, label: "Open config file…", kind: .action, value: "")
         case .releaseNotes:     row(.releaseNotes, label: "View release notes…", kind: .action, value: "")

@@ -340,6 +340,72 @@ enum ExtensionInstaller {
         return .success(id)
     }
 
+    // MARK: - Talking to the release
+
+    // Asset name -> download URL, from the release JSON. Hand-parsed, because
+    // this one is GitHub's format rather than ours — the same split the manifest
+    // and the index already follow.
+    static func assets(fromReleaseJSON data: Data) -> [String: URL] {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let assets = object["assets"] as? [[String: Any]]
+        else { return [:] }
+        var result: [String: URL] = [:]
+        for asset in assets {
+            guard let name = asset["name"] as? String,
+                  let raw = asset["browser_download_url"] as? String,
+                  let url = URL(string: raw)
+            else { continue }
+            result[name] = url
+        }
+        return result
+    }
+
+    static let indexAssetName = "extensions-index.json"
+
+    // The catalogue lives on the app's own latest release, so there is one trust
+    // anchor and one fetch path rather than two. A release with no index at all
+    // is an older one, which is an empty catalogue rather than an error.
+    static func catalogue(fromReleaseJSON data: Data,
+                          fetch: (URL) -> Data?) -> Result<[IndexEntry], Failure> {
+        let published = assets(fromReleaseJSON: data)
+        guard let indexURL = published[indexAssetName] else { return .success([]) }
+        guard let indexData = fetch(indexURL) else {
+            return .failure(.downloadFailed(indexAssetName))
+        }
+        return parseIndex(indexData)
+    }
+
+    static func fetchCatalogue() -> Result<[IndexEntry], Failure> {
+        guard let release = httpGET(UpdateChecker.latestReleaseURL) else {
+            return .failure(.downloadFailed("the release list"))
+        }
+        return catalogue(fromReleaseJSON: release, fetch: httpGET)
+    }
+
+    static func releaseSources() -> Sources {
+        let published = httpGET(UpdateChecker.latestReleaseURL).map(assets(fromReleaseJSON:)) ?? [:]
+        return Sources(assets: published, fetch: httpGET)
+    }
+
+    // Deliberately synchronous: every caller already runs on a background queue,
+    // and the alternative is the semaphore-around-a-dataTask shape that makes
+    // Updater impossible to follow.
+    private static func httpGET(_ url: URL) -> Data? {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        request.setValue("stack-nudge", forHTTPHeaderField: "User-Agent")
+        var payload: Data?
+        let done = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            if let http = response as? HTTPURLResponse, http.statusCode == 200 {
+                payload = data
+            }
+            done.signal()
+        }.resume()
+        _ = done.wait(timeout: .now() + 30)
+        return payload
+    }
+
     // MARK: - The real side effects
 
     static func tarListing(_ archive: String) -> (plain: String, verbose: String)? {

@@ -12,6 +12,9 @@ enum PanelMode: Hashable {
     case extensionTab(String)
     case settings
     case phrases
+    // The extension browser. Absent from orderedTabs like .phrases: it is a
+    // sub-page of Settings, not a tab.
+    case extensions
     // Confirmation step after the user clicks the "Update available" row.
     // Shows release notes (when available) + Cancel / Update Now buttons.
     case updateConfirm
@@ -168,12 +171,14 @@ enum SettingsRow: Hashable, CaseIterable {
     case githubLinks, hideShipped, disconnectGithub
     case historyPerSession
     case editPhrases, checkPermissions, openConfig, releaseNotes, checkUpdates, uninstall, quit
+    case browseExtensions
 }
 
 struct SettingsActions {
     let checkPermissions: () -> Void
     let openConfig:       () -> Void
     let editPhrases:      () -> Void
+    let browseExtensions: () -> Void
     let openReleaseNotes: () -> Void
     let checkForUpdates:  () -> Void
     let beginUpdate:      () -> Void
@@ -897,6 +902,11 @@ final class PanelNav: ObservableObject {
     // the extension runtime populates it.
     // didSet rather than a call site: a reconcile you have to remember to call
     // is one you forget, and its tests pass either way.
+    // Mirrored onto nav so Settings can show it without reaching into the host —
+    // the row is rendered by the same exhaustive switch as every other setting,
+    // which only has nav.
+    @Published var refusedExtensionCount = 0
+
     @Published var extensionTabs: [ExtensionTab] = [] {
         didSet { reconcileModeWithTabs() }
     }
@@ -1104,7 +1114,7 @@ final class PanelNav: ObservableObject {
         case .events:
             return [.historyPerSession, .eventHistory, .clearHistory]
         case .actions:
-            return [.editPhrases, .checkPermissions, .openConfig,
+            return [.editPhrases, .browseExtensions, .checkPermissions, .openConfig,
                     .releaseNotes, .checkUpdates, .uninstall, .quit]
         }
     }
@@ -1491,6 +1501,7 @@ final class PanelNav: ObservableObject {
             if voiceModelDownloading { cancelVoiceModelDownload() } else { startVoiceModelDownload() }
         case .disconnectGithub: disconnectGithub()
         case .editPhrases:      actions?.editPhrases()
+        case .browseExtensions: actions?.browseExtensions()
         case .checkPermissions: actions?.checkPermissions()
         case .openConfig:       actions?.openConfig()
         case .clearHistory:     actions?.clearEventHistory()
@@ -1516,7 +1527,8 @@ final class PanelNav: ObservableObject {
     var selectedRowRespondsToArrows: Bool {
         switch selectedRow {
         case .wireAgents, .dismissAgents,
-             .disconnectGithub, .editPhrases, .checkPermissions, .openConfig,
+             .disconnectGithub, .editPhrases, .browseExtensions,
+             .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
              .slackPaste, .slackIdentity, .slackTest, .none:
             return false
@@ -1785,7 +1797,8 @@ final class PanelNav: ObservableObject {
         // rewrites agent hook configs and Not now persists a dismissal, so
         // neither should fire on an arrow-key graze. Enter/Space only.
         case .wireAgents, .dismissAgents,
-             .disconnectGithub, .editPhrases, .checkPermissions, .openConfig,
+             .disconnectGithub, .editPhrases, .browseExtensions,
+             .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
              .slackPaste, .slackIdentity, .slackTest, .none:
             break
