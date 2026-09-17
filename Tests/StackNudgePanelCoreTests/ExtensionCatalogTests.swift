@@ -118,6 +118,92 @@ final class ExtensionCatalogTests: XCTestCase {
         XCTAssertEqual(rows.count, 1)
     }
 
+    // MARK: - Keyboard
+
+    private var threeRows: [ExtensionRow] {
+        ExtensionCatalog.rows(catalogue: [entry("available")],
+                              installed: [manifest("installed", version: "1.0.0")],
+                              refused: [.init(id: "broken", reason: "nope")])
+    }
+
+    func testArrowsWalkTheRowsAndStopAtTheEnds() {
+        let c = catalog()
+        let rows = threeRows
+        XCTAssertEqual(rows.map(\.id), ["broken", "installed", "available"])
+
+        c.moveSelection(among: rows, by: 1)
+        XCTAssertEqual(c.selectedID, "broken")
+        c.moveSelection(among: rows, by: 1)
+        c.moveSelection(among: rows, by: 1)
+        XCTAssertEqual(c.selectedID, "available")
+        c.moveSelection(among: rows, by: 1)
+        XCTAssertEqual(c.selectedID, "available", "stops rather than wrapping")
+    }
+
+    func testUpFromNoSelectionTakesTheLastRow() {
+        let c = catalog()
+        c.moveSelection(among: threeRows, by: -1)
+        XCTAssertEqual(c.selectedID, "available")
+    }
+
+    // Enter does whatever the row's own button would: install an uninstalled
+    // one, remove an installed one.
+    func testActivatingAnUninstalledRowInstallsIt() {
+        var installed: [String] = []
+        // Loaded, because activation resolves the row back to its index entry —
+        // a row with nothing published behind it has nothing to install.
+        let c = catalog(fetch: { .success([self.entry("available")]) },
+                        install: { installed.append($0.id); return .success($0.id) })
+        c.reload()
+        c.selectedID = "available"
+        c.activateSelection(among: threeRows)
+        XCTAssertEqual(installed, ["available"])
+    }
+
+    func testActivatingAnInstalledRowRemovesIt() {
+        var removed: [String] = []
+        let c = catalog(remove: { removed.append($0); return .success($0) })
+        c.selectedID = "installed"
+        c.activateSelection(among: threeRows)
+        XCTAssertEqual(removed, ["installed"])
+    }
+
+    // A failed row is showing a reason, so Enter clears it rather than
+    // immediately retrying something the user has not read yet.
+    func testActivatingAFailedRowDismissesTheFailureFirst() {
+        var attempts = 0
+        let c = catalog(fetch: { .success([self.entry("available")]) },
+                        install: { _ in attempts += 1; return .failure(.installFailed("no")) })
+        c.reload()
+        c.selectedID = "available"
+        c.activateSelection(among: threeRows)
+        XCTAssertEqual(attempts, 1)
+        XCTAssertNotNil(c.failure(for: "available"))
+
+        c.activateSelection(among: threeRows)
+        XCTAssertEqual(attempts, 1, "the second press dismissed rather than retried")
+        XCTAssertNil(c.failure(for: "available"))
+    }
+
+    func testActivatingWithNothingSelectedDoesNothing() {
+        var installed: [String] = []
+        let c = catalog(install: { installed.append($0.id); return .success($0.id) })
+        c.activateSelection(among: threeRows)
+        XCTAssertTrue(installed.isEmpty)
+    }
+
+    // A selection pointing at a row that has gone would highlight nothing and
+    // make Enter a no-op.
+    func testTheSelectionIsDroppedWhenItsRowDisappears() {
+        let c = catalog()
+        c.selectedID = "installed"
+        c.reconcileSelection(among: threeRows)
+        XCTAssertEqual(c.selectedID, "installed")
+
+        c.reconcileSelection(among: [])
+        XCTAssertNil(c.selectedID)
+    }
+
     // MARK: - Loading
 
     func testLoadingPublishesTheEntries() {

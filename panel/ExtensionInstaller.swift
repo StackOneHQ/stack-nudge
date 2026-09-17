@@ -141,6 +141,14 @@ enum ExtensionInstaller {
     //
     // Pure over the listing text (`tar -tzf`), so every hostile shape is testable
     // without building an archive.
+    //
+    // This rests on one property of tar that is worth naming because nothing in
+    // the format guarantees it: bsdtar *escapes* control characters in a listing,
+    // so a filename containing a newline prints as the literal two characters
+    // \n on one line rather than splitting into two. One entry is always one
+    // line. Splitting can therefore only add lines, and every line is validated
+    // independently — the parse gets stricter, never looser. GNU tar quotes
+    // differently again, so a test pins the assumption rather than trusting it.
     static func safeEntries(fromListing listing: String, id: String) -> Result<[String], Failure> {
         var entries: [String] = []
         for line in listing.split(separator: "\n") {
@@ -376,7 +384,11 @@ enum ExtensionInstaller {
         for asset in assets {
             guard let name = asset["name"] as? String,
                   let raw = asset["browser_download_url"] as? String,
-                  let url = URL(string: raw)
+                  let url = URL(string: raw),
+                  // A release JSON could name any scheme, and file:// fails
+                  // closed only because httpGET insists on an HTTPURLResponse.
+                  // Saying so here means it does not depend on that.
+                  url.scheme?.lowercased() == "https"
             else { continue }
             result[name] = url
         }
@@ -467,6 +479,10 @@ enum ExtensionInstaller {
 
     // MARK: - The real side effects
 
+    // Both listings come from stdout. That matters more than it looks: the
+    // symlink and hard-link guard reads the verbose listing, ProcessOutput
+    // discards stderr, and if tar wrote its listing there instead the guard
+    // would be a silent no-op with nothing failing.
     static func tarListing(_ archive: String) -> (plain: String, verbose: String)? {
         guard let plain = ProcessOutput.read("/usr/bin/tar", ["-tzf", archive], timeout: 20),
               let verbose = ProcessOutput.read("/usr/bin/tar", ["-tvzf", archive], timeout: 20)

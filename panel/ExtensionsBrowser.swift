@@ -26,6 +26,9 @@ final class ExtensionCatalog: ObservableObject {
     @Published private(set) var load: Load = .idle
     @Published private(set) var entries: [ExtensionInstaller.IndexEntry] = []
     @Published private(set) var work: [String: Work] = [:]
+    // Keyboard selection. The panel is keyboard-native and this page's own
+    // footer advertises key hints, but every action on it was mouse-only.
+    @Published var selectedID: String?
 
     private let fetchCatalogue: () -> Result<[ExtensionInstaller.IndexEntry], ExtensionInstaller.Failure>
     private let performInstall: (ExtensionInstaller.IndexEntry) -> Result<String, ExtensionInstaller.Failure>
@@ -133,6 +136,39 @@ final class ExtensionCatalog: ObservableObject {
     func failure(for id: String) -> String? {
         if case .failed(let why) = work[id] { return why }
         return nil
+    }
+
+    // MARK: - Keyboard
+
+    func moveSelection(among rows: [ExtensionRow], by delta: Int) {
+        guard !rows.isEmpty else { return }
+        let current = rows.firstIndex { $0.id == selectedID }
+        // No selection yet: ↓ takes the first and ↑ the last, so either arrow
+        // is a way in. Same rule as the extension tab's row list.
+        let next = current.map { min(max($0 + delta, 0), rows.count - 1) }
+            ?? (delta > 0 ? 0 : rows.count - 1)
+        selectedID = rows[next].id
+    }
+
+    // What Enter does to the selected row. Install when it isn't installed,
+    // update when there is one, otherwise remove — and dismiss a failure first,
+    // since that is what the row is showing.
+    func activateSelection(among rows: [ExtensionRow]) {
+        guard let row = rows.first(where: { $0.id == selectedID }) else { return }
+        if failure(for: row.id) != nil { return dismissFailure(for: row.id) }
+        guard !isBusy(row.id) else { return }
+        if row.updateAvailable || !row.isInstalled {
+            if let entry = entries.first(where: { $0.id == row.id }) { install(entry) }
+        } else {
+            remove(row.id)
+        }
+    }
+
+    // Keeps the selection on a row that still exists after a reload or a
+    // removal, rather than pointing at nothing.
+    func reconcileSelection(among rows: [ExtensionRow]) {
+        guard let selectedID else { return }
+        if !rows.contains(where: { $0.id == selectedID }) { self.selectedID = nil }
     }
 
     func dismissFailure(for id: String) {
@@ -250,11 +286,30 @@ struct ExtensionsView: View {
 
             PageFooter {
                 FooterHint(label: "Back", keys: ["Esc"])
+                FooterHint(label: "Select", keys: ["↑", "↓"])
+                FooterHint(label: activationLabel, keys: ["⏎"])
                 FooterHint(label: "Reload", keys: ["R"])
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear { catalog.loadIfNeeded() }
+    }
+
+    // Named for what Enter will actually do to the selected row, rather than a
+    // generic verb that is wrong two thirds of the time.
+    private var activationLabel: String {
+        guard let id = catalog.selectedID,
+              let row = visibleRows.first(where: { $0.id == id })
+        else { return "Select" }
+        if catalog.failure(for: id) != nil { return "Dismiss" }
+        if row.updateAvailable { return "Update" }
+        return row.isInstalled ? "Remove" : "Install"
+    }
+
+    var visibleRows: [ExtensionRow] {
+        ExtensionCatalog.rows(catalogue: catalog.entries,
+                              installed: host.manifests,
+                              refused: host.refused)
     }
 
     private var header: some View {
@@ -280,9 +335,7 @@ struct ExtensionsView: View {
 
     @ViewBuilder
     private var catalogueBody: some View {
-        let rows = ExtensionCatalog.rows(catalogue: catalog.entries,
-                                         installed: host.manifests,
-                                         refused: host.refused)
+        let rows = visibleRows
         switch catalog.load {
         // A failed *catalogue* fetch does not hide what is installed — those
         // rows are read from disk and are still true, and one of them may be
@@ -373,8 +426,15 @@ struct ExtensionsView: View {
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
             .fill(row.refusedReason == nil
-                  ? Color.primary.opacity(0.05)
-                  : Color.orange.opacity(0.08)))
+                  ? Color.primary.opacity(catalog.selectedID == row.id ? 0.12 : 0.05)
+                  : Color.orange.opacity(catalog.selectedID == row.id ? 0.16 : 0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .strokeBorder(Color.accentColor.opacity(catalog.selectedID == row.id ? 0.6 : 0),
+                          lineWidth: 1.5))
+        .contentShape(Rectangle())
+        .onTapGesture { catalog.selectedID = row.id }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(catalog.selectedID == row.id ? [.isSelected] : [])
     }
 
     private func glyph(for row: ExtensionRow) -> String {

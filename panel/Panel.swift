@@ -3718,8 +3718,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         if nav.mode == .extensions {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain else { return false }
+            let rows = ExtensionCatalog.rows(catalogue: extensionCatalog.entries,
+                                             installed: extensions.manifests,
+                                             refused: extensions.refused)
             switch event.keyCode {
             case KeyCode.escape: nav.mode = .settings
+            case KeyCode.upArrow:   extensionCatalog.moveSelection(among: rows, by: -1)
+            case KeyCode.downArrow: extensionCatalog.moveSelection(among: rows, by: 1)
+            case KeyCode.returnKey, KeyCode.numpadEnter, KeyCode.space:
+                extensionCatalog.activateSelection(among: rows)
             // Not on autorepeat: holding R would otherwise issue one fetch per
             // event, each blocking a pool thread.
             case KeyCode.rKey where !event.isARepeat: extensionCatalog.reload()

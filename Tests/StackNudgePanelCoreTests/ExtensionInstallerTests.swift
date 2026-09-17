@@ -86,6 +86,77 @@ final class ExtensionInstallerTests: XCTestCase {
         XCTAssertFalse(ExtensionInstaller.isSafeAssetName(".."))
     }
 
+    // MARK: - The assumption the archive guard rests on
+
+    // safeEntries splits the listing on newlines, which is only safe because
+    // tar escapes control characters in a name rather than emitting them raw.
+    // Nothing in the tar format guarantees that and GNU tar quotes differently,
+    // so this builds a real archive and asserts the property directly — if the
+    // listing ever starts carrying raw newlines, this fails rather than the
+    // guard silently weakening.
+    func testTarEscapesANewlineInANameRatherThanSplittingTheListing() throws {
+        let root = NSTemporaryDirectory() + "tarnl-\(UUID().uuidString)"
+        let package = "\(root)/derby"
+        try FileManager.default.createDirectory(atPath: package, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        try Data("{}".utf8).write(to: URL(fileURLWithPath: "\(package)/manifest.json"))
+
+        // A name crafted so that a line-split listing would yield two lines
+        // which each look safe on their own.
+        let hostile = "\(package)/safe\n../../escaped"
+        // The no-Xcode runner has no XCTSkip, so a filesystem that refuses the
+        // name simply leaves nothing to assert about.
+        guard FileManager.default.createFile(atPath: hostile, contents: Data("x".utf8)) else {
+            return
+        }
+
+        let archive = "\(root)/hostile.tar.gz"
+        guard ProcessOutput.run("/usr/bin/tar", ["czf", archive, "-C", root, "derby"],
+                                timeout: 20)?.status == 0,
+              let listing = ProcessOutput.read("/usr/bin/tar", ["-tzf", archive], timeout: 20)
+        else { return XCTFail("could not build the fixture archive") }
+
+        XCTAssertFalse(listing.contains("\n../../escaped"),
+                       "tar emitted a raw newline — the line-split parse is no longer safe")
+
+        // And the guard refuses it either way, because the escaped form still
+        // carries ".." as a component.
+        guard case .failure(.unsafeArchive) =
+                ExtensionInstaller.safeEntries(fromListing: listing, id: "derby") else {
+            return XCTFail("accepted an archive containing an escaping name")
+        }
+    }
+
+    // The verbose listing is what the symlink and hard-link guard reads, and
+    // ProcessOutput discards stderr — so if tar wrote it there the guard would
+    // be a silent no-op with nothing failing.
+    func testTheVerboseListingArrivesOnStdout() throws {
+        let root = NSTemporaryDirectory() + "tarv-\(UUID().uuidString)"
+        let package = "\(root)/derby"
+        try FileManager.default.createDirectory(atPath: package, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        try Data("{}".utf8).write(to: URL(fileURLWithPath: "\(package)/manifest.json"))
+        try FileManager.default.createSymbolicLink(atPath: "\(package)/link",
+                                                   withDestinationPath: "/usr/bin")
+
+        let archive = "\(root)/withlink.tar.gz"
+        guard ProcessOutput.run("/usr/bin/tar", ["czf", archive, "-C", root, "derby"],
+                                timeout: 20)?.status == 0,
+              let verbose = ProcessOutput.read("/usr/bin/tar", ["-tvzf", archive], timeout: 20)
+        else { return XCTFail("could not build the fixture archive") }
+
+        XCTAssertFalse(verbose.isEmpty, "the verbose listing did not reach stdout")
+        XCTAssertEqual(ExtensionInstaller.rejectsNonRegularEntries(inVerboseListing: verbose),
+                       .unsafeArchive("a symlink"))
+    }
+
+    // A hostile release JSON can name any scheme. It failed closed only because
+    // httpGET insists on an HTTPURLResponse; this makes it not depend on that.
+    func testOnlyHTTPSAssetURLsAreAccepted() {
+        let json = Data(#"{"assets":[{"name":"a.tar.gz","browser_download_url":"file:///etc/passwd"},{"name":"b.tar.gz","browser_download_url":"http://example.test/b.tar.gz"},{"name":"c.tar.gz","browser_download_url":"https://example.test/c.tar.gz"}]}"#.utf8)
+        XCTAssertEqual(Set(ExtensionInstaller.assets(fromReleaseJSON: json).keys), ["c.tar.gz"])
+    }
+
     // MARK: - Staging
 
     // The defer that cleans up only runs on a normal return, so a quit or crash
