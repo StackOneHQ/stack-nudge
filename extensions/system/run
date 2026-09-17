@@ -25,8 +25,25 @@ tint_for() {
 
 # JSON strings have to be escaped even here: a volume can be called anything,
 # including something with a quote or a backslash in it.
+# Backslash and quote are the obvious two; the control characters are the ones
+# that turn a volume name into an unparseable document rather than a wrong one.
+# A name can legally contain them, and JSON may not.
+#
+# Done in awk rather than sed because BSD sed does not understand \x escapes —
+# the first attempt at this silently ate the first character of every title.
 json_escape() {
-    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+    printf '%s' "$1" | awk '
+        BEGIN { RS = "\0" }
+        {
+            gsub(/\\/, "\\\\")
+            gsub(/"/, "\\\"")
+            gsub(/\b/, "\\b")
+            gsub(/\f/, "\\f")
+            gsub(/\n/, "\\n")
+            gsub(/\r/, "\\r")
+            gsub(/\t/, "\\t")
+            printf "%s", $0
+        }'
 }
 
 human() {
@@ -111,7 +128,7 @@ fi
 
 # Parsed in awk rather than a shell loop so the arithmetic is one pass and the
 # fields are split the same way every time.
-rows=$(echo "$df_output" | tail -n +2 | awk '
+rows=$(printf '%s\n' "$df_output" | tail -n +2 | awk '
     {
         # Mount point is everything from field 6 onward — a path can contain
         # spaces, and "Volumes/My Disk" is ordinary on a Mac.
@@ -130,7 +147,7 @@ rows=$(echo "$df_output" | tail -n +2 | awk '
         # the pane say 440GB free twice at two different percentages — true, and
         # unreadable. The startup disk is one thing to the person looking at it,
         # so Data carries it and "/" is dropped.
-        if (mount == "/") { root_seen = 1; next }
+        if (mount == "/") next
 
         total = $2 + 0
         used  = $3 + 0
@@ -149,10 +166,13 @@ rows=$(echo "$df_output" | tail -n +2 | awk '
     }
 ')
 
-[ -n "$rows" ] || {
-    printf '{"schema":1,"state":"empty","message":"No local volumes found"}\n'
+# No reportable volume is not an empty pane: the CPU and memory rows were
+# computed a moment ago and discarding them was throwing away the two thirds of
+# this extension that had worked.
+if [ -z "$rows" ] && [ -z "$json_rows" ]; then
+    printf '{"schema":1,"state":"empty","message":"Nothing to report"}\n'
     exit 0
-}
+fi
 
 while IFS="$(printf '\t')" read -r name mount fill pct avail; do
     [ -n "$name" ] || continue

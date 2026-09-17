@@ -144,7 +144,7 @@ jobs:
           # Tarball wraps just the .app — it's now self-contained
           # (Bootstrap.swift owns the install side on first launch).
           tar czf "$ARTIFACT" -C build StackNudge.app
-          shasum -a 256 "$ARTIFACT" | awk '{print $1 "  " "'"$ARTIFACT"'"}' \
+          shasum -a 256 "$ARTIFACT" | awk -v name="$ARTIFACT" '{print $1 "  " name}' \
             > "$ARTIFACT.sha256"
           ls -la "$ARTIFACT" "$ARTIFACT.sha256"
 

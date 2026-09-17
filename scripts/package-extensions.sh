@@ -87,8 +87,14 @@ validate_one() {
   schema="$(manifest_field "$manifest" schema)"
   [[ "$schema" == "1" ]] || fail "$id: schema is '$schema', expected 1" || rc=1
 
+  # Constrained like the id is. It becomes part of an asset filename and is
+  # interpolated into shell, so "non-empty" was never a sufficient check.
   version="$(manifest_field "$manifest" version)"
-  [[ -n "$version" ]] || fail "$id: no version" || rc=1
+  if [[ -z "$version" ]]; then
+    fail "$id: no version" || rc=1
+  elif [[ ! "$version" =~ ^[0-9A-Za-z][0-9A-Za-z.+-]{0,31}$ ]]; then
+    fail "$id: version '$version' is not ^[0-9A-Za-z][0-9A-Za-z.+-]{0,31}\$" || rc=1
+  fi
 
   run_rel="$(manifest_field "$manifest" run)"
   [[ -n "$run_rel" ]] || run_rel="./run"
@@ -123,7 +129,10 @@ package_one() {
   # -C so the archive root is the id directory, matching what the installer
   # expects to find after extraction.
   tar czf "$outdir/$asset" -C "$ext_root" "$id"
-  ( cd "$outdir" && shasum -a 256 "$asset" | awk '{print $1 "  " "'"$asset"'"}' > "$asset.sha256" )
+  # -v, never interpolation: `version` reaches this string from a manifest, and
+  # building the awk *program* out of it is arbitrary code execution in the
+  # release job — which holds contents: write and a token.
+  ( cd "$outdir" && shasum -a 256 "$asset" | awk -v name="$asset" '{print $1 "  " name}' > "$asset.sha256" )
   echo "  → $asset"
 }
 
