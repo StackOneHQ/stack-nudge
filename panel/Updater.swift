@@ -147,8 +147,14 @@ final class Updater {
         appendLog("Latest release: v\(release.version)")
 
         let arch = currentArch()
+        // Anchored at both ends. `contains` matched anywhere in the name, and
+        // this release also carries extension packages — so an extension whose
+        // version embedded "-macos-arm64.tar.gz" produced a name that matched,
+        // with a valid sidecar of its own, and first(where:) took whichever
+        // uploaded first. That silently pinned every user's updates forever.
         guard let asset = release.assets.first(where: {
-            $0.name.contains("-macos-\(arch).tar.gz") && !$0.name.hasSuffix(".sha256")
+            $0.name.hasPrefix("stack-nudge-")
+                && $0.name.hasSuffix("-macos-\(arch).tar.gz")
         }) else {
             throw UpdateError.noArtifactForArch(arch: arch)
         }

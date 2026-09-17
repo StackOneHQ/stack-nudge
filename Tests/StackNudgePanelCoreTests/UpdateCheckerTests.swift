@@ -98,4 +98,26 @@ final class UpdateCheckerTests: XCTestCase {
         ])
         XCTAssertFalse(UpdateChecker.hasArtifact(in: json, arch: "x86_64"))
     }
+
+    // The release carries extension packages alongside the app's own. Matching
+    // by suffix alone meant an extension whose version embedded
+    // "-macos-arm64.tar.gz" satisfied this, showing an update badge for a
+    // download the updater would then refuse — and in Updater, which used
+    // `contains` and `first(where:)`, selecting it outright and pinning every
+    // user's updates silently.
+    func test_hasArtifact_ignoresAnExtensionAssetThatLooksLikeTheAppsOwn() {
+        let json: [String: Any] = ["assets": [
+            ["name": "extension-tiny-1.0.0-macos-arm64.tar.gz.d.tar.gz"],
+            ["name": "extension-stack-nudge-1.0.0-macos-arm64.tar.gz"],
+        ]]
+        XCTAssertFalse(UpdateChecker.hasArtifact(in: json, arch: "arm64"))
+    }
+
+    func test_hasArtifact_stillFindsTheRealAsset() {
+        let json: [String: Any] = ["assets": [
+            ["name": "extension-tiny-1.0.0-macos-arm64.tar.gz.d.tar.gz"],
+            ["name": "stack-nudge-1.35.0-macos-arm64.tar.gz"],
+        ]]
+        XCTAssertTrue(UpdateChecker.hasArtifact(in: json, arch: "arm64"))
+    }
 }

@@ -120,19 +120,26 @@ validate_one() {
   return "$rc"
 }
 
+# Namespaced so an extension asset can never be mistaken for the app's own: they
+# share a release, and the updater picks its download by name. Defined once,
+# because the packer and the index both need it and a disagreement between them
+# is a sidecar that verifies nothing.
+asset_name() { printf 'extension-%s-%s.tar.gz' "$1" "$2"; }
+
 package_one() {
   local dir="$1" id version asset
   id="$(basename "$dir")"
   version="$(manifest_field "$dir/manifest.json" version)"
-  asset="${id}-${version}.tar.gz"
+  asset="$(asset_name "$id" "$version")"
 
   # -C so the archive root is the id directory, matching what the installer
   # expects to find after extraction.
   tar czf "$outdir/$asset" -C "$ext_root" "$id"
-  # -v, never interpolation: `version` reaches this string from a manifest, and
-  # building the awk *program* out of it is arbitrary code execution in the
-  # release job — which holds contents: write and a token.
-  ( cd "$outdir" && shasum -a 256 "$asset" | awk -v name="$asset" '{print $1 "  " name}' > "$asset.sha256" )
+  # Run from $outdir with a bare basename, shasum already prints exactly
+  # "<hash>  <basename>" — so there is nothing for awk to do, and no program
+  # text for a manifest value to reach. The awk that used to be here was
+  # arbitrary code execution in a job holding contents: write.
+  ( cd "$outdir" && shasum -a 256 "$asset" > "$asset.sha256" )
   echo "  → $asset"
 }
 
@@ -193,7 +200,7 @@ entries = []
 for d in dirs:
     with open(os.path.join(d, "manifest.json")) as fh:
         m = json.load(fh)
-    asset = "{}-{}.tar.gz".format(m["id"], m["version"])
+    asset = "extension-{}-{}.tar.gz".format(m["id"], m["version"])
     with open(os.path.join(outdir, asset), "rb") as fh:
         digest = hashlib.sha256(fh.read()).hexdigest()
     entries.append({
