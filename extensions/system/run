@@ -1,0 +1,123 @@
+#!/bin/sh
+#
+# The reference extension: disk usage for local volumes, one row per volume
+# with the used fraction as its bar.
+#
+# It is deliberately small and dependency-free — /bin/sh and df, nothing else —
+# because its job is to be the thing you read when writing your own. See
+# docs/extensions.md for the schema it prints.
+
+set -eu
+
+# Colour the bar by how full the volume is. The host clamps whatever it is given
+# toward something legible, so these only have to be roughly right.
+tint_for() {
+    if [ "$1" -ge 90 ]; then echo "#E5534B"
+    elif [ "$1" -ge 75 ]; then echo "#E8A87C"
+    else echo "#7FD1B9"
+    fi
+}
+
+# JSON strings have to be escaped even here: a volume can be called anything,
+# including something with a quote or a backslash in it.
+json_escape() {
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+rows=""
+worst=0
+count=0
+
+# -P for POSIX output (one line per filesystem, never wrapped); -k for KiB so
+# the arithmetic below is in one unit. Local volumes only — a stalled network
+# mount would otherwise hang df and take the whole pane's budget with it.
+df_output=$(df -Pkl 2>/dev/null) || df_output=""
+
+if [ -z "$df_output" ]; then
+    printf '{"schema":1,"state":"error","message":"df returned nothing"}\n'
+    exit 0
+fi
+
+# Parsed in awk rather than a shell loop so the arithmetic is one pass and the
+# fields are split the same way every time.
+rows=$(echo "$df_output" | tail -n +2 | awk '
+    {
+        # Mount point is everything from field 6 onward — a path can contain
+        # spaces, and "Volumes/My Disk" is ordinary on a Mac.
+        mount = $6
+        for (i = 7; i <= NF; i++) mount = mount " " $i
+        if (mount == "") next
+
+        # macOS mounts a handful of synthetic volumes that all report the same
+        # underlying container, so listing them is seven rows of noise around
+        # the one number anybody wants. Data is kept: on an APFS boot drive it
+        # is where the usage actually lives.
+        if (mount ~ /^\/System\/Volumes\// && mount != "/System/Volumes/Data") next
+        if (mount ~ /^\/(dev|private\/var\/vm)$/) next
+
+        total = $2 + 0
+        used  = $3 + 0
+        avail = $4 + 0
+        if (total <= 0) next
+
+        pct = used * 100 / total
+        fill = used / total
+
+        name = mount
+        sub(/.*\//, "", name)
+        if (name == "") name = "/"
+
+        printf "%s\t%s\t%.4f\t%d\t%d\n", name, mount, fill, pct, avail
+    }
+')
+
+[ -n "$rows" ] || {
+    printf '{"schema":1,"state":"empty","message":"No local volumes found"}\n'
+    exit 0
+}
+
+human() {
+    awk -v kb="$1" 'BEGIN {
+        split("KB MB GB TB PB", unit, " ")
+        i = 1
+        while (kb >= 1024 && i < 5) { kb /= 1024; i++ }
+        printf (kb >= 10 || kb == int(kb)) ? "%.0f%s" : "%.1f%s", kb, unit[i]
+    }'
+}
+
+json_rows=""
+index=0
+while IFS="$(printf '\t')" read -r name mount fill pct avail; do
+    [ -n "$name" ] || continue
+    index=$((index + 1))
+    [ "$pct" -gt "$worst" ] && worst=$pct
+    count=$((count + 1))
+
+    free_label=$(human "$avail")
+    tint=$(tint_for "$pct")
+    sep=""
+    [ -n "$json_rows" ] && sep=","
+
+    json_rows="$json_rows$sep$(printf '{"id":"v%s","lead":"%s","title":"%s","subtitle":"%s","value":"%s free","footnote":"%s%% used","track":{"fill":%s,"tint":"%s"}}' \
+        "$index" \
+        "$index" \
+        "$(json_escape "$name")" \
+        "$(json_escape "$mount")" \
+        "$free_label" \
+        "$pct" \
+        "$fill" \
+        "$tint")"
+done <<EOF
+$rows
+EOF
+
+if [ "$worst" -ge 90 ]; then
+    badge='{"text":"FULL","tone":"danger"}'
+elif [ "$worst" -ge 75 ]; then
+    badge='{"text":"TIGHT","tone":"warning"}'
+else
+    badge='{"text":"OK","tone":"success"}'
+fi
+
+printf '{"schema":1,"state":"ok","header":{"title":"Disks","badge":%s,"trailing":"%s volume%s"},"rows":[%s],"actions":[{"id":"refresh","label":"Refresh","key":"r"}]}\n' \
+    "$badge" "$count" "$([ "$count" = 1 ] || echo s)" "$json_rows"

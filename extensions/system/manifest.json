@@ -1,0 +1,12 @@
+{
+  "id": "system",
+  "name": "System",
+  "description": "Disk usage for your mounted volumes.",
+  "version": "1.0.0",
+  "schema": 1,
+  "tab": { "label": "System" },
+  "run": "./run",
+  "requires": [],
+  "config": [],
+  "refresh": { "onOpen": true, "intervalSeconds": 60, "whileFocusedOnly": true }
+}
