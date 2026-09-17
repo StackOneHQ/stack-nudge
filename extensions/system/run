@@ -50,10 +50,16 @@ rows=$(echo "$df_output" | tail -n +2 | awk '
 
         # macOS mounts a handful of synthetic volumes that all report the same
         # underlying container, so listing them is seven rows of noise around
-        # the one number anybody wants. Data is kept: on an APFS boot drive it
-        # is where the usage actually lives.
+        # the one number anybody wants.
         if (mount ~ /^\/System\/Volumes\// && mount != "/System/Volumes/Data") next
         if (mount ~ /^\/(dev|private\/var\/vm)$/) next
+
+        # An APFS boot drive is split across a read-only system volume at "/"
+        # and a Data volume, sharing one container. Reporting both is what makes
+        # the pane say 440GB free twice at two different percentages — true, and
+        # unreadable. The startup disk is one thing to the person looking at it,
+        # so Data carries it and "/" is dropped.
+        if (mount == "/") { root_seen = 1; next }
 
         total = $2 + 0
         used  = $3 + 0
@@ -66,6 +72,7 @@ rows=$(echo "$df_output" | tail -n +2 | awk '
         name = mount
         sub(/.*\//, "", name)
         if (name == "") name = "/"
+        if (mount == "/System/Volumes/Data") { name = "Startup disk"; mount = "/" }
 
         printf "%s\t%s\t%.4f\t%d\t%d\n", name, mount, fill, pct, avail
     }
@@ -98,11 +105,15 @@ while IFS="$(printf '\t')" read -r name mount fill pct avail; do
     sep=""
     [ -n "$json_rows" ] && sep=","
 
-    json_rows="$json_rows$sep$(printf '{"id":"v%s","lead":"%s","title":"%s","subtitle":"%s","value":"%s free","footnote":"%s%% used","track":{"fill":%s,"tint":"%s"}}' \
+    # A subtitle that repeats the title is noise, which is what "/ /" was.
+    subtitle=""
+    [ "$mount" = "$name" ] || subtitle=$(printf ',"subtitle":"%s"' "$(json_escape "$mount")")
+
+    json_rows="$json_rows$sep$(printf '{"id":"v%s","lead":"%s","title":"%s"%s,"value":"%s free","footnote":"%s%% used","track":{"fill":%s,"tint":"%s"}}' \
         "$index" \
         "$index" \
         "$(json_escape "$name")" \
-        "$(json_escape "$mount")" \
+        "$subtitle" \
         "$free_label" \
         "$pct" \
         "$fill" \

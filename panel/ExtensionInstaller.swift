@@ -192,6 +192,175 @@ enum ExtensionInstaller {
         requires.first { !probe($0) }
     }
 
+    // MARK: - Installing
+
+    // Where the index and the packages live: attached to the app's own release,
+    // so there is one trust anchor and one fetch path rather than two.
+    static func indexURL(forRelease assets: [String: URL]) -> URL? {
+        assets["extensions-index.json"]
+    }
+
+    struct Sources {
+        // Asset name -> download URL, from the release JSON. The installer never
+        // builds a URL itself, so a hostile index cannot point the fetch
+        // anywhere the release doesn't already publish.
+        let assets: [String: URL]
+        let fetch: (URL) -> Data?
+    }
+
+    // The whole install, with every side effect injected. Returns the id on
+    // success so the caller can persist it.
+    //
+    // Order matters and is the point: verify the bytes before unpacking them,
+    // inspect the archive before extracting it, and validate the manifest before
+    // committing anything to the extensions directory.
+    static func install(_ entry: IndexEntry,
+                        from sources: Sources,
+                        into root: String = ExtensionRuntime.root,
+                        fileManager: FileManager = .default,
+                        listArchive: (String) -> (plain: String, verbose: String)? = tarListing,
+                        extract: (String, String) -> Bool = untar,
+                        probeRequirement: (String) -> Bool = interpreterWorks)
+        -> Result<String, Failure> {
+
+        guard ExtensionManifest.isValidID(entry.id) else {
+            return .failure(.invalidEntry(entry.id))
+        }
+        if let missing = missingRequirement(in: entry.requires, probe: probeRequirement) {
+            return .failure(.missingRequirement(missing))
+        }
+        guard let assetURL = sources.assets[entry.asset] else {
+            return .failure(.downloadFailed(entry.asset))
+        }
+        // The sidecar is fatal when absent, not advisory. A release missing one
+        // is tampered or incomplete, and installing unverified is the thing this
+        // whole path exists to avoid.
+        guard let sidecarURL = sources.assets["\(entry.asset).sha256"] else {
+            return .failure(.sidecarMissing(entry.asset))
+        }
+        guard let payload = sources.fetch(assetURL) else {
+            return .failure(.downloadFailed(entry.asset))
+        }
+        guard let sidecarData = sources.fetch(sidecarURL),
+              let sidecar = String(data: sidecarData, encoding: .utf8),
+              let expected = expectedHex(fromSidecar: sidecar)
+        else { return .failure(.sidecarMissing(entry.asset)) }
+
+        // The index carries a hash too, but it is the same document that named
+        // the asset — agreeing with itself proves nothing. The sidecar is a
+        // separate artifact, so it is the one that counts.
+        if case .failure(let failure) = verify(payload, expectedHex: expected) {
+            return .failure(failure)
+        }
+        guard expected.caseInsensitiveCompare(entry.sha256) == .orderedSame else {
+            return .failure(.checksumMismatch(expected: entry.sha256.lowercased(),
+                                              actual: expected))
+        }
+
+        let staging = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("stack-nudge-extension-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fileManager.removeItem(at: staging) }
+        do {
+            try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
+        } catch {
+            return .failure(.installFailed("couldn't create a staging directory"))
+        }
+
+        let archive = staging.appendingPathComponent("\(entry.id).tar.gz")
+        do { try payload.write(to: archive) } catch {
+            return .failure(.installFailed("couldn't write the download"))
+        }
+
+        // Look before unpacking. Updater extracts first and asks nothing.
+        guard let listing = listArchive(archive.path) else {
+            return .failure(.extractFailed("couldn't read the archive"))
+        }
+        if let unsafe = rejectsNonRegularEntries(inVerboseListing: listing.verbose) {
+            return .failure(unsafe)
+        }
+        if case .failure(let failure) = safeEntries(fromListing: listing.plain, id: entry.id) {
+            return .failure(failure)
+        }
+
+        let unpacked = staging.appendingPathComponent("unpacked", isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: unpacked, withIntermediateDirectories: true)
+        } catch {
+            return .failure(.installFailed("couldn't create an unpack directory"))
+        }
+        guard extract(archive.path, unpacked.path) else {
+            return .failure(.extractFailed("tar refused it"))
+        }
+
+        let source = unpacked.appendingPathComponent(entry.id, isDirectory: true)
+        guard let manifestData = fileManager.contents(
+            atPath: source.appendingPathComponent("manifest.json").path)
+        else { return .failure(.manifestRejected("no manifest.json")) }
+
+        // Validated against the same parser the runtime uses, before anything is
+        // committed — so a package whose manifest the host would refuse never
+        // reaches the extensions directory to be refused later.
+        switch ExtensionManifest.parse(manifestData) {
+        case .failure(let failure):
+            return .failure(.manifestRejected(failure.message))
+        case .success(let manifest) where manifest.id != entry.id:
+            return .failure(.manifestRejected("manifest declares id \"\(manifest.id)\""))
+        case .success:
+            break
+        }
+
+        guard let destination = ExtensionRuntime.directory(for: entry.id, in: root) else {
+            return .failure(.invalidEntry(entry.id))
+        }
+        stripQuarantine(source.path)
+        do {
+            try fileManager.createDirectory(atPath: root, withIntermediateDirectories: true)
+            // Replace rather than merge: leftovers from an older version would
+            // otherwise survive alongside the new one.
+            try? fileManager.removeItem(atPath: destination)
+            try fileManager.moveItem(atPath: source.path, toPath: destination)
+        } catch {
+            return .failure(.installFailed(error.localizedDescription))
+        }
+        return .success(entry.id)
+    }
+
+    static func remove(_ id: String,
+                       from root: String = ExtensionRuntime.root,
+                       fileManager: FileManager = .default) -> Result<String, Failure> {
+        // Goes through the same id guard as everything else, so a crafted id
+        // cannot delete a directory outside the extensions root.
+        guard let directory = ExtensionRuntime.directory(for: id, in: root) else {
+            return .failure(.invalidEntry(id))
+        }
+        guard fileManager.fileExists(atPath: directory) else { return .success(id) }
+        do { try fileManager.removeItem(atPath: directory) } catch {
+            return .failure(.installFailed(error.localizedDescription))
+        }
+        return .success(id)
+    }
+
+    // MARK: - The real side effects
+
+    static func tarListing(_ archive: String) -> (plain: String, verbose: String)? {
+        guard let plain = ProcessOutput.read("/usr/bin/tar", ["-tzf", archive], timeout: 20),
+              let verbose = ProcessOutput.read("/usr/bin/tar", ["-tvzf", archive], timeout: 20)
+        else { return nil }
+        return (plain, verbose)
+    }
+
+    static func untar(_ archive: String, into directory: String) -> Bool {
+        ProcessOutput.run("/usr/bin/tar", ["-xzf", archive, "-C", directory],
+                          timeout: 60)?.status == 0
+    }
+
+    private static func stripQuarantine(_ path: String) {
+        // Exit status ignored deliberately: xattr reports success even when the
+        // attribute was never set, and its absence is not a failure to install.
+        _ = ProcessOutput.run("/usr/bin/xattr", ["-dr", "com.apple.quarantine", path],
+                              timeout: 20)
+    }
+
     static func interpreterWorks(_ name: String) -> Bool {
         // Only a bare name, never a path: `requires` comes from a manifest and
         // this ends up as an executable.

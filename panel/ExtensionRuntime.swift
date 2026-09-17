@@ -26,7 +26,11 @@ enum ExtensionRuntime {
         case malformed(String)
     }
 
-    static func directory(for id: String) -> String? {
+    // The single id -> path guard. Everything that builds a path from an id goes
+    // through here, so a crafted id cannot reach outside the extensions root —
+    // including the install and remove paths, where it would otherwise be a
+    // delete rather than a read.
+    static func directory(for id: String, in root: String = ExtensionRuntime.root) -> String? {
         guard ExtensionManifest.isValidID(id) else { return nil }
         return "\(root)/\(id)"
     }
