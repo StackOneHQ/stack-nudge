@@ -472,11 +472,14 @@ struct SettingsView: View {
     // rows(in:) and missing from its group would be keyboard-selectable and
     // invisible, and no test could see it. Exhaustive, so a new row has to be
     // given a home here too.
+    // Both numbers, not one instead of the other. Three working extensions and
+    // one stale directory used to read "1 not loaded", with no sign the other
+    // three existed.
     private var extensionsRowValue: String {
         let installed = nav.extensionTabs.count
         let refused = nav.refusedExtensionCount
-        if refused > 0 { return "\(refused) not loaded" }
-        return installed == 0 ? "None" : "\(installed) installed"
+        let installedLabel = installed == 0 ? "None" : "\(installed) installed"
+        return refused == 0 ? installedLabel : "\(installedLabel) · \(refused) not loaded"
     }
 
     @ViewBuilder private func settingRow(_ id: SettingsRow) -> some View {

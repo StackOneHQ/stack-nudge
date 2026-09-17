@@ -182,6 +182,11 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ inputs.tag || github.ref }}
+          # This job packages and uploads; it never pushes. Leaving the default
+          # would park a repo-write token in .git/config for the rest of the run,
+          # where anything later in the job can read it — and what runs later
+          # here is a script driven by a merged extension's manifest.
+          persist-credentials: false
 
       - name: Package
         run: ./scripts/package-extensions.sh package dist/extensions

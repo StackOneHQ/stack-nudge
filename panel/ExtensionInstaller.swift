@@ -414,23 +414,38 @@ enum ExtensionInstaller {
         return output.data(using: .utf8)
     }
 
-    // Deliberately synchronous: every caller already runs on a background queue,
-    // and the alternative is the semaphore-around-a-dataTask shape that makes
-    // Updater impossible to follow.
+    // Its own session rather than URLSession.shared, so the *resource* timeout
+    // is ours: URLRequest.timeoutInterval is an idle timeout, and a response
+    // that trickles a byte at a time never trips it. shared's resource timeout
+    // is seven days.
+    private static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 20
+        configuration.timeoutIntervalForResource = 60
+        return URLSession(configuration: configuration)
+    }()
+
+    // Synchronous, because every caller is already on a background queue. The
+    // wait has no deadline of its own on purpose: an abandoning wait returns
+    // while the task is still running, so the completion writes the captured
+    // result after the reader has read it — a data race, and one that leaves
+    // the download running while the user is told it failed. The session's
+    // resource timeout is what bounds this now, so the completion always fires
+    // and always fires before the wait returns.
     private static func httpGET(_ url: URL) -> Data? {
         var request = URLRequest(url: url)
-        request.timeoutInterval = 20
         request.setValue("stack-nudge", forHTTPHeaderField: "User-Agent")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         var payload: Data?
         let done = DispatchSemaphore(value: 0)
-        URLSession.shared.dataTask(with: request) { data, response, _ in
+        let task = session.dataTask(with: request) { data, response, _ in
             if let http = response as? HTTPURLResponse, http.statusCode == 200 {
                 payload = data
             }
             done.signal()
-        }.resume()
-        _ = done.wait(timeout: .now() + 30)
+        }
+        task.resume()
+        done.wait()
         return payload
     }
 

@@ -241,6 +241,49 @@ final class ExtensionInstallTests: XCTestCase {
         }
     }
 
+    // A present-but-unreadable sidecar refuses rather than falling through to
+    // the hash the index carried — the index named the asset, so it agreeing
+    // with itself is not evidence.
+    func testAnUnparseableSidecarRefusesRatherThanTrustingTheIndex() {
+        let asset = publish("derby-1.0.0.tar.gz", payload)
+        let side = publish("derby-1.0.0.tar.gz.sha256", Data("garbage, not a hash".utf8))
+        let e = entry(sha: ExtensionInstaller.sha256Hex(payload))
+        let result = install(e,
+                             assets: ["derby-1.0.0.tar.gz": asset,
+                                      "derby-1.0.0.tar.gz.sha256": side],
+                             extract: { _, _ in XCTFail("must not extract"); return false })
+        XCTAssertEqual(result, .failure(.sidecarMissing("derby-1.0.0.tar.gz")))
+    }
+
+    // Reinstalling replaces rather than merges, or a file an older version
+    // shipped survives beside the new one — including a `run` the new manifest
+    // no longer points at.
+    func testReinstallingReplacesTheDirectoryRatherThanMergingIntoIt() {
+        let asset = publish("derby-1.0.0.tar.gz", payload)
+        let side = publish("derby-1.0.0.tar.gz.sha256", sidecar(for: payload, name: "derby-1.0.0.tar.gz"))
+        let e = entry(sha: ExtensionInstaller.sha256Hex(payload))
+        let assets = ["derby-1.0.0.tar.gz": asset, "derby-1.0.0.tar.gz.sha256": side]
+
+        // First install also drops a file the second version does not ship.
+        let withStale: (String, String) -> Bool = { [self] _, directory in
+            _ = extractor()( "", directory)
+            let dir = URL(fileURLWithPath: directory).appendingPathComponent("derby")
+            try? Data("old".utf8).write(to: dir.appendingPathComponent("leftover"))
+            return true
+        }
+        guard case .success = install(e, assets: assets, extract: withStale) else {
+            return XCTFail("first install failed")
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: "\(root)/derby/leftover"))
+
+        guard case .success = install(e, assets: assets, extract: extractor()) else {
+            return XCTFail("reinstall failed")
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: "\(root)/derby/leftover"),
+                       "a file from the previous version survived the reinstall")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: "\(root)/derby/manifest.json"))
+    }
+
     // MARK: - Removal
 
     func testRemovingDeletesTheDirectory() throws {

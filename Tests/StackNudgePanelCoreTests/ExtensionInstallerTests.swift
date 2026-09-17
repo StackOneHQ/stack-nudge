@@ -201,6 +201,16 @@ final class ExtensionInstallerTests: XCTestCase {
         XCTAssertTrue(message.contains("refusing"), message)
     }
 
+    // The whole justification for the sidecar is that the index agreeing with
+    // itself proves nothing. Only a *missing* sidecar was covered; a present
+    // but unparseable one is the tampering case that actually matters, and it
+    // must not fall back to the hash the index supplied.
+    func testAnUnparseableSidecarDoesNotFallBackToTheIndexHash() {
+        for body in ["", "   ", "not a hash at all", "\n\n"] {
+            XCTAssertNil(ExtensionInstaller.expectedHex(fromSidecar: body), body)
+        }
+    }
+
     // MARK: - The archive guard
 
     private func entries(_ listing: String, id: String = "derby")
@@ -258,17 +268,34 @@ final class ExtensionInstallerTests: XCTestCase {
         XCTAssertEqual(why?.contains("outside"), true, "\(why ?? "accepted")")
     }
 
+    // Each of the terminal guards, pinned by its own reason rather than by the
+    // generic case — an archive with no manifest is refused for that reason,
+    // which is what let the others survive mutation while looking covered.
+    func testAnEmptyArchiveIsRefusedForBeingEmpty() {
+        XCTAssertEqual(reason("\n"), "no files")
+    }
+
+    // A manifest nested somewhere below the root is not this package's manifest.
+    func testAManifestMustBeAtThePackageRoot() {
+        let why = reason("derby/\nderby/inner/manifest.json\n")
+        XCTAssertEqual(why?.contains("no manifest.json"), true, "\(why ?? "accepted")")
+    }
+
+    // docs/extensions.md claims any symlink or special file is refused, and a
+    // hard link is how you reach a file you were not given.
+    func testAVerboseListingRejectsHardLinks() {
+        let listing = "hrw-r--r--  0 root wheel 0 Jan 1 00:00 derby/run link to /etc/passwd"
+        XCTAssertEqual(ExtensionInstaller.rejectsNonRegularEntries(inVerboseListing: listing),
+                       .unsafeArchive("a hard link"))
+    }
+
     func testAnArchiveWithoutAManifestIsRefused() {
         guard case .failure(.unsafeArchive) = entries("derby/\nderby/run\n") else {
             return XCTFail("expected refusal")
         }
     }
 
-    func testAnEmptyArchiveIsRefused() {
-        guard case .failure(.unsafeArchive) = entries("\n") else {
-            return XCTFail("expected refusal")
-        }
-    }
+
 
     // The packaging script rejects symlinks at review time; this is the same
     // rule applied to the bytes that actually arrived, since the archive on a

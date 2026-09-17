@@ -3720,7 +3720,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             guard plain else { return false }
             switch event.keyCode {
             case KeyCode.escape: nav.mode = .settings
-            case KeyCode.rKey:   extensionCatalog.reload()
+            // Not on autorepeat: holding R would otherwise issue one fetch per
+            // event, each blocking a pool thread.
+            case KeyCode.rKey where !event.isARepeat: extensionCatalog.reload()
             default:             break
             }
             return true
