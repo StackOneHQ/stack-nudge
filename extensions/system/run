@@ -1,7 +1,12 @@
 #!/bin/sh
 #
-# The reference extension: disk usage for local volumes, one row per volume
-# with the used fraction as its bar.
+# The reference extension: CPU, memory and disk, each as a row whose bar is the
+# used fraction.
+#
+# There is no chart primitive in the schema, and none is needed here — a
+# proportion is what a bar is for. (A sparkline would be expressible as a
+# sprite, since that primitive is a grid of coloured cells, but it would mean
+# the extension keeping its own history between invocations.)
 #
 # It is deliberately small and dependency-free — /bin/sh and df, nothing else —
 # because its job is to be the thing you read when writing your own. See
@@ -24,9 +29,73 @@ json_escape() {
     printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
 
+human() {
+    awk -v kb="$1" 'BEGIN {
+        split("KB MB GB TB PB", unit, " ")
+        i = 1
+        while (kb >= 1024 && i < 5) { kb /= 1024; i++ }
+        printf (kb >= 10 || kb == int(kb)) ? "%.0f%s" : "%.1f%s", kb, unit[i]
+    }'
+}
+
 rows=""
 worst=0
 count=0
+json_rows=""
+index=0
+
+append_row() { # id lead title subtitle value footnote fill pct
+    local_sep=""
+    [ -n "$json_rows" ] && local_sep=","
+    subtitle_json=""
+    [ -z "$4" ] || subtitle_json=$(printf ',"subtitle":"%s"' "$(json_escape "$4")")
+    json_rows="$json_rows$local_sep$(printf '{"id":"%s","lead":"%s","title":"%s"%s,"value":"%s","footnote":"%s","track":{"fill":%s,"tint":"%s"}}' \
+        "$1" "$2" "$(json_escape "$3")" "$subtitle_json" \
+        "$(json_escape "$5")" "$(json_escape "$6")" "$7" "$(tint_for "$8")")"
+    [ "$8" -gt "$worst" ] && worst="$8"
+    count=$((count + 1))
+}
+
+# CPU. ps reports a per-process decaying average, so summing it and dividing by
+# the core count is a busy-ness figure rather than an instantaneous sample —
+# which is the right shape for a bar, and avoids `top -l 2` costing two seconds
+# of the invocation budget for a prettier number.
+cores=$(sysctl -n hw.ncpu 2>/dev/null || echo 1)
+cpu_pct=$(ps -A -o %cpu= 2>/dev/null | awk -v cores="$cores" '
+    {sum += $1}
+    END {
+        pct = (cores > 0) ? sum / cores : 0
+        if (pct > 100) pct = 100
+        printf "%d", pct + 0.5
+    }
+')
+[ -n "$cpu_pct" ] || cpu_pct=0
+append_row cpu "" "CPU" "$cores cores" "$cpu_pct%" "across all cores" \
+    "$(awk -v p="$cpu_pct" 'BEGIN {printf "%.4f", p / 100}')" "$cpu_pct"
+
+# Memory. vm_stat counts pages, so the page size comes from its own header
+# rather than being assumed — it is 16K on Apple silicon and 4K on Intel.
+mem_total=$(sysctl -n hw.memsize 2>/dev/null || echo 0)
+if [ "$mem_total" -gt 0 ]; then
+    mem_used=$(vm_stat 2>/dev/null | awk '
+        /page size of/ { for (i = 1; i <= NF; i++) if ($i == "of") page = $(i+1) }
+        /^Pages active/      { active = $3 }
+        /^Pages wired down/  { wired = $4 }
+        /^Pages occupied by compressor/ { compressed = $5 }
+        END {
+            gsub(/\./, "", active); gsub(/\./, "", wired); gsub(/\./, "", compressed)
+            # Active + wired + compressed is what macOS itself counts as used:
+            # inactive pages are reclaimable and counting them reads as a leak.
+            printf "%.0f", (active + wired + compressed) * page
+        }
+    ')
+    [ -n "$mem_used" ] || mem_used=0
+    mem_pct=$(awk -v u="$mem_used" -v t="$mem_total" 'BEGIN {printf "%d", (u * 100 / t) + 0.5}')
+    mem_free_label=$(human "$(awk -v u="$mem_used" -v t="$mem_total" 'BEGIN {printf "%d", (t - u) / 1024}')")
+    append_row mem "" "Memory" "$(human "$(awk -v t="$mem_total" 'BEGIN {printf "%d", t / 1024}')") installed" \
+        "$mem_free_label free" "$mem_pct% used" \
+        "$(awk -v p="$mem_pct" 'BEGIN {printf "%.4f", p / 100}')" "$mem_pct"
+fi
 
 # -P for POSIX output (one line per filesystem, never wrapped); -k for KiB so
 # the arithmetic below is in one unit. Local volumes only — a stalled network
@@ -83,17 +152,6 @@ rows=$(echo "$df_output" | tail -n +2 | awk '
     exit 0
 }
 
-human() {
-    awk -v kb="$1" 'BEGIN {
-        split("KB MB GB TB PB", unit, " ")
-        i = 1
-        while (kb >= 1024 && i < 5) { kb /= 1024; i++ }
-        printf (kb >= 10 || kb == int(kb)) ? "%.0f%s" : "%.1f%s", kb, unit[i]
-    }'
-}
-
-json_rows=""
-index=0
 while IFS="$(printf '\t')" read -r name mount fill pct avail; do
     [ -n "$name" ] || continue
     index=$((index + 1))
@@ -122,13 +180,15 @@ done <<EOF
 $rows
 EOF
 
+# The badge reflects the worst of everything on screen, so the tab says
+# something useful without being opened.
 if [ "$worst" -ge 90 ]; then
-    badge='{"text":"FULL","tone":"danger"}'
+    badge='{"text":"HIGH","tone":"danger"}'
 elif [ "$worst" -ge 75 ]; then
-    badge='{"text":"TIGHT","tone":"warning"}'
+    badge='{"text":"BUSY","tone":"warning"}'
 else
     badge='{"text":"OK","tone":"success"}'
 fi
 
-printf '{"schema":1,"state":"ok","header":{"title":"Disks","badge":%s,"trailing":"%s volume%s"},"rows":[%s],"actions":[{"id":"refresh","label":"Refresh","key":"r"}]}\n' \
-    "$badge" "$count" "$([ "$count" = 1 ] || echo s)" "$json_rows"
+printf '{"schema":1,"state":"ok","header":{"title":"System","badge":%s,"trailing":"%s%% peak"},"rows":[%s],"actions":[{"id":"refresh","label":"Refresh","key":"r"}]}\n' \
+    "$badge" "$worst" "$json_rows"

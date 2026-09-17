@@ -1,8 +1,8 @@
 {
   "id": "system",
   "name": "System",
-  "description": "Disk usage for your mounted volumes.",
-  "version": "1.0.0",
+  "description": "CPU, memory and disk usage at a glance.",
+  "version": "1.1.0",
   "schema": 1,
   "tab": { "label": "System" },
   "run": "./run",
