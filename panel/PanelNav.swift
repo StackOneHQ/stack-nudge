@@ -1109,12 +1109,17 @@ final class PanelNav: ObservableObject {
             return [.slackPaste, .slackIdentity, .slackTest,
                     .slackEnabled, .slackIdle, .slackDetail, .slackStop,
                     .githubLinks, .hideShipped, .disconnectGithub]
+        // Its own category rather than a row under Actions: extensions declare
+        // STACKNUDGE_EXT_ keys, so per-extension configuration needs somewhere
+        // to live, and it should not arrive by growing an unrelated category.
+        case .extensions:
+            return [.browseExtensions]
         case .panel:
             return [.hotkey, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin, .tabTitleNames]
         case .events:
             return [.historyPerSession, .eventHistory, .clearHistory]
         case .actions:
-            return [.editPhrases, .browseExtensions, .checkPermissions, .openConfig,
+            return [.editPhrases, .checkPermissions, .openConfig,
                     .releaseNotes, .checkUpdates, .uninstall, .quit]
         }
     }
@@ -1874,7 +1879,7 @@ struct ExtensionTab: Equatable, Identifiable {
 // subjects — "Toggles" held ten rows spanning notifications, panel behaviour and
 // session naming, while "Hotkey" was a category of one.
 enum SettingsCategory: String, CaseIterable {
-    case notifications, voice, appearance, usage, integrations, panel, events, actions
+    case notifications, voice, appearance, usage, integrations, extensions, panel, events, actions
 
     // Kept short: the sidebar is ~120pt.
     var label: String {
@@ -1884,6 +1889,7 @@ enum SettingsCategory: String, CaseIterable {
         case .appearance:    return "Appearance"
         case .usage:         return "Usage"
         case .integrations:  return "Integrations"
+        case .extensions:    return "Extensions"
         case .panel:         return "Panel"
         case .events:        return "Events"
         case .actions:       return "Actions"

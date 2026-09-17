@@ -137,6 +137,41 @@ final class SettingsCategoryTests: XCTestCase {
     }
 }
 
+// Extensions get their own category rather than a row inside another one,
+// because per-extension configuration has to land somewhere and growing an
+// unrelated category is how the flat list came back last time.
+@MainActor
+final class ExtensionsCategoryTests: XCTestCase {
+
+    func testExtensionsIsItsOwnCategory() {
+        XCTAssertTrue(SettingsCategory.allCases.contains(.extensions))
+        XCTAssertEqual(SettingsCategory.extensions.label, "Extensions")
+    }
+
+    func testTheBrowserRowLivesThere() {
+        let nav = PanelNav()
+        XCTAssertEqual(nav.rows(in: .extensions), [.browseExtensions])
+    }
+
+    // It used to sit under Actions, and moving it must not leave it in both.
+    func testTheBrowserRowIsNotAlsoSomewhereElse() {
+        let nav = PanelNav()
+        let elsewhere = SettingsCategory.allCases
+            .filter { $0 != .extensions }
+            .flatMap { nav.rows(in: $0) }
+        XCTAssertFalse(elsewhere.contains(.browseExtensions))
+    }
+
+    // Entering the category selects its first row, and that row must be the one
+    // the pane is actually showing — the same invariant the attention-row fix
+    // exists to keep.
+    func testEnteringTheCategorySelectsTheBrowserRow() {
+        let nav = PanelNav()
+        nav.settingsCategory = .extensions
+        XCTAssertEqual(nav.selectedRow, .browseExtensions)
+    }
+}
+
 // Proves the reported defect: attention rows prepend to settingsRows but render
 // above the split, not in the detail. Resetting the index to a literal 0 on
 // category change therefore selects an invisible row, and Enter fires it.
