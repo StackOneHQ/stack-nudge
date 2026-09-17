@@ -618,6 +618,13 @@ struct SettingsView: View {
                         proxy.scrollTo(newIndex, anchor: .center)
                     }
                 }
+                // Entering a category always lands on its first row, so the
+                // index is the same number every time and onChange above never
+                // fires. Without this the pane keeps the previous category's
+                // scroll offset and a short category opens part-scrolled.
+                .onChange(of: nav.settingsCategory) { _ in
+                    proxy.scrollTo(0, anchor: .top)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .top) {
@@ -647,10 +654,11 @@ struct SettingsView: View {
                     .fill(selected ? Color.accentColor.opacity(0.12) : .clear)
             )
             .contentShape(Rectangle())
-            .onTapGesture {
-                nav.settingsCategory = category
-                nav.settingsDetailFocused = true
-            }
+            // Selecting, not entering. The Usage tab's two-level model is the
+            // precedent: clicking a row in the list picks it, and →/Enter is
+            // what steps inside. Focusing the detail here meant a click on the
+            // sidebar silently repurposed ↑/↓ from categories to rows.
+            .onTapGesture { nav.settingsCategory = category }
     }
 
     private var detailRows: some View {

@@ -151,4 +151,96 @@ final class SettingsAttentionSelectionTests: XCTestCase {
                           "Enter here would wire every detected agent's hooks")
         XCTAssertEqual(nav.selectedRow, nav.rows(in: .appearance).first)
     }
+
+    // The same defect reached by a timer instead of a keypress. The attention
+    // rows sit in front of the category's, so their count moving shifts every
+    // index behind it — and the update check is a repeating Timer while the
+    // permissions probe is an async callback, so both land while Settings is
+    // open and nobody has touched the keyboard.
+    func testAnUpdateArrivingDoesNotSlideTheSelectionOntoTheUpdateRow() {
+        let nav = PanelNav()
+        nav.settingsCategory = .appearance
+        let expected = nav.selectedRow
+
+        nav.updateAvailable = "1.35.0"
+
+        XCTAssertNotEqual(nav.selectedRow, .update,
+                          "Enter here would start the updater")
+        XCTAssertEqual(nav.selectedRow, expected, "the selection must not move at all")
+    }
+
+    func testPermissionsGoingMissingDoesNotSlideTheSelection() {
+        let nav = PanelNav()
+        nav.settingsCategory = .voice
+        let expected = nav.selectedRow
+
+        nav.missingPermissions = [.notifications]
+
+        XCTAssertNotEqual(nav.selectedRow, .permissions)
+        XCTAssertEqual(nav.selectedRow, expected)
+    }
+
+    func testAnAgentBecomingUnwiredDoesNotSlideTheSelection() {
+        let nav = PanelNav()
+        nav.settingsCategory = .panel
+        let expected = nav.selectedRow
+
+        nav.unwiredAgents = [.codex]
+
+        XCTAssertNotEqual(nav.selectedRow, .wireAgents,
+                          "Enter here would rewrite every detected agent's hooks")
+        XCTAssertEqual(nav.selectedRow, expected)
+    }
+
+    // The selection is held by row identity, so it follows its row rather than
+    // its number — the whole point of anchoring instead of re-clamping.
+    func testTheSelectionFollowsItsRowWhenAttentionRowsAppear() {
+        let nav = PanelNav()
+        nav.settingsCategory = .appearance
+        nav.selectNextRow()
+        let expected = nav.selectedRow
+        let indexBefore = nav.selectedSettingIndex
+
+        nav.updateAvailable = "1.35.0"
+
+        XCTAssertEqual(nav.selectedRow, expected, "same row")
+        XCTAssertEqual(nav.selectedSettingIndex, indexBefore + 1, "moved along by one")
+    }
+
+    // A deliberate selection on an attention row is still a selection, and must
+    // survive an unrelated attention row arriving beside it.
+    func testASelectedAttentionRowKeepsTheSelection() {
+        let nav = PanelNav()
+        nav.unwiredAgents = [.codex]
+        nav.settingsCategory = .appearance
+        nav.selectedSettingIndex = nav.index(of: .wireAgents)
+        XCTAssertEqual(nav.selectedRow, .wireAgents)
+
+        nav.updateAvailable = "1.35.0"
+
+        XCTAssertEqual(nav.selectedRow, .wireAgents)
+    }
+
+    // A row that goes away entirely hands the selection to the category rather
+    // than to whatever inherited its index — inheriting an index is exactly how
+    // a keypress meant for a toggle ends up starting an updater.
+    func testASelectionOnAVanishedRowFallsBackToTheCategory() {
+        // Three attention rows, selection on the first. Wiring the agents
+        // removes two of them, so the selected row is gone and the index it
+        // held now belongs to the update banner. Keeping the number would put
+        // the selection there — Enter starts the updater — which is the whole
+        // reason a vanished row falls back to the category instead.
+        let nav = PanelNav()
+        nav.unwiredAgents = [.codex]
+        nav.updateAvailable = "1.35.0"
+        nav.settingsCategory = .appearance
+        nav.selectedSettingIndex = nav.index(of: .wireAgents)
+        XCTAssertEqual(nav.selectedRow, .wireAgents)
+
+        nav.unwiredAgents = []
+
+        XCTAssertNotEqual(nav.selectedRow, .update,
+                          "the vanished row's index now belongs to the updater")
+        XCTAssertEqual(nav.selectedRow, nav.rows(in: .appearance).first)
+    }
 }

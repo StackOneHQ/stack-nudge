@@ -207,7 +207,18 @@ struct SettingsActions {
 final class PanelNav: ObservableObject {
 
     @Published var mode: PanelMode = .events
-    @Published var selectedSettingIndex: Int = 0
+    @Published var selectedSettingIndex: Int = 0 {
+        didSet { anchoredSettingRow = selectedRow }
+    }
+
+    // What the selection is actually *on*, remembered so it can survive the row
+    // list changing underneath it. The index alone cannot: the attention rows
+    // sit in front of the category's, and their count moves at runtime — the
+    // update check is a repeating timer and the permissions probe is async — so
+    // an index parked at the boundary silently slides onto a banner row the
+    // pane isn't even showing in that position. Enter there runs the updater,
+    // or rewrites every detected agent's hook config.
+    private var anchoredSettingRow: SettingsRow?
 
     @Published var hotkeyDisplay:   String = "cmd+opt+n"
     @Published var recordingHotkey: Bool = false
@@ -268,7 +279,9 @@ final class PanelNav: ObservableObject {
     // CFBundleShortVersionString — nil otherwise. Drives both the Settings
     // tab dot badge and the conditional "Update available" row at the top
     // of the Settings list. Populated by UpdateChecker.
-    @Published var updateAvailable: String?
+    @Published var updateAvailable: String? {
+        didSet { if oldValue != updateAvailable { reanchorSettingSelection() } }
+    }
     // Runtime permissions (Accessibility / Automation / Notifications) that
     // aren't granted yet — empty means all set. Drives the orange dot on the
     // Settings tab and the "Permissions needed" banner pinned above the
@@ -276,7 +289,9 @@ final class PanelNav: ObservableObject {
     // the app can't fully function without the grant either way. Refreshed on
     // launch and every Settings.onAppear (see refreshPermissions) so granting
     // a permission and coming back clears it. Populated by refreshPermissions.
-    @Published var missingPermissions: [SettingsPane] = []
+    @Published var missingPermissions: [SettingsPane] = [] {
+        didSet { if oldValue != missingPermissions { reanchorSettingSelection() } }
+    }
     // Release notes body (markdown) for the available update — shown in the
     // confirmation step. nil before notes have loaded or when fetch failed
     // (e.g. private repo without auth).
@@ -992,7 +1007,9 @@ final class PanelNav: ObservableObject {
     // the banner if it leaves and re-enters the unwired set — eg they
     // wire it manually, then delete the entry; or upgrade lands new
     // event types we should wire.
-    @Published var unwiredAgents:    [BootstrapAgent] = []
+    @Published var unwiredAgents:    [BootstrapAgent] = [] {
+        didSet { if oldValue != unwiredAgents { reanchorSettingSelection() } }
+    }
     @Published var dismissedAgents:  Set<String>      = []
     // Transient confirmation state. When the user clicks Set up on the
     // reconciliation banner, `recentlyWiredAgents` holds the agents we
@@ -1100,6 +1117,22 @@ final class PanelNav: ObservableObject {
     // into the banners, which is where they're drawn.
     func selectFirstCategoryRow() {
         selectedSettingIndex = settingsAttentionRows.count
+    }
+
+    // Put the selection back on the row it was on, wherever that row has moved
+    // to. Called whenever the attention rows change, because they are what shift
+    // every index behind them.
+    //
+    // A row that has gone entirely — the update that was installed, the agent
+    // that got wired — hands the selection to the first row of the category
+    // rather than to whatever inherited its index, since inheriting an index is
+    // exactly how a keypress meant for a toggle ends up starting an updater.
+    func reanchorSettingSelection() {
+        guard let anchored = anchoredSettingRow else { return selectFirstCategoryRow() }
+        guard let index = settingsRows.firstIndex(of: anchored) else {
+            return selectFirstCategoryRow()
+        }
+        if selectedSettingIndex != index { selectedSettingIndex = index }
     }
 
     // Which category holds a row. index(of:) answers 0 for a row outside the
