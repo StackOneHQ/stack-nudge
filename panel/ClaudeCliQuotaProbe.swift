@@ -35,23 +35,16 @@ final class ClaudeCliQuotaProbe {
     // of the process, and stop paying for the check.
     private var strictMcpConfigSupported = true
 
-    // How fresh Claude Code's own usage cache has to be before the probe serves
-    // it instead of spawning the CLI. Matched to PanelController's fastest quota
-    // poll: within one interval the cache is, by definition, no older than the
-    // reading the spawn it replaces would have produced.
-    //
-    // Deliberately tight. Measured against a live account, `claude /usage` does
-    // NOT serve its own cache on a normal run — it refreshes and writes back —
-    // and Claude Code only rewrites the file every several minutes, so a 464s-old
-    // cache read 6%/62% where the CLI read 9%/63%. Widening this would trade a
-    // spawn for numbers that are visibly wrong during active use.
+    // Matched to PanelController's fastest quota poll, and deliberately tight:
+    // `claude /usage` refreshes rather than serving its own cache, and Claude
+    // Code only rewrites the file every few minutes, so a 464s-old cache read
+    // 6%/62% against the CLI's 9%/63%. Widening this buys a spawn back in
+    // exchange for numbers that are wrong during active use.
     static let cacheMaxAge: TimeInterval = 60
 
-    // When the reported snapshot was actually measured. Date() for a CLI read,
-    // the cache's own `fetchedAt` when the snapshot came from disk. The panel
-    // dates the Usage tab from this, so a fallback reading can't be presented as
-    // if it had just been taken. Read after the completion fires, like
-    // cliMissing and lastProbeFailed.
+    // When the snapshot was measured: Date() for a CLI read, the cache's
+    // `fetchedAt` when it came from disk. The panel dates the Usage tab from
+    // this. Read after the completion fires, like cliMissing.
     private(set) var snapshotAsOf: Date?
 
     var isRateLimited: Bool {
@@ -93,13 +86,8 @@ final class ClaudeCliQuotaProbe {
                     fetchedPlan = plan
                 }
             }
-            // Claude Code caches this exact payload to ~/.claude.json whenever it
-            // refreshes its own bars, so while a session is running the answer is
-            // already on disk and the spawn below buys nothing. Skip it while the
-            // cache is younger than a poll interval — that is the window in which
-            // it cannot be staler than what a fresh spawn would return anyway.
-            // See ClaudeUsageCache for why `fetchedAt` gates this rather than
-            // the file merely existing.
+            // While a session is running the answer is already on disk and the
+            // spawn below buys nothing. See ClaudeUsageCache.
             var strictRejected = false
             var measuredAt = Date()
             let result: ParseResult
@@ -132,10 +120,9 @@ final class ClaudeCliQuotaProbe {
                 }
             }
 
-            // The CLI broke. Claude Code may still have left a usable reading on
-            // disk from before it did — at any age, since the alternative here is
-            // "Couldn't refresh" over nothing at all. Read off-main and only on
-            // the failing path, so the common case never parses the file twice.
+            // CLI broke, but a reading may still be on disk — at any age, since
+            // the alternative is "Couldn't refresh" over nothing. Only parsed on
+            // the failing path, so the common case never reads the file twice.
             var fallback: ClaudeUsageCache.Reading?
             if case .hardFail = result {
                 fallback = ClaudeUsageCache.read(maxAge: .infinity)
@@ -181,12 +168,10 @@ final class ClaudeCliQuotaProbe {
         }
     }
 
-    // Whether a disk reading should stand in after the CLI hard-failed. It has to
-    // beat what we last reported, or a file left over from an earlier session
-    // would walk a good snapshot backwards the first time the CLI timed out —
-    // turning one bad tick into visibly wrong numbers instead of a held-stale
-    // note. With nothing reported yet (cold start, broken CLI) any reading wins,
-    // which is the case this exists for.
+    // A disk reading has to beat what we last reported, or a file left from an
+    // earlier session would walk a good snapshot backwards the first time the CLI
+    // timed out. With nothing reported yet — cold start, broken CLI — any reading
+    // wins, which is the case this exists for.
     static func fallbackReading(_ reading: ClaudeUsageCache.Reading?,
                                 lastReportedAt: Date?) -> ClaudeUsageCache.Reading? {
         guard let reading,

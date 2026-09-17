@@ -15,23 +15,18 @@ struct CodexQuotaSnapshot: Equatable {
     var hasTier: Bool { primary != nil || secondary != nil }
 }
 
-// Codex account rate limits, from `codex app-server` where it's available and
-// the newest rollout JSONL under ~/.codex/sessions where it isn't.
+// Codex account rate limits: `codex app-server` where it's available, and the
+// newest rollout JSONL under ~/.codex/sessions where it isn't.
 //
-// The rollout is the older source and the weaker one. Codex records limits on
-// each `token_count` event at `payload.rate_limits`, with `used_percent` on a
-// 0–100 scale, a unix `resets_at` and a `window_minutes` — but only while a CLI
-// turn runs on this machine. Quota spent on the web, in the IDE, in the desktop
-// app or on another Mac never reaches it, so the file drifts behind the account
-// it claims to describe, and once its own window expires `tier` drops it and the
-// tab goes blank. Measured here: a two-day-old rollout reported the weekly window
-// at 29% against a live 36%, inside the same window instance, and offered no
-// 5-hour window at all.
+// The rollout records limits on each `token_count` event at
+// `payload.rate_limits`, but only while a CLI turn runs on this machine — quota
+// spent on the web, in the IDE or on another Mac never reaches it, and once its
+// own window expires `tier` drops it and the tab goes blank. Measured: a
+// two-day-old rollout read 29% against a live 36%, inside the same window
+// instance, with no 5-hour window at all. Hence app-server first.
 //
-// So the app-server goes first (see CodexAppServer) and the rollout stays as the
-// fallback for a `codex` too old to serve it. Returns nil for API-key auth (no
-// limits reported either way) or when neither source has anything, which the
-// Usage tab treats as "no Codex usage to show".
+// nil for API-key auth or when neither source has anything, which the Usage tab
+// treats as "no Codex usage to show".
 final class CodexQuotaProbe {
 
     private let sessionsDir = "\(NSHomeDirectory())/.codex/sessions"
@@ -42,11 +37,9 @@ final class CodexQuotaProbe {
     private var cacheKey: String?
     private var cached: CodexQuotaSnapshot?
 
-    // Latched off once `codex app-server` spawns and dies without a line of
-    // stdout, which is the shape an unknown subcommand makes. Same reasoning as
-    // ClaudeCliQuotaProbe's --strict-mcp-config latch: detect it once, then stop
-    // paying for a spawn that can't work on this install. Only ever touched on
-    // probeQueue.
+    // Latched off once app-server spawns and dies with no stdout — an unknown
+    // subcommand. Same reasoning as the --strict-mcp-config latch: detect once,
+    // stop paying for a spawn that can't work. Only touched on probeQueue.
     private var appServerSupported = true
 
     // Serialises read() so overlapping polls — the 60s/5min timer firing while a
@@ -71,10 +64,8 @@ final class CodexQuotaProbe {
                 return snapshot
             case .unsupported:
                 appServerSupported = false
-            // `empty` is the binary answering with nothing usable and `cliMissing`
-            // is not being a Codex user. Neither says anything about whether the
-            // subcommand exists, so neither latches — but both fall through to
-            // the rollout, which on a cold `empty` may still hold a live window.
+            // Neither says anything about whether the subcommand exists, so
+            // neither latches — but both fall through to the rollout.
             case .empty, .cliMissing:
                 break
             }

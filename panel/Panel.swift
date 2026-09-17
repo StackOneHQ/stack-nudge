@@ -1774,11 +1774,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             guard let self else { return }
             self.nav.quotaSyncing = false
             if let snapshot {
-                // When the numbers were measured, not when they arrived. A
-                // snapshot read from Claude Code's own cache — the fast path, or
-                // the fallback after the CLI breaks — is older than this tick,
-                // and dating it Date() would let the pane call a stale reading
-                // current. See ClaudeCliQuotaProbe.snapshotAsOf.
+                // When the numbers were measured, not when they arrived: a
+                // snapshot read from Claude Code's cache is older than this tick.
                 let measuredAt = self.claudeCliQuotaProbe.snapshotAsOf ?? Date()
                 self.nav.quota = snapshot
                 self.nav.quotaErrors[.claude] = nil

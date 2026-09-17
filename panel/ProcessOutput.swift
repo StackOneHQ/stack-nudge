@@ -114,9 +114,8 @@ enum ProcessOutput {
         ].first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
-    // Resolve the `codex` CLI. Same minimal-PATH rationale as claude() above,
-    // and the same escape hatch for version managers that install outside these
-    // paths. The npm install lands in ~/.local/bin; Homebrew covers the cask.
+    // Resolve the `codex` CLI. Same minimal-PATH rationale and version-manager
+    // escape hatch as claude() above.
     static func codex() -> String? {
         if let override = ConfigFile.read()["STACKNUDGE_CODEX_PATH"], !override.isEmpty {
             return FileManager.default.isExecutableFile(atPath: override) ? override : nil
