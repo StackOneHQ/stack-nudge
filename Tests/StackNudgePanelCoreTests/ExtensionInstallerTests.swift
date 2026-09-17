@@ -86,6 +86,83 @@ final class ExtensionInstallerTests: XCTestCase {
         XCTAssertFalse(ExtensionInstaller.isSafeAssetName(".."))
     }
 
+    // MARK: - Reaching the release
+
+    // The anonymous GitHub API is sixty requests an hour per machine, shared
+    // with everything else on it, so a 403 here is ordinary. UpdateChecker
+    // already falls back to the local gh CLI; without the same fallback the
+    // browser tells somebody whose network is fine that it couldn't download.
+    func testTheReleaseFallsBackToTheGHCLI() {
+        var askedGH: String?
+        let data = ExtensionInstaller.releaseJSON(http: { _ in nil },
+                                                  gh: { path in
+                                                      askedGH = path
+                                                      return Data("{}".utf8)
+                                                  })
+        XCTAssertNotNil(data)
+        XCTAssertEqual(askedGH, UpdateChecker.latestGHPath)
+    }
+
+    // The CLI is the fallback, not the first choice — it spawns a process.
+    func testTheCLIIsNotUsedWhenTheAPIAnswers() {
+        var ghCalls = 0
+        let data = ExtensionInstaller.releaseJSON(http: { _ in Data("{}".utf8) },
+                                                  gh: { _ in ghCalls += 1; return nil })
+        XCTAssertNotNil(data)
+        XCTAssertEqual(ghCalls, 0)
+    }
+
+    func testBothPathsFailingIsReportedAsUnreachableRatherThanEmpty() {
+        XCTAssertNil(ExtensionInstaller.releaseJSON(http: { _ in nil }, gh: { _ in nil }))
+        let message = ExtensionInstaller.Failure.catalogueUnavailable.message
+        XCTAssertTrue(message.contains("rate-limiting"), message)
+    }
+
+    // MARK: - The catalogue on a release
+
+    private func releaseJSON(_ assets: [String]) -> Data {
+        let entries = assets.map {
+            "{\"name\":\"\($0)\",\"browser_download_url\":\"https://example.test/\($0)\"}"
+        }.joined(separator: ",")
+        return Data("{\"tag_name\":\"v1.0.0\",\"assets\":[\(entries)]}".utf8)
+    }
+
+    // A release published before extensions existed carries no index. That is an
+    // empty catalogue, not a failure — otherwise every user on an older release
+    // sees an error for something that is working correctly.
+    func testAReleaseWithoutAnIndexIsAnEmptyCatalogue() {
+        let result = ExtensionInstaller.catalogue(
+            fromReleaseJSON: releaseJSON(["stack-nudge-1.0.0-macos-arm64.tar.gz"]),
+            fetch: { _ in XCTFail("nothing to fetch"); return nil })
+        guard case .success(let entries) = result else { return XCTFail("\(result)") }
+        XCTAssertTrue(entries.isEmpty)
+    }
+
+    func testAnIndexOnTheReleaseIsFetchedAndParsed() {
+        let index = Data("{\"schema\":1,\"extensions\":[]}".utf8)
+        let result = ExtensionInstaller.catalogue(
+            fromReleaseJSON: releaseJSON(["extensions-index.json"]),
+            fetch: { _ in index })
+        guard case .success = result else { return XCTFail("\(result)") }
+    }
+
+    func testAnIndexThatCannotBeFetchedIsAFailureNotAnEmptyList() {
+        let result = ExtensionInstaller.catalogue(
+            fromReleaseJSON: releaseJSON(["extensions-index.json"]),
+            fetch: { _ in nil })
+        guard case .failure(.downloadFailed) = result else { return XCTFail("\(result)") }
+    }
+
+    func testAssetsAreReadFromTheReleaseJSON() {
+        let assets = ExtensionInstaller.assets(
+            fromReleaseJSON: releaseJSON(["a.tar.gz", "a.tar.gz.sha256"]))
+        XCTAssertEqual(Set(assets.keys), ["a.tar.gz", "a.tar.gz.sha256"])
+    }
+
+    func testMalformedReleaseJSONYieldsNoAssets() {
+        XCTAssertTrue(ExtensionInstaller.assets(fromReleaseJSON: Data("nonsense".utf8)).isEmpty)
+    }
+
     // MARK: - Checksums
 
     func testTheSidecarFormatIsHashThenName() {

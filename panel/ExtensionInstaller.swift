@@ -35,6 +35,7 @@ enum ExtensionInstaller {
         case missingRequirement(String)
         case manifestRejected(String)
         case downloadFailed(String)
+        case catalogueUnavailable
         case extractFailed(String)
         case installFailed(String)
 
@@ -51,6 +52,12 @@ enum ExtensionInstaller {
             case .missingRequirement(let what): return "needs \(what), which isn't installed"
             case .manifestRejected(let why):   return "the package's manifest was refused — \(why)"
             case .downloadFailed(let what):    return "couldn't download \(what)"
+            case .catalogueUnavailable:
+                // Both paths failed. Anonymous GitHub is sixty requests an hour
+                // per machine, so this is usually a wait rather than a fault.
+                return "couldn't reach GitHub — it may be rate-limiting this "
+                    + "machine, or be unreachable. Installing the gh CLI lets "
+                    + "stack-nudge use your own quota."
             case .extractFailed(let why):      return "couldn't unpack the download — \(why)"
             case .installFailed(let why):      return "couldn't install — \(why)"
             }
@@ -376,15 +383,35 @@ enum ExtensionInstaller {
     }
 
     static func fetchCatalogue() -> Result<[IndexEntry], Failure> {
-        guard let release = httpGET(UpdateChecker.latestReleaseURL) else {
-            return .failure(.downloadFailed("the release list"))
-        }
+        guard let release = releaseJSON() else { return .failure(.catalogueUnavailable) }
         return catalogue(fromReleaseJSON: release, fetch: httpGET)
     }
 
     static func releaseSources() -> Sources {
-        let published = httpGET(UpdateChecker.latestReleaseURL).map(assets(fromReleaseJSON:)) ?? [:]
-        return Sources(assets: published, fetch: httpGET)
+        Sources(assets: releaseJSON().map(assets(fromReleaseJSON:)) ?? [:], fetch: httpGET)
+    }
+
+    // The anonymous GitHub API is rate-limited per IP — sixty an hour, shared
+    // with everything else on the machine — so a 403 here is ordinary rather
+    // than exceptional, and it has nothing to do with the release being absent.
+    // UpdateChecker already falls back to the local gh CLI for this; without the
+    // same fallback the browser reports "couldn't download the release list" to
+    // somebody whose network is fine.
+    //
+    // Only the API call needs it. The assets themselves are served from a
+    // different host and are not rate-limited this way.
+    static func releaseJSON(http: (URL) -> Data? = httpGET,
+                            gh: (String) -> Data? = ghAPI) -> Data? {
+        if let data = http(UpdateChecker.latestReleaseURL) { return data }
+        return gh(UpdateChecker.latestGHPath)
+    }
+
+    static func ghAPI(_ path: String) -> Data? {
+        guard let gh = ProcessOutput.gh() else { return nil }
+        guard let output = ProcessOutput.read(gh, ["api", path], timeout: 20),
+              !output.isEmpty
+        else { return nil }
+        return output.data(using: .utf8)
     }
 
     // Deliberately synchronous: every caller already runs on a background queue,
@@ -394,6 +421,7 @@ enum ExtensionInstaller {
         var request = URLRequest(url: url)
         request.timeoutInterval = 20
         request.setValue("stack-nudge", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         var payload: Data?
         let done = DispatchSemaphore(value: 0)
         URLSession.shared.dataTask(with: request) { data, response, _ in
