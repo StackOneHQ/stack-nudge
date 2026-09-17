@@ -27,6 +27,13 @@ final class ClaudeCliQuotaProbe {
     private var retryAfterUntil: Date?
     private var lastSubscriptionType: String?
     private var subscriptionFetched = false
+    // `--strict-mcp-config` makes the /usage probe skip loading MCP servers it
+    // never needs (see usageArgs). A `claude` predating the flag rejects it
+    // (exit 1, empty stdout), which would read as a permanent hard-fail — the
+    // exact "Couldn't refresh" this probe exists to avoid, but forever rather
+    // than intermittently. We detect that shape once, drop the flag for the rest
+    // of the process, and stop paying for the check.
+    private var strictMcpConfigSupported = true
 
     var isRateLimited: Bool {
         guard let until = retryAfterUntil else { return false }
@@ -52,6 +59,9 @@ final class ClaudeCliQuotaProbe {
         }
         let needsSubscriptionFetch = !subscriptionFetched
         let priorPlan = lastSubscriptionType
+        // Captured on main like the two above; the latch is written back on main
+        // in the completion, matching this class's threading model.
+        let strictSupported = strictMcpConfigSupported
 
         probeQueue.async { [weak self] in
             var fetchedPlan: String? = priorPlan
@@ -64,9 +74,18 @@ final class ClaudeCliQuotaProbe {
                     fetchedPlan = plan
                 }
             }
-            let raw = ProcessOutput.read(
-                path, ["--print", "--output-format", "json", "/usage"],
-                timeout: 10, cwd: Self.probeCwd)
+            // /usage is a client-side intercept that needs no MCP servers, so
+            // usageArgs adds --strict-mcp-config to load none: without it every
+            // spawn boots the user's whole MCP config (60+ servers on a heavy
+            // setup), and that variable startup tail is what pushed an otherwise
+            // -fine probe past a 10s timeout under load — a spurious hard-fail on
+            // the Usage tab. The intercept's own local-session scan also slows on
+            // a busy machine, so 20s leaves headroom rather than sitting on the
+            // edge. runUsage drops the flag and retries once if this CLI is too
+            // old to know it (see strictMcpConfigSupported).
+            let (raw, strictRejected) = Self.runUsage(strictMcpConfig: strictSupported) {
+                ProcessOutput.read(path, $0, timeout: 20, cwd: Self.probeCwd)
+            }
             let result = Self.parseEnvelope(raw)
             // Every `claude --print` spawns a new session rollout under
             // ~/.claude/projects/<cwd-encoded>/<uuid>.jsonl. At a 60s poll
@@ -80,6 +99,7 @@ final class ClaudeCliQuotaProbe {
 
             DispatchQueue.main.async {
                 guard let self else { return }
+                if strictRejected { self.strictMcpConfigSupported = false }
                 if needsSubscriptionFetch { self.subscriptionFetched = true }
                 self.lastSubscriptionType = fetchedPlan
 
@@ -103,6 +123,43 @@ final class ClaudeCliQuotaProbe {
                 }
             }
         }
+    }
+
+    // MARK: - Invocation
+
+    // Args for `claude --print /usage`. --strict-mcp-config loads zero MCP
+    // servers, which the intercept never needs — see the call site in fetch().
+    static func usageArgs(strictMcpConfig: Bool) -> [String] {
+        var args = ["--print"]
+        if strictMcpConfig { args.append("--strict-mcp-config") }
+        args += ["--output-format", "json", "/usage"]
+        return args
+    }
+
+    // Runs the /usage probe and, if a `claude` too old to know --strict-mcp-config
+    // rejects it, retries once without the flag. Returns the raw envelope plus
+    // whether the flag was rejected, so fetch() can latch it off for the process.
+    // `run` is injected so this is unit-testable without shelling out; the
+    // function holds no instance state and does no I/O of its own.
+    static func runUsage(strictMcpConfig: Bool,
+                         run: (_ args: [String]) -> String?) -> (raw: String?, strictRejected: Bool) {
+        let raw = run(usageArgs(strictMcpConfig: strictMcpConfig))
+        // Only the flagged path can be rejected, and only an EMPTY result is the
+        // rejection shape: an unknown flag exits non-zero with no stdout, while a
+        // working /usage always returns a JSON envelope. A nil result is a timeout
+        // — retrying there would reload every MCP server and be slower, the exact
+        // path this fix protects — so we leave it alone.
+        guard strictMcpConfig, raw?.isEmpty == true else {
+            return (raw, false)
+        }
+        let retry = run(usageArgs(strictMcpConfig: false))
+        // Latch the flag off only if dropping it actually produced output. If the
+        // retry is empty/nil too it was something else (a real outage), so keep
+        // the flag — the next poll should still get the no-MCP speedup.
+        if let retry, !retry.isEmpty {
+            return (retry, true)
+        }
+        return (raw, false)
     }
 
     // MARK: - Session cleanup

@@ -319,4 +319,84 @@ final class ClaudeCliQuotaProbeTests: XCTestCase {
     func testWindowLengthIsNilForAnUnknownTierName() {
         XCTAssertNil(ClaudeCliQuotaProbe.windowLength(forTier: "extra_usage"))
     }
+
+    // MARK: - usageArgs
+
+    func testUsageArgsIncludesStrictFlagWhenSupported() {
+        XCTAssertEqual(
+            ClaudeCliQuotaProbe.usageArgs(strictMcpConfig: true),
+            ["--print", "--strict-mcp-config", "--output-format", "json", "/usage"])
+    }
+
+    func testUsageArgsOmitsStrictFlagWhenUnsupported() {
+        XCTAssertEqual(
+            ClaudeCliQuotaProbe.usageArgs(strictMcpConfig: false),
+            ["--print", "--output-format", "json", "/usage"])
+    }
+
+    // MARK: - runUsage (--strict-mcp-config compatibility)
+
+    private static let envelope = #"{"result":"Current session: 5% used\n"}"#
+
+    func testRunUsageSendsTheFlagAndDoesNotRetryOnANewCli() {
+        var calls: [[String]] = []
+        let (raw, rejected) = ClaudeCliQuotaProbe.runUsage(strictMcpConfig: true) {
+            calls.append($0); return Self.envelope
+        }
+        XCTAssertEqual(raw, Self.envelope)
+        XCTAssertFalse(rejected)
+        XCTAssertEqual(calls.count, 1, "a working flag must not trigger a retry")
+        XCTAssertTrue(calls[0].contains("--strict-mcp-config"))
+    }
+
+    func testRunUsageRetriesWithoutTheFlagWhenAnOldCliRejectsIt() {
+        // Old CLI: unknown flag → exit 1, empty stdout. Dropping it works.
+        var calls: [[String]] = []
+        let (raw, rejected) = ClaudeCliQuotaProbe.runUsage(strictMcpConfig: true) { args in
+            calls.append(args)
+            return args.contains("--strict-mcp-config") ? "" : Self.envelope
+        }
+        XCTAssertEqual(raw, Self.envelope, "the no-flag retry's output is what's used")
+        XCTAssertTrue(rejected, "so the caller latches the flag off")
+        XCTAssertEqual(calls.count, 2)
+        XCTAssertTrue(calls[0].contains("--strict-mcp-config"))
+        XCTAssertFalse(calls[1].contains("--strict-mcp-config"))
+    }
+
+    func testRunUsageDoesNotLatchWhenTheRetryAlsoFails() {
+        // Empty with the flag, empty again without it → a real outage, not the
+        // flag. Don't latch, so the next poll still tries for the speedup.
+        var calls = 0
+        let (raw, rejected) = ClaudeCliQuotaProbe.runUsage(strictMcpConfig: true) { _ in
+            calls += 1; return ""
+        }
+        XCTAssertEqual(raw, "")
+        XCTAssertFalse(rejected)
+        XCTAssertEqual(calls, 2)
+    }
+
+    func testRunUsageDoesNotRetryOnTimeout() {
+        // nil is a timeout, not a flag rejection. Retrying would reload every MCP
+        // server — the slow path this whole fix protects — so it must not happen.
+        var calls = 0
+        let (raw, rejected) = ClaudeCliQuotaProbe.runUsage(strictMcpConfig: true) { _ in
+            calls += 1; return nil
+        }
+        XCTAssertNil(raw)
+        XCTAssertFalse(rejected)
+        XCTAssertEqual(calls, 1, "a timeout must not trigger a second, slower call")
+    }
+
+    func testRunUsageSkipsTheFlagOnceLatchedOff() {
+        // strictMcpConfig:false is the latched state — send base args and don't
+        // probe for a rejection again.
+        var calls: [[String]] = []
+        let (raw, rejected) = ClaudeCliQuotaProbe.runUsage(strictMcpConfig: false) {
+            calls.append($0); return Self.envelope
+        }
+        XCTAssertEqual(raw, Self.envelope)
+        XCTAssertFalse(rejected)
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertFalse(calls[0].contains("--strict-mcp-config"))
+    }
 }
