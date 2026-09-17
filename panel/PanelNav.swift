@@ -149,7 +149,9 @@ enum EventsPane: String, CaseIterable {
 }
 
 
-enum SettingsRow: Hashable {
+// CaseIterable so a row can't be dropped when categories are reshuffled — the
+// completeness test enumerates this.
+enum SettingsRow: Hashable, CaseIterable {
     // One slot per button in the agent-reconciliation banner, so both are
     // keyboard-reachable rather than mouse-only.
     case wireAgents, dismissAgents
@@ -205,7 +207,18 @@ struct SettingsActions {
 final class PanelNav: ObservableObject {
 
     @Published var mode: PanelMode = .events
-    @Published var selectedSettingIndex: Int = 0
+    @Published var selectedSettingIndex: Int = 0 {
+        didSet { anchoredSettingRow = selectedRow }
+    }
+
+    // What the selection is actually *on*, remembered so it can survive the row
+    // list changing underneath it. The index alone cannot: the attention rows
+    // sit in front of the category's, and their count moves at runtime — the
+    // update check is a repeating timer and the permissions probe is async — so
+    // an index parked at the boundary silently slides onto a banner row the
+    // pane isn't even showing in that position. Enter there runs the updater,
+    // or rewrites every detected agent's hook config.
+    private var anchoredSettingRow: SettingsRow?
 
     @Published var hotkeyDisplay:   String = "cmd+opt+n"
     @Published var recordingHotkey: Bool = false
@@ -266,7 +279,9 @@ final class PanelNav: ObservableObject {
     // CFBundleShortVersionString — nil otherwise. Drives both the Settings
     // tab dot badge and the conditional "Update available" row at the top
     // of the Settings list. Populated by UpdateChecker.
-    @Published var updateAvailable: String?
+    @Published var updateAvailable: String? {
+        didSet { if oldValue != updateAvailable { reanchorSettingSelection() } }
+    }
     // Runtime permissions (Accessibility / Automation / Notifications) that
     // aren't granted yet — empty means all set. Drives the orange dot on the
     // Settings tab and the "Permissions needed" banner pinned above the
@@ -274,7 +289,9 @@ final class PanelNav: ObservableObject {
     // the app can't fully function without the grant either way. Refreshed on
     // launch and every Settings.onAppear (see refreshPermissions) so granting
     // a permission and coming back clears it. Populated by refreshPermissions.
-    @Published var missingPermissions: [SettingsPane] = []
+    @Published var missingPermissions: [SettingsPane] = [] {
+        didSet { if oldValue != missingPermissions { reanchorSettingSelection() } }
+    }
     // Release notes body (markdown) for the available update — shown in the
     // confirmation step. nil before notes have loaded or when fetch failed
     // (e.g. private repo without auth).
@@ -865,6 +882,14 @@ final class PanelNav: ObservableObject {
     @Published var quotaAlertsEnabled:   Bool = true
     @Published var quotaShowRemaining:   Bool = false
 
+    // Which Settings category the sidebar has selected, and whether focus has
+    // stepped into its rows. Changing category resets the row selection, or the
+    // index would point into the previous category's list.
+    @Published var settingsCategory: SettingsCategory = .notifications {
+        didSet { if oldValue != settingsCategory { selectFirstCategoryRow() } }
+    }
+    @Published var settingsDetailFocused = false
+
     // ⌘1…⌘9. Tabs past this are reachable by ←/→ only.
     static let maxNumberedTabs = 9
 
@@ -982,7 +1007,9 @@ final class PanelNav: ObservableObject {
     // the banner if it leaves and re-enters the unwired set — eg they
     // wire it manually, then delete the entry; or upgrade lands new
     // event types we should wire.
-    @Published var unwiredAgents:    [BootstrapAgent] = []
+    @Published var unwiredAgents:    [BootstrapAgent] = [] {
+        didSet { if oldValue != unwiredAgents { reanchorSettingSelection() } }
+    }
     @Published var dismissedAgents:  Set<String>      = []
     // Transient confirmation state. When the user clicks Set up on the
     // reconciliation banner, `recentlyWiredAgents` holds the agents we
@@ -1035,27 +1062,96 @@ final class PanelNav: ObservableObject {
     // top, permissions first), and Voice collapses to a single Download row
     // until the model is cached — no hand-maintained indices, no off-by-one to
     // chase.
-    var settingsRows: [SettingsRow] {
+    // Rows that need attention now. They render pinned above the split and
+    // repeat across every category, so they stay reachable whichever one you're
+    // in — and they index first, matching that render order.
+    var settingsAttentionRows: [SettingsRow] {
         var rows: [SettingsRow] = []
-        // The reconciliation banner renders above the permissions and update
-        // rows, so it indexes above them too — Set up first, then Not now.
         if !unwiredAgents.isEmpty { rows += [.wireAgents, .dismissAgents] }
         if !missingPermissions.isEmpty { rows.append(.permissions) }
         if updateAvailable != nil { rows.append(.update) }
-        rows += [.hotkey,
-                 .banner, .muteWhenFocused, .mute, .muteDuration, .remindUnanswered, .stalledSessions,
-                 .tabTitleNames, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin,
-                 .widget, .snapToCorners, .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme,
-                 .soundEnabled, .agentDoneSound, .permissionSound,
-                 .voiceEnabled, .speakHotkey]
-        rows += voiceModelCached ? [.voice, .voiceSpeed] : [.downloadVoiceModel]
-        rows += [.quotaTracking, .quotaAlerts, .alertThreshold, .pollFrequency, .contextAlert, .showRemaining,
-                 .githubLinks, .hideShipped, .disconnectGithub,
-                 .historyPerSession, .eventHistory, .clearHistory,
-                 .slackPaste, .slackIdentity, .slackTest,
-                 .slackEnabled, .slackIdle, .slackDetail, .slackStop,
-                 .editPhrases, .checkPermissions, .openConfig, .releaseNotes, .checkUpdates, .uninstall, .quit]
         return rows
+    }
+
+    // The rows the keyboard can currently reach: the attention rows, then the
+    // selected category's. Everything downstream — selectedSettingIndex,
+    // index(of:), activate, applyCycle — keeps working against this unchanged.
+    var settingsRows: [SettingsRow] {
+        settingsAttentionRows + rows(in: settingsCategory)
+    }
+
+    func rows(in category: SettingsCategory) -> [SettingsRow] {
+        switch category {
+        case .notifications:
+            return [.banner, .muteWhenFocused, .mute, .muteDuration,
+                    .remindUnanswered, .stalledSessions,
+                    .soundEnabled, .agentDoneSound, .permissionSound]
+        case .voice:
+            return [.voiceEnabled, .speakHotkey]
+                + (voiceModelCached ? [.voice, .voiceSpeed] : [.downloadVoiceModel])
+        case .appearance:
+            return [.widget, .snapToCorners, .widgetCorner, .widgetOpacity,
+                    .widgetContent, .mascot, .theme]
+        case .usage:
+            return [.quotaTracking, .quotaAlerts, .alertThreshold,
+                    .pollFrequency, .contextAlert, .showRemaining]
+        case .integrations:
+            return [.slackPaste, .slackIdentity, .slackTest,
+                    .slackEnabled, .slackIdle, .slackDetail, .slackStop,
+                    .githubLinks, .hideShipped, .disconnectGithub]
+        case .panel:
+            return [.hotkey, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin, .tabTitleNames]
+        case .events:
+            return [.historyPerSession, .eventHistory, .clearHistory]
+        case .actions:
+            return [.editPhrases, .checkPermissions, .openConfig,
+                    .releaseNotes, .checkUpdates, .uninstall, .quit]
+        }
+    }
+
+    // The first row the detail actually renders. Index 0 is an attention row
+    // whenever one exists, and those render above the split — so selecting 0
+    // put the selection on a row the pane wasn't showing, and Enter fired it.
+    // With an update pending that starts the updater; with unwired agents it
+    // rewrites every detected agent's hook config. ↑ from here still walks up
+    // into the banners, which is where they're drawn.
+    func selectFirstCategoryRow() {
+        selectedSettingIndex = settingsAttentionRows.count
+    }
+
+    // Put the selection back on the row it was on, wherever that row has moved
+    // to. Called whenever the attention rows change, because they are what shift
+    // every index behind them.
+    //
+    // A row that has gone entirely — the update that was installed, the agent
+    // that got wired — hands the selection to the first row of the category
+    // rather than to whatever inherited its index, since inheriting an index is
+    // exactly how a keypress meant for a toggle ends up starting an updater.
+    func reanchorSettingSelection() {
+        guard let anchored = anchoredSettingRow else { return selectFirstCategoryRow() }
+        guard let index = settingsRows.firstIndex(of: anchored) else {
+            return selectFirstCategoryRow()
+        }
+        if selectedSettingIndex != index { selectedSettingIndex = index }
+    }
+
+    // Which category holds a row. index(of:) answers 0 for a row outside the
+    // selected category, so anything reaching for a row by identity has to land
+    // on its category first.
+    func category(containing row: SettingsRow) -> SettingsCategory? {
+        SettingsCategory.allCases.first { rows(in: $0).contains(row) }
+    }
+
+    func selectNextCategory() {
+        let all = SettingsCategory.allCases
+        guard let i = all.firstIndex(of: settingsCategory) else { return }
+        settingsCategory = all[(i + 1) % all.count]
+    }
+
+    func selectPrevCategory() {
+        let all = SettingsCategory.allCases
+        guard let i = all.firstIndex(of: settingsCategory) else { return }
+        settingsCategory = all[(i - 1 + all.count) % all.count]
     }
 
     var rowCount: Int { settingsRows.count }
@@ -1376,8 +1472,6 @@ final class PanelNav: ObservableObject {
     }
 
     // ⌘↑/↓ — jump to the first / last settings row.
-    func selectFirstRow() { guard rowCount > 0 else { return }; selectedSettingIndex = 0 }
-    func selectLastRow()  { guard rowCount > 0 else { return }; selectedSettingIndex = rowCount - 1 }
 
     // MARK: - Cycle / activate
 
@@ -1761,4 +1855,25 @@ final class PanelNav: ObservableObject {
 struct ExtensionTab: Equatable, Identifiable {
     let id: String
     let label: String
+}
+
+// Settings grouped by subject. The old sections named control types rather than
+// subjects — "Toggles" held ten rows spanning notifications, panel behaviour and
+// session naming, while "Hotkey" was a category of one.
+enum SettingsCategory: String, CaseIterable {
+    case notifications, voice, appearance, usage, integrations, panel, events, actions
+
+    // Kept short: the sidebar is ~120pt.
+    var label: String {
+        switch self {
+        case .notifications: return "Notifications"
+        case .voice:         return "Voice"
+        case .appearance:    return "Appearance"
+        case .usage:         return "Usage"
+        case .integrations:  return "Integrations"
+        case .panel:         return "Panel"
+        case .events:        return "Events"
+        case .actions:       return "Actions"
+        }
+    }
 }

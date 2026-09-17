@@ -21,177 +21,47 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        // Timed-mute status banner — pinned at the very top
-                        // only while a mute is active, so landing in Settings
-                        // mid-mute makes it obvious (and one-click undoable).
-                        // Mouse-only like the reconciliation banner; keyboard
-                        // users toggle mute via the .mute row in Toggles, so
-                        // this isn't part of the settingsRows index.
-                        muteBanner
-                        // Reconciliation banner — appears above all other
-                        // rows when one or more detected agents lack our
-                        // notify.sh hook. Its two buttons are keyboard-indexed
-                        // (.wireAgents / .dismissAgents, pinned ahead of
-                        // .permissions to match this render order). After Set
-                        // up is actioned, the success state takes over the slot
-                        // for a few seconds before disappearing — that state is
-                        // inert, so it isn't indexed.
-                        if !nav.unwiredAgents.isEmpty {
-                            unwiredAgentsRow(nav.unwiredAgents)
-                        } else if !nav.recentlyWiredAgents.isEmpty {
-                            wiredConfirmationRow(nav.recentlyWiredAgents)
-                        }
-                        // Runtime-permission nudge. nav.settingsRows puts
-                        // .permissions ahead of .update, so it renders (and
-                        // keyboard-indexes) above the update row when both are
-                        // present.
-                        if !nav.missingPermissions.isEmpty {
-                            permissionsRow(nav.missingPermissions)
-                        }
-                        // Shown only when an update is pending.
-                        if let version = nav.updateAvailable {
-                            updateRow(version: version)
-                        }
+            categorySplit
 
-                        section("Hotkey") {
-                            row(.hotkey, label: "Panel shortcut",
-                                kind: .cycle,
-                                value: nav.recordingHotkey ? "Press combo…" : nav.hotkeyDisplay)
-                            if let error = nav.hotkeyError {
-                                Text(error)
-                                    .font(.caption)
-                                    .foregroundStyle(.red)
-                                    .padding(.horizontal, 14)
-                                    .padding(.top, 2)
-                            }
-                        }
-
-                        section("Toggles") {
-                            row(.banner,           label: "Banner notifications", kind: .toggle, value: nav.bannerEnabled    ? "On" : "Off")
-                            row(.muteWhenFocused,  label: "Mute when focused",    kind: .toggle, value: nav.muteWhenFocused  ? "On" : "Off")
-                            row(.mute,             label: nav.isMuted ? "Resume notifications" : "Mute notifications", kind: .mute, value: muteRowValue)
-                            row(.muteDuration,     label: "Mute duration",        kind: .cycle,  value: "\(nav.muteDurationMinutes) min")
-                            row(.remindUnanswered, label: "Remind unanswered",    kind: .cycle,  value: AttentionPolicy.minuteLabel(nav.remindMinutes))
-                            row(.stalledSessions,  label: "Flag stalled after",   kind: .cycle,  value: AttentionPolicy.minuteLabel(nav.stalledMinutes))
-                            row(.tabTitleNames,    label: "Name from tab titles", kind: .toggle, value: nav.tabTitleNames    ? "On" : "Off")
-                            row(.pinPanel,         label: "Pin panel",            kind: .toggle, value: nav.panelPinned      ? "On" : "Off")
-                            row(.keepOpenWhenEmpty, label: "Keep open when empty", kind: .toggle, value: nav.keepOpenWhenEmpty ? "On" : "Off")
-                            row(.launchAtLogin,    label: "Launch at login",      kind: .toggle, value: nav.launchAtLogin    ? "On" : "Off")
-                        }
-
-                        section("Widget") {
-                            row(.widget,        label: "Widget",          kind: .toggle, value: nav.compactMode ? "On" : "Off")
-                            row(.snapToCorners, label: "Snap to corners", kind: .toggle, value: nav.compactSnap ? "On" : "Off",   enabled: nav.compactMode)
-                            row(.widgetCorner,  label: "Widget corner",   kind: .cycle,  value: nav.compactCorner.label,           enabled: nav.compactMode && nav.compactSnap)
-                            row(.widgetOpacity, label: "Widget opacity",  kind: .cycle,  value: "\(Int(nav.compactAlpha * 100))%", enabled: nav.compactMode)
-                            row(.widgetContent, label: "Widget type",     kind: .cycle,  value: nav.compactContent.label,          enabled: nav.compactMode)
-                            row(.mascot,        label: "Mascot",          kind: .cycle,  value: nav.mascot.label,                  enabled: nav.compactMode)
-                            row(.theme,         label: "Accent color",    kind: .cycle,  value: nav.theme.label,                   enabled: nav.compactMode)
-                        }
-
-                        section("Sounds") {
-                            row(.soundEnabled,    label: "Sound enabled", kind: .toggle, value: nav.soundEnabled ? "On" : "Off")
-                            row(.agentDoneSound,  label: "Agent done",    kind: .cycle,  value: nav.soundStop,       enabled: nav.soundEnabled)
-                            row(.permissionSound, label: "Permission",    kind: .cycle,  value: nav.soundPermission, enabled: nav.soundEnabled)
-                        }
-
-                        section("Voice") {
-                            row(.voiceEnabled, label: "Voice notifications", kind: .toggle, value: nav.voiceEnabled ? "On" : "Off")
-                            row(.speakHotkey, label: "Read aloud shortcut", kind: .cycle,
-                                value: nav.recordingSpeakHotkey ? "Press combo…" : nav.speakHotkeyDisplay)
-                            if let error = nav.speakHotkeyError {
-                                Text(error)
-                                    .font(.caption)
-                                    .foregroundStyle(.red)
-                                    .padding(.horizontal, 14)
-                                    .padding(.top, 2)
-                            }
-                            if nav.voiceModelCached {
-                                row(.voice,      label: "Voice", kind: .cycle, value: voiceLabel,                              enabled: nav.voiceEnabled)
-                                row(.voiceSpeed, label: "Speed", kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed), enabled: nav.voiceEnabled)
-                            } else {
-                                voiceModelDownloadRow(index: nav.index(of: .downloadVoiceModel))
-                            }
-                        }
-
-                        section("Usage") {
-                            row(.quotaTracking, label: "Quota tracking",  kind: .toggle, value: nav.quotaTrackingEnabled ? "On" : "Off")
-                            row(.quotaAlerts,   label: "Quota alerts",    kind: .toggle, value: nav.quotaAlertsEnabled    ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
-                            row(.alertThreshold, label: "Alert threshold", kind: .cycle,  value: "\(nav.quotaAlertThreshold)%",            enabled: nav.quotaTrackingEnabled && nav.quotaAlertsEnabled)
-                            row(.pollFrequency, label: "Poll frequency",  kind: .cycle,  value: "\(nav.quotaPollMinutes) min",            enabled: nav.quotaTrackingEnabled)
-                            row(.contextAlert,  label: "Context alert at", kind: .cycle, value: contextAlertLabel)
-                            row(.showRemaining, label: "Show remaining",   kind: .toggle, value: nav.quotaShowRemaining ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
-                        }
-
-                        section("Tickets") {
-                            row(.githubLinks,     label: "GitHub PR links",  kind: .toggle, value: nav.githubLinkingEnabled ? "On" : "Off")
-                            row(.hideShipped,     label: "Hide shipped",     kind: .toggle, value: nav.hideShippedTickets ? "On" : "Off", enabled: nav.githubLinkingEnabled)
-                            row(.disconnectGithub, label: "Disconnect GitHub…", kind: .action, value: nav.githubSignedIn ? "Signed in" : "", enabled: nav.githubSignedIn)
-                        }
-
-                        section("Events") {
-                            row(.historyPerSession, label: "History per session", kind: .cycle, value: "\(nav.eventsPerSession)")
-                            row(.eventHistory,  label: "Event history",  kind: .toggle, value: nav.eventHistoryEnabled ? "On" : "Off")
-                            row(.clearHistory,  label: "Clear event history", kind: .action, value: nav.historyRecords.isEmpty ? "empty" : "\(nav.historyRecords.count) kept")
-                        }
-
-                        section("Slack") {
-                            row(.slackPaste,    label: "Paste Slack setup",   kind: .action, value: slackPasteValue)
-                            row(.slackIdentity, label: "Slack user",          kind: .action, value: slackUserValue,  enabled: nav.slackTokenPresent)
-                            row(.slackTest,     label: "Send test message",   kind: .action, value: "",              enabled: slackReady)
-                            row(.slackEnabled,  label: "Slack notifications", kind: .toggle, value: nav.slackEnabled ? "On" : "Off",       enabled: slackReady)
-                            row(.slackIdle,     label: "Notify when idle",    kind: .cycle,  value: SlackDelivery.idleLabel(nav.slackIdleMinutes), enabled: slackReady && nav.slackEnabled)
-                            row(.slackDetail,   label: "Include message text", kind: .toggle, value: nav.slackIncludeDetail ? "On" : "Off", enabled: slackReady && nav.slackEnabled)
-                            row(.slackStop,     label: "Also notify on finished turns", kind: .toggle, value: nav.slackNotifyOnStop ? "On" : "Off", enabled: slackReady && nav.slackEnabled)
-                        }
-
-                        section("Actions") {
-                            row(.editPhrases,      label: "Edit phrases…",         kind: .action, value: "")
-                            row(.checkPermissions, label: "Check permissions…",    kind: .action, value: "")
-                            row(.openConfig,       label: "Open config file…",     kind: .action, value: "")
-                            row(.releaseNotes,     label: "View release notes…",   kind: .action, value: "")
-                            row(.checkUpdates,     label: "Check for updates…",    kind: .action, value: checkForUpdatesStatus)
-                            row(.uninstall,        label: "Uninstall StackNudge…", kind: .action, value: "")
-                            row(.quit,             label: "Quit panel",            kind: .action, value: "")
-                        }
-
-                        aboutFooter
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 14)
-                    .background(ThinScrollers())
-                }
-                .onChange(of: nav.selectedSettingIndex) { newIndex in
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo(newIndex, anchor: .center)
-                    }
-                }
-            }
+            aboutFooter
+                .padding(.horizontal, 14)
+                .padding(.bottom, 6)
 
             PageFooter {
                 if nav.recordingHotkey || nav.recordingSpeakHotkey {
                     FooterHint(label: "Press a combo with ⌘ / ⇧ / ⌥ / ⌃", keys: [], primary: true)
                     FooterHint(label: "Cancel", keys: ["Esc"])
                 } else {
-                    FooterHint(label: "Move",  keys: ["↑", "↓"])
-                    FooterHint(label: "Top/Bottom", keys: ["⌘↑↓"])
-                    // Always rendered so the footer doesn't reflow as selection
-                    // moves, dimmed on the rows where ←/→ do nothing (the
-                    // banner's buttons and the action rows) — same treatment
-                    // the events page gives its Snooze hint. Enter acts on
-                    // every row, so "Act" never dims.
-                    FooterHint(label: "Cycle", keys: ["←", "→"])
-                        .opacity(nav.selectedRowRespondsToArrows ? 1.0 : 0.35)
-                    FooterHint(label: "Act",   keys: ["⏎"])
-                    FooterHint(label: "Back",  keys: ["Esc"])
+                    if nav.settingsDetailFocused {
+                        FooterHint(label: "Move", keys: ["↑", "↓"])
+                        // Works at both levels, but only worth advertising
+                        // here — on the sidebar it duplicates plain ↑↓.
+                        FooterHint(label: "Category", keys: ["⌘↑↓"])
+                        // Always rendered so the footer doesn't reflow as
+                        // selection moves, dimmed on the rows where ←/→ do
+                        // nothing — the same treatment the events page gives
+                        // its Snooze hint. Enter acts on every row, so "Act"
+                        // never dims.
+                        FooterHint(label: "Cycle", keys: ["←", "→"])
+                            .opacity(nav.selectedRowRespondsToArrows ? 1.0 : 0.35)
+                        FooterHint(label: "Act", keys: ["⏎"])
+                    } else {
+                        FooterHint(label: "Category", keys: ["↑", "↓"])
+                        FooterHint(label: "Open", keys: ["→"])
+                    }
+                    // One Esc hint, naming where it actually goes from here.
+                    FooterHint(label: nav.settingsDetailFocused ? "Categories" : "Hide",
+                               keys: ["Esc"])
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
+            // Matching UsageView: never land back inside the detail from a
+            // previous visit, where ↑↓ move rows rather than categories and the
+            // attention-row count may have changed while away.
+            nav.settingsDetailFocused = false
+            nav.selectFirstCategoryRow()
             nav.loadFromConfig()
             nav.refreshVoiceModelCached()
             if nav.voiceModelCached, nav.voicesAvailable.isEmpty {
@@ -597,17 +467,206 @@ struct SettingsView: View {
         .padding(.bottom, 4)
     }
 
-    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-                .padding(.horizontal, 6)
-                .padding(.bottom, 2)
-            VStack(spacing: 2) { content() }
+    // One renderer over nav.rows(in:), rather than eight hand-kept lists beside
+    // nav's eight. They agreed, but nothing made them: a row present in
+    // rows(in:) and missing from its group would be keyboard-selectable and
+    // invisible, and no test could see it. Exhaustive, so a new row has to be
+    // given a home here too.
+    @ViewBuilder private func settingRow(_ id: SettingsRow) -> some View {
+        switch id {
+        // Notifications
+        case .banner:           row(.banner, label: "Banner notifications", kind: .toggle, value: nav.bannerEnabled ? "On" : "Off")
+        case .muteWhenFocused:  row(.muteWhenFocused, label: "Mute when focused", kind: .toggle, value: nav.muteWhenFocused ? "On" : "Off")
+        case .mute:             row(.mute, label: nav.isMuted ? "Resume notifications" : "Mute notifications", kind: .mute, value: muteRowValue)
+        case .muteDuration:     row(.muteDuration, label: "Mute duration", kind: .cycle, value: "\(nav.muteDurationMinutes) min")
+        case .remindUnanswered: row(.remindUnanswered, label: "Remind unanswered", kind: .cycle, value: AttentionPolicy.minuteLabel(nav.remindMinutes))
+        case .stalledSessions:  row(.stalledSessions, label: "Flag stalled after", kind: .cycle, value: AttentionPolicy.minuteLabel(nav.stalledMinutes))
+        case .soundEnabled:     row(.soundEnabled, label: "Sound enabled", kind: .toggle, value: nav.soundEnabled ? "On" : "Off")
+        case .agentDoneSound:   row(.agentDoneSound, label: "Agent done", kind: .cycle, value: nav.soundStop, enabled: nav.soundEnabled)
+        case .permissionSound:  row(.permissionSound, label: "Permission", kind: .cycle, value: nav.soundPermission, enabled: nav.soundEnabled)
+
+        // Voice
+        case .voiceEnabled: row(.voiceEnabled, label: "Voice notifications", kind: .toggle, value: nav.voiceEnabled ? "On" : "Off")
+        case .speakHotkey:
+            row(.speakHotkey, label: "Read aloud shortcut", kind: .cycle,
+                value: nav.recordingSpeakHotkey ? "Press combo…" : nav.speakHotkeyDisplay)
+            if let error = nav.speakHotkeyError {
+                Text(error).font(.caption).foregroundStyle(.red)
+                    .padding(.horizontal, 14).padding(.top, 2)
+            }
+        case .voice:      row(.voice, label: "Voice", kind: .cycle, value: voiceLabel, enabled: nav.voiceEnabled)
+        case .voiceSpeed: row(.voiceSpeed, label: "Speed", kind: .cycle, value: String(format: "%.2f×", nav.voiceSpeed), enabled: nav.voiceEnabled)
+        case .downloadVoiceModel: voiceModelDownloadRow(index: nav.index(of: .downloadVoiceModel))
+
+        // Appearance
+        case .widget:        row(.widget, label: "Widget", kind: .toggle, value: nav.compactMode ? "On" : "Off")
+        case .snapToCorners: row(.snapToCorners, label: "Snap to corners", kind: .toggle, value: nav.compactSnap ? "On" : "Off", enabled: nav.compactMode)
+        case .widgetCorner:  row(.widgetCorner, label: "Widget corner", kind: .cycle, value: nav.compactCorner.label, enabled: nav.compactMode && nav.compactSnap)
+        case .widgetOpacity: row(.widgetOpacity, label: "Widget opacity", kind: .cycle, value: "\(Int(nav.compactAlpha * 100))%", enabled: nav.compactMode)
+        case .widgetContent: row(.widgetContent, label: "Widget type", kind: .cycle, value: nav.compactContent.label, enabled: nav.compactMode)
+        case .mascot:        row(.mascot, label: "Mascot", kind: .cycle, value: nav.mascot.label, enabled: nav.compactMode)
+        case .theme:         row(.theme, label: "Accent color", kind: .cycle, value: nav.theme.label, enabled: nav.compactMode)
+
+        // Usage
+        case .quotaTracking:  row(.quotaTracking, label: "Quota tracking", kind: .toggle, value: nav.quotaTrackingEnabled ? "On" : "Off")
+        case .quotaAlerts:    row(.quotaAlerts, label: "Quota alerts", kind: .toggle, value: nav.quotaAlertsEnabled ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
+        case .alertThreshold: row(.alertThreshold, label: "Alert threshold", kind: .cycle, value: "\(nav.quotaAlertThreshold)%", enabled: nav.quotaTrackingEnabled && nav.quotaAlertsEnabled)
+        case .pollFrequency:  row(.pollFrequency, label: "Poll frequency", kind: .cycle, value: "\(nav.quotaPollMinutes) min", enabled: nav.quotaTrackingEnabled)
+        case .contextAlert:   row(.contextAlert, label: "Context alert at", kind: .cycle, value: contextAlertLabel)
+        case .showRemaining:  row(.showRemaining, label: "Show remaining", kind: .toggle, value: nav.quotaShowRemaining ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
+
+        // Integrations
+        case .slackPaste:      row(.slackPaste, label: "Paste Slack setup", kind: .action, value: slackPasteValue)
+        case .slackIdentity:   row(.slackIdentity, label: "Slack user", kind: .action, value: slackUserValue, enabled: nav.slackTokenPresent)
+        case .slackTest:       row(.slackTest, label: "Send test message", kind: .action, value: "", enabled: slackReady)
+        case .slackEnabled:    row(.slackEnabled, label: "Slack notifications", kind: .toggle, value: nav.slackEnabled ? "On" : "Off", enabled: slackReady)
+        case .slackIdle:       row(.slackIdle, label: "Notify when idle", kind: .cycle, value: SlackDelivery.idleLabel(nav.slackIdleMinutes), enabled: slackReady && nav.slackEnabled)
+        case .slackDetail:     row(.slackDetail, label: "Include message text", kind: .toggle, value: nav.slackIncludeDetail ? "On" : "Off", enabled: slackReady && nav.slackEnabled)
+        case .slackStop:       row(.slackStop, label: "Also notify on finished turns", kind: .toggle, value: nav.slackNotifyOnStop ? "On" : "Off", enabled: slackReady && nav.slackEnabled)
+        case .githubLinks:     row(.githubLinks, label: "GitHub PR links", kind: .toggle, value: nav.githubLinkingEnabled ? "On" : "Off")
+        case .hideShipped:     row(.hideShipped, label: "Hide shipped", kind: .toggle, value: nav.hideShippedTickets ? "On" : "Off", enabled: nav.githubLinkingEnabled)
+        case .disconnectGithub: row(.disconnectGithub, label: "Disconnect GitHub…", kind: .action, value: nav.githubSignedIn ? "Signed in" : "", enabled: nav.githubSignedIn)
+
+        // Panel
+        case .hotkey:
+            row(.hotkey, label: "Panel shortcut", kind: .cycle,
+                value: nav.recordingHotkey ? "Press combo…" : nav.hotkeyDisplay)
+            if let error = nav.hotkeyError {
+                Text(error).font(.caption).foregroundStyle(.red)
+                    .padding(.horizontal, 14).padding(.top, 2)
+            }
+        case .pinPanel:          row(.pinPanel, label: "Pin panel", kind: .toggle, value: nav.panelPinned ? "On" : "Off")
+        case .keepOpenWhenEmpty: row(.keepOpenWhenEmpty, label: "Keep open when empty", kind: .toggle, value: nav.keepOpenWhenEmpty ? "On" : "Off")
+        case .launchAtLogin:     row(.launchAtLogin, label: "Launch at login", kind: .toggle, value: nav.launchAtLogin ? "On" : "Off")
+        case .tabTitleNames:     row(.tabTitleNames, label: "Name from tab titles", kind: .toggle, value: nav.tabTitleNames ? "On" : "Off")
+
+        // Events
+        case .historyPerSession: row(.historyPerSession, label: "History per session", kind: .cycle, value: "\(nav.eventsPerSession)")
+        case .eventHistory:      row(.eventHistory, label: "Event history", kind: .toggle, value: nav.eventHistoryEnabled ? "On" : "Off")
+        case .clearHistory:      row(.clearHistory, label: "Clear event history", kind: .action, value: nav.historyRecords.isEmpty ? "empty" : "\(nav.historyRecords.count) kept")
+
+        // Actions
+        case .editPhrases:      row(.editPhrases, label: "Edit phrases…", kind: .action, value: "")
+        case .checkPermissions: row(.checkPermissions, label: "Check permissions…", kind: .action, value: "")
+        case .openConfig:       row(.openConfig, label: "Open config file…", kind: .action, value: "")
+        case .releaseNotes:     row(.releaseNotes, label: "View release notes…", kind: .action, value: "")
+        case .checkUpdates:     row(.checkUpdates, label: "Check for updates…", kind: .action, value: checkForUpdatesStatus)
+        case .uninstall:        row(.uninstall, label: "Uninstall StackNudge…", kind: .action, value: "")
+        case .quit:             row(.quit, label: "Quit panel", kind: .action, value: "")
+
+        // Drawn by settingsBanners, above the category's rows.
+        case .wireAgents, .dismissAgents, .permissions, .update:
+            EmptyView()
         }
     }
+
+    // Attention items stay above the split and outside any category, so they're
+    // visible whichever one you're in. They index first, matching that order.
+    @ViewBuilder private var settingsBanners: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            muteBanner
+            if !nav.unwiredAgents.isEmpty {
+                unwiredAgentsRow(nav.unwiredAgents)
+            } else if !nav.recentlyWiredAgents.isEmpty {
+                wiredConfirmationRow(nav.recentlyWiredAgents)
+            }
+            if !nav.missingPermissions.isEmpty {
+                permissionsRow(nav.missingPermissions)
+            }
+            if let version = nav.updateAvailable {
+                updateRow(version: version)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 12)
+    }
+
+    // Categories left, the selected one's rows right — the Usage tab's split,
+    // so the two-level keyboard model is the one already in the app.
+    private var categorySplit: some View {
+        HStack(alignment: .top, spacing: 0) {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(SettingsCategory.allCases, id: \.self) { category in
+                    categoryRow(category)
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(width: 124)
+            .padding(.vertical, 10)
+            .padding(.leading, 6)
+
+            Divider()
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        // Inside the scroller, not pinned above it: on first
+                        // launch the unwired-agents and permissions banners
+                        // together are taller than the pane, and pinned they
+                        // left two rows visible with no way to scroll past.
+                        // They index ahead of the category's rows, so this is
+                        // also the order the keyboard walks.
+                        settingsBanners
+                        detailRows
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .background(ThinScrollers())
+                }
+                .onChange(of: nav.selectedSettingIndex) { newIndex in
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        proxy.scrollTo(newIndex, anchor: .center)
+                    }
+                }
+                // Entering a category always lands on its first row, so the
+                // index is the same number every time and onChange above never
+                // fires. Without this the pane keeps the previous category's
+                // scroll offset and a short category opens part-scrolled.
+                .onChange(of: nav.settingsCategory) { _ in
+                    proxy.scrollTo(0, anchor: .top)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .top) {
+                // Same focus ring the Usage tab uses when you step into its detail.
+                if nav.settingsDetailFocused {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 2)
+                        .padding(2)
+                        .allowsHitTesting(false)
+                }
+            }
+        }
+        .frame(maxHeight: .infinity)
+    }
+
+    private func categoryRow(_ category: SettingsCategory) -> some View {
+        let selected = nav.settingsCategory == category
+        return Text(category.label)
+            .font(.caption.weight(selected ? .semibold : .regular))
+            .foregroundStyle(selected ? Color.accentColor : .secondary)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(selected ? Color.accentColor.opacity(0.12) : .clear)
+            )
+            .contentShape(Rectangle())
+            // Selecting, not entering. The Usage tab's two-level model is the
+            // precedent: clicking a row in the list picks it, and →/Enter is
+            // what steps inside. Focusing the detail here meant a click on the
+            // sidebar silently repurposed ↑/↓ from categories to rows.
+            .onTapGesture { nav.settingsCategory = category }
+    }
+
+    private var detailRows: some View {
+        ForEach(nav.rows(in: nav.settingsCategory), id: \.self) { id in
+            settingRow(id)
+        }
+    }
+
 
     @ViewBuilder
     private func row(_ id: SettingsRow, label: String, kind: SettingsKind, value: String, enabled: Bool = true) -> some View {
@@ -615,7 +674,7 @@ struct SettingsView: View {
             label: label,
             value: value,
             kind: kind,
-            selected: nav.selectedSettingIndex == nav.index(of: id)
+            selected: nav.settingsDetailFocused && nav.selectedSettingIndex == nav.index(of: id)
         )
         // Visual-only dimming when a row is gated by another setting
         // (Sound section's deps when Sound is off; Usage deps when
