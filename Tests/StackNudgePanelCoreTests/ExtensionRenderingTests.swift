@@ -160,6 +160,31 @@ final class ExtensionRenderingTests: XCTestCase {
         XCTAssertEqual(ExtensionTabView.spriteOffset(sprite, fill: 0.5, width: 4), 0)
     }
 
+    // MARK: - Band height
+
+    // The row's bar band has to make room for the sprite riding on it. Clipping
+    // to the bar's own 6pt is how an 11-row horse became a 4-row smudge — the
+    // overflow fix has to make room, not just cut.
+    func testTheBandGrowsToFitATallSprite() {
+        let horse = ornament("""
+            {"fps":7,"palette":{"H":"#fff"},
+             "frames":[["HHHH","HHHH","HHHH","HHHH","HHHH","HHHH",
+                        "HHHH","HHHH","HHHH","HHHH","HHHH"]]}
+            """)
+        XCTAssertEqual(SpriteView.rows(horse), 11)
+        let band = ExtensionTabView.bandHeight(for: horse)
+        XCTAssertGreaterThanOrEqual(band, CGFloat(11) * SpriteView.cell,
+                                    "an 11-row sprite must not be clipped")
+    }
+
+    // A short sprite doesn't shrink the band below the bar's own slot, so rows
+    // with and without ornaments keep the same rhythm.
+    func testAShortSpriteKeepsTheDefaultBand() {
+        let small = ornament("{\"palette\":{\"H\":\"#fff\"},\"frames\":[[\"HH\",\"HH\"]]}")
+        XCTAssertEqual(ExtensionTabView.bandHeight(for: small), 12)
+        XCTAssertEqual(ExtensionTabView.bandHeight(for: nil), 12)
+    }
+
     // MARK: - Labels
 
     func testKeyCaps() {

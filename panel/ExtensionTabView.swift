@@ -207,37 +207,58 @@ struct ExtensionTabView: View {
                            value: String?) -> some View {
         let tint = Self.readable(Self.hexColor(track?.tint)) ?? .accentColor
         let fill = track?.fill ?? 0
+        let band = Self.bandHeight(for: ornament)
         return GeometryReader { geo in
-            ZStack(alignment: .leading) {
+            // Bottom-aligned so the bar sits at the foot of the band and a
+            // sprite stands *on* it. Centring both put the track line through
+            // the sprite's legs, which reads as a horse wading rather than
+            // running.
+            ZStack(alignment: .bottomLeading) {
                 if track != nil {
-                    Capsule().fill(Color.primary.opacity(0.12)).frame(height: 6)
+                    Capsule().fill(Color.primary.opacity(0.12)).frame(height: Self.barHeight)
                     if let ghost = track?.ghost, ghost > 0 {
                         Capsule().fill(tint.opacity(0.2))
-                            .frame(width: max(ghost * geo.size.width, 2), height: 6)
+                            .frame(width: max(ghost * geo.size.width, 2), height: Self.barHeight)
                     }
                     Capsule().fill(tint)
                         .frame(width: max(fill * geo.size.width, fill > 0 ? 2 : 0), height: 3)
                 }
                 if let ornament {
                     SpriteView(ornament: ornament)
-                        .offset(x: Self.spriteOffset(ornament, fill: fill, width: geo.size.width))
+                        .offset(x: Self.spriteOffset(ornament, fill: fill, width: geo.size.width),
+                                // Hooves land on the bar's centre line rather
+                                // than below it, so the sprite rides the track.
+                                y: -Self.barHeight / 2)
                         // Decoration only, and it is taller than its band: an
                         // uncapped sprite used to spill into the title above and
                         // the row below.
                         .accessibilityHidden(true)
                 }
             }
-            .frame(height: 6)
-            .frame(maxHeight: .infinity)
+            .frame(height: band)
             .clipped()
         }
-        .frame(height: 12)
+        .frame(height: band)
         // The bar *is* the information when a row has no `value` — the Usage tab
         // annotates exactly this widget the same way (see SessionUsage.paceBar).
         .accessibilityElement()
         .accessibilityLabel(Text(label))
         .accessibilityValue(Text(value ?? Self.percentLabel(fill)))
         .accessibilityHidden(track == nil)
+    }
+
+    // The row's bar band. Tall enough for whatever sprite rides on it, because
+    // clipping a sprite to the bar's own 6pt is how an 11-row horse ends up as a
+    // 4-row smudge — the overflow fix has to make room, not just cut. The bar
+    // stays 6pt and centres itself inside the band.
+    static let barHeight: CGFloat = 6
+
+    static func bandHeight(for ornament: ExtensionDocument.Ornament?) -> CGFloat {
+        guard let ornament else { return 12 }
+        // Room for the whole sprite standing on the bar's centre line, plus a
+        // point of headroom so a tall one doesn't touch the title above.
+        let sprite = CGFloat(SpriteView.rows(ornament)) * SpriteView.cell
+        return max(12, sprite + barHeight / 2 + 1)
     }
 
     static func percentLabel(_ fill: Double) -> String {
