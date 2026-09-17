@@ -404,6 +404,64 @@ subagent_label() {
   printf '%s' "${agent_type:-subagent}"
 }
 
+# True when the transcript shows the main agent handed control back while a
+# background subagent is still running. Claude Code runs a detached Task/Agent
+# as its own turn: launching one ends the main turn (firing Stop), but the
+# session auto-resumes when the child finishes, so a "ready for you" nudge there
+# is a false finish — nothing is waiting on the user.
+#
+# The obvious tell (an unresolved Task/Agent tool_use) does NOT work: a detached
+# agent's tool_use is resolved immediately by a "launched" acknowledgement, and
+# the real finish arrives later as a separate task-notification message keyed by
+# the same tool-use id. So the signal is: the most recent tool-using turn spawned
+# a Task/Agent whose completion task-notification has not been written yet. We
+# look only at the latest tool-using turn so a stale, never-notified launch from
+# earlier in the session cannot wedge every future nudge shut.
+#
+# Fails open (returns 1, nudge normally) when the transcript is absent or
+# unreadable: a missed suppression is one stray nudge, but a wrong positive
+# would swallow a genuine finish.
+background_subagent_pending() {
+  local transcript
+  transcript="$(hook_json_field transcript_path)"
+  [[ -n "$transcript" && -r "$transcript" ]] || return 1
+  command -v python3 &>/dev/null || return 1
+  NUDGE_TRANSCRIPT="$transcript" python3 -c 'import json, os, re, sys
+spawners = {"Task", "Agent"}
+completed = set()
+latest_launch_ids = []
+notified = re.compile(r"<tool-use-id>\s*([^<\s]+)\s*</tool-use-id>")
+try:
+    with open(os.environ["NUDGE_TRANSCRIPT"], encoding="utf-8", errors="replace") as handle:
+        for raw in handle:
+            if "task-notification" in raw:
+                completed.update(notified.findall(raw))
+            try:
+                record = json.loads(raw)
+            except ValueError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            message = record.get("message") if isinstance(record.get("message"), dict) else record
+            content = message.get("content") if isinstance(message, dict) else None
+            if not isinstance(content, list):
+                continue
+            launch_ids = []
+            saw_tool_use = False
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "tool_use":
+                    saw_tool_use = True
+                    if block.get("name") in spawners and block.get("id"):
+                        launch_ids.append(block["id"])
+            if saw_tool_use:
+                latest_launch_ids = launch_ids
+except OSError:
+    sys.exit(1)
+sys.exit(0 if any(i not in completed for i in latest_launch_ids) else 1)' 2>/dev/null
+}
+
 # Agent-initiated question (multi-select / open prompt) or plan approval, not a
 # tool permission. Approving in the panel would write "allow" to the FIFO,
 # which CC interprets as "press Enter on the highlighted option" — making
@@ -910,6 +968,16 @@ SUBAGENT_LABEL="$(subagent_label)"
 if [[ -n "$SUBAGENT_LABEL" ]]; then
   [[ "${STACKNUDGE_SUBAGENT_NUDGES:-tag}" == "off" ]] && exit 0
   TITLE="${TITLE} · ${SUBAGENT_LABEL}"
+fi
+
+# A Stop fires whenever the main agent hands control back — including when it
+# launches a background subagent that will auto-resume the session on its own.
+# Nudging "ready for you" there is a false finish: nothing is waiting on the
+# user, and the real Stop arrives when the resumed session actually ends. Skip
+# it. Claude Code only — the check reads Claude Code's transcript shape.
+if [[ "$EVENT" == "stop" && "$AGENT" == "claude-code" ]] && background_subagent_pending; then
+  nudge_debug "stop nudge suppressed: a background subagent is still in flight"
+  exit 0
 fi
 
 case "$OS" in

@@ -84,7 +84,86 @@ CASES = [
 # fallback is what most machines actually run.
 NO_JQ_CASES = [CASES[0], CASES[1], CASES[5]]
 
-EXPECTED_CASE_COUNT = len(CASES) + len(NO_JQ_CASES)
+
+# Stop-event suppression. Claude Code runs a detached Task/Agent as its own turn,
+# so launching one ends the main turn and fires Stop — but the session resumes on
+# its own when the child finishes, making that "ready for you" a false finish.
+#
+# The transcript shape is the load-bearing detail these cases pin down: a detached
+# agent's tool_use is resolved IMMEDIATELY by a "launched" acknowledgement
+# tool_result, and its real finish arrives later as a separate task-notification
+# message keyed by the same tool-use id. So "still running" is not an unresolved
+# tool_use — it is a launch whose completion notification hasn't been written yet,
+# judged against the latest tool-using turn only.
+
+def _assistant(*blocks):
+    return json.dumps({"type": "assistant",
+                       "message": {"role": "assistant", "content": list(blocks)}})
+
+
+def _user(*blocks):
+    return json.dumps({"type": "user",
+                       "message": {"role": "user", "content": list(blocks)}})
+
+
+def _use(name, tool_use_id):
+    return {"type": "tool_use", "id": tool_use_id, "name": name, "input": {}}
+
+
+def _result(tool_use_id):
+    # A detached agent's launch ack: resolves the tool_use at once. It must NOT
+    # read as "finished" — only a task-notification does.
+    return {"type": "tool_result", "tool_use_id": tool_use_id,
+            "content": "Async agent launched successfully. It is working in the background."}
+
+
+def _text(text):
+    return {"type": "text", "text": text}
+
+
+def _notification(tool_use_id):
+    # The completion message Claude Code injects when a detached agent stops.
+    return json.dumps({"type": "user", "message": {"role": "user", "content": (
+        "<task-notification><task-id>t</task-id>"
+        "<tool-use-id>%s</tool-use-id><status>completed</status>"
+        "</task-notification>" % tool_use_id)}})
+
+
+# A detached-agent turn: launch + its immediate "launched" ack, no finish yet.
+def _launch(tool_use_id):
+    return [_assistant(_use("Agent", tool_use_id)), _user(_result(tool_use_id))]
+
+
+# name, agent, transcript lines (None = no file on disk), expected title (None = suppressed)
+STOP_CASES = [
+    # Launched + acked but no completion notification yet: still running -> suppress.
+    # (The ack alone must not read as finished — that was the bug this replaces.)
+    ("stop, background subagent in flight", "claude-code",
+     _launch("a1"), None),
+    ("stop, subagent finished", "claude-code",
+     _launch("a1") + [_notification("a1")], "Claude Code"),
+    ("stop, plain finish, no subagent", "claude-code",
+     [_assistant(_use("Bash", "b1")), _user(_result("b1")), _assistant(_text("done"))],
+     "Claude Code"),
+    # Two parallel children launched together; only one has finished -> suppress.
+    ("stop, one parallel child still running", "claude-code",
+     [_assistant(_use("Agent", "a1"), _use("Agent", "a2")),
+      _user(_result("a1")), _user(_result("a2")), _notification("a1")], None),
+    # A stale, never-notified launch is followed by a later plain tool turn: the
+    # latest tool-using turn has no spawn, so nudge — a stale launch can't wedge it.
+    ("stop, stale launch then plain turn", "claude-code",
+     _launch("a1") + [_assistant(_use("Bash", "b1")), _user(_result("b1")),
+                      _assistant(_text("done"))], "Claude Code"),
+    # No transcript on disk: fail open and nudge rather than swallow a finish.
+    ("stop, transcript missing", "claude-code", None, "Claude Code"),
+]
+
+# Most machines run without jq, so the transcript read and the scan both fall to
+# python3: prove suppress-and-fire still hold there.
+NO_JQ_STOP_CASES = [STOP_CASES[0], STOP_CASES[1]]
+
+EXPECTED_CASE_COUNT = (len(CASES) + len(NO_JQ_CASES)
+                       + len(STOP_CASES) + len(NO_JQ_STOP_CASES))
 
 
 def build_nojq_path():
@@ -102,7 +181,8 @@ def build_nojq_path():
                 os.symlink(os.path.join(source_dir, entry), link)
 
 
-def posted_title(agent, payload_fields, env_overrides, expect_event, without_jq):
+def posted_title(agent, payload_fields, env_overrides, expect_event, without_jq,
+                 event="permission", transcript_lines=None):
     """Run one hook invocation; return the title it posted, or None."""
     home = tempfile.mkdtemp(prefix="stack-nudge-test-home-")
     os.makedirs(os.path.join(home, ".stack-nudge"))
@@ -131,10 +211,15 @@ def posted_title(agent, payload_fields, env_overrides, expect_event, without_jq)
     listener = threading.Thread(target=accept_one, daemon=True)
     listener.start()
 
+    transcript_path = os.path.join(home, "transcript.jsonl")
+    if transcript_lines is not None:
+        with open(transcript_path, "w", encoding="utf-8") as transcript_file:
+            transcript_file.write("\n".join(transcript_lines) + "\n")
+
     payload = {
-        "hook_event_name": "PermissionRequest",
+        "hook_event_name": "PermissionRequest" if event == "permission" else "Stop",
         "session_id": "test-session",
-        "transcript_path": os.path.join(home, "transcript.jsonl"),
+        "transcript_path": transcript_path,
         "tool_name": "Bash",
         "tool_input": {"command": "rg --files"},
     }
@@ -146,7 +231,7 @@ def posted_title(agent, payload_fields, env_overrides, expect_event, without_jq)
     env.update(env_overrides)
 
     hook = subprocess.Popen(
-        [NOTIFY, agent, "permission"],
+        [NOTIFY, agent, event],
         stdin=subprocess.PIPE,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -169,9 +254,10 @@ def posted_title(agent, payload_fields, env_overrides, expect_event, without_jq)
         return "<unparseable payload: %s>" % received["payload"][:120]
 
 
-def run_case(name, agent, payload_fields, env_overrides, expected, without_jq=False):
+def run_case(name, agent, payload_fields, env_overrides, expected, without_jq=False,
+             event="permission", transcript_lines=None):
     actual = posted_title(agent, payload_fields, env_overrides, expected is not None,
-                          without_jq)
+                          without_jq, event, transcript_lines)
     passed = actual == expected
     print("%-4s %-36s expected=%-34r actual=%r"
           % ("PASS" if passed else "FAIL",
@@ -192,6 +278,12 @@ def main():
     try:
         results = [run_case(*case) for case in CASES]
         results += [run_case(*case, without_jq=True) for case in NO_JQ_CASES]
+        results += [run_case(name, agent, {}, {}, expected, event="stop",
+                             transcript_lines=lines)
+                    for (name, agent, lines, expected) in STOP_CASES]
+        results += [run_case(name, agent, {}, {}, expected, without_jq=True, event="stop",
+                             transcript_lines=lines)
+                    for (name, agent, lines, expected) in NO_JQ_STOP_CASES]
     finally:
         shutil.rmtree(NOJQ_BIN, ignore_errors=True)
 
