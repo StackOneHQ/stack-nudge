@@ -4,6 +4,15 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.34.1](https://github.com/StackOneHQ/stack-nudge/compare/v1.34.0...v1.34.1) (2026-09-17)
+
+
+### Bug Fixes
+
+* **panel:** group Settings into categories instead of one 51-row list ([#181](https://github.com/StackOneHQ/stack-nudge/issues/181)) ([5b99f59](https://github.com/StackOneHQ/stack-nudge/commit/5b99f59b8c081bf0dc5e4e7759a9e7ab914fac2b))
+* **panel:** stop the claude usage probe timing out ([#182](https://github.com/StackOneHQ/stack-nudge/issues/182)) ([ec273cc](https://github.com/StackOneHQ/stack-nudge/commit/ec273cc5c0b973b85eed7c40df76b83ae732b8c0))
+* **panel:** tab key routing, runtime tabs, and per-client usage freshness ([#180](https://github.com/StackOneHQ/stack-nudge/issues/180)) ([6946b03](https://github.com/StackOneHQ/stack-nudge/commit/6946b03a48c07b8a6428d148d3d887ad19387ed5))
+
 ## [1.34.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.33.1...v1.34.0) (2026-09-15)
 
 
