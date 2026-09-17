@@ -167,3 +167,31 @@ jobs:
         if: always()
         run: |
           security delete-keychain "$KEYCHAIN" || true
+
+  # Separate job, deliberately. The release job above is a matrix over arm64 and
+  # x86_64, and extensions are arch-independent scripts — packaging them inside
+  # it would upload every asset twice and race on the index.
+  extensions:
+    name: Package extensions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TARGET_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Package
+        run: ./scripts/package-extensions.sh package dist/extensions
+
+      # The index ships even when there are no extensions yet, so the app always
+      # has something well-formed to fetch rather than a 404 it has to special-case.
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        with:
+          tag_name: ${{ env.TARGET_TAG }}
+          files: |
+            dist/extensions/extensions-index.json
+            dist/extensions/*.tar.gz
+            dist/extensions/*.tar.gz.sha256
