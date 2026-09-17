@@ -45,7 +45,7 @@ does not buy.
 | `schema` | yes | Must be `1`. Anything else is refused outright — see [Versioning](#versioning). |
 | `tab.label` | no | Defaults to `name`. Trimmed, capped at 16 characters, falls back to `id` if empty. |
 | `run` | no | Defaults to `./run`. Relative to the extension directory, no `..`, no absolute or `~` paths. |
-| `requires` | no | Interpreters the extension needs. **Parsed but not yet enforced** — install-time checking arrives with distribution. |
+| `requires` | no | Interpreters the extension needs. Checked at install time by **running** each one, not by resolving it. |
 | `config` | no | Environment keys to pass through. Must be under `STACKNUDGE_EXT_`. |
 | `refresh.onOpen` | no | Default `true`. Fetch when the tab is opened. |
 | `refresh.intervalSeconds` | no | Default off. Floored at 5 — every tick is a process spawn. |
@@ -216,12 +216,75 @@ failed halfway may have printed a partial document.
 
 ## Versioning
 
-The host refuses any `schema` it does not speak, rather than guessing. Read
+The host refuses any `schema` it does not speak, rather than guessing. A refused
+extension is listed in **Settings → Extensions** with the reason, so
+"needs manifest schema 2; this version reads 1" reaches the person who can act on
+it rather than only the log. Read
 `STACKNUDGE_EXT_SCHEMA` to find out what this host can read before you print.
 
 **Additive fields are the only compatible change.** Unknown fields are ignored, so
 a new field is invisible to an older host — which also means a field that
 *restricts* behaviour cannot be added safely without a schema bump.
+
+## Publishing one
+
+Extensions live in `extensions/<id>/` in this repository. Open a PR; CI validates
+it on every push, and the release workflow packages whatever is on `main` when a
+version ships.
+
+```
+extensions/
+    system/
+        manifest.json
+        run
+```
+
+`scripts/package-extensions.sh validate` is what CI runs, and you can run it
+yourself. It refuses:
+
+- a manifest that doesn't parse, or whose `id` disagrees with the directory name
+- an `id` outside `^[a-z0-9-]{1,32}$`, or a `schema` that isn't 1
+- a `run` path that is absolute or contains `..`
+- a `run` file that is missing, not a regular file, or not executable
+- **any symlink or non-regular file anywhere in the package**
+
+That last one is not redundant with the `run` checks, and it is the reason the
+whole script exists. An extension declaring `"run": "vendor/tool"` where `vendor`
+is a symlink to `/usr/bin` passes every check on the run path itself — the file
+exists, is regular, is executable, and is not itself a symlink, because its
+*parent* is. Only walking the tree catches it, and that is exactly the manifest a
+reviewer would read as in-package.
+
+Your `run` script is also linted. CI runs shellcheck across the repository and
+picks up extensionless files by shebang, at `severity: warning`.
+
+### What a release publishes
+
+```
+system-1.1.1.tar.gz
+system-1.1.1.tar.gz.sha256      <- "<hash>  <basename>"
+extensions-index.json
+```
+
+The index is attached to the app's own release, so there is one trust anchor and
+one fetch path. It ships even when there are no extensions, so the app always has
+something well-formed to fetch.
+
+### What installing checks
+
+In this order, and each step refuses before the next one runs:
+
+1. `requires` — each interpreter is **executed**, because `command -v python3`
+   succeeds on the Command Line Tools stub and then fails the moment anything runs
+2. the payload is verified against its `.sha256` sidecar — **a missing sidecar is
+   fatal**, never a soft pass
+3. the sidecar must also agree with the index; the index naming the asset *and*
+   carrying its hash proves nothing on its own
+4. the archive is listed and inspected before it is extracted — absolute paths,
+   any `..` component, anything outside the extension's own directory, and any
+   symlink or special file are all refused
+5. the unpacked `manifest.json` is validated with the same parser the runtime
+   uses, before anything is moved into place
 
 ## Trust
 
