@@ -44,13 +44,15 @@ count=0
 json_rows=""
 index=0
 
-append_row() { # id lead title subtitle value footnote fill pct
+# A rank would be meaningless here — these are unlike things, not a leaderboard
+# — so no row carries a lead.
+append_row() { # id _unused title subtitle value footnote fill pct
     local_sep=""
     [ -n "$json_rows" ] && local_sep=","
     subtitle_json=""
     [ -z "$4" ] || subtitle_json=$(printf ',"subtitle":"%s"' "$(json_escape "$4")")
-    json_rows="$json_rows$local_sep$(printf '{"id":"%s","lead":"%s","title":"%s"%s,"value":"%s","footnote":"%s","track":{"fill":%s,"tint":"%s"}}' \
-        "$1" "$2" "$(json_escape "$3")" "$subtitle_json" \
+    json_rows="$json_rows$local_sep$(printf '{"id":"%s","title":"%s"%s,"value":"%s","footnote":"%s","track":{"fill":%s,"tint":"%s"}}' \
+        "$1" "$(json_escape "$3")" "$subtitle_json" \
         "$(json_escape "$5")" "$(json_escape "$6")" "$7" "$(tint_for "$8")")"
     [ "$8" -gt "$worst" ] && worst="$8"
     count=$((count + 1))
@@ -167,8 +169,7 @@ while IFS="$(printf '\t')" read -r name mount fill pct avail; do
     subtitle=""
     [ "$mount" = "$name" ] || subtitle=$(printf ',"subtitle":"%s"' "$(json_escape "$mount")")
 
-    json_rows="$json_rows$sep$(printf '{"id":"v%s","lead":"%s","title":"%s"%s,"value":"%s free","footnote":"%s%% used","track":{"fill":%s,"tint":"%s"}}' \
-        "$index" \
+    json_rows="$json_rows$sep$(printf '{"id":"v%s","title":"%s"%s,"value":"%s free","footnote":"%s%% used","track":{"fill":%s,"tint":"%s"}}' \
         "$index" \
         "$(json_escape "$name")" \
         "$subtitle" \

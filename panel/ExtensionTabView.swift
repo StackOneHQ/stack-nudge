@@ -31,28 +31,29 @@ struct ExtensionTabView: View {
 
     // MARK: - Status
 
-    // Any status worth showing over a live document. `.broken` belongs here too:
-    // it used to be rendered only by `cold`, which is the no-document branch, so
-    // a script that started erroring left last hour's numbers on screen with no
-    // marker at all — the exact failure the stale/broken split exists to prevent.
-    private var statusNote: (text: String, spinning: Bool)? {
+    // Only conditions that persist. `.broken` belongs here too: it used to be
+    // rendered only by `cold`, which is the no-document branch, so a script that
+    // started erroring left last hour's numbers on screen with no marker at all
+    // — the exact failure the stale/broken split exists to prevent.
+    //
+    // A refresh in flight deliberately does *not* appear here. This strip takes
+    // layout space, so showing it for a routine poll made the whole pane drop
+    // and spring back every interval — a periodic flicker that reads as a
+    // rendering fault. In-flight goes in the header instead, which has a fixed
+    // height and so cannot reflow.
+    private var statusNote: String? {
         guard pane.document != nil else { return nil }
         switch pane.status {
-        case .idle:            return pane.busy ? ("Refreshing…", true) : nil
-        case .loading:         return ("Refreshing…", true)
-        case .stale(let why):  return ("Showing older data · \(why)", false)
-        case .broken(let why): return (why, false)
+        case .idle, .loading:  return nil
+        case .stale(let why):  return "Showing older data · \(why)"
+        case .broken(let why): return why
         }
     }
 
-    private func statusStrip(_ note: (text: String, spinning: Bool)) -> some View {
+    private func statusStrip(_ text: String) -> some View {
         HStack(spacing: 5) {
-            if note.spinning {
-                ProgressView().controlSize(.small).scaleEffect(0.5).frame(width: 10, height: 10)
-            } else {
-                Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 9))
-            }
-            Text(note.text).font(.system(size: 10)).lineLimit(1)
+            Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 9))
+            Text(text).font(.system(size: 10)).lineLimit(1)
             Spacer(minLength: 0)
         }
         .foregroundStyle(.secondary)
@@ -149,6 +150,15 @@ struct ExtensionTabView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+            // Fixed size whether or not it is spinning, so a refresh cannot
+            // change the header's height and move the list underneath it.
+            ProgressView()
+                .controlSize(.small)
+                .scaleEffect(0.5)
+                .frame(width: 12, height: 12)
+                .opacity(pane.busy ? 1 : 0)
+                .accessibilityHidden(!pane.busy)
+                .accessibilityLabel(Text("Refreshing"))
         }
         .padding(.horizontal, 12)
         .padding(.top, 8)

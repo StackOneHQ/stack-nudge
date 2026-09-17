@@ -168,6 +168,33 @@ final class ExtensionDocumentTests: XCTestCase {
         XCTAssertEqual(document(json)?.rows.map(\.id), ["b"])
     }
 
+    // A shell script emitting "" for a field it has no value for is the natural
+    // thing for a shell script to do. Rendering that as a present-but-empty
+    // element reserved layout for nothing, so one row sat indented past its
+    // neighbours with no visible cause.
+    func testEmptyOptionalTextIsTreatedAsAbsent() {
+        let json = """
+            {"schema":1,"message":"","header":{"title":"T","trailing":"  "},
+             "rows":[{"id":"a","title":"A","lead":"","subtitle":"","value":"","footnote":" "}]}
+            """
+        guard let d = document(json), let row = d.rows.first else { return XCTFail("no row") }
+        XCTAssertNil(row.lead)
+        XCTAssertNil(row.subtitle)
+        XCTAssertNil(row.value)
+        XCTAssertNil(row.footnote)
+        XCTAssertNil(d.header?.trailing)
+        XCTAssertNil(d.message)
+    }
+
+    // Only *optional* fields. A title is what a row is, so an empty one drops
+    // the row rather than quietly rendering a blank one.
+    func testAnEmptyTitleStillDropsTheRow() {
+        let json = """
+            {"schema":1,"rows":[{"id":"a","title":""},{"id":"b","title":"B"}]}
+            """
+        XCTAssertEqual(document(json)?.rows.map(\.id), ["b"])
+    }
+
     // MARK: - Tracks
 
     // An arithmetic slip in an extension draws a full or empty bar; it does not
