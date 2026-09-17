@@ -75,7 +75,7 @@ struct ExtensionTabView: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 6) {
                             ForEach(document.rows, id: \.id) { row in
-                                rowView(row).id(row.id)
+                                rowView(row, inset: document.usesGhostBars).id(row.id)
                             }
                         }
                         .padding(.horizontal, 12)
@@ -157,7 +157,7 @@ struct ExtensionTabView: View {
 
     // MARK: - Rows
 
-    private func rowView(_ row: ExtensionDocument.Row) -> some View {
+    private func rowView(_ row: ExtensionDocument.Row, inset: Bool) -> some View {
         let selected = pane.selectedRow == row.id
         return VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -181,7 +181,8 @@ struct ExtensionTabView: View {
             // be passed only into trackView, so a row without a bar silently
             // dropped a sprite that had parsed perfectly well.
             if row.track != nil || row.ornament != nil {
-                trackView(row.track, ornament: row.ornament, label: row.title, value: row.value)
+                trackView(row.track, ornament: row.ornament, label: row.title,
+                          value: row.value, inset: inset)
             }
             if let footnote = row.footnote {
                 Text(footnote).font(.system(size: 9)).foregroundStyle(.tertiary).lineLimit(1)
@@ -204,7 +205,8 @@ struct ExtensionTabView: View {
     private func trackView(_ track: ExtensionDocument.Track?,
                            ornament: ExtensionDocument.Ornament?,
                            label: String,
-                           value: String?) -> some View {
+                           value: String?,
+                           inset: Bool) -> some View {
         let tint = Self.readable(Self.hexColor(track?.tint)) ?? .accentColor
         let fill = track?.fill ?? 0
         let band = Self.bandHeight(for: ornament)
@@ -221,7 +223,8 @@ struct ExtensionTabView: View {
                             .frame(width: max(ghost * geo.size.width, 2), height: Self.barHeight)
                     }
                     Capsule().fill(tint)
-                        .frame(width: max(fill * geo.size.width, fill > 0 ? 2 : 0), height: 3)
+                        .frame(width: max(fill * geo.size.width, fill > 0 ? 2 : 0),
+                               height: Self.fillHeight(inset: inset))
                 }
                 if let ornament {
                     SpriteView(ornament: ornament)
@@ -252,6 +255,13 @@ struct ExtensionTabView: View {
     // 4-row smudge — the overflow fix has to make room, not just cut. The bar
     // stays 6pt and centres itself inside the band.
     static let barHeight: CGFloat = 6
+
+    // Inset inside the track only when something is drawn behind it. Otherwise
+    // the fill is the whole bar — a half-height line in a full-height groove
+    // reads as a rendering fault, not as a design.
+    static func fillHeight(inset: Bool) -> CGFloat {
+        inset ? barHeight / 2 : barHeight
+    }
 
     static func bandHeight(for ornament: ExtensionDocument.Ornament?) -> CGFloat {
         guard let ornament else { return 12 }

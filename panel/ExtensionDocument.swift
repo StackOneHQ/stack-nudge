@@ -80,6 +80,15 @@ struct ExtensionDocument: Equatable {
     // rather than sitting blank. The fallbacks exist because `message` is
     // optional in the schema and an extension that omits it still gets a pane
     // that reads as deliberate.
+    // Whether any row pairs a fill with a paler bar behind it. The renderer
+    // insets the fill so the two edges can't hide each other, and asks this
+    // per-*document* rather than per-row: within one list every bar should be
+    // the same thickness, but a document that never uses a ghost has no reason
+    // to draw a thin line in a fat groove.
+    var usesGhostBars: Bool {
+        rows.contains { $0.track?.ghost != nil }
+    }
+
     var placeholder: String? {
         switch state {
         case .ok:    return rows.isEmpty ? (message ?? "Nothing to show") : nil
