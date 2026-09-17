@@ -488,6 +488,17 @@ Source layout:
 
 Swift compiled with `swiftc` directly. No Xcode, no SPM, no dependencies.
 
+### Extensions
+
+A tab can be contributed by an extension: a directory holding a manifest and an
+executable that prints one JSON document. No API to link against and no native
+code — anything that can print JSON works.
+
+Extensions are curated rather than sandboxed: the script runs as you, and the
+control is that nothing installs which did not come through a reviewed PR here.
+See **[docs/extensions.md](docs/extensions.md)** for the manifest, the view
+document, and what a reviewer should check.
+
 ## Terms of use
 
 By using stack-nudge or its source code, you agree to the following:
