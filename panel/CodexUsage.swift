@@ -15,15 +15,18 @@ struct CodexQuotaSnapshot: Equatable {
     var hasTier: Bool { primary != nil || secondary != nil }
 }
 
-// Reads Codex's account-level rate limits from the newest rollout JSONL under
-// ~/.codex/sessions. Codex records them on each `token_count` event at
-// `payload.rate_limits`, with `used_percent` on a 0–100 scale, a unix
-// `resets_at` and a `window_minutes`. Local-only — no network, no auth.
+// Codex account rate limits: `codex app-server` where it's available, and the
+// newest rollout JSONL under ~/.codex/sessions where it isn't.
 //
-// The limits are account-wide (not per-session), so the most-recently-written
-// rollout holds the freshest values. Returns nil for API-key auth (no
-// rate_limits emitted) or when no rollout exists, which the Usage tab treats as
-// "no Codex usage to show".
+// The rollout records limits on each `token_count` event at
+// `payload.rate_limits`, but only while a CLI turn runs on this machine — quota
+// spent on the web, in the IDE or on another Mac never reaches it, and once its
+// own window expires `tier` drops it and the tab goes blank. Measured: a
+// two-day-old rollout read 29% against a live 36%, inside the same window
+// instance, with no 5-hour window at all. Hence app-server first.
+//
+// nil for API-key auth or when neither source has anything, which the Usage tab
+// treats as "no Codex usage to show".
 final class CodexQuotaProbe {
 
     private let sessionsDir = "\(NSHomeDirectory())/.codex/sessions"
@@ -34,12 +37,18 @@ final class CodexQuotaProbe {
     private var cacheKey: String?
     private var cached: CodexQuotaSnapshot?
 
+    // Latched off once app-server spawns and dies with no stdout — an unknown
+    // subcommand. Same reasoning as the --strict-mcp-config latch: detect once,
+    // stop paying for a spawn that can't work. Only touched on probeQueue.
+    private var appServerSupported = true
+
     // Serialises read() so overlapping polls — the 60s/5min timer firing while a
     // prior fetch is still doing disk I/O on a large ~/.codex/sessions tree —
     // can't race on cacheKey/cached. These are only ever touched on this queue.
     private let probeQueue = DispatchQueue(label: "stack-nudge.codex-quota")
 
-    // Calls completion on the main queue. File IO runs off-main.
+    // Calls completion on the main queue. The app-server exchange and file IO
+    // both run off-main.
     func fetch(completion: @escaping (CodexQuotaSnapshot?) -> Void) {
         let dir = sessionsDir
         probeQueue.async { [weak self] in
@@ -49,6 +58,22 @@ final class CodexQuotaProbe {
     }
 
     private func read(dir: String) -> CodexQuotaSnapshot? {
+        if appServerSupported {
+            switch CodexAppServer.fetch() {
+            case .ok(let snapshot):
+                return snapshot
+            case .unsupported:
+                appServerSupported = false
+            // Neither says anything about whether the subcommand exists, so
+            // neither latches — but both fall through to the rollout.
+            case .empty, .cliMissing:
+                break
+            }
+        }
+        return rollout(dir: dir)
+    }
+
+    private func rollout(dir: String) -> CodexQuotaSnapshot? {
         guard let newest = Self.newestRollout(in: dir) else { return nil }
         let key = "\(newest.path)|\(newest.size)|\(newest.mtime)"
         if key == cacheKey { return cached }

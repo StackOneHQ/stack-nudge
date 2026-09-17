@@ -1790,11 +1790,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             guard let self else { return }
             self.nav.quotaSyncing = false
             if let snapshot {
+                // When the numbers were measured, not when they arrived: a
+                // snapshot read from Claude Code's cache is older than this tick.
+                let measuredAt = self.claudeCliQuotaProbe.snapshotAsOf ?? Date()
                 self.nav.quota = snapshot
                 self.nav.quotaErrors[.claude] = nil
                 self.nav.quotaLastUpdated = Date()
-                self.nav.quotaClaudeLastUpdated = Date()
-                self.nav.quotaUpdatedAt[.claude] = Date()
+                self.nav.quotaClaudeLastUpdated = measuredAt
+                self.nav.quotaUpdatedAt[.claude] = measuredAt
                 self.evaluateQuotaThresholds(snapshot)
             } else if self.claudeCliQuotaProbe.cliMissing {
                 // `claude` didn't resolve on PATH. With no prior snapshot, treat

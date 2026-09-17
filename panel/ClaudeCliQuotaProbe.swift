@@ -35,6 +35,18 @@ final class ClaudeCliQuotaProbe {
     // of the process, and stop paying for the check.
     private var strictMcpConfigSupported = true
 
+    // Matched to PanelController's fastest quota poll, and deliberately tight:
+    // `claude /usage` refreshes rather than serving its own cache, and Claude
+    // Code only rewrites the file every few minutes, so a 464s-old cache read
+    // 6%/62% against the CLI's 9%/63%. Widening this buys a spawn back in
+    // exchange for numbers that are wrong during active use.
+    static let cacheMaxAge: TimeInterval = 60
+
+    // When the snapshot was measured: Date() for a CLI read, the cache's
+    // `fetchedAt` when it came from disk. The panel dates the Usage tab from
+    // this. Read after the completion fires, like cliMissing.
+    private(set) var snapshotAsOf: Date?
+
     var isRateLimited: Bool {
         guard let until = retryAfterUntil else { return false }
         return until > Date()
@@ -74,27 +86,46 @@ final class ClaudeCliQuotaProbe {
                     fetchedPlan = plan
                 }
             }
-            // /usage is a client-side intercept that needs no MCP servers, so
-            // usageArgs adds --strict-mcp-config to load none: without it every
-            // spawn boots the user's whole MCP config (60+ servers on a heavy
-            // setup), and that variable startup tail is what pushed an otherwise
-            // -fine probe past a 10s timeout under load — a spurious hard-fail on
-            // the Usage tab. The intercept's own local-session scan also slows on
-            // a busy machine, so 20s leaves headroom rather than sitting on the
-            // edge. runUsage drops the flag and retries once if this CLI is too
-            // old to know it (see strictMcpConfigSupported).
-            let (raw, strictRejected) = Self.runUsage(strictMcpConfig: strictSupported) {
-                ProcessOutput.read(path, $0, timeout: 20, cwd: Self.probeCwd)
+            // While a session is running the answer is already on disk and the
+            // spawn below buys nothing. See ClaudeUsageCache.
+            var strictRejected = false
+            var measuredAt = Date()
+            let result: ParseResult
+            if let cached = ClaudeUsageCache.read(maxAge: Self.cacheMaxAge) {
+                result = .ok(cached.snapshot)
+                measuredAt = cached.fetchedAt
+            } else {
+                // /usage is a client-side intercept that needs no MCP servers, so
+                // usageArgs adds --strict-mcp-config to load none: without it every
+                // spawn boots the user's whole MCP config (60+ servers on a heavy
+                // setup), and that variable startup tail is what pushed an otherwise
+                // -fine probe past a 10s timeout under load — a spurious hard-fail on
+                // the Usage tab. The intercept's own local-session scan also slows on
+                // a busy machine, so 20s leaves headroom rather than sitting on the
+                // edge. runUsage drops the flag and retries once if this CLI is too
+                // old to know it (see strictMcpConfigSupported).
+                let (raw, rejected) = Self.runUsage(strictMcpConfig: strictSupported) {
+                    ProcessOutput.read(path, $0, timeout: 20, cwd: Self.probeCwd)
+                }
+                strictRejected = rejected
+                result = Self.parseEnvelope(raw)
+                // Every `claude --print` spawns a new session rollout under
+                // ~/.claude/projects/<cwd-encoded>/<uuid>.jsonl. At a 60s poll
+                // cadence that's ~1.4k files/day — clutters `claude --resume`
+                // and burns inodes for zero benefit (num_turns = 0). Pinning
+                // cwd above means we know the exact directory; this scrubs the
+                // single file the probe just produced.
+                if let sid = Self.extractSessionId(raw) {
+                    Self.removeSessionFile(sid)
+                }
             }
-            let result = Self.parseEnvelope(raw)
-            // Every `claude --print` spawns a new session rollout under
-            // ~/.claude/projects/<cwd-encoded>/<uuid>.jsonl. At a 60s poll
-            // cadence that's ~1.4k files/day — clutters `claude --resume`
-            // and burns inodes for zero benefit (num_turns = 0). Pinning
-            // cwd above means we know the exact directory; this scrubs the
-            // single file the probe just produced.
-            if let sid = Self.extractSessionId(raw) {
-                Self.removeSessionFile(sid)
+
+            // CLI broke, but a reading may still be on disk — at any age, since
+            // the alternative is "Couldn't refresh" over nothing. Only parsed on
+            // the failing path, so the common case never reads the file twice.
+            var fallback: ClaudeUsageCache.Reading?
+            if case .hardFail = result {
+                fallback = ClaudeUsageCache.read(maxAge: .infinity)
             }
 
             DispatchQueue.main.async {
@@ -107,6 +138,7 @@ final class ClaudeCliQuotaProbe {
                 case .ok(let snap):
                     self.lastProbeFailed = false
                     self.retryAfterUntil = nil
+                    self.snapshotAsOf = measuredAt
                     completion(QuotaSnapshot(
                         fiveHour:       snap.fiveHour,
                         sevenDay:       snap.sevenDay,
@@ -119,10 +151,32 @@ final class ClaudeCliQuotaProbe {
                     completion(nil)
                 case .hardFail:
                     self.lastProbeFailed = true
-                    completion(nil)
+                    guard let usable = Self.fallbackReading(
+                        fallback, lastReportedAt: self.snapshotAsOf) else {
+                        completion(nil)
+                        return
+                    }
+                    self.snapshotAsOf = usable.fetchedAt
+                    completion(QuotaSnapshot(
+                        fiveHour:       usable.snapshot.fiveHour,
+                        sevenDay:       usable.snapshot.sevenDay,
+                        sevenDayOpus:   usable.snapshot.sevenDayOpus,
+                        sevenDaySonnet: usable.snapshot.sevenDaySonnet,
+                        planType:       fetchedPlan))
                 }
             }
         }
+    }
+
+    // A disk reading has to beat what we last reported, or a file left from an
+    // earlier session would walk a good snapshot backwards the first time the CLI
+    // timed out. With nothing reported yet — cold start, broken CLI — any reading
+    // wins, which is the case this exists for.
+    static func fallbackReading(_ reading: ClaudeUsageCache.Reading?,
+                                lastReportedAt: Date?) -> ClaudeUsageCache.Reading? {
+        guard let reading,
+              reading.fetchedAt > (lastReportedAt ?? .distantPast) else { return nil }
+        return reading
     }
 
     // MARK: - Invocation
