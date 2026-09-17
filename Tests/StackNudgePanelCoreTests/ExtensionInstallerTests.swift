@@ -216,17 +216,29 @@ final class ExtensionInstallerTests: XCTestCase {
     }
 
     // The three shapes Updater's bare `tar -xzf` would have written anywhere.
+    //
+    // Each listing below is otherwise *valid* — it carries a manifest and stays
+    // under the id — so only the guard under test can reject it. Without that
+    // the three guards mask each other: a listing with no manifest.json is
+    // refused for that reason alone, and removing any one guard left the suite
+    // green while the hole was open.
+    private func reason(_ listing: String) -> String? {
+        guard case .failure(.unsafeArchive(let why)) = entries(listing) else { return nil }
+        return why
+    }
+
     func testAnAbsolutePathIsRefused() {
-        guard case .failure(.unsafeArchive) = entries("/etc/passwd\n") else {
-            return XCTFail("expected refusal")
-        }
+        // Under the id, no "..", manifest present — only the absolute-path
+        // guard stands between this and a write to /derby/run.
+        let why = reason("derby/manifest.json\n/derby/run\n")
+        XCTAssertEqual(why?.contains("absolute"), true, "\(why ?? "accepted")")
     }
 
     func testATraversingPathIsRefused() {
-        for listing in ["derby/../../evil\n", "../evil\n", "derby/a/../../../evil\n"] {
-            guard case .failure(.unsafeArchive) = entries(listing) else {
-                return XCTFail("accepted \(listing)")
-            }
+        for listing in ["derby/manifest.json\nderby/../../evil\n",
+                        "derby/manifest.json\nderby/a/../../../evil\n"] {
+            let why = reason(listing)
+            XCTAssertEqual(why?.contains("escapes"), true, "\(why ?? "accepted"): \(listing)")
         }
     }
 
@@ -241,9 +253,9 @@ final class ExtensionInstallerTests: XCTestCase {
     // An archive that unpacks outside its own directory is not the extension it
     // claims to be, whichever direction it wanders.
     func testEverythingMustLiveUnderTheIDDirectory() {
-        guard case .failure(.unsafeArchive) = entries("otherext/manifest.json\n") else {
-            return XCTFail("expected refusal")
-        }
+        // Relative and traversal-free, so only the under-the-id guard applies.
+        let why = reason("derby/manifest.json\nsomewhereelse/run\n")
+        XCTAssertEqual(why?.contains("outside"), true, "\(why ?? "accepted")")
     }
 
     func testAnArchiveWithoutAManifestIsRefused() {

@@ -228,6 +228,19 @@ final class ExtensionInstallTests: XCTestCase {
         XCTAssertTrue(fetched.isEmpty)
     }
 
+    // install() turns an id into a destination path, so it carries the same
+    // guard removal does — and an index is fetched over the network, so the id
+    // in it is not ours just because the release is.
+    func testInstallingRefusesATraversingIDBeforeAnythingElse() {
+        for id in ["../evil", "..", "/etc", "Derby", ""] {
+            let e = entry(id: id, sha: "irrelevant")
+            let result = install(e, assets: [:],
+                                 extract: { _, _ in XCTFail("must not extract"); return false })
+            XCTAssertEqual(result, .failure(.invalidEntry(id)), id)
+            XCTAssertTrue(fetched.isEmpty, "fetched despite an invalid id")
+        }
+    }
+
     // MARK: - Removal
 
     func testRemovingDeletesTheDirectory() throws {
