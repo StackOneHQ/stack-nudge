@@ -88,7 +88,15 @@ enum ExtensionRuntime {
     // The child's whole environment. It replaces ours rather than extending it
     // — ProcessOutput passes `env` straight to Process, which does not merge —
     // so an extension sees exactly the keys its manifest declared plus enough
-    // PATH to find an interpreter. An extension therefore can't quietly depend
+    // PATH to find an interpreter.
+    //
+    // Only the STACKNUDGE_EXT_ namespace is passable. A STACKNUDGE_ prefix was
+    // not a filter: the config file holds forty-odd keys and one of them is
+    // STACKNUDGE_SLACK_BOT_TOKEN, which SlackCredentials deliberately leaves in
+    // plaintext when the Keychain is locked — exactly the window in which a
+    // manifest naming it would walk off with a live bot token. A deny-list would
+    // need extending every time a key is added, which is the same bug deferred;
+    // a separate namespace makes it unnameable. An extension therefore can't quietly depend
     // on something it never declared and then break when the app is launched
     // from launchd with a different environment.
     //
@@ -107,14 +115,14 @@ enum ExtensionRuntime {
         var env = [
             "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
             "HOME": home,
-            "STACKNUDGE_EXTENSION_ID": manifest.id,
+            "\(ExtensionManifest.configPrefix)ID": manifest.id,
             // The one thing an extension needs to adapt to an older host. Free
             // now and impossible to retrofit: without it "additive only" has no
             // migration path, because a script has no way to ask what this host
             // can read before it prints.
-            "STACKNUDGE_SCHEMA": "\(ExtensionManifest.supportedSchema)",
+            "\(ExtensionManifest.configPrefix)SCHEMA": "\(ExtensionManifest.supportedSchema)",
         ]
-        for key in manifest.config where key.hasPrefix("STACKNUDGE_") {
+        for key in manifest.config where ExtensionManifest.isPassableConfigKey(key) {
             if let value = config[key], !value.isEmpty { env[key] = value }
         }
         return env
@@ -179,8 +187,18 @@ enum ExtensionRuntime {
     // same call: the extension ran, said nothing, and the last good document is
     // a better thing to show than a blank pane.
     static func classify(_ completion: ProcessOutput.Completion) -> Fetch {
+        // Truncated output is the host's deadline, not the extension's fault, so
+        // it must not be reported as malformed — and a half-written document
+        // must never be parsed as a whole one.
+        guard !completion.truncated else {
+            return .transient("output was cut off")
+        }
         guard completion.status == 0 else {
-            return .transient("exited \(completion.status)")
+            // terminationStatus after a signal is the signal number, not an exit
+            // code, so wording it as an exit would report SIGSEGV as "exited 11".
+            return .transient(completion.signalled
+                ? "killed by signal \(completion.status)"
+                : "exited \(completion.status)")
         }
         let trimmed = completion.output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .transient("printed nothing") }

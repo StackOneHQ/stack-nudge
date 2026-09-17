@@ -46,14 +46,14 @@ final class ExtensionManifestTests: XCTestCase {
         let json = """
             {"id":"derby","name":"Token Derby","version":"1.2.0","schema":1,
              "tab":{"label":"Derby"},"run":"bin/go","requires":["python3"],
-             "config":["STACKNUDGE_DERBY_ORG"],
+             "config":["STACKNUDGE_EXT_DERBY_ORG"],
              "refresh":{"onOpen":false,"intervalSeconds":30,"whileFocusedOnly":false}}
             """
         guard let m = manifest(json) else { return }
         XCTAssertEqual(m.tab.label, "Derby")
         XCTAssertEqual(m.run, "bin/go")
         XCTAssertEqual(m.requires, ["python3"])
-        XCTAssertEqual(m.config, ["STACKNUDGE_DERBY_ORG"])
+        XCTAssertEqual(m.config, ["STACKNUDGE_EXT_DERBY_ORG"])
         XCTAssertFalse(m.refresh.onOpen)
         XCTAssertEqual(m.refresh.intervalSeconds, 30)
         XCTAssertFalse(m.refresh.whileFocusedOnly)

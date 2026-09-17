@@ -122,18 +122,18 @@ struct ExtensionDocument: Equatable {
         // Rows sharing an id would collapse under ForEach and make actions
         // ambiguous — the action payload names a row by id and nothing else.
         var seen = Set<String>()
-        let rows = decoded.rows?.compactMap { row -> Row? in
+        let parsed = decoded.rows?.compactMap { row -> Row? in
             // id and title are what a row *is* — one addresses it, the other is
             // the only thing guaranteed to be drawn. Everything else degrades.
             guard let id = row.id, !id.isEmpty, seen.insert(id).inserted,
                   let title = row.title
             else { return nil }
             return Row(id: id,
-                       lead: row.lead,
-                       title: title,
-                       subtitle: row.subtitle,
-                       value: row.value,
-                       footnote: row.footnote,
+                       lead: clamp(row.lead),
+                       title: clamp(title),  // non-optional overload
+                       subtitle: clamp(row.subtitle),
+                       value: clamp(row.value),
+                       footnote: clamp(row.footnote),
                        track: row.track.flatMap { track in
                            track.fill.map {
                                Track(fill: clampFraction($0),
@@ -144,19 +144,23 @@ struct ExtensionDocument: Equatable {
                        ornament: row.ornament.flatMap(ornament(from:)),
                        actions: actions(from: row.actions))
         } ?? []
+        // Capped after parsing rather than before, so dropping a malformed row
+        // doesn't cost a good one its place. What bounds the parse itself is the
+        // output ceiling in ProcessOutput, which this sits behind.
+        let rows = Array(parsed.prefix(maxRows))
 
         return .success(ExtensionDocument(
             schema: decoded.schema,
             state: state,
-            message: decoded.message,
+            message: clamp(decoded.message),
             header: decoded.header.flatMap { header in
                 header.title.map {
-                    Header(title: $0,
+                    Header(title: clamp($0),
                            badge: header.badge?.text.map {
-                               Badge(text: $0,
+                               Badge(text: clamp($0),
                                      tone: Tone(rawValue: header.badge?.tone ?? "") ?? .neutral)
                            },
-                           trailing: header.trailing)
+                           trailing: clamp(header.trailing))
                 }
             },
             rows: rows,
@@ -169,6 +173,17 @@ struct ExtensionDocument: Equatable {
     // than the front line — JSONDecoder refuses a literal that won't fit a
     // Double — but a non-finite width reaches CoreGraphics as a crash, which
     // isn't a thing to leave one decoder's behaviour away.
+    // Truncated rather than refused: an over-long title is a formatting slip in
+    // the extension, and every text field is line-limited on screen anyway — the
+    // cap is about what gets parsed and held, not what gets drawn.
+    private static func clamp(_ text: String) -> String {
+        text.count <= maxTextLength ? text : String(text.prefix(maxTextLength))
+    }
+
+    private static func clamp(_ text: String?) -> String? {
+        text.map(clamp)
+    }
+
     private static func clampFraction(_ value: Double) -> Double {
         guard value.isFinite else { return 0 }
         return min(max(value, 0), 1)
@@ -181,6 +196,14 @@ struct ExtensionDocument: Equatable {
     // tight. Capping fps alone was pointless: rows, columns and frame count were
     // all unbounded, and a single million-column frame parses happily and then
     // asks Canvas to fill a million cells on every tick.
+    // Bounds on everything that arrives sized by the extension. The sprite got
+    // these first; rows, actions and the strings themselves were left unbounded,
+    // which is the same hole one level out — a script printing a million rows
+    // inside the timeout is parsed in full before LazyVStack ever declines to
+    // draw them. Generous enough that no honest document notices.
+    static let maxRows = 500
+    static let maxActions = 16
+    static let maxTextLength = 256
     static let maxSpriteFrames = 32
     static let maxSpriteRows = 24
     static let maxSpriteColumns = 64
@@ -208,11 +231,12 @@ struct ExtensionDocument: Equatable {
     // ambiguous, so both are dropped here rather than checked at press time.
     private static func actions(from raw: [Decoded.Action]?) -> [Action] {
         var seen = Set<String>()
-        return (raw ?? []).compactMap { action in
+        return (raw ?? []).prefix(maxActions).compactMap { action in
             guard let id = action.id, !id.isEmpty, seen.insert(id).inserted,
                   let label = action.label
             else { return nil }
-            return Action(id: id, label: label, key: ExtensionKey.grant(action.key))
+            return Action(id: id, label: clamp(label),
+                          key: ExtensionKey.grant(action.key))
         }
     }
 

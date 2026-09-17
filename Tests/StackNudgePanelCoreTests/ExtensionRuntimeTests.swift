@@ -281,6 +281,34 @@ final class ExtensionRuntimeTests: XCTestCase {
                        .transient("printed nothing"))
     }
 
+    // The flag existed, was asserted in two ProcessOutput tests, and was read
+    // nowhere — so a segfaulting extension still reported "exited 11", which is
+    // the one thing it was added to prevent. Asserting the rendered message is
+    // what keeps it wired.
+    func testASignalledExtensionIsNotDescribedAsHavingExited() throws {
+        try install("derby", script: """
+            #!/bin/sh
+            kill -SEGV $$
+            """)
+        guard case .transient(let why) = fetch("derby") else {
+            return XCTFail("expected transient")
+        }
+        XCTAssertTrue(why.contains("signal"), why)
+        XCTAssertFalse(why.contains("exited"), why)
+    }
+
+    // Output cut off by the host's own ceiling is the host's problem, not a bug
+    // in the extension — reporting it as malformed would blame the wrong party,
+    // and parsing a half-written document would be worse still.
+    func testTruncatedOutputIsTransientRatherThanMalformed() {
+        let completion = ProcessOutput.Completion(
+            status: 0, output: #"{"schema":1,"rows":[{"id":"a","tit"#, truncated: true)
+        guard case .transient(let why) = ExtensionRuntime.classify(completion) else {
+            return XCTFail("expected transient")
+        }
+        XCTAssertTrue(why.contains("cut off"), why)
+    }
+
     // MARK: - Arguments
 
     func testArgumentsAreEmptyForAPlainRefresh() {
@@ -314,48 +342,71 @@ final class ExtensionRuntimeTests: XCTestCase {
     func testOnlyDeclaredConfigKeysArePassedThrough() {
         guard case .success(let m) = ExtensionManifest.parse(Data("""
             {"id":"derby","name":"D","version":"1","schema":1,
-             "config":["STACKNUDGE_DERBY_ORG","STACKNUDGE_ABSENT"]}
+             "config":["STACKNUDGE_EXT_DERBY_ORG","STACKNUDGE_EXT_ABSENT"]}
             """.utf8)) else { return XCTFail("fixture didn't parse") }
 
         let env = ExtensionRuntime.environment(for: m, config: [
-            "STACKNUDGE_DERBY_ORG": "stackone",
+            "STACKNUDGE_EXT_DERBY_ORG": "stackone",
             "STACKNUDGE_SLACK_TOKEN": "xoxb-secret",
-            "STACKNUDGE_ABSENT": "",
+            "STACKNUDGE_EXT_ABSENT": "",
         ], home: "/Users/test")
 
-        XCTAssertEqual(env["STACKNUDGE_DERBY_ORG"], "stackone")
+        XCTAssertEqual(env["STACKNUDGE_EXT_DERBY_ORG"], "stackone")
         XCTAssertNil(env["STACKNUDGE_SLACK_TOKEN"])
         // Declared but unset is the same as undeclared: an empty string would
         // read as a configured value to a script checking for presence.
-        XCTAssertNil(env["STACKNUDGE_ABSENT"])
+        XCTAssertNil(env["STACKNUDGE_EXT_ABSENT"])
         XCTAssertEqual(env["HOME"], "/Users/test")
-        XCTAssertEqual(env["STACKNUDGE_EXTENSION_ID"], "derby")
+        XCTAssertEqual(env["STACKNUDGE_EXT_ID"], "derby")
         XCTAssertNotNil(env["PATH"])
         // The only way a script can adapt to an older host before it prints.
-        XCTAssertEqual(env["STACKNUDGE_SCHEMA"], "\(ExtensionManifest.supportedSchema)")
+        XCTAssertEqual(env["STACKNUDGE_EXT_SCHEMA"], "\(ExtensionManifest.supportedSchema)")
     }
 
-    // A manifest can only pass through our own namespace, so declaring PATH or
-    // anything else doesn't let it rewrite the environment it runs in.
-    func testAManifestCannotDeclareItsWayIntoNonStackNudgeKeys() {
-        guard case .success(let m) = ExtensionManifest.parse(Data("""
-            {"id":"derby","name":"D","version":"1","schema":1,
-             "config":["PATH","HOME","AWS_SECRET_ACCESS_KEY"]}
-            """.utf8)) else { return XCTFail("fixture didn't parse") }
+    // A manifest can only name its own namespace, so declaring PATH or anything
+    // else doesn't let it rewrite the environment it runs in. Refused at parse
+    // time, so it is a reviewable failure rather than an empty variable.
+    func testAManifestCannotDeclareItsWayIntoOtherKeys() {
+        for key in ["PATH", "HOME", "AWS_SECRET_ACCESS_KEY", "STACKNUDGE_EXT_"] {
+            let result = ExtensionManifest.parse(Data("""
+                {"id":"derby","name":"D","version":"1","schema":1,"config":["\(key)"]}
+                """.utf8))
+            XCTAssertEqual(result, .failure(.invalidConfigKey(key)), key)
+        }
+    }
 
-        let env = ExtensionRuntime.environment(for: m, config: [
-            "PATH": "/evil", "HOME": "/evil", "AWS_SECRET_ACCESS_KEY": "shh",
-        ], home: "/Users/test")
+    // The leak this namespace exists to close. SlackCredentials deliberately
+    // leaves the bot token in plaintext config when the Keychain is locked —
+    // scrubbing a token the Keychain refused would destroy it — and a
+    // STACKNUDGE_ prefix was wide enough to name it. A prefix is not a secret
+    // filter, and the namespace it guarded grows every time a config key is
+    // added.
+    func testAManifestCannotReachTheSlackBotToken() {
+        let key = SlackCredentials.configTokenKey
+        XCTAssertFalse(ExtensionManifest.isPassableConfigKey(key),
+                       "\(key) must be unnameable by a manifest")
+        XCTAssertEqual(
+            ExtensionManifest.parse(Data("""
+                {"id":"derby","name":"D","version":"1","schema":1,"config":["\(key)"]}
+                """.utf8)),
+            .failure(.invalidConfigKey(key)))
 
-        XCTAssertNotEqual(env["PATH"], "/evil")
-        XCTAssertEqual(env["HOME"], "/Users/test")
-        XCTAssertNil(env["AWS_SECRET_ACCESS_KEY"])
+        // And even if a manifest carrying it were constructed directly, the
+        // environment builder refuses it too — both halves are guarded.
+        let manifest = ExtensionManifest(
+            id: "derby", name: "D", version: "1", schema: 1, tab: .init(label: "D"),
+            run: "./run", requires: [], config: [key], refresh: .never)
+        let env = ExtensionRuntime.environment(for: manifest,
+                                               config: [key: "xoxb-a-real-looking-token"],
+                                               home: "/Users/test")
+        XCTAssertNil(env[key])
+        XCTAssertFalse(env.values.contains { $0.hasPrefix("xoxb-") })
     }
 
     func testTheChildGetsNothingItDidNotAskFor() throws {
         try install("derby", script: """
             #!/bin/sh
-            echo "{\\"schema\\":1,\\"rows\\":[{\\"id\\":\\"a\\",\\"title\\":\\"${STACKNUDGE_EXTENSION_ID}/$(env | wc -l | tr -d ' ')\\"}]}"
+            echo "{\\"schema\\":1,\\"rows\\":[{\\"id\\":\\"a\\",\\"title\\":\\"${STACKNUDGE_EXT_ID}/$(env | wc -l | tr -d ' ')\\"}]}"
             """)
         guard case .ok(let document) = fetch("derby") else {
             return XCTFail("expected a document")

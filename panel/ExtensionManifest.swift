@@ -42,6 +42,17 @@ struct ExtensionManifest: Equatable {
     // the value arrives from the package rather than from us.
     static let minimumIntervalSeconds = 5
 
+    // Extensions live in their own environment namespace. See
+    // ExtensionRuntime.environment for why a bare STACKNUDGE_ prefix was not a
+    // filter. Enforced here as well as there, so a key outside the namespace is
+    // a refusal a reviewer reads in the PR rather than an empty variable a
+    // script discovers at runtime.
+    static let configPrefix = "STACKNUDGE_EXT_"
+
+    static func isPassableConfigKey(_ key: String) -> Bool {
+        key.hasPrefix(configPrefix) && key.count > configPrefix.count
+    }
+
     // The tab strip is a row of buttons across a fixed-width panel, and the id
     // is strictly validated while the label was not — so an empty or 300-character
     // label went straight into the strip and pushed every other tab off it.
@@ -77,6 +88,7 @@ struct ExtensionManifest: Equatable {
         case unsupportedSchema(Int)     // well-formed, but from a newer host
         case invalidID(String)
         case invalidRunPath(String)
+        case invalidConfigKey(String)
 
         var message: String {
             switch self {
@@ -84,6 +96,8 @@ struct ExtensionManifest: Equatable {
             case .unsupportedSchema(let n):  return "needs manifest schema \(n); this version reads \(supportedSchema)"
             case .invalidID(let id):         return "invalid id \"\(id)\""
             case .invalidRunPath(let run):   return "invalid run path \"\(run)\""
+            case .invalidConfigKey(let key):
+                return "config key \"\(key)\" is outside \(configPrefix)*"
             }
         }
     }
@@ -107,6 +121,10 @@ struct ExtensionManifest: Equatable {
         guard isValidID(decoded.id) else { return .failure(.invalidID(decoded.id)) }
         let run = decoded.run ?? "./run"
         guard isValidRunPath(run) else { return .failure(.invalidRunPath(run)) }
+        let config = decoded.config ?? []
+        if let stray = config.first(where: { !isPassableConfigKey($0) }) {
+            return .failure(.invalidConfigKey(stray))
+        }
 
         return .success(ExtensionManifest(
             id: decoded.id,
@@ -116,7 +134,7 @@ struct ExtensionManifest: Equatable {
             tab: Tab(label: Self.tabLabel(decoded.tab?.label ?? decoded.name, id: decoded.id)),
             run: run,
             requires: decoded.requires ?? [],
-            config: decoded.config ?? [],
+            config: config,
             refresh: Refresh(onOpen: decoded.refresh?.onOpen ?? true,
                              intervalSeconds: decoded.refresh?.intervalSeconds
                                  .map { max($0, minimumIntervalSeconds) },

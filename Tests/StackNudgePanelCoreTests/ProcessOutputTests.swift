@@ -110,6 +110,78 @@ final class ProcessOutputTests: XCTestCase {
         XCTAssertFalse(alive, "backgrounded grandchild survived the timeout")
     }
 
+    // MARK: - Truncation
+
+    // The distinction the truncated flag exists for. Here the grandchild is
+    // idle: the child printed everything and exited, only EOF is missing, so
+    // the output is whole and must be believed.
+    func test_run_anIdleGrandchildDoesNotMarkOutputTruncated() throws {
+        let script = try fixture("""
+            #!/bin/sh
+            sleep 300 &
+            echo done
+            exit 0
+            """)
+        let completion = ProcessOutput.run("/bin/sh", [script], timeout: 10)
+        XCTAssertEqual(completion?.truncated, false)
+        XCTAssertEqual(completion?.output.trimmingCharacters(in: .whitespacesAndNewlines), "done")
+    }
+
+    // A chatty helper does not make the child's own output partial. Once the
+    // child has exited, everything *it* wrote is already in the buffer, so a
+    // read that reaches EAGAIN has seen all of it — whatever the helper emits
+    // afterwards are a different process's bytes, not a missing tail.
+    func test_run_aChattyGrandchildDoesNotMakeTheChildsOutputPartial() throws {
+        let script = try fixture("""
+            #!/bin/sh
+            (while true; do echo more; sleep 0.05; done) &
+            echo start
+            exit 0
+            """)
+        let completion = ProcessOutput.run("/bin/sh", [script], timeout: 10)
+        XCTAssertEqual(completion?.truncated, false)
+        XCTAssertTrue(completion?.output.hasPrefix("start") == true,
+                      "the child's own line must be there: \(completion?.output ?? "nil")")
+    }
+
+    // String callers get nil rather than a partial answer, which is what nil has
+    // always meant here — they have no way to tell a short answer from a whole
+    // one. This is the shape that would otherwise hand SessionStore a clipped
+    // `ps -axo args=` that parses perfectly well as a smaller session list.
+    func test_read_returnsNilRatherThanPartialOutput() throws {
+        let script = try fixture("""
+            #!/bin/sh
+            /usr/bin/yes ABCDEFGHIJKLMNOPQRSTUVWXYZ | /usr/bin/head -c 9000000
+            exit 0
+            """)
+        XCTAssertNil(ProcessOutput.read("/bin/sh", [script], timeout: 30))
+    }
+
+    // A well-behaved binary is unaffected — this is the path every existing
+    // caller takes, and it must stay byte-identical.
+    func test_read_ordinaryOutputIsNotTruncated() {
+        let completion = ProcessOutput.run("/usr/bin/seq", ["1", "5000"], timeout: 10)
+        XCTAssertEqual(completion?.truncated, false)
+        XCTAssertEqual(completion?.output.split(separator: "\n").count, 5000)
+    }
+
+    // A script that prints far more than we are willing to keep is bounded, and
+    // says so. The bytes past the ceiling are read and dropped rather than left
+    // in the pipe: abandoning it would block the child on a full buffer and turn
+    // its overrun into a timeout instead of a truncation.
+    func test_run_stopsStoringAtTheOutputCeilingWithoutWedgingTheChild() throws {
+        let script = try fixture("""
+            #!/bin/sh
+            /usr/bin/yes ABCDEFGHIJKLMNOPQRSTUVWXYZ | /usr/bin/head -c 9000000
+            exit 0
+            """)
+        let completion = ProcessOutput.run("/bin/sh", [script], timeout: 30)
+        XCTAssertNotNil(completion, "the child must still be able to exit")
+        XCTAssertLessThanOrEqual(completion?.output.utf8.count ?? .max,
+                                 ProcessOutput.maxOutputBytes)
+        XCTAssertEqual(completion?.truncated, true, "a capped read is by definition partial")
+    }
+
     // MARK: - Signals
 
     // terminationStatus after a signal is the signal number — not an exit code,

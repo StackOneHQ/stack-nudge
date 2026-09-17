@@ -315,6 +315,57 @@ final class ExtensionDocumentTests: XCTestCase {
                                  ExtensionDocument.maxSpriteColumns)
     }
 
+    // Sprite frames were capped and the things around them were not, which is
+    // the same hole one level out: a script printing a million rows inside the
+    // timeout has them all parsed before LazyVStack ever declines to draw them.
+    func testTheRowListIsCapped() {
+        let rows = (0..<(ExtensionDocument.maxRows + 500))
+            .map { "{\"id\":\"r\($0)\",\"title\":\"R\"}" }.joined(separator: ",")
+        XCTAssertEqual(document("{\"schema\":1,\"rows\":[\(rows)]}")?.rows.count,
+                       ExtensionDocument.maxRows)
+    }
+
+    func testTheActionListIsCapped() {
+        let actions = (0..<(ExtensionDocument.maxActions + 20))
+            .map { "{\"id\":\"a\($0)\",\"label\":\"A\"}" }.joined(separator: ",")
+        XCTAssertEqual(document("{\"schema\":1,\"actions\":[\(actions)]}")?.actions.count,
+                       ExtensionDocument.maxActions)
+    }
+
+    // Truncated rather than refused: an over-long title is a formatting slip,
+    // and every field is line-limited on screen anyway. The cap is about what
+    // gets parsed and held.
+    func testOverlongTextIsTruncatedNotRejected() {
+        let long = String(repeating: "x", count: ExtensionDocument.maxTextLength + 400)
+        let json = """
+            {"schema":1,"message":"\(long)",
+             "header":{"title":"\(long)","trailing":"\(long)"},
+             "rows":[{"id":"a","title":"\(long)","subtitle":"\(long)","value":"\(long)",
+                      "footnote":"\(long)","lead":"\(long)"}]}
+            """
+        guard let d = document(json), let row = d.rows.first else { return XCTFail("no row") }
+        let cap = ExtensionDocument.maxTextLength
+        XCTAssertEqual(row.title.count, cap)
+        XCTAssertEqual(row.subtitle?.count, cap)
+        XCTAssertEqual(row.value?.count, cap)
+        XCTAssertEqual(row.footnote?.count, cap)
+        XCTAssertEqual(row.lead?.count, cap)
+        XCTAssertEqual(d.header?.title.count, cap)
+        XCTAssertEqual(d.header?.trailing?.count, cap)
+        XCTAssertEqual(d.message?.count, cap)
+    }
+
+    // Capped after the malformed ones are dropped, so a bad row doesn't cost a
+    // good one its place in the list.
+    func testTheRowCapIsAppliedAfterDroppingMalformedRows() {
+        let bad = (0..<10).map { "{\"id\":\"bad\($0)\"}" }.joined(separator: ",")
+        let good = (0..<ExtensionDocument.maxRows)
+            .map { "{\"id\":\"g\($0)\",\"title\":\"G\"}" }.joined(separator: ",")
+        let d = document("{\"schema\":1,\"rows\":[\(bad),\(good)]}")
+        XCTAssertEqual(d?.rows.count, ExtensionDocument.maxRows)
+        XCTAssertEqual(d?.rows.first?.id, "g0")
+    }
+
     // MARK: - Key allowlist
 
     func testGrantedKeys() {
