@@ -65,6 +65,15 @@
 # can carry local paths.
 #STACKNUDGE_TAB_TITLE_NAMES=true
 
+# What to do with permission prompts raised from inside a subagent (Claude
+# Code's Task tool, Codex's spawn_agent), which otherwise look identical to the
+# ones you asked for. "tag" adds the subagent's name to the banner title
+# ("Claude Code · Explore"); "off" drops those events: the agent still prompts
+# in its own terminal, so nothing gets auto-approved, but nothing tells you it's
+# waiting either. Other agents are unaffected: their hooks carry no subagent id.
+# Default: tag
+#STACKNUDGE_SUBAGENT_NUDGES=off
+
 # Log a debug line (to the launchd log) explaining voice decisions — useful
 # when a notification played silently and you want to know why.
 # Default: false

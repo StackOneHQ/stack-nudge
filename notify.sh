@@ -350,21 +350,58 @@ agent_supports_decision() {
   esac
 }
 
-# tool_name from the hook payload. Only macOS 15+ preinstalls jq, and this value
-# decides whether a prompt gets an Allow button, so fall back to python3 rather
-# than silently answering "no tool".
-hook_tool_name() {
+# A top-level string field from the hook payload. Only macOS 15+ preinstalls jq,
+# and these values decide whether a prompt gets an Allow button and whether it
+# nudges at all, so fall back to python3 rather than silently answering "absent".
+hook_json_field() {
+  local field="$1"
   [[ -z "$HOOK_JSON" ]] && return
   if command -v jq &>/dev/null; then
-    printf '%s' "$HOOK_JSON" | jq -r '.tool_name // empty' 2>/dev/null
+    printf '%s' "$HOOK_JSON" | jq -r --arg field "$field" '.[$field] // empty' 2>/dev/null
     return
   fi
   command -v python3 &>/dev/null || return
-  printf '%s' "$HOOK_JSON" | python3 -c 'import json, sys
+  printf '%s' "$HOOK_JSON" | NUDGE_HOOK_FIELD="$field" python3 -c 'import json, os, sys
 try:
-    print(json.load(sys.stdin).get("tool_name") or "")
+    value = json.load(sys.stdin).get(os.environ["NUDGE_HOOK_FIELD"])
+    print(value if isinstance(value, str) else "")
 except Exception:
     pass' 2>/dev/null
+}
+
+hook_tool_name() {
+  hook_json_field tool_name
+}
+
+# Label for a hook that fired inside a subagent; empty for a main-thread one.
+#
+# Claude Code (Task tool) and Codex (spawn_agent) run a subagent's tool calls
+# through the same PermissionRequest hook as the main thread, so an Explore
+# agent's `Bash` call arrives here indistinguishable from one the user asked
+# for. Both put `agent_id` on the payload only when the hook fired inside a
+# subagent, and `agent_type` alongside it as the name.
+#
+# Key off agent_id, never agent_type on its own: Claude Code also sets
+# agent_type on the main thread of a session started with `--agent`.
+#
+# Stop needs no check: both agents convert a subagent's turn end to their own
+# SubagentStop event, which stack-nudge doesn't wire, so the stop path is
+# main-agent-only by construction. Gemini, Antigravity and pi carry no
+# equivalent field (pi has no subagents at all), hence the agent gate.
+subagent_label() {
+  case "$AGENT" in
+    claude-code|codex) ;;
+    *)                 return ;;
+  esac
+  [[ -n "$(hook_json_field agent_id)" ]] || return
+  local agent_type
+  agent_type=$(hook_json_field agent_type)
+  # Plugin-supplied subagents report a plugin-scoped agent_type
+  # (`stackone-deep-dive:security-reviewer`); the scope is noise in a banner
+  # title that already names the agent, so keep the part that identifies it.
+  agent_type="${agent_type##*:}"
+  [[ ${#agent_type} -gt 24 ]] && agent_type="${agent_type:0:23}…"
+  printf '%s' "${agent_type:-subagent}"
 }
 
 # Agent-initiated question (multi-select / open prompt) or plan approval, not a
@@ -863,6 +900,17 @@ play_windows() {
 }
 
 TITLE="$(agent_label "$AGENT")"
+
+# Say which subagent a nudge came from, so "I didn't ask for that" has an
+# answer. `off` drops subagent events entirely instead: the agent still falls
+# back to prompting in its own terminal, so nothing is auto-approved; but an
+# unattended session then waits on a prompt nothing told you about, which is
+# why tagging is the default.
+SUBAGENT_LABEL="$(subagent_label)"
+if [[ -n "$SUBAGENT_LABEL" ]]; then
+  [[ "${STACKNUDGE_SUBAGENT_NUDGES:-tag}" == "off" ]] && exit 0
+  TITLE="${TITLE} · ${SUBAGENT_LABEL}"
+fi
 
 case "$OS" in
   Darwin)
