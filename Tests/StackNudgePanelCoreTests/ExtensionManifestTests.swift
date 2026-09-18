@@ -205,6 +205,20 @@ final class ExtensionManifestTests: XCTestCase {
         XCTAssertEqual(m.config.map(\.label), [nil, "B"])
     }
 
+    // The settings form renders one field per entry, so two entries writing one
+    // key is a form where the answer depends on which box you filled in last.
+    func testARepeatedKeyIsKeptOnce() {
+        let json = """
+            {"id":"derby","name":"D","version":"1","schema":1,
+             "config":["STACKNUDGE_EXT_A",{"key":"STACKNUDGE_EXT_A","label":"Again"},
+                       "STACKNUDGE_EXT_B"]}
+            """
+        guard let m = manifest(json) else { return }
+        XCTAssertEqual(m.config.map(\.key), ["STACKNUDGE_EXT_A", "STACKNUDGE_EXT_B"])
+        // First occurrence wins, so the list reads in declaration order.
+        XCTAssertNil(m.config[0].label)
+    }
+
     // The namespace guard is on the key, not on the form it arrived in — an
     // object is not a way around it.
     func testTheObjectFormIsHeldToTheSameNamespace() {

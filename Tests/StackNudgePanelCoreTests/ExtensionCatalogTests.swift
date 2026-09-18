@@ -51,10 +51,29 @@ final class ExtensionCatalogTests: XCTestCase {
 
     // MARK: - The merged row model
 
-    private func manifest(_ id: String, version: String) -> ExtensionManifest {
+    private func manifest(_ id: String, version: String,
+                          config: [ExtensionManifest.ConfigKey] = []) -> ExtensionManifest {
         ExtensionManifest(id: id, name: id.capitalized, version: version, schema: 1,
                           tab: .init(label: id), run: "./run",
-                          requires: [], config: [], refresh: .never)
+                          requires: [], config: config, refresh: .never)
+    }
+
+    // The form configures the version that actually runs. Taking the index's
+    // list instead would offer a field for a key a newer release added and this
+    // install ignores.
+    func testAnInstalledExtensionsOwnKeysWinOverTheIndexs() {
+        var published = entry("derby", version: "2.0.0")
+        published = .init(id: published.id, name: published.name, version: published.version,
+                          description: published.description, asset: published.asset,
+                          sha256: published.sha256, requires: published.requires,
+                          config: [.init(key: "STACKNUDGE_EXT_NEW", label: nil,
+                                         help: nil, placeholder: nil)])
+        let installed = manifest("derby", version: "1.0.0",
+                                 config: [.init(key: "STACKNUDGE_EXT_OLD", label: nil,
+                                                help: nil, placeholder: nil)])
+        let rows = ExtensionCatalog.rows(catalogue: [published],
+                                         installed: [installed], refused: [])
+        XCTAssertEqual(rows[0].config.map(\.key), ["STACKNUDGE_EXT_OLD"])
     }
 
     // The browser used to render the catalogue, the installed set and the

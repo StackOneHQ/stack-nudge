@@ -150,7 +150,12 @@ struct ExtensionManifest: Equatable {
         guard isValidID(decoded.id) else { return .failure(.invalidID(decoded.id)) }
         let run = decoded.run ?? "./run"
         guard isValidRunPath(run) else { return .failure(.invalidRunPath(run)) }
-        let config = decoded.config ?? []
+        // Deduplicated by key, first occurrence winning. A manifest naming the
+        // same key twice is a typo rather than a refusal, but the settings form
+        // renders one field per entry and two fields writing one key is a form
+        // where the answer depends on which box you filled in last.
+        var seenConfigKeys = Set<String>()
+        let config = (decoded.config ?? []).filter { seenConfigKeys.insert($0.key).inserted }
         if let stray = config.first(where: { !isPassableConfigKey($0.key) }) {
             return .failure(.invalidConfigKey(stray.key))
         }

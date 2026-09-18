@@ -251,7 +251,11 @@ extension ExtensionCatalog {
                 availableVersion: entry.version,
                 refusedReason: refusedByID[entry.id],
                 requires: entry.requires,
-                config: entry.config))
+                // The installed manifest wins when there is one: it is the
+                // version that actually runs, and the form is for configuring
+                // *it*. Taking the index's list instead would offer a field for
+                // a key a newer release added and this install ignores.
+                config: installedByID[entry.id]?.config ?? entry.config))
         }
         // Installed but unpublished — still listed, so it can be seen and
         // removed rather than being invisible and permanent.
