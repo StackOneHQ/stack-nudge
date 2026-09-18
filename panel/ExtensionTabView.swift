@@ -81,8 +81,16 @@ struct ExtensionTabView: View {
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
+                        // On the content, not on the ScrollView, which is where
+                        // this used to be. ThinScrollers walks *superviews* for
+                        // the NSScrollView, so out there it is a sibling of the
+                        // scroll view rather than a descendant: the walk starts
+                        // above the thing it is looking for and never finds it.
+                        // It silently did nothing, which left an extension's tab
+                        // as the one page in the panel still drawing the system's
+                        // full-width scroller.
+                        .background(ThinScrollers())
                     }
-                    .background(ThinScrollers())
                     // Keyboard selection has to bring its row with it; ↑/↓ past
                     // the fold otherwise move an invisible highlight, and ⏎ acts
                     // on a row the user can't see. Every other list pane here
