@@ -12,6 +12,10 @@ enum SettingsKind {
 
 struct SettingsView: View {
 
+    // Scroll target for the top of the detail pane. A String so it can't
+    // collide with the Int row indices the rows themselves are keyed by.
+    private static let scrollTopID = "settings-detail-top"
+
     @ObservedObject var nav: PanelNav
 
     // Hook-script freshness, sampled on appear (two small file reads) rather than
@@ -625,11 +629,23 @@ struct SettingsView: View {
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 12)
+                    // The id sits on the padded container, not on the first row,
+                    // so scrolling here lands on the true top of the content.
+                    // Anchoring on row 0 aligned that row's own top edge with the
+                    // viewport and scrolled the 12pt inset away, which is why a
+                    // category tall enough to scroll opened flush against the
+                    // divider while a short one kept its inset.
+                    .id(Self.scrollTopID)
                     .background(ThinScrollers())
                 }
+                // Nearest-edge, not centred. Centring re-scrolled the whole list
+                // on every ↑/↓ to park the selection mid-pane, so rows slid under
+                // the cursor in a category tall enough to scroll and sat still in
+                // one that wasn't. A nil anchor scrolls the least it can to bring
+                // the selection into view, leaving the list where the user put it.
                 .onChange(of: nav.selectedSettingIndex) { newIndex in
                     withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo(newIndex, anchor: .center)
+                        proxy.scrollTo(newIndex, anchor: nil)
                     }
                 }
                 // Entering a category always lands on its first row, so the
@@ -637,7 +653,7 @@ struct SettingsView: View {
                 // fires. Without this the pane keeps the previous category's
                 // scroll offset and a short category opens part-scrolled.
                 .onChange(of: nav.settingsCategory) { _ in
-                    proxy.scrollTo(0, anchor: .top)
+                    proxy.scrollTo(Self.scrollTopID, anchor: .top)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
