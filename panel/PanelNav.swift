@@ -15,6 +15,10 @@ enum PanelMode: Hashable {
     // The extension browser. Absent from orderedTabs like .phrases: it is a
     // sub-page of Settings, not a tab.
     case extensions
+    // One extension's own configuration, a level below the browser. Keyed by
+    // id for the same reason .extensionTab is: the view is rebuilt when the id
+    // changes rather than reused with a different extension's values in it.
+    case extensionConfig(String)
     // Confirmation step after the user clicks the "Update available" row.
     // Shows release notes (when available) + Cancel / Update Now buttons.
     case updateConfirm
@@ -211,7 +215,16 @@ struct SettingsActions {
 // the settings field set is settings-page-specific.
 final class PanelNav: ObservableObject {
 
-    @Published var mode: PanelMode = .events
+    @Published var mode: PanelMode = .events {
+        // Leaving the form drops it, so a second visit reads the config file
+        // again rather than reopening the last visit's unsaved edits. Done here
+        // rather than at the two back buttons because the mode also changes
+        // when a tab is picked, when an extension is uninstalled underneath the
+        // panel, and when the panel is reopened on a different tab.
+        didSet {
+            if case .extensionConfig = mode {} else { extensionConfig = nil }
+        }
+    }
     @Published var selectedSettingIndex: Int = 0 {
         didSet { anchoredSettingRow = selectedRow }
     }
@@ -906,6 +919,11 @@ final class PanelNav: ObservableObject {
     // the row is rendered by the same exhaustive switch as every other setting,
     // which only has nav.
     @Published var refusedExtensionCount = 0
+    // The form behind .extensionConfig. Held here rather than built in the view
+    // so its unsaved edits survive a re-render, and cleared on the way out so a
+    // second visit reads the file again rather than showing the last visit's
+    // values.
+    @Published var extensionConfig: ExtensionConfigModel?
 
     @Published var extensionTabs: [ExtensionTab] = [] {
         didSet { reconcileModeWithTabs() }

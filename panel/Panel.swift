@@ -86,6 +86,10 @@ struct PanelContentView: View {
     @ObservedObject var phrases: PhrasesViewModel
     @ObservedObject var extensions: ExtensionHost
     @ObservedObject var extensionCatalog: ExtensionCatalog
+    // Navigating into an extension's own configuration builds a model that
+    // needs the config file and the host, so the controller owns it and the
+    // view just asks.
+    let onConfigureExtension: (ExtensionRow) -> Void
 
     // The disk-backed name store. Observed here (rather than inside EventRow)
     // so resolving a nudge's session label stays a render-time lookup that
@@ -156,8 +160,26 @@ struct PanelContentView: View {
                 case .settings: SettingsView(nav: nav)
                 case .phrases:  PhrasesView(model: phrases) { nav.mode = .settings }
                 case .extensions:
-                    ExtensionsView(catalog: extensionCatalog, host: extensions) {
-                        nav.mode = .settings
+                    ExtensionsView(catalog: extensionCatalog,
+                                   host: extensions,
+                                   onConfigure: onConfigureExtension,
+                                   onBack: { nav.mode = .settings })
+                // .id(id) for the same reason .extensionTab has one: the
+                // associated value isn't part of a ViewBuilder case's identity,
+                // so two extensions' forms would share one view and the second
+                // would open showing the first's values.
+                case .extensionConfig(let id):
+                    if let model = nav.extensionConfig, model.id == id {
+                        ExtensionConfigView(model: model) { nav.mode = .extensions }
+                            .id(id)
+                    } else {
+                        // Unreachable in practice — the model is set before the
+                        // mode is — but a half-entered navigation must not be a
+                        // blank panel with no way back.
+                        ExtensionsView(catalog: extensionCatalog,
+                                       host: extensions,
+                                       onConfigure: onConfigureExtension,
+                                       onBack: { nav.mode = .settings })
                     }
                 case .updateConfirm:
                     UpdateConfirmView(
@@ -200,8 +222,8 @@ struct PanelContentView: View {
         case .extensionTab(let id): return nav.extensionTab(id: id)?.label ?? id
         // Listed, not defaulted: a new tab should fail to compile here rather
         // than render an unlabelled one.
-        case .phrases, .extensions, .updateConfirm, .updating, .postUpdate,
-             .bootstrap, .uninstall:
+        case .phrases, .extensions, .extensionConfig, .updateConfirm, .updating,
+             .postUpdate, .bootstrap, .uninstall:
             return ""
         }
     }
@@ -881,6 +903,22 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private let sessions = SessionStore()
     let nav = PanelNav()
     private let phrases = PhrasesViewModel()
+    // Into one extension's own configuration. The model is built here rather
+    // than in the view because it needs the config file and the host, and
+    // because its unsaved edits have to survive a re-render.
+    func configureExtension(_ row: ExtensionRow) {
+        guard row.isConfigurable, row.refusedReason == nil else { return }
+        nav.extensionConfig = ExtensionConfigModel(
+            id: row.id,
+            name: row.name,
+            keys: row.config,
+            // Saving is not enough on its own: the environment is rebuilt for
+            // each invocation, so the tab only shows the new value once the
+            // extension runs again.
+            didChange: { [weak self] in self?.extensions.refresh(row.id) })
+        nav.mode = .extensionConfig(row.id)
+    }
+
     private lazy var extensionCatalog = ExtensionCatalog(
         fetchCatalogue: { ExtensionInstaller.fetchCatalogue() },
         performInstall: { entry in
@@ -1013,6 +1051,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         let host = NSHostingView(rootView: PanelContentView(
             store: store, sessions: sessions, nav: nav, phrases: phrases,
             extensions: extensions, extensionCatalog: extensionCatalog,
+            onConfigureExtension: { [weak self] row in self?.configureExtension(row) },
             onGrantPermissions: { [weak self] in self?.handleGrantPermissions() }
         ).environmentObject(SessionPersistence.shared))
         // Don't let SwiftUI's preferred / intrinsic content size drive
@@ -3715,25 +3754,60 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // Space toggles the selected default, ⌫ removes the selected
         // custom, Esc returns to Settings. Typing / Tab / Enter for
         // adding still fall through to SwiftUI's TextField.
-        // Extensions browser: Esc returns to Settings and R reloads the
-        // catalogue. Everything else is swallowed rather than passed on — the
-        // same rule the extension tabs follow, for the same reason.
+        // An extension's configuration form: Esc returns to the browser and
+        // everything else belongs to the text fields. Enter is handled by the
+        // field's own .onSubmit rather than here, so it saves from whichever
+        // field has focus.
+        if case .extensionConfig = nav.mode {
+            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            guard plain, event.keyCode == KeyCode.escape else { return false }
+            nav.mode = .extensions
+            return true
+        }
+
+        // Extensions browser. Unlike every other page here, this one does *not*
+        // swallow what it doesn't recognise: the search field is focused on
+        // arrival, so a plain letter is a search term and has to reach SwiftUI.
+        //
+        // That is what cost R its bare binding. Reload moved to ⌘R and
+        // configure took ⌘⏎, which is why both are read before the plain guard
+        // rather than after it.
         if nav.mode == .extensions {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            let rows = ExtensionCatalog.matching(
+                ExtensionCatalog.rows(catalogue: extensionCatalog.entries,
+                                      installed: extensions.manifests,
+                                      refused: extensions.refused),
+                query: extensionCatalog.query)
+            let onlyCommand = mods.intersection([.command, .control, .option, .shift]) == [.command]
+
+            if onlyCommand {
+                switch event.keyCode {
+                // Not on autorepeat: holding it would otherwise issue one fetch
+                // per event, each blocking a pool thread.
+                case KeyCode.rKey where !event.isARepeat:
+                    extensionCatalog.reload()
+                    return true
+                case KeyCode.returnKey, KeyCode.numpadEnter:
+                    if let id = extensionCatalog.selectedID,
+                       let row = rows.first(where: { $0.id == id }),
+                       row.isConfigurable, row.refusedReason == nil {
+                        configureExtension(row)
+                    }
+                    return true
+                default: return false
+                }
+            }
             guard plain else { return false }
-            let rows = ExtensionCatalog.rows(catalogue: extensionCatalog.entries,
-                                             installed: extensions.manifests,
-                                             refused: extensions.refused)
             switch event.keyCode {
             case KeyCode.escape: nav.mode = .settings
             case KeyCode.upArrow:   extensionCatalog.moveSelection(among: rows, by: -1)
             case KeyCode.downArrow: extensionCatalog.moveSelection(among: rows, by: 1)
-            case KeyCode.returnKey, KeyCode.numpadEnter, KeyCode.space:
+            case KeyCode.returnKey, KeyCode.numpadEnter:
                 extensionCatalog.activateSelection(among: rows)
-            // Not on autorepeat: holding R would otherwise issue one fetch per
-            // event, each blocking a pool thread.
-            case KeyCode.rKey where !event.isARepeat: extensionCatalog.reload()
-            default:             break
+            // Space is no longer an activation key — it is a space, and the
+            // search field is what wants it.
+            default: return false
             }
             return true
         }

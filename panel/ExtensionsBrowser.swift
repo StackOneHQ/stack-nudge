@@ -29,6 +29,10 @@ final class ExtensionCatalog: ObservableObject {
     // Keyboard selection. The panel is keyboard-native and this page's own
     // footer advertises key hints, but every action on it was mouse-only.
     @Published var selectedID: String?
+    // What the search field holds. Filtering happens at render time rather than
+    // over `entries`, so a query never hides an *installed* extension from the
+    // merge that produces the rows — it only hides it from this list.
+    @Published var query = ""
 
     private let fetchCatalogue: () -> Result<[ExtensionInstaller.IndexEntry], ExtensionInstaller.Failure>
     private let performInstall: (ExtensionInstaller.IndexEntry) -> Result<String, ExtensionInstaller.Failure>
@@ -171,6 +175,22 @@ final class ExtensionCatalog: ObservableObject {
         if !rows.contains(where: { $0.id == selectedID }) { self.selectedID = nil }
     }
 
+    // Pure, so the matching rule is testable without a view.
+    //
+    // Matches the id as well as the name and description because the id is what
+    // the config keys, the directory and the docs all use — somebody who knows
+    // an extension as "derby" should not have to remember it is called "Token
+    // Derby" to find it.
+    static func matching(_ rows: [ExtensionRow], query: String) -> [ExtensionRow] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return rows }
+        return rows.filter { row in
+            [row.id, row.name, row.description].contains {
+                $0.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+            }
+        }
+    }
+
     func dismissFailure(for id: String) {
         if case .failed = work[id] { work[id] = nil }
     }
@@ -274,11 +294,18 @@ struct ExtensionsView: View {
 
     @ObservedObject var catalog: ExtensionCatalog
     @ObservedObject var host: ExtensionHost
+    let onConfigure: (ExtensionRow) -> Void
     let onBack: () -> Void
+
+    // Focused on arrival, so the page is type-to-find rather than
+    // click-then-type. It is why R lost its bare binding — see the key routing
+    // in Panel.
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+            searchField
             Divider().opacity(0.4)
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
@@ -296,28 +323,61 @@ struct ExtensionsView: View {
                 FooterHint(label: "Back", keys: ["Esc"])
                 FooterHint(label: "Select", keys: ["↑", "↓"])
                 FooterHint(label: activationLabel, keys: ["⏎"])
-                FooterHint(label: "Reload", keys: ["R"])
+                if selectedRow?.isConfigurable == true {
+                    FooterHint(label: "Configure", keys: ["⌘⏎"])
+                }
+                // ⌘R rather than R: the search field above has first claim on
+                // every plain letter.
+                FooterHint(label: "Reload", keys: ["⌘R"])
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onAppear { catalog.loadIfNeeded() }
+        .onAppear {
+            catalog.loadIfNeeded()
+            searchFocused = true
+        }
+    }
+
+    private var selectedRow: ExtensionRow? {
+        guard let id = catalog.selectedID else { return nil }
+        return visibleRows.first { $0.id == id }
     }
 
     // Named for what Enter will actually do to the selected row, rather than a
     // generic verb that is wrong two thirds of the time.
     private var activationLabel: String {
-        guard let id = catalog.selectedID,
-              let row = visibleRows.first(where: { $0.id == id })
-        else { return "Select" }
-        if catalog.failure(for: id) != nil { return "Dismiss" }
+        guard let row = selectedRow else { return "Select" }
+        if catalog.failure(for: row.id) != nil { return "Dismiss" }
         if row.updateAvailable { return "Update" }
         return row.isInstalled ? "Remove" : "Install"
     }
 
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.caption2).foregroundStyle(.tertiary)
+            TextField("Search extensions", text: $catalog.query)
+                .textFieldStyle(.plain)
+                .font(.caption)
+                .focused($searchFocused)
+            if !catalog.query.isEmpty {
+                Button { catalog.query = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.bottom, 8)
+    }
+
     var visibleRows: [ExtensionRow] {
-        ExtensionCatalog.rows(catalogue: catalog.entries,
-                              installed: host.manifests,
-                              refused: host.refused)
+        ExtensionCatalog.matching(
+            ExtensionCatalog.rows(catalogue: catalog.entries,
+                                  installed: host.manifests,
+                                  refused: host.refused),
+            query: catalog.query)
     }
 
     private var header: some View {
@@ -366,7 +426,11 @@ struct ExtensionsView: View {
             note("Looking for extensions…")
         default:
             if rows.isEmpty {
-                note("No extensions are published yet.")
+                // Distinguished, because "nothing is published" and "nothing
+                // matches what you typed" want very different next actions.
+                note(catalog.query.isEmpty
+                     ? "No extensions are published yet."
+                     : "Nothing matches \"\(catalog.query)\".")
             } else {
                 ForEach(rows) { row in extensionRow(row) }
             }
@@ -467,6 +531,13 @@ struct ExtensionsView: View {
                 if row.updateAvailable, let entry = entry(for: row.id) {
                     cardButton("Update", prominent: true) { catalog.install(entry) }
                 }
+                // Above Remove, because it is the thing somebody opens an
+                // installed extension's card to do. A refused extension is not
+                // offered one — its manifest is what failed, so there is no
+                // trustworthy list of keys to render a form from.
+                if row.isConfigurable && row.refusedReason == nil {
+                    cardButton("Configure") { onConfigure(row) }
+                }
                 if row.isInstalled {
                     cardButton("Remove") { catalog.remove(row.id) }
                 } else if let entry = entry(for: row.id) {
@@ -482,6 +553,21 @@ struct ExtensionsView: View {
 
     private func cardButton(_ title: String, prominent: Bool = false,
                             action: @escaping () -> Void) -> some View {
+        CardButton(title: title, prominent: prominent, action: action)
+    }
+}
+
+// The button on an extension card. Its own type rather than a method, because
+// the per-extension config page needs the same one and two copies of a button
+// style is how two pages in one panel start looking like two apps.
+struct CardButton: View {
+
+    let title: String
+    var prominent = false
+    var enabled = true
+    let action: () -> Void
+
+    var body: some View {
         Button(action: action) {
             Text(title)
                 .font(.caption.weight(.medium))
@@ -492,5 +578,7 @@ struct ExtensionsView: View {
                 .foregroundStyle(prominent ? Color.white : Color.primary)
         }
         .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.45)
     }
 }

@@ -422,4 +422,72 @@ final class ExtensionCatalogTests: XCTestCase {
         c.remove("derby")
         guard case .failed = c.work["derby"] else { return XCTFail("expected a failure") }
     }
+
+    // MARK: - Search
+
+    private func row(_ id: String, name: String, description: String = "",
+                     installed: Bool = false,
+                     config: [ExtensionManifest.ConfigKey] = []) -> ExtensionRow {
+        ExtensionRow(id: id, name: name, description: description,
+                     installedVersion: installed ? "1.0.0" : nil,
+                     availableVersion: "1.0.0", refusedReason: nil,
+                     requires: [], config: config)
+    }
+
+    private var sample: [ExtensionRow] {
+        [row("derby", name: "Token Derby", description: "A horse race."),
+         row("system", name: "System", description: "CPU, memory and disk.")]
+    }
+
+    func testAnEmptyQueryFiltersNothing() {
+        XCTAssertEqual(ExtensionCatalog.matching(sample, query: "").count, 2)
+        XCTAssertEqual(ExtensionCatalog.matching(sample, query: "   ").count, 2)
+    }
+
+    func testTheQueryMatchesTheNameCaseInsensitively() {
+        XCTAssertEqual(ExtensionCatalog.matching(sample, query: "token").map(\.id), ["derby"])
+        XCTAssertEqual(ExtensionCatalog.matching(sample, query: "TOKEN").map(\.id), ["derby"])
+    }
+
+    // The id is what the config keys, the directory and the docs all use.
+    // Somebody who knows an extension as "derby" should not have to remember
+    // that it is called "Token Derby" to find it.
+    func testTheQueryMatchesTheIDAndTheDescription() {
+        XCTAssertEqual(ExtensionCatalog.matching(sample, query: "derby").map(\.id), ["derby"])
+        XCTAssertEqual(ExtensionCatalog.matching(sample, query: "memory").map(\.id), ["system"])
+    }
+
+    func testAQueryThatMatchesNothingReturnsNothingRatherThanEverything() {
+        XCTAssertTrue(ExtensionCatalog.matching(sample, query: "zzz").isEmpty)
+    }
+
+    func testMatchingPreservesTheOrderItWasGiven() {
+        // The rows arrive already sorted — refusals first, then installed — and
+        // a filter that reordered them would move the selection under the user.
+        let rows = ExtensionCatalog.matching(sample, query: "e")
+        XCTAssertEqual(rows.map(\.id), sample.filter { rows.contains($0) }.map(\.id))
+    }
+
+    // MARK: - Configurability
+
+    func testOnlyAnInstalledExtensionThatDeclaredAKeyIsConfigurable() {
+        let key = ExtensionManifest.ConfigKey(key: "STACKNUDGE_EXT_DERBY_ORG",
+                                              label: nil, help: nil, placeholder: nil)
+        XCTAssertTrue(row("derby", name: "D", installed: true, config: [key]).isConfigurable)
+        // Nothing declared: there is no form to render.
+        XCTAssertFalse(row("derby", name: "D", installed: true).isConfigurable)
+        // Not installed: there is nowhere for the value to take effect.
+        XCTAssertFalse(row("derby", name: "D", config: [key]).isConfigurable)
+    }
+
+    func testTheCardListsTheKeysRatherThanTheirLabels() {
+        // This line is about what the extension can read, and the key is the
+        // thing a reviewer recognises from the manifest.
+        let keys = [ExtensionManifest.ConfigKey(key: "STACKNUDGE_EXT_A", label: "Alpha",
+                                                help: nil, placeholder: nil),
+                    ExtensionManifest.ConfigKey(key: "STACKNUDGE_EXT_B", label: nil,
+                                                help: nil, placeholder: nil)]
+        XCTAssertEqual(row("derby", name: "D", config: keys).configKeyList,
+                       "STACKNUDGE_EXT_A, STACKNUDGE_EXT_B")
+    }
 }
