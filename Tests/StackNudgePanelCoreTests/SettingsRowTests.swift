@@ -120,7 +120,7 @@ final class SettingsRowTests: XCTestCase {
 
         for row in [SettingsRow.wireAgents, .dismissAgents, .quit, .editPhrases,
                     .openConfig, .releaseNotes, .checkUpdates, .checkPermissions,
-                    .uninstall, .disconnectGithub] {
+                    .uninstall, .disconnectGithub, .openRepo] {
             select(row)
             XCTAssertEqual(nav.selectedRow, row)
             XCTAssertFalse(nav.selectedRowRespondsToArrows, "\(row) should ignore arrows")

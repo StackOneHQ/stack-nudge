@@ -19,17 +19,13 @@ struct SettingsView: View {
     @ObservedObject var nav: PanelNav
 
     // Hook-script freshness, sampled on appear (two small file reads) rather than
-    // recomputed every render. Surfaced in aboutFooter.
+    // recomputed every render. Surfaced in aboutHeader.
     @State private var installedHookVersion: String?
     @State private var hookScriptStale = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             categorySplit
-
-            aboutFooter
-                .padding(.horizontal, 14)
-                .padding(.bottom, 6)
 
             PageFooter {
                 if nav.recordingHotkey || nav.recordingSpeakHotkey {
@@ -434,41 +430,35 @@ struct SettingsView: View {
         }
     }
 
-    // Non-navigable footer with version info. Sits below the action rows so
-    // keyboard nav (rowCount=12) doesn't need to know about it. Clicking the
-    // GitHub link opens the repo in the user's browser.
-    private var aboutFooter: some View {
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        return VStack(spacing: 4) {
-            Text("StackNudge v\(version)")
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(.tertiary)
+    // Bundle version, rendered at the foot of the category sidebar and again at
+    // the head of the About category.
+    private var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+    }
+
+    // Non-navigable readouts at the head of the About category: the version, and
+    // the hook-script warning when one applies. Neither is a row — there is
+    // nothing to activate, and a selectable row that ignores Enter reads as
+    // broken.
+    private var aboutHeader: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("StackNudge v\(appVersion)")
+                .font(.subheadline.monospacedDigit())
             // The app rewrites a stale hook script at launch, so a mismatch that
             // survives to here means the rewrite failed (read-only dotdir, wrong
             // owner) and hook payloads may be missing fields the panel needs.
             // Read on appear, not per render, to keep this off the render path.
             if hookScriptStale {
                 Text("Hook script \(installedHookVersion.map { "v\($0)" } ?? "unstamped") is out of date; reinstall to refresh")
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundStyle(.orange)
-                    .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Button {
-                if let url = URL(string: "https://github.com/StackOneHQ/stack-nudge") {
-                    NSWorkspace.shared.open(url)
-                }
-            } label: {
-                Text("github.com/StackOneHQ/stack-nudge")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .underline()
-            }
-            .buttonStyle(.plain)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 12)
-        .padding(.bottom, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.top, 2)
+        .padding(.bottom, 8)
     }
 
     // One renderer over nav.rows(in:), rather than eight hand-kept lists beside
@@ -572,6 +562,11 @@ struct SettingsView: View {
         case .uninstall:        row(.uninstall, label: "Uninstall StackNudge…", kind: .action, value: "")
         case .quit:             row(.quit, label: "Quit panel", kind: .action, value: "")
 
+        // About
+        case .openRepo:
+            row(.openRepo, label: "GitHub repo", kind: .action,
+                value: PanelNav.repositoryURL.replacingOccurrences(of: "https://", with: ""))
+
         // Drawn by settingsBanners, above the category's rows.
         case .wireAgents, .dismissAgents, .permissions, .update:
             EmptyView()
@@ -599,19 +594,53 @@ struct SettingsView: View {
         .padding(.top, 12)
     }
 
+    // Left column: the category list, with the version pinned under it.
+    //
+    // The list scrolls. It used to be a plain VStack, which cannot shrink below
+    // the height of its rows — ~248pt for the ten categories, against the ~190pt
+    // this column gets at the panel's 260pt minimum. The overflow did not clip
+    // at the bottom, where it would at least have been obvious: the enclosing
+    // frame centred it, so the first categories went off the top with no way to
+    // reach them, and the footer hints were pushed off the bottom. Scrolling
+    // bounds the column to whatever height it is given, whether that is a short
+    // panel, an eleventh category, or a larger system font.
+    private var categorySidebar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(SettingsCategory.allCases, id: \.self) { category in
+                            categoryRow(category)
+                                .id(category)
+                        }
+                    }
+                    .background(ThinScrollers())
+                }
+                // ⌘↑↓ and the sidebar's own ↑↓ move the selection without
+                // touching the scroll offset, so a category picked while the
+                // list is scrolled can sit off-screen.
+                .onChange(of: nav.settingsCategory) { category in
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        proxy.scrollTo(category, anchor: nil)
+                    }
+                }
+            }
+
+            Text("v\(appVersion)")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 8)
+        }
+        .frame(width: 124)
+        .padding(.vertical, 10)
+        .padding(.leading, 6)
+    }
+
     // Categories left, the selected one's rows right — the Usage tab's split,
     // so the two-level keyboard model is the one already in the app.
     private var categorySplit: some View {
         HStack(alignment: .top, spacing: 0) {
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(SettingsCategory.allCases, id: \.self) { category in
-                    categoryRow(category)
-                }
-                Spacer(minLength: 0)
-            }
-            .frame(width: 124)
-            .padding(.vertical, 10)
-            .padding(.leading, 6)
+            categorySidebar
 
             Divider()
 
@@ -625,6 +654,7 @@ struct SettingsView: View {
                         // They index ahead of the category's rows, so this is
                         // also the order the keyboard walks.
                         settingsBanners
+                        if nav.settingsCategory == .about { aboutHeader }
                         detailRows
                     }
                     .padding(.horizontal, 14)

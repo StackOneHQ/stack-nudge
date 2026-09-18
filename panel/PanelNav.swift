@@ -172,6 +172,7 @@ enum SettingsRow: Hashable, CaseIterable {
     case historyPerSession
     case editPhrases, checkPermissions, openConfig, releaseNotes, checkUpdates, uninstall, quit
     case browseExtensions
+    case openRepo
 }
 
 struct SettingsActions {
@@ -210,6 +211,10 @@ struct SettingsActions {
 // model (mode, selected row, hotkey state) is read across all pages — only
 // the settings field set is settings-page-specific.
 final class PanelNav: ObservableObject {
+
+    // Repo URL, shared by the About row's label and the action behind it so the
+    // link can't say one thing and open another.
+    static let repositoryURL = "https://github.com/StackOneHQ/stack-nudge"
 
     @Published var mode: PanelMode = .events
     @Published var selectedSettingIndex: Int = 0 {
@@ -564,6 +569,15 @@ final class PanelNav: ObservableObject {
             rows.append(contentsOf: group.branches.map { [Self.outcomeKey($0.repoRoot, $0.branch)] })
         }
         return rows
+    }
+
+    // The About category's one actionable row. Named for the repo rather than
+    // for GitHub because the release-notes and disconnect rows open GitHub too,
+    // at unrelated URLs.
+    func openRepository() {
+        if let url = URL(string: Self.repositoryURL) {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     // Settings "Disconnect GitHub": wipe the local token + PR state, then open
@@ -1121,6 +1135,11 @@ final class PanelNav: ObservableObject {
         case .actions:
             return [.editPhrases, .checkPermissions, .openConfig,
                     .releaseNotes, .checkUpdates, .uninstall, .quit]
+        // Version and hook-script freshness render above this row as a plain
+        // note, not as rows: they are readouts with nothing to activate, and a
+        // keyboard-selectable row that ignores Enter reads as broken.
+        case .about:
+            return [.openRepo]
         }
     }
 
@@ -1517,6 +1536,7 @@ final class PanelNav: ObservableObject {
         case .checkUpdates:     actions?.checkForUpdates()
         case .uninstall:        actions?.beginUninstall()
         case .quit:             actions?.quit()
+        case .openRepo:         openRepository()
         // Toggles + cycles flip/step on Enter, same as left/right.
         default: applyCycle(forward: true)
         }
@@ -1535,7 +1555,7 @@ final class PanelNav: ObservableObject {
              .disconnectGithub, .editPhrases, .browseExtensions,
              .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
-             .slackPaste, .slackIdentity, .slackTest, .none:
+             .slackPaste, .slackIdentity, .slackTest, .openRepo, .none:
             return false
         case .permissions, .update, .hotkey, .speakHotkey,
              .banner, .muteWhenFocused, .mute, .muteDuration,
@@ -1805,7 +1825,7 @@ final class PanelNav: ObservableObject {
              .disconnectGithub, .editPhrases, .browseExtensions,
              .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
-             .slackPaste, .slackIdentity, .slackTest, .none:
+             .slackPaste, .slackIdentity, .slackTest, .openRepo, .none:
             break
         }
     }
@@ -1879,7 +1899,8 @@ struct ExtensionTab: Equatable, Identifiable {
 // subjects — "Toggles" held ten rows spanning notifications, panel behaviour and
 // session naming, while "Hotkey" was a category of one.
 enum SettingsCategory: String, CaseIterable {
-    case notifications, voice, appearance, usage, integrations, extensions, panel, events, actions
+    case notifications, voice, appearance, usage, integrations, extensions, panel, events, actions,
+         about
 
     // Kept short: the sidebar is ~120pt.
     var label: String {
@@ -1893,6 +1914,7 @@ enum SettingsCategory: String, CaseIterable {
         case .panel:         return "Panel"
         case .events:        return "Events"
         case .actions:       return "Actions"
+        case .about:         return "About"
         }
     }
 }
