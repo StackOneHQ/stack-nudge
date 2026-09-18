@@ -11,8 +11,8 @@
     {
       "key": "STACKNUDGE_EXT_DERBY_ORG",
       "label": "Organisation",
-      "help": "Whose races to show. Ask whoever runs your league.",
-      "placeholder": "stackone"
+      "help": "Whose races to show, exactly as spelled — the name is case-sensitive.",
+      "placeholder": "StackOne"
     },
     {
       "key": "STACKNUDGE_EXT_DERBY_BASE",

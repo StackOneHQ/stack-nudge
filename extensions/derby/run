@@ -95,16 +95,22 @@ def short_countdown(seconds):
 
 # --- Colour -----------------------------------------------------------------
 
-def darken(hex_color, fraction=0.45):
-    """Blend a colour toward black, for the mane against its own coat.
+def mane_for(hex_color, fraction=0.45):
+    """The mane and tail, shaded from the horse's own coat.
 
-    Without it the mane is the same colour as the body and the horse is a
-    blob. The host's legibility clamp acts on each palette entry separately,
-    so this only has to make the two differ.
+    Darker than the coat, except on a coat too dark to darken — #000000 shaded
+    toward black is #000000, and the field has real black horses in it, which
+    made them flat silhouettes with no mane at all. Those get a lighter mane
+    instead. Either way the two differ, which is the whole requirement: the
+    host's legibility clamp acts on each palette entry separately, so this only
+    has to give the silhouette an edge.
     """
     parsed = parse_hex(hex_color)
     if parsed is None:
         return hex_color
+    if max(parsed) < 64:
+        lifted = tuple(min(255, int(round(c + (255 - c) * fraction))) for c in parsed)
+        return "#%02X%02X%02X" % lifted
     keep = 1 - fraction
     return "#%02X%02X%02X" % tuple(int(round(c * keep)) for c in parsed)
 
@@ -279,7 +285,7 @@ def ornament_for(coat, animated):
         "kind": "sprite",
         "fps": 7 if animated else 0,
         "anchor": "fill-edge",
-        "palette": {"H": coat, "M": darken(coat)},
+        "palette": {"H": coat, "M": mane_for(coat)},
         "frames": frames,
     }
 
@@ -366,10 +372,19 @@ class NotJSON(Exception):
     """The request succeeded and returned something that isn't data.
 
     Worth its own type rather than falling in with a parse error. The derby is
-    a single-page app behind a CDN, and a route the CDN doesn't recognise is
-    served the app's own index.html with a 200 — so "the service is
-    misconfigured" arrives looking exactly like "the response was corrupt",
-    and the two want very different things said about them.
+    a single-page app behind a CDN, and a request it doesn't recognise is
+    answered with the app's own index.html and a 200 rather than a 404 — so a
+    mistyped organisation arrives looking exactly like a corrupt response, and
+    the two want very different things said about them.
+    """
+
+
+class UnknownOrg(Exception):
+    """No organisation by that name.
+
+    Its own type because the name is case-sensitive and nothing about the
+    failure says so: "StackOne" works and "stackone" gets the web page. That is
+    the single most likely thing to be wrong, and it is not guessable.
     """
 
 
@@ -397,7 +412,13 @@ def api_error_code(error):
 
 def fetch(base, org):
     """Two hops: the org's races, then the one worth showing."""
-    listing = get_json("%s/organisations/%s/races" % (base, urllib.parse.quote(org, safe="")))
+    try:
+        listing = get_json(
+            "%s/organisations/%s/races" % (base, urllib.parse.quote(org, safe="")))
+    except NotJSON:
+        # The web page came back instead of data. On this route that means the
+        # organisation isn't one, rather than anything being broken.
+        raise UnknownOrg(org) from None
     races = listing.get("races") if isinstance(listing, dict) else None
     chosen = pick(races or [])
     if not chosen:
@@ -419,13 +440,13 @@ def build():
 
     try:
         race = fetch(base, org)
+    except UnknownOrg:
+        # Worth spelling out: the name is case-sensitive, "StackOne" works and
+        # "stackone" does not, and nothing about the failure would tell you.
+        return message("empty",
+                       'No organisation named "%s". The name is case-sensitive.' % org)
     except NotJSON:
-        # Not a wrong org and not a network fault: the route answered with the
-        # derby's own web page. Say which, because the fix is on the service's
-        # side and nothing the user changes here will help.
-        return message("error",
-                       "The derby's API returned a web page instead of data. "
-                       "Its race endpoints look misconfigured.")
+        return message("error", "The derby answered with a web page instead of data.")
     except urllib.error.HTTPError as error:
         code, detail = api_error_code(error)
         if code == "ORG_NOT_FOUND" or error.code == 404:

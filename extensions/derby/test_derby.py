@@ -77,11 +77,18 @@ class Colour(unittest.TestCase):
     def test_the_mane_is_darker_than_the_coat(self):
         # Without this the mane is the same colour as the body and the horse is
         # a blob at 1.5pt a cell.
-        self.assertEqual(derby.darken("#FFFFFF"), "#8C8C8C")
-        self.assertEqual(derby.darken("#000000"), "#000000")
+        self.assertEqual(derby.mane_for("#FFFFFF"), "#8C8C8C")
 
-    def test_darkening_something_unparseable_leaves_it_alone(self):
-        self.assertEqual(derby.darken("nonsense"), "nonsense")
+    # The field has real black horses in it, and #000000 shaded toward black is
+    # still #000000 — which drew them as flat silhouettes with no mane.
+    def test_a_coat_too_dark_to_darken_gets_a_lighter_mane_instead(self):
+        self.assertNotEqual(derby.mane_for("#000000"), "#000000")
+        self.assertEqual(derby.mane_for("#000000"), "#737373")
+        for coat in ["#000000", "#101010", "#1A0A0A"]:
+            self.assertNotEqual(derby.mane_for(coat), coat, coat)
+
+    def test_shading_something_unparseable_leaves_it_alone(self):
+        self.assertEqual(derby.mane_for("nonsense"), "nonsense")
 
 
 class Numbers(unittest.TestCase):
@@ -280,8 +287,10 @@ class Document(unittest.TestCase):
             self.assertEqual(len(colour), 7, colour)
 
     def test_the_mane_differs_from_the_coat(self):
-        palette = self.build(horses=[horse()])["rows"][0]["ornament"]["palette"]
-        self.assertNotEqual(palette["H"], palette["M"])
+        for body in ["#FFFFFF", "#000000", "#7FD1B9"]:
+            palette = self.build(
+                horses=[horse(colors={"body": body})])["rows"][0]["ornament"]["palette"]
+            self.assertNotEqual(palette["H"], palette["M"], body)
 
     def test_only_a_live_runner_burning_tokens_animates(self):
         # A finished race is a standings table, and a timeline that redraws a
