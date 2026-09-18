@@ -126,8 +126,9 @@ enum ExtensionRuntime {
             // can read before it prints.
             "\(ExtensionManifest.configPrefix)SCHEMA": "\(ExtensionManifest.supportedSchema)",
         ]
-        for key in manifest.config where ExtensionManifest.isPassableConfigKey(key) {
-            if let value = config[key], !value.isEmpty { env[key] = value }
+        for declared in manifest.config
+        where ExtensionManifest.isPassableConfigKey(declared.key) {
+            if let value = config[declared.key], !value.isEmpty { env[declared.key] = value }
         }
         return env
     }

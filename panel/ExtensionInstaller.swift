@@ -22,7 +22,7 @@ enum ExtensionInstaller {
         let asset: String
         let sha256: String
         let requires: [String]
-        let config: [String]
+        let config: [ExtensionManifest.ConfigKey]
     }
 
     enum Failure: Error, Equatable {

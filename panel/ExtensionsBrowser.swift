@@ -190,9 +190,17 @@ struct ExtensionRow: Equatable, Identifiable {
     let availableVersion: String?
     let refusedReason: String?
     let requires: [String]
-    let config: [String]
+    let config: [ExtensionManifest.ConfigKey]
 
     var isInstalled: Bool { installedVersion != nil || refusedReason != nil }
+
+    // The environment keys, not their labels: this line is about what the
+    // extension can read, and the key is the thing a reviewer recognises.
+    var configKeyList: String { config.map(\.key).joined(separator: ", ") }
+
+    // Only an installed extension has anywhere to put a value, and only one
+    // that declared a key has anything to put there.
+    var isConfigurable: Bool { isInstalled && !config.isEmpty }
 
     // Only when both are known and differ. An extension that is installed but
     // unpublished has nothing to update to, which is not the same as being
@@ -403,7 +411,7 @@ struct ExtensionsView: View {
                     // rather than after. The namespace is narrow by design, but
                     // narrow is not the same as nothing.
                     if !row.config.isEmpty {
-                        Text("Reads \(row.config.joined(separator: ", "))")
+                        Text("Reads \(row.configKeyList)")
                             .font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
                     }
                     if !row.requires.isEmpty {

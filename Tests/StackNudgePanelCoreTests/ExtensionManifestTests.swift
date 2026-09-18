@@ -53,7 +53,7 @@ final class ExtensionManifestTests: XCTestCase {
         XCTAssertEqual(m.tab.label, "Derby")
         XCTAssertEqual(m.run, "bin/go")
         XCTAssertEqual(m.requires, ["python3"])
-        XCTAssertEqual(m.config, ["STACKNUDGE_EXT_DERBY_ORG"])
+        XCTAssertEqual(m.config.map(\.key), ["STACKNUDGE_EXT_DERBY_ORG"])
         XCTAssertFalse(m.refresh.onOpen)
         XCTAssertEqual(m.refresh.intervalSeconds, 30)
         XCTAssertFalse(m.refresh.whileFocusedOnly)
@@ -161,5 +161,104 @@ final class ExtensionManifestTests: XCTestCase {
                 parse(#"{"id":"derby","name":"D","version":1,"schema":1}"#) else {
             return XCTFail("expected malformed")
         }
+    }
+
+    // MARK: - Config keys
+
+    // The original form. Every manifest written before there was a settings
+    // form uses it, and it has to keep working — `system` still ships it.
+    func testABareStringIsStillAValidConfigKey() {
+        let json = """
+            {"id":"derby","name":"D","version":"1","schema":1,
+             "config":["STACKNUDGE_EXT_DERBY_ORG"]}
+            """
+        guard let m = manifest(json) else { return }
+        XCTAssertEqual(m.config.count, 1)
+        XCTAssertEqual(m.config[0].key, "STACKNUDGE_EXT_DERBY_ORG")
+        XCTAssertNil(m.config[0].label)
+    }
+
+    // The object form is what lets Settings render a labelled field rather than
+    // a raw environment variable name.
+    func testTheObjectFormCarriesItsOwnLabelling() {
+        let json = """
+            {"id":"derby","name":"D","version":"1","schema":1,
+             "config":[{"key":"STACKNUDGE_EXT_DERBY_ORG","label":"Organisation",
+                        "help":"Whose races to show.","placeholder":"stackone"}]}
+            """
+        guard let m = manifest(json) else { return }
+        XCTAssertEqual(m.config[0].key, "STACKNUDGE_EXT_DERBY_ORG")
+        XCTAssertEqual(m.config[0].label, "Organisation")
+        XCTAssertEqual(m.config[0].help, "Whose races to show.")
+        XCTAssertEqual(m.config[0].placeholder, "stackone")
+    }
+
+    // One list, both forms. Widening the element rather than adding a second
+    // array is what keeps the passable keys and the form fields from drifting.
+    func testBothFormsCanShareOneList() {
+        let json = """
+            {"id":"derby","name":"D","version":"1","schema":1,
+             "config":["STACKNUDGE_EXT_A",{"key":"STACKNUDGE_EXT_B","label":"B"}]}
+            """
+        guard let m = manifest(json) else { return }
+        XCTAssertEqual(m.config.map(\.key), ["STACKNUDGE_EXT_A", "STACKNUDGE_EXT_B"])
+        XCTAssertEqual(m.config.map(\.label), [nil, "B"])
+    }
+
+    // The namespace guard is on the key, not on the form it arrived in — an
+    // object is not a way around it.
+    func testTheObjectFormIsHeldToTheSameNamespace() {
+        let json = """
+            {"id":"derby","name":"D","version":"1","schema":1,
+             "config":[{"key":"AWS_SECRET_ACCESS_KEY","label":"Harmless"}]}
+            """
+        XCTAssertEqual(parse(json), .failure(.invalidConfigKey("AWS_SECRET_ACCESS_KEY")))
+    }
+
+    // An object without a key is not a config key at all, and must not decode
+    // into one with an empty name that then passes the prefix check by accident.
+    func testAnObjectWithoutAKeyIsMalformed() {
+        let json = """
+            {"id":"derby","name":"D","version":"1","schema":1,
+             "config":[{"label":"Organisation"}]}
+            """
+        guard case .failure(.malformed) = parse(json) else {
+            return XCTFail("expected malformed")
+        }
+    }
+
+    // The label a form puts beside the field. Stripping the namespace is not
+    // pretty, but an extension that declares nothing still gets a usable field
+    // rather than STACKNUDGE_EXT_DERBY_ORG in a settings pane.
+    func testDisplayLabelFallsBackToTheKeyWithoutItsNamespace() {
+        let bare = ExtensionManifest.ConfigKey(
+            key: "STACKNUDGE_EXT_DERBY_ORG", label: nil, help: nil, placeholder: nil)
+        XCTAssertEqual(bare.displayLabel, "DERBY_ORG")
+
+        let labelled = ExtensionManifest.ConfigKey(
+            key: "STACKNUDGE_EXT_DERBY_ORG", label: "Organisation", help: nil, placeholder: nil)
+        XCTAssertEqual(labelled.displayLabel, "Organisation")
+
+        // A label of spaces is a label the extension forgot to fill in.
+        let blank = ExtensionManifest.ConfigKey(
+            key: "STACKNUDGE_EXT_DERBY_ORG", label: "   ", help: nil, placeholder: nil)
+        XCTAssertEqual(blank.displayLabel, "DERBY_ORG")
+    }
+
+    // The index round-trips these, so a plain key list must not come back out
+    // as a wall of single-field objects.
+    func testEncodingKeepsWhicheverFormItCameIn() throws {
+        let keys = [
+            ExtensionManifest.ConfigKey(key: "STACKNUDGE_EXT_A", label: nil,
+                                       help: nil, placeholder: nil),
+            ExtensionManifest.ConfigKey(key: "STACKNUDGE_EXT_B", label: "B",
+                                       help: nil, placeholder: nil),
+        ]
+        let data = try JSONEncoder().encode(keys)
+        let text = String(decoding: data, as: UTF8.self)
+        XCTAssertTrue(text.contains("\"STACKNUDGE_EXT_A\","), text)
+        XCTAssertTrue(text.contains("\"label\":\"B\""), text)
+        XCTAssertEqual(try JSONDecoder().decode([ExtensionManifest.ConfigKey].self, from: data),
+                       keys)
     }
 }

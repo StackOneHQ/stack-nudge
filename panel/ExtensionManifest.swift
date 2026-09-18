@@ -17,6 +17,31 @@ struct ExtensionManifest: Equatable {
         static let never = Refresh(onOpen: true, intervalSeconds: nil, whileFocusedOnly: true)
     }
 
+    // A config key the extension declares. A bare string is the original form
+    // and stays valid; the object form adds what a settings form needs in order
+    // to render a field for it rather than a raw environment variable name.
+    //
+    // One list rather than two. The tempting shape is to leave `config` as names
+    // and add a parallel array describing them — which is the same mistake as
+    // the asset name that used to be written in both the packer and the index
+    // writer. The two drift, and what you get is a form field for a key that is
+    // never passed, or a passed key with nowhere to set it.
+    struct ConfigKey: Equatable {
+        let key: String
+        let label: String?
+        let help: String?
+        let placeholder: String?
+
+        // What a form puts next to the field. Falling back to the key with its
+        // namespace stripped is not pretty, but it is always right and it is
+        // better than the bare STACKNUDGE_EXT_DERBY_ORG — an extension that
+        // doesn't bother still gets a usable field.
+        var displayLabel: String {
+            if let label, !label.trimmingCharacters(in: .whitespaces).isEmpty { return label }
+            return String(key.dropFirst(key.hasPrefix(ExtensionManifest.configPrefix) ? ExtensionManifest.configPrefix.count : 0))
+        }
+    }
+
     let id: String
     let name: String
     let version: String
@@ -24,7 +49,7 @@ struct ExtensionManifest: Equatable {
     let tab: Tab
     let run: String
     let requires: [String]
-    let config: [String]
+    let config: [ConfigKey]
     let refresh: Refresh
 
     var tabEntry: ExtensionTab { ExtensionTab(id: id, label: tab.label) }
@@ -126,8 +151,8 @@ struct ExtensionManifest: Equatable {
         let run = decoded.run ?? "./run"
         guard isValidRunPath(run) else { return .failure(.invalidRunPath(run)) }
         let config = decoded.config ?? []
-        if let stray = config.first(where: { !isPassableConfigKey($0) }) {
-            return .failure(.invalidConfigKey(stray))
+        if let stray = config.first(where: { !isPassableConfigKey($0.key) }) {
+            return .failure(.invalidConfigKey(stray.key))
         }
 
         return .success(ExtensionManifest(
@@ -174,7 +199,42 @@ struct ExtensionManifest: Equatable {
         let tab: Tab?
         let run: String?
         let requires: [String]?
-        let config: [String]?
+        let config: [ConfigKey]?
         let refresh: Refresh?
+    }
+}
+
+// Decoded from either a bare key name or an object describing it. Written back
+// in whichever form it came in, so a round-trip through the index doesn't turn
+// every extension's plain key list into a wall of objects.
+extension ExtensionManifest.ConfigKey: Codable {
+
+    private enum CodingKeys: String, CodingKey {
+        case key, label, help, placeholder
+    }
+
+    init(from decoder: Decoder) throws {
+        let single = try decoder.singleValueContainer()
+        if let name = try? single.decode(String.self) {
+            self.init(key: name, label: nil, help: nil, placeholder: nil)
+            return
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(key: try container.decode(String.self, forKey: .key),
+                  label: try container.decodeIfPresent(String.self, forKey: .label),
+                  help: try container.decodeIfPresent(String.self, forKey: .help),
+                  placeholder: try container.decodeIfPresent(String.self, forKey: .placeholder))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        guard label != nil || help != nil || placeholder != nil else {
+            var single = encoder.singleValueContainer()
+            return try single.encode(key)
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(key, forKey: .key)
+        try container.encodeIfPresent(label, forKey: .label)
+        try container.encodeIfPresent(help, forKey: .help)
+        try container.encodeIfPresent(placeholder, forKey: .placeholder)
     }
 }
