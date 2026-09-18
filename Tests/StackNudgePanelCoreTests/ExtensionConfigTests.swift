@@ -16,12 +16,14 @@ final class ExtensionConfigTests: XCTestCase {
                        existing: [String: String] = [:],
                        persist: @escaping (String, String?) -> Void = { _, _ in },
                        didChange: @escaping () -> Void = {},
+                       origin: PanelMode = .settings,
                        onRemove: @escaping () -> Void = {}) -> ExtensionConfigModel {
         let row = ExtensionRow(id: "derby", name: "Token Derby", description: "",
                                installedVersion: "1.0.0", availableVersion: nil,
                                refusedReason: nil, requires: [], config: keys)
-        return ExtensionConfigModel(row: row, read: { existing }, persist: persist,
-                                    didChange: didChange, onRemove: onRemove)
+        return ExtensionConfigModel(row: row, origin: origin, read: { existing },
+                                    persist: persist, didChange: didChange,
+                                    onRemove: onRemove)
     }
 
     // MARK: - Seeding
@@ -129,6 +131,22 @@ final class ExtensionConfigTests: XCTestCase {
         let m = model(keys: [], onRemove: { removals += 1 })
         m.onRemove()
         XCTAssertEqual(removals, 1)
+    }
+
+    // MARK: - Where Back goes
+
+    // Not a constant. The page is reached from the Settings category that lists
+    // installed extensions *and* from the browser, and sending everyone to the
+    // browser put people on a page they had never opened — with a chevron
+    // reading "Extensions" to tell them so.
+    func testBackReturnsWhereThePageWasOpenedFrom() {
+        XCTAssertEqual(model(keys: [], origin: .settings).origin, .settings)
+        XCTAssertEqual(model(keys: [], origin: .extensions).origin, .extensions)
+    }
+
+    func testTheBackLabelNamesTheDestination() {
+        XCTAssertEqual(model(keys: [], origin: .settings).backLabel, "Settings")
+        XCTAssertEqual(model(keys: [], origin: .extensions).backLabel, "Browse")
     }
 
     // MARK: - Validation

@@ -15,6 +15,13 @@ import SwiftUI
 final class ExtensionConfigModel: ObservableObject {
 
     let row: ExtensionRow
+    // Where Back goes, which is not a constant: this page is reached both from
+    // the Settings category that lists installed extensions and from the
+    // browser. Sending everyone to the browser put people on a page they had
+    // never opened, and told them so with a chevron reading "Extensions".
+    let origin: PanelMode
+
+    var backLabel: String { origin == .extensions ? "Browse" : "Settings" }
 
     var id: String { row.id }
     var name: String { row.name }
@@ -30,11 +37,13 @@ final class ExtensionConfigModel: ObservableObject {
     let onRemove: () -> Void
 
     init(row: ExtensionRow,
+         origin: PanelMode = .settings,
          read: () -> [String: String] = ConfigFile.read,
          persist: @escaping (String, String?) -> Void = ExtensionConfigModel.writeToConfigFile,
          didChange: @escaping () -> Void = {},
          onRemove: @escaping () -> Void = {}) {
         self.row = row
+        self.origin = origin
         self.persist = persist
         self.didChange = didChange
         self.onRemove = onRemove
@@ -178,7 +187,7 @@ struct ExtensionConfigView: View {
             Button(action: onBack) {
                 HStack(spacing: 4) {
                     Image(systemName: "chevron.left").font(.caption.weight(.semibold))
-                    Text("Extensions").font(.caption)
+                    Text(model.backLabel).font(.caption)
                 }
                 .foregroundStyle(.secondary)
             }

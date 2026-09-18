@@ -170,7 +170,7 @@ struct PanelContentView: View {
                 // would open showing the first's values.
                 case .extensionConfig(let id):
                     if let model = nav.extensionConfig, model.id == id {
-                        ExtensionConfigView(model: model) { nav.mode = .extensions }
+                        ExtensionConfigView(model: model) { nav.mode = model.origin }
                             .id(id)
                     } else {
                         // Unreachable in practice — the model is set before the
@@ -896,9 +896,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // Every installed extension gets a page, including one that declares no
     // config keys: the page is where Remove lives, and a row that opens nothing
     // would make Enter mean something different depending on the extension.
-    func configureExtension(_ row: ExtensionRow) {
+    func configureExtension(_ row: ExtensionRow, from origin: PanelMode = .extensions) {
         nav.extensionConfig = ExtensionConfigModel(
             row: row,
+            origin: origin,
             // Saving is not enough on its own: the environment is rebuilt for
             // each invocation, so the tab only shows the new value once the
             // extension runs again.
@@ -910,12 +911,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // From a Settings row, which knows only the id.
     func openExtension(_ id: String) {
         guard let row = nav.installedExtensions.first(where: { $0.id == id }) else { return }
-        configureExtension(row)
+        configureExtension(row, from: .settings)
     }
 
     private func removeExtension(_ id: String) {
         extensionCatalog.remove(id)
-        nav.mode = .settings
+        // Back where the page was opened from — the extension it described no
+        // longer exists, so staying on it is not an option.
+        nav.mode = nav.extensionConfig?.origin ?? .settings
     }
 
     // Installed and refused, as the Extensions settings category renders them.
@@ -3772,7 +3775,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         if case .extensionConfig = nav.mode {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain, event.keyCode == KeyCode.escape else { return false }
-            nav.mode = .extensions
+            // Wherever this page was opened from, which is the Settings list as
+            // often as the browser.
+            nav.mode = nav.extensionConfig?.origin ?? .extensions
             return true
         }
 
