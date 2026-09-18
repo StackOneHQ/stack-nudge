@@ -32,4 +32,4 @@ stack-nudge is pre-1.0. Only the latest published release receives security fixe
 
 ## Privacy
 
-stack-nudge runs entirely locally — see [`PRIVACY.md`](./PRIVACY.md) for the full story. There is no network telemetry, no analytics, no cloud component. Voice synthesis happens locally via stackvox; the only network traffic at install time is `pip install stackvox` from PyPI.
+There is no network telemetry, no analytics and no cloud component, and nothing is sent to StackOne. The panel does call out to GitHub, and to Slack once you configure it. [`PRIVACY.md`](./PRIVACY.md) lists every call it makes and what each one carries. Voice synthesis itself happens locally via stackvox, which `./install.sh` pip-installs from PyPI.
