@@ -291,3 +291,26 @@ struct ThinScrollers: NSViewRepresentable {
         }
     }
 }
+
+// Collapse the focused field editor's selection to a caret at its end.
+//
+// AppKit selects a field's entire contents when it becomes first responder,
+// which throws away the character that asked for focus in the first place —
+// type "eng" into a type-to-search box and get "ng". Both the history filter
+// and the extensions search hand focus over mid-keystroke this way, so this
+// lives here rather than as a private copy in each.
+//
+// It has to run once the field editor really *is* first responder, and a miss
+// doesn't fail safe — it reintroduces the bug, intermittently. So callers key
+// off focus actually becoming true rather than predicting when it will: the
+// editor is already installed by the time that fires, with the select-all
+// range in place, which a scheduled hop only happened to be late enough for.
+enum FieldEditor {
+
+    // Whichever field just took focus is the key window's first responder, so
+    // there is nothing to identify: the one that asked is the one that has it.
+    static func collapseSelectionToEnd() {
+        guard let editor = NSApp.keyWindow?.firstResponder as? NSTextView else { return }
+        editor.setSelectedRange(NSRange(location: editor.string.count, length: 0))
+    }
+}

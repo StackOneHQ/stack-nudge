@@ -359,28 +359,14 @@ struct PanelContentView: View {
         .onChange(of: nav.historyFilterFocusRequests) { _ in
             historyFieldFocused = true
         }
-        // AppKit selects a field's entire contents when it becomes first
-        // responder, which would throw away the character that asked for focus
-        // in the first place (type "eng", get "ng"). Collapsing to a caret at
-        // the end fixes that, but it has to happen once the field editor really
-        // is first responder — and a miss doesn't fail safe, it reintroduces the
-        // very bug, intermittently. So key off focus actually becoming true
-        // rather than predicting when it will: the editor is already installed
-        // by the time this fires (with the select-all range in place), which a
-        // scheduled hop only happened to be late enough for.
-        //
-        // It also makes / on an existing filter extend it rather than replace
-        // it, the more useful default for a box that Esc already clears.
+        // Keyed off focus actually becoming true rather than a scheduled hop —
+        // see FieldEditor.collapseSelectionToEnd for why a miss here doesn't
+        // fail safe. It also makes / on an existing filter extend it rather
+        // than replace it, the more useful default for a box Esc already
+        // clears.
         .onChange(of: historyFieldFocused) { focused in
-            if focused { Self.collapseFilterSelectionToEnd() }
+            if focused { FieldEditor.collapseSelectionToEnd() }
         }
-    }
-
-    // The history filter is the only field focused at this point, so the key
-    // window's field editor is it.
-    private static func collapseFilterSelectionToEnd() {
-        guard let editor = NSApp.keyWindow?.firstResponder as? NSTextView else { return }
-        editor.setSelectedRange(NSRange(location: editor.string.count, length: 0))
     }
 
     // Durable log, newest first. Read-only by design: these records have no
@@ -3784,11 +3770,16 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // Reload keeps ⌘R and configure takes ⌘⏎, since a plain letter is a
         // search term.
         if nav.mode == .extensions {
-            let rows = ExtensionCatalog.matching(
-                ExtensionCatalog.rows(catalogue: extensionCatalog.entries,
-                                      installed: extensions.manifests,
-                                      refused: extensions.refused),
-                query: extensionCatalog.query)
+            // Built where it is needed rather than up front: this is a merge of
+            // three lists plus a sort and a filter, and it ran on every key
+            // event including the ones this branch doesn't handle.
+            func visibleRows() -> [ExtensionRow] {
+                ExtensionCatalog.matching(
+                    ExtensionCatalog.rows(catalogue: extensionCatalog.entries,
+                                          installed: extensions.manifests,
+                                          refused: extensions.refused),
+                    query: extensionCatalog.query)
+            }
             let onlyCommand = mods.intersection([.command, .control, .option, .shift]) == [.command]
 
             if onlyCommand {
@@ -3800,7 +3791,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                     return true
                 case KeyCode.returnKey, KeyCode.numpadEnter:
                     if let id = extensionCatalog.selectedID,
-                       let row = rows.first(where: { $0.id == id }),
+                       let row = visibleRows().first(where: { $0.id == id }),
                        row.isConfigurable, row.refusedReason == nil {
                         configureExtension(row)
                     }
@@ -3821,8 +3812,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 extensionCatalog.query += typed
                 extensionCatalog.focusSearch()
             case .moveSelection(let delta):
-                extensionCatalog.moveSelection(among: rows, by: delta)
-            case .activate:     extensionCatalog.activateSelection(among: rows)
+                extensionCatalog.moveSelection(among: visibleRows(), by: delta)
+            case .activate:     extensionCatalog.activateSelection(among: visibleRows())
             case .swallow:      break
             }
             return true

@@ -319,13 +319,17 @@ struct ExtensionsView: View {
     @FocusState private var searchFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        // Once per body pass. visibleRows is a merge of three lists plus a sort
+        // and a filter, and it was read from the ScrollView, from .onChange's
+        // value expression, from its closure and twice from the footer.
+        let rows = visibleRows
+        return VStack(alignment: .leading, spacing: 0) {
             header
             searchField
             Divider().opacity(0.4)
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
-                    catalogueBody
+                    catalogueBody(rows)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
@@ -341,8 +345,8 @@ struct ExtensionsView: View {
                 FooterHint(label: catalog.query.isEmpty ? "Back" : "Clear", keys: ["Esc"])
                 FooterHint(label: "Search", keys: ["/"])
                 FooterHint(label: "Select", keys: ["↑", "↓"])
-                FooterHint(label: activationLabel, keys: ["⏎"])
-                if selectedRow?.isConfigurable == true {
+                FooterHint(label: activationLabel(in: rows), keys: ["⏎"])
+                if selectedRow(in: rows)?.isConfigurable == true {
                     FooterHint(label: "Configure", keys: ["⌘⏎"])
                 }
                 // ⌘R rather than R: a plain letter seeds the search field, the
@@ -362,26 +366,34 @@ struct ExtensionsView: View {
             searchFocused = false
         }
         .onChange(of: catalog.searchFocusRequests) { _ in searchFocused = true }
+        // AppKit selects the field's whole contents when it becomes first
+        // responder, which throws away the character that asked for focus:
+        // type "de" and get "e". The history filter hands focus over the same
+        // way and needs the same collapse — see FieldEditor for why this keys
+        // off focus actually becoming true rather than a scheduled hop.
+        .onChange(of: searchFocused) { focused in
+            if focused { FieldEditor.collapseSelectionToEnd() }
+        }
         // The selection has to survive the list changing under it, and it was
         // never reconciled from anywhere — the method existed and only the
         // tests called it. Searching made that visible: a query that filters
         // out the selected row leaves selectedID pointing at something not on
         // screen, and Enter then does nothing at all rather than acting on
         // whatever is in front of you.
-        .onChange(of: visibleRows.map(\.id)) { _ in
-            catalog.reconcileSelection(among: visibleRows)
+        .onChange(of: rows.map(\.id)) { _ in
+            catalog.reconcileSelection(among: rows)
         }
     }
 
-    private var selectedRow: ExtensionRow? {
+    private func selectedRow(in rows: [ExtensionRow]) -> ExtensionRow? {
         guard let id = catalog.selectedID else { return nil }
-        return visibleRows.first { $0.id == id }
+        return rows.first { $0.id == id }
     }
 
     // Named for what Enter will actually do to the selected row, rather than a
     // generic verb that is wrong two thirds of the time.
-    private var activationLabel: String {
-        guard let row = selectedRow else { return "Select" }
+    private func activationLabel(in rows: [ExtensionRow]) -> String {
+        guard let row = selectedRow(in: rows) else { return "Select" }
         if catalog.failure(for: row.id) != nil { return "Dismiss" }
         if row.updateAvailable { return "Update" }
         return row.isInstalled ? "Remove" : "Install"
@@ -446,8 +458,7 @@ struct ExtensionsView: View {
     }
 
     @ViewBuilder
-    private var catalogueBody: some View {
-        let rows = visibleRows
+    private func catalogueBody(_ rows: [ExtensionRow]) -> some View {
         switch catalog.load {
         // A failed *catalogue* fetch does not hide what is installed — those
         // rows are read from disk and are still true, and one of them may be
