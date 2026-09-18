@@ -195,6 +195,20 @@ def race(status="live", **extra):
     return base
 
 
+def runner_of(row):
+    """The horse in a row's ornament list.
+
+    Rows carry two now — the finish post anchored trailing, then the runner
+    anchored fill-edge — so a test about the horse has to say which it means
+    rather than taking the first one it finds.
+    """
+    return next(o for o in row["ornaments"] if o["anchor"] == "fill-edge")
+
+
+def post_of(row):
+    return next(o for o in row["ornaments"] if o["anchor"] == "trailing")
+
+
 def horse(id="h1", **extra):
     base = {"horse_id": id, "name": "black & white", "user_name": "Yashika",
             "rank": 1, "current_tokens": 1000, "scored_tokens": 900,
@@ -318,7 +332,7 @@ class Document(unittest.TestCase):
     def test_a_horse_with_no_colour_gets_the_default_coat(self):
         row = self.build(horses=[horse(colors=None)])["rows"][0]
         self.assertEqual(row["track"]["tint"], derby.DEFAULT_COAT)
-        self.assertEqual(row["ornament"]["palette"]["H"], derby.DEFAULT_COAT)
+        self.assertEqual(runner_of(row)["palette"]["H"], derby.DEFAULT_COAT)
 
     # Every colour the document carries has to be one the host will read back.
     def test_every_emitted_colour_is_in_the_form_the_host_accepts(self):
@@ -328,7 +342,8 @@ class Document(unittest.TestCase):
         emitted = []
         for row in doc["rows"]:
             emitted.append(row["track"]["tint"])
-            emitted.extend(row["ornament"]["palette"].values())
+            for ornament in row["ornaments"]:
+                emitted.extend(ornament["palette"].values())
         for colour in emitted:
             self.assertIsNotNone(derby.parse_hex(colour), colour)
             self.assertTrue(colour.startswith("#"), colour)
@@ -336,21 +351,21 @@ class Document(unittest.TestCase):
 
     def test_the_mane_differs_from_the_coat(self):
         for body in ["#FFFFFF", "#000000", "#7FD1B9"]:
-            palette = self.build(
-                horses=[horse(colors={"body": body})])["rows"][0]["ornament"]["palette"]
+            row = self.build(horses=[horse(colors={"body": body})])["rows"][0]
+            palette = runner_of(row)["palette"]
             self.assertNotEqual(palette["H"], palette["M"], body)
 
     def test_only_a_live_runner_burning_tokens_animates(self):
         # A finished race is a standings table, and a timeline that redraws a
         # row to show the same thing is the cost the compact widget already
         # learned to avoid.
-        live = self.build(horses=[horse()])["rows"][0]["ornament"]
+        live = runner_of(self.build(horses=[horse()])["rows"][0])
         self.assertEqual(live["fps"], 7)
         self.assertEqual(len(live["frames"]), 2)
 
         for still in (self.build(status="finished", horses=[horse()]),
                       self.build(horses=[horse(pace_15m=0)])):
-            ornament = still["rows"][0]["ornament"]
+            ornament = runner_of(still["rows"][0])
             self.assertEqual(ornament["fps"], 0)
             self.assertEqual(len(ornament["frames"]), 1)
 
@@ -433,6 +448,36 @@ class Document(unittest.TestCase):
         self.assertTrue(doc["message"])
         self.assertEqual(doc["rows"], [])
 
+    # The post is anchored trailing, so it sits at the end of the track whatever
+    # the fill is doing — that is what makes it a line rather than something the
+    # horse drags along. Still, too: a chequer that animated would be a fault.
+    def test_every_row_gets_a_finish_post(self):
+        for status in ["live", "finished", "pending"]:
+            row = self.build(status=status, horses=[horse()])["rows"][0]
+            post = post_of(row)
+            self.assertEqual(post["fps"], 0, status)
+            self.assertEqual(len(post["frames"]), 1, status)
+
+    # The horse draws over the post at the line rather than under it.
+    def test_the_horse_draws_on_top_of_the_post(self):
+        row = self.build(horses=[horse()])["rows"][0]
+        self.assertEqual([o["anchor"] for o in row["ornaments"]],
+                         ["trailing", "fill-edge"])
+
+    # Its palette is fixed rather than taken from the coat, so a white horse
+    # doesn't get an invisible finish line.
+    def test_the_post_keeps_its_own_colours(self):
+        for body in ["#FFFFFF", "#000000"]:
+            post = post_of(self.build(horses=[horse(colors={"body": body})])["rows"][0])
+            self.assertEqual(post["palette"], derby.FINISH_PALETTE)
+            self.assertNotEqual(post["palette"]["W"], post["palette"]["K"])
+
+    def test_the_post_alternates_every_row(self):
+        rows = derby.FINISH_POST
+        self.assertTrue(all(len(r) == 2 for r in rows))
+        for above, below in zip(rows, rows[1:]):
+            self.assertNotEqual(above, below)
+
     def test_the_sync_action_is_bound_to_a_key_the_host_will_accept(self):
         # An action whose key request is refused has no shortcut and no button,
         # so it would be unreachable.
@@ -458,7 +503,7 @@ class Sprite(unittest.TestCase):
 
     def test_both_frames_stay_inside_the_hosts_caps(self):
         # 32 frames x 24 rows x 64 columns, per docs/extensions.md.
-        for frame in (derby.HORSE_STANDING, derby.HORSE_EXTENDED):
+        for frame in (derby.HORSE_STANDING, derby.HORSE_EXTENDED, derby.FINISH_POST):
             self.assertLessEqual(len(frame), 24)
             self.assertTrue(all(len(row) <= 64 for row in frame))
 
@@ -474,10 +519,13 @@ class Sprite(unittest.TestCase):
             self.assertEqual(len({len(row) for row in frame}), 1, frame)
 
     def test_the_sprite_uses_only_palette_keys_it_declares(self):
-        palette = set(derby.ornament_for("#FFFFFF", True)["palette"])
-        for frame in (derby.HORSE_STANDING, derby.HORSE_EXTENDED):
-            used = {c for row in frame for c in row if c != "."}
-            self.assertTrue(used <= palette, used - palette)
+        for ornament, frames in ((derby.ornament_for("#FFFFFF", True),
+                                  (derby.HORSE_STANDING, derby.HORSE_EXTENDED)),
+                                 (derby.finish_line(), (derby.FINISH_POST,))):
+            palette = set(ornament["palette"])
+            for frame in frames:
+                used = {c for row in frame for c in row if c != "."}
+                self.assertTrue(used <= palette, used - palette)
 
 
 class Base(unittest.TestCase):

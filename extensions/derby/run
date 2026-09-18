@@ -53,6 +53,18 @@ HORSE_EXTENDED = HORSE_STANDING[:8] + [
     "..H...H.H...H...",
 ]
 
+# The finish line: a two-cell chequer, anchored at the trailing edge so it sits
+# at the end of the track whatever the fill is doing. Eleven rows to stand as
+# tall as the horse, so the post reads as a post rather than a dash.
+#
+# "W" and "K" rather than the coat's keys: a palette is per-ornament, so these
+# stay fixed while every horse's silks differ.
+FINISH_POST = [
+    "WK" if row % 2 == 0 else "KW"
+    for row in range(11)
+]
+FINISH_PALETTE = {"W": "#FFFFFF", "K": "#111111"}
+
 # Anything the service doesn't give a colour for. The host clamps whatever it
 # is handed toward legibility against the current appearance, so this only has
 # to be roughly right rather than correct in both modes.
@@ -303,6 +315,18 @@ def ornament_for(coat, animated):
     }
 
 
+def finish_line():
+    """The post at the end of the track. Still, and anchored trailing, so it
+    stays put while the horse rides the fill."""
+    return {
+        "kind": "sprite",
+        "fps": 0,
+        "anchor": "trailing",
+        "palette": FINISH_PALETTE,
+        "frames": [FINISH_POST],
+    }
+
+
 def row_for(identifier, horse, leader, elapsed, live, names):
     colours = horse.get("colors")
     coat = normalise_hex(colours.get("body") if isinstance(colours, dict) else None)
@@ -325,9 +349,10 @@ def row_for(identifier, horse, leader, elapsed, live, names):
         "value": short_tokens(tokens),
         "footnote": footnote_for(horse, names),
         "track": {"fill": position(tokens, leader, elapsed), "tint": coat},
-        # Only a live runner that is actually burning tokens animates. A
-        # finished race is a standings table.
-        "ornament": ornament_for(coat, live and pace > 0),
+        # The post first so the horse draws over it at the line, then the
+        # horse. Only a live runner burning tokens animates — a finished race
+        # is a standings table.
+        "ornaments": [finish_line(), ornament_for(coat, live and pace > 0)],
     }
 
 

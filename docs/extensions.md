@@ -210,7 +210,14 @@ so a `#FFFFFF` bar is not invisible in light mode. Hue is preserved.
 
 ### `ornament`
 
-An animated pixel grid, drawn on the row's track band.
+An animated pixel grid, drawn on the row's track band. A row may carry several —
+send `ornaments` as a list instead, or alongside `ornament`, which reads first.
+Up to 4; they draw in the order written, so the last one is on top.
+
+Two are what a race needs: a still chequered post anchored `trailing`, which
+stays at the end of the track, and the runner anchored `fill-edge`, which rides
+the head of the fill. One `ornament` could only ever be one of them.
+
 
 - `kind` — only `"sprite"` today. An unknown kind is dropped rather than guessed at.
 - `fps` — `0` or absent means a still image. Capped at 30.
@@ -380,6 +387,7 @@ reviewer should check that are easy to miss:
 | actions | 16 per list |
 | text fields | 256 characters |
 | sprite | 32 frames × 24 rows × 64 columns, 30 fps |
+| ornaments | 4 per row |
 | tab label | 16 characters |
 | poll interval | 5 s minimum |
 

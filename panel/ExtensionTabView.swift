@@ -190,8 +190,8 @@ struct ExtensionTabView: View {
             // The ornament no longer rides on the track's existence — it used to
             // be passed only into trackView, so a row without a bar silently
             // dropped a sprite that had parsed perfectly well.
-            if row.track != nil || row.ornament != nil {
-                trackView(row.track, ornament: row.ornament, label: row.title,
+            if row.track != nil || !row.ornaments.isEmpty {
+                trackView(row.track, ornaments: row.ornaments, label: row.title,
                           value: row.value, inset: inset)
             }
             if let footnote = row.footnote {
@@ -213,13 +213,13 @@ struct ExtensionTabView: View {
     // slot; without it the bar hugs the top of a 12pt band and sits visibly
     // closer to the title than to the footnote.
     private func trackView(_ track: ExtensionDocument.Track?,
-                           ornament: ExtensionDocument.Ornament?,
+                           ornaments: [ExtensionDocument.Ornament],
                            label: String,
                            value: String?,
                            inset: Bool) -> some View {
         let tint = Self.readable(Self.hexColor(track?.tint)) ?? .accentColor
         let fill = track?.fill ?? 0
-        let band = Self.bandHeight(for: ornament)
+        let band = Self.bandHeight(for: ornaments)
         return GeometryReader { geo in
             // Bottom-aligned so the bar sits at the foot of the band and a
             // sprite stands *on* it. Centring both put the track line through
@@ -236,7 +236,9 @@ struct ExtensionTabView: View {
                         .frame(width: max(fill * geo.size.width, fill > 0 ? 2 : 0),
                                height: Self.fillHeight(inset: inset))
                 }
-                if let ornament {
+                // Drawn in the order they were sent, so a document decides
+                // what sits on top of what.
+                ForEach(Array(ornaments.enumerated()), id: \.offset) { _, ornament in
                     SpriteView(ornament: ornament)
                         .offset(x: Self.spriteOffset(ornament, fill: fill, width: geo.size.width),
                                 // Hooves land on the bar's centre line rather
@@ -273,12 +275,18 @@ struct ExtensionTabView: View {
         inset ? barHeight / 2 : barHeight
     }
 
-    static func bandHeight(for ornament: ExtensionDocument.Ornament?) -> CGFloat {
-        guard let ornament else { return 12 }
+    // Tall enough for the tallest of them: a short marker beside a tall sprite
+    // must not shrink the band the sprite needs.
+    static func bandHeight(for ornaments: [ExtensionDocument.Ornament]) -> CGFloat {
+        let tallest = ornaments.map { CGFloat(SpriteView.rows($0)) * SpriteView.cell }.max() ?? 0
+        guard tallest > 0 else { return 12 }
         // Room for the whole sprite standing on the bar's centre line, plus a
         // point of headroom so a tall one doesn't touch the title above.
-        let sprite = CGFloat(SpriteView.rows(ornament)) * SpriteView.cell
-        return max(12, sprite + barHeight / 2 + 1)
+        return max(12, tallest + barHeight / 2 + 1)
+    }
+
+    static func bandHeight(for ornament: ExtensionDocument.Ornament?) -> CGFloat {
+        bandHeight(for: ornament.map { [$0] } ?? [])
     }
 
     static func percentLabel(_ fill: Double) -> String {

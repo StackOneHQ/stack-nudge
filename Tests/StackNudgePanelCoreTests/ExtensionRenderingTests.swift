@@ -231,6 +231,39 @@ final class ExtensionRenderingTests: XCTestCase {
         XCTAssertEqual(ExtensionTabView.bandHeight(for: nil), 12)
     }
 
+    // A short marker beside a tall sprite must not shrink the band the sprite
+    // needs — the finish post is 11 rows, but a 2-row one alongside a horse
+    // would have clipped it if the band took the last ornament rather than the
+    // tallest.
+    func testTheBandFitsTheTallestOrnament() {
+        let tall = ornament("""
+            {"palette":{"H":"#fff"},
+             "frames":[["H","H","H","H","H","H","H","H","H","H","H"]]}
+            """)
+        let short = ornament("{\"palette\":{\"W\":\"#fff\"},\"frames\":[[\"W\",\"W\"]]}")
+        XCTAssertEqual(ExtensionTabView.bandHeight(for: [short, tall]),
+                       ExtensionTabView.bandHeight(for: [tall]))
+        XCTAssertGreaterThan(ExtensionTabView.bandHeight(for: [short, tall]),
+                             ExtensionTabView.bandHeight(for: [short]))
+    }
+
+    func testAnEmptyOrnamentListKeepsTheDefaultBand() {
+        XCTAssertEqual(ExtensionTabView.bandHeight(for: []), 12)
+    }
+
+    // The finish post is anchored trailing, so it parks at the far edge and
+    // stays there whatever the fill does — that is what makes it a line rather
+    // than something the horse drags along.
+    func testATrailingOrnamentIgnoresTheFill() {
+        let post = ornament("""
+            {"anchor":"trailing","palette":{"W":"#fff"},"frames":[["WK"]]}
+            """)
+        let atStart = ExtensionTabView.spriteOffset(post, fill: 0, width: 100)
+        let atEnd = ExtensionTabView.spriteOffset(post, fill: 1, width: 100)
+        XCTAssertEqual(atStart, atEnd)
+        XCTAssertEqual(atEnd, 100 - SpriteView.cell * 2)
+    }
+
     // MARK: - Labels
 
     func testKeyCaps() {
