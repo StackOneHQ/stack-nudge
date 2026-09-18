@@ -258,6 +258,20 @@ final class ExtensionManifestTests: XCTestCase {
         XCTAssertFalse(ExtensionManifest.isPassableConfigKey(ExtensionManifest.configPrefix))
     }
 
+    // Pinning a subtlety rather than trusting it. The guard is a regex, and in
+    // several engines "$" matches *before* a final newline — which would let a
+    // trailing "\n" through, and the whole point of the check is that a key
+    // cannot carry one. Swift's .regularExpression does not, but that is worth
+    // a test rather than a belief: swapping the implementation, or adding
+    // .anchorsMatchLines, would silently reopen it.
+    func testTheKeyCheckIsAnchoredToTheWholeStringNotEachLine() {
+        for key in ["STACKNUDGE_EXT_ORG\n", "STACKNUDGE_EXT_ORG\r\n",
+                    "\nSTACKNUDGE_EXT_ORG", "STACKNUDGE_EXT_ORG\n\n",
+                    " STACKNUDGE_EXT_ORG", "STACKNUDGE_EXT_ORG "] {
+            XCTAssertFalse(ExtensionManifest.isPassableConfigKey(key), key.debugDescription)
+        }
+    }
+
     // The namespace guard is on the key, not on the form it arrived in — an
     // object is not a way around it.
     func testTheObjectFormIsHeldToTheSameNamespace() {
