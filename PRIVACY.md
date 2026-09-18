@@ -24,9 +24,11 @@ None of this is uploaded anywhere.
 ## What it sends, and when
 
 **GitHub — always.** It checks for its own updates, and fetches the extension
-index and any extension you install, from this project's GitHub releases. These
-are anonymous requests; GitHub sees your IP address, as it would for any
-download.
+index and any extension you install, from this project's GitHub releases.
+These are anonymous requests, and GitHub sees your IP address as it would for
+any download — with one exception: if the anonymous API is rate-limiting your
+machine and you have the `gh` CLI installed, stack-nudge retries through it,
+which authenticates as you against your own GitHub account.
 
 **GitHub sign-in — only if you start it.** Signing in links pull requests to
 your sessions. It uses GitHub's device flow, asks for the `repo` scope, and
@@ -61,12 +63,17 @@ guarantee — see the Trust section of `docs/extensions.md`.
 Sounds are played with your operating system's own tools (`afplay`, `paplay` or
 `powershell`). No audio is recorded, ever.
 
-Spoken notifications are optional and off until you enable them. Turning them on
-downloads a speech model once, through the bundled `stackvox` package, from that
-package's own model host. After that, synthesis runs locally on your machine —
-the text of a notification is never sent anywhere to be spoken.
+Spoken notifications are optional and off until you enable them. Turning them
+on downloads a speech model once — about 350 MB, from GitHub Releases, into
+`~/.cache/stackvox/`. After that, synthesis runs locally on your machine: the
+text of a notification is never sent anywhere to be spoken.
 
 ## Removing it
 
 `./uninstall.sh` removes the app and the launch agent. Deleting
-`~/.stack-nudge/` removes everything listed above.
+`~/.stack-nudge/` removes the settings, the event history and any installed
+extensions.
+
+If you ever enabled spoken notifications, the downloaded speech model lives
+outside that directory, in `~/.cache/stackvox/`, and is a few hundred
+megabytes. Delete that too.

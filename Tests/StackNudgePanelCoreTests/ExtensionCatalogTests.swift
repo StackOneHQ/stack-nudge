@@ -66,14 +66,28 @@ final class ExtensionCatalogTests: XCTestCase {
         published = .init(id: published.id, name: published.name, version: published.version,
                           description: published.description, asset: published.asset,
                           sha256: published.sha256, requires: published.requires,
-                          config: [.init(key: "STACKNUDGE_EXT_NEW", label: nil,
-                                         help: nil, placeholder: nil)])
+                          config: ["STACKNUDGE_EXT_NEW"])
         let installed = manifest("derby", version: "1.0.0",
                                  config: [.init(key: "STACKNUDGE_EXT_OLD", label: nil,
                                                 help: nil, placeholder: nil)])
         let rows = ExtensionCatalog.rows(catalogue: [published],
                                          installed: [installed], refused: [])
         XCTAssertEqual(rows[0].config.map(\.key), ["STACKNUDGE_EXT_OLD"])
+    }
+
+    // The index carries key names and no metadata, on purpose: it is a wire
+    // format read by binaries of every version. An uninstalled row only shows
+    // the "Reads …" line, and isConfigurable requires an install, so a
+    // label-less key never reaches a form.
+    func testAnUninstalledRowTakesItsKeyNamesFromTheIndex() {
+        var published = entry("derby")
+        published = .init(id: published.id, name: published.name, version: published.version,
+                          description: published.description, asset: published.asset,
+                          sha256: published.sha256, requires: published.requires,
+                          config: ["STACKNUDGE_EXT_DERBY_ORG"])
+        let rows = ExtensionCatalog.rows(catalogue: [published], installed: [], refused: [])
+        XCTAssertEqual(rows[0].configKeyList, "STACKNUDGE_EXT_DERBY_ORG")
+        XCTAssertFalse(rows[0].isConfigurable)
     }
 
     // The browser used to render the catalogue, the installed set and the

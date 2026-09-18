@@ -243,7 +243,12 @@ for d in dirs:
         "asset": asset,
         "sha256": digest,
         "requires": m.get("requires", []),
-        "config": m.get("config", []),
+        # Key names only. A manifest entry may be an object carrying a label
+        # and help text, but the index is read by binaries of every version —
+        # it is fetched from /releases/latest, so an old host reads the newest
+        # index — and nothing downstream needs the metadata here: the settings
+        # form renders for an *installed* extension and reads its manifest.
+        "config": [c["key"] if isinstance(c, dict) else c for c in m.get("config", [])],
     })
 
 entries.sort(key=lambda e: e["id"])

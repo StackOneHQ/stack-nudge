@@ -22,7 +22,15 @@ enum ExtensionInstaller {
         let asset: String
         let sha256: String
         let requires: [String]
-        let config: [ExtensionManifest.ConfigKey]
+        // Key *names* only, deliberately, even though a manifest's entry may
+        // carry a label and help text. The index is a wire format read by
+        // binaries of every version — it is fetched from /releases/latest, so
+        // an old host reads the newest index — and the settings form never
+        // needs this: it renders for an installed extension and reads that
+        // extension's own manifest. Putting the object form here would have
+        // made a strictly additive manifest change into a breaking index
+        // change, for no gain.
+        let config: [String]
     }
 
     enum Failure: Error, Equatable {
@@ -69,9 +77,19 @@ enum ExtensionInstaller {
     // MARK: - The index
 
     static func parseIndex(_ data: Data) -> Result<[IndexEntry], Failure> {
+        // One unreadable entry must not cost the rest. The index is fetched
+        // from /releases/latest by every host at every version, so a newer
+        // release's index reaches older binaries — decoding the array strictly
+        // makes any future entry-shape change a break rather than a degrade.
+        struct Lenient: Decodable {
+            let entry: IndexEntry?
+            init(from decoder: Decoder) throws {
+                entry = try? IndexEntry(from: decoder)
+            }
+        }
         struct Document: Decodable {
             let schema: Int
-            let extensions: [IndexEntry]?
+            let extensions: [Lenient]?
         }
         let document: Document
         do {
@@ -79,10 +97,15 @@ enum ExtensionInstaller {
         } catch {
             return .failure(.malformedIndex("not valid JSON"))
         }
+        // Note: entries decode leniently (see Lenient below), so one entry this
+        // version can't read costs that entry rather than the whole catalogue.
+        // Decoding the array strictly meant a single new field of the wrong
+        // shape took Settings → Extensions out entirely, with "the extension
+        // index didn't parse" as the only explanation.
         guard document.schema == indexSchema else {
             return .failure(.unsupportedIndexSchema(document.schema))
         }
-        let entries = document.extensions ?? []
+        let entries = (document.extensions ?? []).compactMap(\.entry)
         // An id from the index becomes a directory name and an asset name, so it
         // is validated here rather than trusted because it came from our own
         // release. The index is fetched over the network; "ours" is a claim

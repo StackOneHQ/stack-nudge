@@ -261,7 +261,13 @@ extension ExtensionCatalog {
                 // version that actually runs, and the form is for configuring
                 // *it*. Taking the index's list instead would offer a field for
                 // a key a newer release added and this install ignores.
-                config: installedByID[entry.id]?.config ?? entry.config))
+                //
+                // With nothing installed there is only the index, which carries
+                // key names and no metadata — enough for the "Reads …" line,
+                // which is all an uninstalled row shows. isConfigurable already
+                // requires an install, so a label-less key never reaches a form.
+                config: installedByID[entry.id]?.config
+                    ?? entry.config.map { .init(key: $0, label: nil, help: nil, placeholder: nil) }))
         }
         // Installed but unpublished — still listed, so it can be seen and
         // removed rather than being invisible and permanent.

@@ -39,7 +39,7 @@ does not buy.
 
 | Field | Required | Notes |
 |---|---|---|
-| `id` | yes | `^[a-z0-9-]{1,32}$`, and **must equal the directory name**. It becomes a path component, so it is validated before it is ever used as one. |
+| `id` | yes | `^[a-z0-9][a-z0-9-]{0,31}$`, and **must equal the directory name**. It becomes a path component, so it is validated before it is ever used as one. |
 | `name` | yes | Human-readable. Used as the tab label when `tab.label` is absent. |
 | `version` | yes | Yours to manage; the host only records it. |
 | `schema` | yes | Must be `1`. Anything else is refused outright — see [Versioning](#versioning). |
@@ -88,10 +88,13 @@ writing an empty one, which matters because a declared-but-unset key is
 and "the variable isn't there" are the same case, and you only have to handle
 one of them.
 
-> The object form needs a host that understands it. An older host reads the
-> bare-string form only. In practice this is not something to plan around: the
-> index is published per app release, so an older host never fetches a newer
-> manifest.
+The object form is a **manifest** field, not an index field. The published
+`extensions-index.json` carries key *names* only, whichever form the manifest
+used — deliberately, because the index is a wire format read by binaries of
+every version: the app fetches it from `/releases/latest`, so an old host reads
+the *newest* index. The settings form never needs the metadata there, since it
+renders for an extension that is already installed and reads that extension's
+own manifest.
 
 ## The environment
 
@@ -292,7 +295,7 @@ a failure rather than a pass.
 yourself. It refuses:
 
 - a manifest that doesn't parse, or whose `id` disagrees with the directory name
-- an `id` outside `^[a-z0-9-]{1,32}$`, or a `schema` that isn't 1
+- an `id` outside `^[a-z0-9][a-z0-9-]{0,31}$`, or a `schema` that isn't 1
 - a `run` path that is absolute or contains `..`
 - a `run` file that is missing, not a regular file, or not executable
 - **any symlink or non-regular file anywhere in the package**
