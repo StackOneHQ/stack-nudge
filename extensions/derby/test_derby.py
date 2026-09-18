@@ -102,6 +102,15 @@ class Numbers(unittest.TestCase):
         self.assertEqual(derby.number("12"), 0.0)
         self.assertEqual(derby.number(None, 3.0), 3.0)
 
+    # json.loads accepts the bare literals Infinity, -Infinity and NaN, and
+    # int(inf) raises rather than returning something wrong — so a server
+    # sending one crashed the script instead of producing a document. A NaN
+    # would also serialise back out as a bare NaN token, which the host's
+    # JSONDecoder rejects.
+    def test_a_non_finite_number_is_not_a_token_count(self):
+        for value in [float("inf"), float("-inf"), float("nan")]:
+            self.assertEqual(derby.number(value), 0.0, value)
+
     def test_a_bool_is_not_a_token_count(self):
         # True == 1 in Python, so a sloppy isinstance check draws a bar for it.
         self.assertEqual(derby.number(True), 0.0)
@@ -341,6 +350,14 @@ class Document(unittest.TestCase):
         action = self.build(horses=[horse()])["actions"][0]
         self.assertEqual(action["key"], "r")
 
+    def test_a_race_carrying_a_non_finite_number_still_produces_a_document(self):
+        doc = self.build(horses=[horse(scored_tokens=float("inf"),
+                                       current_tokens=float("nan"),
+                                       pace_15m=float("inf"))])
+        self.assertEqual(doc["rows"][0]["value"], "0")
+        # And it still round-trips: a bare NaN in the output is a blank pane.
+        self.assertEqual(json.loads(json.dumps(doc)), doc)
+
     def test_the_whole_document_survives_a_json_round_trip(self):
         # The host reads one JSON object from stdout and nothing else. A value
         # json.dump refuses is a blank pane, not a wrong number.
@@ -452,6 +469,15 @@ class Fetching(unittest.TestCase):
         with self.assertRaises(derby.NotJSON):
             derby.get_json("https://example.test/api")
 
+    # The literals are not valid JSON, and letting them in only moves the
+    # failure somewhere less legible.
+    def test_infinity_and_nan_literals_are_refused_at_the_parse(self):
+        for literal in ["Infinity", "-Infinity", "NaN"]:
+            derby.urllib.request.urlopen = self.stub(
+                FakeResponse('{"x": %s}' % literal, "application/json"))
+            with self.assertRaises(ValueError, msg=literal):
+                derby.get_json("https://example.test/api")
+
     def test_a_response_with_no_content_type_is_refused(self):
         derby.urllib.request.urlopen = self.stub(FakeResponse('{"races": []}', ""))
         with self.assertRaises(derby.NotJSON):
@@ -479,6 +505,23 @@ class Fetching(unittest.TestCase):
 
     # An unknown org is empty, not an error: nothing is broken and nothing
     # needs reporting — the name just isn't one.
+    # Building the document used to sit outside build()'s try, so anything it
+    # raised escaped as a traceback. The host reads that as a crashed
+    # extension rather than as the extension reporting something.
+    def test_a_race_that_cannot_be_rendered_is_reported_rather_than_raised(self):
+        derby.urllib.request.urlopen = self.stub(
+            FakeResponse('{"races": [{"join_code": "A", "status": "live"}]}',
+                         "application/json"),
+            FakeResponse('{"join_code": "A", "horses": "not a list"}', "application/json"))
+        os_environ = derby.os.environ
+        derby.os.environ = {derby.ORG_KEY: "StackOne"}
+        try:
+            doc = derby.build()
+        finally:
+            derby.os.environ = os_environ
+        self.assertIn(doc["state"], ("ok", "empty", "error"))
+        self.assertEqual(json.loads(json.dumps(doc)), doc)
+
     def test_build_reports_an_unknown_org_as_empty_and_says_why(self):
         derby.urllib.request.urlopen = self.stub(
             FakeResponse("<!DOCTYPE html>", "text/html"))

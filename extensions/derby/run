@@ -19,6 +19,7 @@ See docs/extensions.md for the schema this prints.
 """
 
 import json
+import math
 import os
 import sys
 import urllib.error
@@ -181,8 +182,17 @@ def duration_seconds(start, end):
 def number(value, default=0.0):
     """current_tokens arrives as an int for some horses and a half-token float
     for others, so neither type can be assumed. A bool is an int in Python and
-    is not a token count."""
+    is not a token count.
+
+    Non-finite is refused for a sharper reason than tidiness: json.loads accepts
+    the bare literals Infinity, -Infinity and NaN, and int(inf) raises rather
+    than returning something wrong — so a server sending one crashed the script
+    instead of producing a document. A NaN also serialises back out as a bare
+    NaN token, which the host's JSONDecoder rejects.
+    """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    if not math.isfinite(value):
         return default
     return float(value)
 
@@ -388,6 +398,13 @@ class UnknownOrg(Exception):
     """
 
 
+def _refuse_constant(literal):
+    """json.loads accepts Infinity / -Infinity / NaN by default. None of them is
+    a number this document can carry, and letting them in only moves the failure
+    somewhere less legible."""
+    raise ValueError("unexpected %s in the response" % literal)
+
+
 def get_json(url):
     request = urllib.request.Request(
         url, headers={"User-Agent": "stack-nudge", "Accept": "application/json"})
@@ -396,7 +413,7 @@ def get_json(url):
         body = response.read().decode("utf-8", errors="replace")
     if "json" not in content_type:
         raise NotJSON(content_type or "no content type")
-    return json.loads(body)
+    return json.loads(body, parse_constant=_refuse_constant)
 
 
 def api_error_code(error):
@@ -461,7 +478,15 @@ def build():
 
     if not race:
         return message("empty", 'No races found for "%s".' % org)
-    return document(race)
+
+    # Inside its own guard, not outside the fetch's. Building the document was
+    # the one step whose failures escaped as a traceback — the host reads that
+    # as a crashed extension rather than as the extension reporting something,
+    # and the pane says nothing useful.
+    try:
+        return document(race)
+    except (ValueError, TypeError, OverflowError, KeyError, IndexError):
+        return message("error", "The derby sent a race this version can't read.")
 
 
 def main():
