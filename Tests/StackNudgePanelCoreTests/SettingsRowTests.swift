@@ -126,7 +126,7 @@ final class SettingsRowTests: XCTestCase {
 
         for row in [SettingsRow.wireAgents, .dismissAgents, .quit, .editPhrases,
                     .openConfig, .releaseNotes, .checkUpdates, .checkPermissions,
-                    .uninstall, .disconnectGithub, .browseExtensions,
+                    .uninstall, .disconnectGithub, .openRepo, .browseExtensions,
                     .installedExtension("derby")] {
             select(row)
             XCTAssertEqual(nav.selectedRow, row)

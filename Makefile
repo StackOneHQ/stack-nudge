@@ -24,6 +24,7 @@ help:
 	@echo "  make reload     rebuild + replace installed app + bounce the daemon"
 	@echo "  make dev        watch sources; auto-reload on change (ctrl-c to stop)"
 	@echo "  make test       run swift test (needs full Xcode for XCTest)"
+	@echo "  make test-notify  run the notify.sh hook tests (macOS, no Xcode)"
 	@echo "  make typecheck-tests  compile-check the test sources (no Xcode needed)"
 	@echo "  make test-without-xcode  compile AND run the test sources (no Xcode needed)"
 	@echo "  make clean      remove build/ and .build/"
@@ -53,6 +54,12 @@ test:
 		exit 1; \
 	fi
 	@swift test
+
+# Drive notify.sh against a fake panel socket under a throwaway $HOME, so the
+# hook side gets covered too. macOS only; a no-op elsewhere. Needs no Xcode.
+.PHONY: test-notify
+test-notify:
+	@python3 ./scripts/test-notify-subagents.py
 
 # Compile-check the XCTest sources without Xcode. Catches the breakage `make
 # test` can't reach on a Command Line Tools-only machine — a production API

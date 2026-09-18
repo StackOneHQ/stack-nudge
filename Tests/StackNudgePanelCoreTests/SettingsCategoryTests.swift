@@ -339,6 +339,51 @@ final class ExtensionsCategoryTests: XCTestCase {
     }
 }
 
+// About replaces the full-width version bar that used to sit under every
+// category. The bar cost ~45pt of fixed height on a page whose chrome already
+// did not fit the panel's minimum. Its hook-script warning did not come here —
+// that is a nudges-are-broken signal, so it moved up to the attention banners
+// that render above every category.
+@MainActor
+final class AboutCategoryTests: XCTestCase {
+
+    func testAboutIsACategoryWithAShortLabel() {
+        XCTAssertTrue(SettingsCategory.allCases.contains(.about))
+        XCTAssertEqual(SettingsCategory.about.label, "About")
+    }
+
+    func testTheRepoRowLivesThere() {
+        let nav = PanelNav()
+        XCTAssertEqual(nav.rows(in: .about), [.openRepo])
+    }
+
+    func testTheRepoRowIsNotAlsoSomewhereElse() {
+        let nav = PanelNav()
+        let elsewhere = SettingsCategory.allCases
+            .filter { $0 != .about }
+            .flatMap { nav.rows(in: $0) }
+        XCTAssertFalse(elsewhere.contains(.openRepo))
+    }
+
+    func testEnteringTheCategorySelectsTheRepoRow() {
+        let nav = PanelNav()
+        nav.settingsCategory = .about
+        XCTAssertEqual(nav.selectedRow, .openRepo)
+    }
+
+    // The row's trailing text is built from this, so a link that says one thing
+    // and opens another is the failure it guards.
+    func testTheRepoURLIsTheStackOneRepo() {
+        XCTAssertEqual(PanelNav.repositoryURL, "https://github.com/StackOneHQ/stack-nudge")
+    }
+
+    // About sits last so the categories the user reaches for daily keep their
+    // positions, and ⌘↓ from Actions lands here rather than wrapping.
+    func testAboutSitsLast() {
+        XCTAssertEqual(SettingsCategory.allCases.last, .about)
+    }
+}
+
 // Proves the reported defect: attention rows prepend to settingsRows but render
 // above the split, not in the detail. Resetting the index to a literal 0 on
 // category change therefore selects an invisible row, and Enter fires it.

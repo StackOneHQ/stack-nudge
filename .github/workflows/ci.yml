@@ -106,3 +106,9 @@ jobs:
 
       - name: swift test
         run: swift test
+
+      # notify.sh is the hook side, which swift test can't reach. Runs here
+      # rather than in the shell job because the panel post it asserts on is
+      # macOS-only; on Linux the script just plays a sound.
+      - name: notify.sh subagent tests
+        run: python3 scripts/test-notify-subagents.py
