@@ -421,10 +421,32 @@ def _refuse_constant(literal):
     raise ValueError("unexpected %s in the response" % literal)
 
 
+class NoDowngrade(urllib.request.HTTPRedirectHandler):
+    """Refuse a redirect that leaves https.
+
+    valid_base() checks the scheme of the URL we *type*, which is only half a
+    promise: urllib follows redirects, and Python's stock handler is happy to
+    send you from https to http. The settings field tells the user only https
+    addresses are allowed, so the guarantee should survive a hop rather than
+    describing the first request alone.
+
+    There are no credentials on these requests, so nothing leaks — this is
+    about the claim being true, not about a disclosure.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if urllib.parse.urlsplit(newurl).scheme != "https":
+            raise urllib.error.URLError("refused a redirect off https")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_opener = urllib.request.build_opener(NoDowngrade())
+
+
 def get_json(url):
     request = urllib.request.Request(
         url, headers={"User-Agent": "stack-nudge", "Accept": "application/json"})
-    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+    with _opener.open(request, timeout=TIMEOUT) as response:
         content_type = (response.headers.get("Content-Type") or "").lower()
         body = response.read().decode("utf-8", errors="replace")
     if "json" not in content_type:

@@ -26,6 +26,24 @@ derby = importlib.util.module_from_spec(_SPEC)
 _LOADER.exec_module(derby)
 
 
+class _Forbidden:
+    """The opener every test starts with.
+
+    The two functions that touch the network are stubbed where they are
+    tested, but nothing made that true — patching the wrong seam once let the
+    whole suite quietly start making live requests against a real service, and
+    the only symptom was that it took five seconds instead of two
+    milliseconds. Now reaching the network is a failure with the URL in it.
+    """
+
+    def open(self, request, timeout=None):
+        raise AssertionError("a test reached the network: %s" % request.full_url)
+
+
+def setUpModule():
+    derby._opener = _Forbidden()
+
+
 class Formatting(unittest.TestCase):
     """Both mirror a Swift helper the panel uses for its own tabs. A Derby row
     that abbreviated differently from the Usage tab beside it would read as two
@@ -415,6 +433,25 @@ class Base(unittest.TestCase):
         self.assertEqual(derby.valid_base("https://example.test/api/"),
                          "https://example.test/api")
 
+    # valid_base only checks the URL we type. urllib follows redirects, and
+    # Python's stock handler will happily send you from https to http — so
+    # without this the "https only" the settings field promises described the
+    # first request and nothing after it.
+    def test_a_redirect_off_https_is_refused(self):
+        handler = derby.NoDowngrade()
+        for target in ["http://evil.test/api", "ftp://evil.test"]:
+            with self.assertRaises(derby.urllib.error.URLError, msg=target):
+                handler.redirect_request(None, None, 302, "Found", {}, target)
+
+    def test_a_redirect_that_stays_on_https_is_allowed(self):
+        # Delegates to the stock handler, which needs a real request to build
+        # the next one — so assert it gets that far rather than raising.
+        request = derby.urllib.request.Request("https://example.test/a")
+        result = derby.NoDowngrade().redirect_request(
+            request, None, 302, "Found", {}, "https://example.test/b")
+        self.assertIsNotNone(result)
+        self.assertEqual(result.full_url, "https://example.test/b")
+
     def test_anything_but_https_is_refused(self):
         for raw in ["http://example.test/api", "file:///etc/passwd",
                     "ftp://example.test", "https://", "example.test",
@@ -450,24 +487,40 @@ class Fetching(unittest.TestCase):
     """
 
     def stub(self, *responses):
+        """A stand-in for the module's opener.
+
+        Patching urllib.request.urlopen is not enough: get_json goes through a
+        built opener so a redirect off https can be refused, and a stub that
+        misses that seam lets the tests reach the real network — which is how
+        this harness silently started making live requests once the opener
+        landed.
+        """
         remaining = list(responses)
         calls = []
 
-        def urlopen(request, timeout=None):
-            calls.append(request.full_url)
-            return remaining.pop(0)
+        class FakeOpener:
+            def open(self, request, timeout=None):
+                calls.append(request.full_url)
+                return remaining.pop(0)
 
         self.calls = calls
-        return urlopen
+        return FakeOpener()
+
+    def raising_stub(self, make_error):
+        class FakeOpener:
+            def open(self, request, timeout=None):
+                raise make_error(request.full_url)
+
+        return FakeOpener()
 
     def setUp(self):
-        self._real = derby.urllib.request.urlopen
+        self._real = derby._opener
 
     def tearDown(self):
-        derby.urllib.request.urlopen = self._real
+        derby._opener = self._real
 
     def test_a_json_response_is_parsed(self):
-        derby.urllib.request.urlopen = self.stub(
+        derby._opener = self.stub(
             FakeResponse('{"races": []}', "application/json"))
         self.assertEqual(derby.get_json("https://example.test/api"), {"races": []})
 
@@ -475,7 +528,7 @@ class Fetching(unittest.TestCase):
     # reaches json.loads and the failure reads as "the response wasn't
     # readable" — which sends somebody looking for a fault that isn't there.
     def test_a_web_page_is_refused_rather_than_parsed(self):
-        derby.urllib.request.urlopen = self.stub(
+        derby._opener = self.stub(
             FakeResponse("<!DOCTYPE html>", "text/html; charset=utf-8"))
         with self.assertRaises(derby.NotJSON):
             derby.get_json("https://example.test/api")
@@ -484,13 +537,13 @@ class Fetching(unittest.TestCase):
     # failure somewhere less legible.
     def test_infinity_and_nan_literals_are_refused_at_the_parse(self):
         for literal in ["Infinity", "-Infinity", "NaN"]:
-            derby.urllib.request.urlopen = self.stub(
+            derby._opener = self.stub(
                 FakeResponse('{"x": %s}' % literal, "application/json"))
             with self.assertRaises(ValueError, msg=literal):
                 derby.get_json("https://example.test/api")
 
     def test_a_response_with_no_content_type_is_refused(self):
-        derby.urllib.request.urlopen = self.stub(FakeResponse('{"races": []}', ""))
+        derby._opener = self.stub(FakeResponse('{"races": []}', ""))
         with self.assertRaises(derby.NotJSON):
             derby.get_json("https://example.test/api")
 
@@ -499,13 +552,12 @@ class Fetching(unittest.TestCase):
     # document, so the pane would say "wrong type for message" instead of
     # showing the API's error.
     def test_a_non_string_error_message_does_not_reach_the_document(self):
-        import urllib.error, io
+        import io
         for body in ['{"code":"X","message":{"a":1}}', '{"code":"X","message":7}',
                      '{"code":"X"}', 'not json']:
-            def raiser(request, timeout=None, _b=body):
-                raise urllib.error.HTTPError(
-                    request.full_url, 500, "err", {}, io.BytesIO(_b.encode()))
-            derby.urllib.request.urlopen = raiser
+            derby._opener = self.raising_stub(
+                lambda url, _b=body: derby.urllib.error.HTTPError(
+                    url, 500, "err", {}, io.BytesIO(_b.encode())))
             os_environ = derby.os.environ
             derby.os.environ = {derby.ORG_KEY: "StackOne"}
             try:
@@ -516,13 +568,13 @@ class Fetching(unittest.TestCase):
             self.assertEqual(json.loads(json.dumps(doc)), doc)
 
     def test_a_web_page_on_the_org_route_means_no_such_org(self):
-        derby.urllib.request.urlopen = self.stub(
+        derby._opener = self.stub(
             FakeResponse("<!DOCTYPE html>", "text/html"))
         with self.assertRaises(derby.UnknownOrg):
             derby.fetch("https://example.test/api", "stackone")
 
     def test_the_org_name_reaches_the_url_percent_encoded(self):
-        derby.urllib.request.urlopen = self.stub(
+        derby._opener = self.stub(
             FakeResponse('{"races": [{"join_code": "A B", "status": "live"}]}',
                          "application/json"),
             FakeResponse('{"join_code": "A B", "horses": []}', "application/json"))
@@ -531,7 +583,7 @@ class Fetching(unittest.TestCase):
         self.assertEqual(self.calls[1], "https://example.test/api/races/A%20B")
 
     def test_an_org_with_no_races_is_nothing_rather_than_an_error(self):
-        derby.urllib.request.urlopen = self.stub(
+        derby._opener = self.stub(
             FakeResponse('{"races": []}', "application/json"))
         self.assertIsNone(derby.fetch("https://example.test/api", "StackOne"))
 
@@ -541,7 +593,7 @@ class Fetching(unittest.TestCase):
     # raised escaped as a traceback. The host reads that as a crashed
     # extension rather than as the extension reporting something.
     def test_a_race_that_cannot_be_rendered_is_reported_rather_than_raised(self):
-        derby.urllib.request.urlopen = self.stub(
+        derby._opener = self.stub(
             FakeResponse('{"races": [{"join_code": "A", "status": "live"}]}',
                          "application/json"),
             FakeResponse('{"join_code": "A", "horses": "not a list"}', "application/json"))
@@ -555,7 +607,7 @@ class Fetching(unittest.TestCase):
         self.assertEqual(json.loads(json.dumps(doc)), doc)
 
     def test_build_reports_an_unknown_org_as_empty_and_says_why(self):
-        derby.urllib.request.urlopen = self.stub(
+        derby._opener = self.stub(
             FakeResponse("<!DOCTYPE html>", "text/html"))
         os_environ = derby.os.environ
         derby.os.environ = {derby.ORG_KEY: "stackone"}
