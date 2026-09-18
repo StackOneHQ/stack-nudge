@@ -144,7 +144,7 @@ jobs:
           # Tarball wraps just the .app — it's now self-contained
           # (Bootstrap.swift owns the install side on first launch).
           tar czf "$ARTIFACT" -C build StackNudge.app
-          shasum -a 256 "$ARTIFACT" | awk '{print $1 "  " "'"$ARTIFACT"'"}' \
+          shasum -a 256 "$ARTIFACT" | awk -v name="$ARTIFACT" '{print $1 "  " name}' \
             > "$ARTIFACT.sha256"
           ls -la "$ARTIFACT" "$ARTIFACT.sha256"
 
@@ -167,3 +167,42 @@ jobs:
         if: always()
         run: |
           security delete-keychain "$KEYCHAIN" || true
+
+  # Separate job, deliberately. The release job above is a matrix over arm64 and
+  # x86_64, and extensions are arch-independent scripts — packaging them inside
+  # it would upload every asset twice and race on the index.
+  extensions:
+    name: Package extensions
+    runs-on: ubuntu-latest
+    # After the app, deliberately. action-gh-release creates the release when
+    # none exists, and this job takes about a minute against the matrix job's
+    # sign-and-notarize — so on a hand-pushed tag the fast one would win and
+    # publish a release carrying only the extensions index for the whole
+    # notarization window.
+    needs: release
+    permissions:
+      contents: write
+    env:
+      TARGET_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          # This job packages and uploads; it never pushes. Leaving the default
+          # would park a repo-write token in .git/config for the rest of the run,
+          # where anything later in the job can read it — and what runs later
+          # here is a script driven by a merged extension's manifest.
+          persist-credentials: false
+
+      - name: Package
+        run: ./scripts/package-extensions.sh package dist/extensions
+
+      # The index ships even when there are no extensions yet, so the app always
+      # has something well-formed to fetch rather than a 404 it has to special-case.
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        with:
+          tag_name: ${{ env.TARGET_TAG }}
+          files: |
+            dist/extensions/extensions-index.json
+            dist/extensions/*.tar.gz
+            dist/extensions/*.tar.gz.sha256

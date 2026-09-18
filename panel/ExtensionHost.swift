@@ -53,6 +53,7 @@ final class ExtensionHost: ObservableObject {
 
     private let runner: (ExtensionManifest, String?, String?) -> ExtensionRuntime.Fetch
     private let onTabsChanged: ([ExtensionTab]) -> Void
+    private let onRefusalsChanged: (Int) -> Void
     private let background: (@escaping () -> Void) -> Void
     private let toMain: (@escaping () -> Void) -> Void
 
@@ -64,6 +65,7 @@ final class ExtensionHost: ObservableObject {
     // timer: run them inline and the whole invocation becomes synchronous, so a
     // test can assert on the in-flight gate rather than on a race with it.
     init(onTabsChanged: @escaping ([ExtensionTab]) -> Void = { _ in },
+         onRefusalsChanged: @escaping (Int) -> Void = { _ in },
          background: @escaping (@escaping () -> Void) -> Void
              = { DispatchQueue.global(qos: .utility).async(execute: $0) },
          toMain: @escaping (@escaping () -> Void) -> Void
@@ -71,6 +73,7 @@ final class ExtensionHost: ObservableObject {
          runner: @escaping (ExtensionManifest, String?, String?) -> ExtensionRuntime.Fetch
              = { ExtensionRuntime.fetch($0, action: $1, row: $2) }) {
         self.onTabsChanged = onTabsChanged
+        self.onRefusalsChanged = onRefusalsChanged
         self.background = background
         self.toMain = toMain
         self.runner = runner
@@ -91,10 +94,10 @@ final class ExtensionHost: ObservableObject {
         let found = discovery ?? ExtensionRuntime.discover()
         manifests = found.installed
         refused = found.refused
-        // Reported to stderr as well as published. The Settings browser that
-        // will render these properly arrives with distribution; until then a
-        // refusal that only lives in a @Published nobody reads is the same
-        // silence this was meant to end.
+        // Still reported to stderr, but no longer only there: the Settings
+        // browser renders these now, which is what the published property was
+        // added for. The log line stays because a refusal at launch happens
+        // before anybody opens Settings.
         for refusal in found.refused {
             FileHandle.standardError.write(Data(
                 "stack-nudge: extension \"\(refusal.id)\" not loaded — \(refusal.reason)\n".utf8))
@@ -104,6 +107,7 @@ final class ExtensionHost: ObservableObject {
         let live = Set(manifests.map(\.id))
         panes = panes.filter { live.contains($0.key) }
         onTabsChanged(manifests.map(\.tabEntry))
+        onRefusalsChanged(refused.count)
     }
 
     // MARK: - Invocation

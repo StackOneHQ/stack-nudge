@@ -1,0 +1,12 @@
+{
+  "id": "system",
+  "name": "System",
+  "description": "CPU, memory and disk usage at a glance.",
+  "version": "1.1.1",
+  "schema": 1,
+  "tab": { "label": "System" },
+  "run": "./run",
+  "requires": [],
+  "config": [],
+  "refresh": { "onOpen": true, "intervalSeconds": 60, "whileFocusedOnly": true }
+}

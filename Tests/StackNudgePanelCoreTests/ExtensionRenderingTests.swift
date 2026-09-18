@@ -160,6 +160,52 @@ final class ExtensionRenderingTests: XCTestCase {
         XCTAssertEqual(ExtensionTabView.spriteOffset(sprite, fill: 0.5, width: 4), 0)
     }
 
+    // MARK: - Bar thickness
+
+    // The fill is inset inside the track so a ghost behind it can't be hidden by
+    // its own edge. Asked per-document: within one list every bar should be the
+    // same thickness, but a document that never uses a ghost has no reason to
+    // draw a half-height line in a full-height groove — which is exactly what it
+    // looked like.
+    func testAFillWithNothingBehindItFillsTheTrack() {
+        XCTAssertEqual(ExtensionTabView.fillHeight(inset: false), ExtensionTabView.barHeight)
+    }
+
+    // Asserting "less than" passed for any value below the bar height, which
+    // left the actual inset unpinned.
+    func testAFillWithAGhostBehindItIsInsetToHalfTheTrack() {
+        XCTAssertEqual(ExtensionTabView.fillHeight(inset: true), ExtensionTabView.barHeight / 2)
+    }
+
+    private func document(_ json: String) -> ExtensionDocument {
+        guard case .success(let d) = ExtensionDocument.parse(Data(json.utf8)) else {
+            fatalError("fixture didn't parse")
+        }
+        return d
+    }
+
+    func testADocumentWithNoGhostsDoesNotInset() {
+        let d = document("""
+            {"schema":1,"rows":[{"id":"a","title":"A","track":{"fill":0.5}},
+                                {"id":"b","title":"B","track":{"fill":0.2}}]}
+            """)
+        XCTAssertFalse(d.usesGhostBars)
+    }
+
+    // One row using a ghost insets the whole list, so bars don't change
+    // thickness partway down it.
+    func testOneGhostAnywhereInsetsTheWholeDocument() {
+        let d = document("""
+            {"schema":1,"rows":[{"id":"a","title":"A","track":{"fill":0.5}},
+                                {"id":"b","title":"B","track":{"fill":0.2,"ghost":0.4}}]}
+            """)
+        XCTAssertTrue(d.usesGhostBars)
+    }
+
+    func testADocumentWithNoTracksDoesNotInset() {
+        XCTAssertFalse(document("{\"schema\":1,\"rows\":[{\"id\":\"a\",\"title\":\"A\"}]}").usesGhostBars)
+    }
+
     // MARK: - Band height
 
     // The row's bar band has to make room for the sprite riding on it. Clipping

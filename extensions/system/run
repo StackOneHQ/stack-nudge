@@ -1,0 +1,225 @@
+#!/bin/sh
+#
+# The reference extension: CPU, memory and disk, each as a row whose bar is the
+# used fraction.
+#
+# There is no chart primitive in the schema, and none is needed here — a
+# proportion is what a bar is for. (A sparkline would be expressible as a
+# sprite, since that primitive is a grid of coloured cells, but it would mean
+# the extension keeping its own history between invocations.)
+#
+# It is deliberately small and dependency-free — /bin/sh and df, nothing else —
+# because its job is to be the thing you read when writing your own. See
+# docs/extensions.md for the schema it prints.
+
+set -eu
+
+# Colour the bar by how full the volume is. The host clamps whatever it is given
+# toward something legible, so these only have to be roughly right.
+tint_for() {
+    if [ "$1" -ge 90 ]; then echo "#E5534B"
+    elif [ "$1" -ge 75 ]; then echo "#E8A87C"
+    else echo "#7FD1B9"
+    fi
+}
+
+# JSON strings have to be escaped even here: a volume can be called anything,
+# including something with a quote or a backslash in it.
+# Backslash and quote are the obvious two; the control characters are the ones
+# that turn a volume name into an unparseable document rather than a wrong one.
+# A name can legally contain them, and JSON may not.
+#
+# Done in awk rather than sed because BSD sed does not understand \x escapes —
+# the first attempt at this silently ate the first character of every title.
+json_escape() {
+    printf '%s' "$1" | awk '
+        BEGIN { RS = "\0" }
+        {
+            gsub(/\\/, "\\\\")
+            gsub(/"/, "\\\"")
+            gsub(/\b/, "\\b")
+            gsub(/\f/, "\\f")
+            gsub(/\n/, "\\n")
+            gsub(/\r/, "\\r")
+            gsub(/\t/, "\\t")
+            printf "%s", $0
+        }'
+}
+
+human() {
+    awk -v kb="$1" 'BEGIN {
+        split("KB MB GB TB PB", unit, " ")
+        i = 1
+        while (kb >= 1024 && i < 5) { kb /= 1024; i++ }
+        printf (kb >= 10 || kb == int(kb)) ? "%.0f%s" : "%.1f%s", kb, unit[i]
+    }'
+}
+
+rows=""
+worst=0
+count=0
+json_rows=""
+index=0
+
+# A rank would be meaningless here — these are unlike things, not a leaderboard
+# — so no row carries a lead.
+append_row() { # id _unused title subtitle value footnote fill pct
+    local_sep=""
+    [ -n "$json_rows" ] && local_sep=","
+    subtitle_json=""
+    [ -z "$4" ] || subtitle_json=$(printf ',"subtitle":"%s"' "$(json_escape "$4")")
+    json_rows="$json_rows$local_sep$(printf '{"id":"%s","title":"%s"%s,"value":"%s","footnote":"%s","track":{"fill":%s,"tint":"%s"}}' \
+        "$1" "$(json_escape "$3")" "$subtitle_json" \
+        "$(json_escape "$5")" "$(json_escape "$6")" "$7" "$(tint_for "$8")")"
+    [ "$8" -gt "$worst" ] && worst="$8"
+    count=$((count + 1))
+}
+
+# CPU. ps reports a per-process decaying average, so summing it and dividing by
+# the core count is a busy-ness figure rather than an instantaneous sample —
+# which is the right shape for a bar, and avoids `top -l 2` costing two seconds
+# of the invocation budget for a prettier number.
+cores=$(sysctl -n hw.ncpu 2>/dev/null || echo 1)
+cpu_pct=$(ps -A -o %cpu= 2>/dev/null | awk -v cores="$cores" '
+    {sum += $1}
+    END {
+        pct = (cores > 0) ? sum / cores : 0
+        if (pct > 100) pct = 100
+        printf "%d", pct + 0.5
+    }
+')
+[ -n "$cpu_pct" ] || cpu_pct=0
+append_row cpu "" "CPU" "$cores cores" "$cpu_pct%" "across all cores" \
+    "$(awk -v p="$cpu_pct" 'BEGIN {printf "%.4f", p / 100}')" "$cpu_pct"
+
+# Memory. vm_stat counts pages, so the page size comes from its own header
+# rather than being assumed — it is 16K on Apple silicon and 4K on Intel.
+mem_total=$(sysctl -n hw.memsize 2>/dev/null || echo 0)
+if [ "$mem_total" -gt 0 ]; then
+    mem_used=$(vm_stat 2>/dev/null | awk '
+        /page size of/ { for (i = 1; i <= NF; i++) if ($i == "of") page = $(i+1) }
+        /^Pages active/      { active = $3 }
+        /^Pages wired down/  { wired = $4 }
+        /^Pages occupied by compressor/ { compressed = $5 }
+        END {
+            gsub(/\./, "", active); gsub(/\./, "", wired); gsub(/\./, "", compressed)
+            # Print nothing rather than zero when the header or the fields are
+            # missing. vm_stat absent, or reformatted, otherwise multiplied by an
+            # unset page size and reported a confident "0% used, all free" —
+            # which is worse than saying nothing, because it looks like an answer.
+            if (page > 0 && active != "" && wired != "") {
+                # Active + wired + compressed is what macOS itself counts as
+                # used: inactive pages are reclaimable and counting them reads
+                # as a leak.
+                printf "%.0f", (active + wired + compressed) * page
+            }
+        }
+    ')
+    # No usable reading means no memory row, the same way a volume reporting a
+    # zero total is skipped rather than drawn as empty.
+    if [ -n "$mem_used" ] && [ "$mem_used" -gt 0 ] 2>/dev/null; then
+    mem_pct=$(awk -v u="$mem_used" -v t="$mem_total" 'BEGIN {printf "%d", (u * 100 / t) + 0.5}')
+    mem_free_label=$(human "$(awk -v u="$mem_used" -v t="$mem_total" 'BEGIN {printf "%d", (t - u) / 1024}')")
+    append_row mem "" "Memory" "$(human "$(awk -v t="$mem_total" 'BEGIN {printf "%d", t / 1024}')") installed" \
+        "$mem_free_label free" "$mem_pct% used" \
+        "$(awk -v p="$mem_pct" 'BEGIN {printf "%.4f", p / 100}')" "$mem_pct"
+    fi
+fi
+
+# -P for POSIX output (one line per filesystem, never wrapped); -k for KiB so
+# the arithmetic below is in one unit. Local volumes only — a stalled network
+# mount would otherwise hang df and take the whole pane's budget with it.
+df_output=$(df -Pkl 2>/dev/null) || df_output=""
+
+if [ -z "$df_output" ]; then
+    printf '{"schema":1,"state":"error","message":"df returned nothing"}\n'
+    exit 0
+fi
+
+# Parsed in awk rather than a shell loop so the arithmetic is one pass and the
+# fields are split the same way every time.
+rows=$(printf '%s\n' "$df_output" | tail -n +2 | awk '
+    {
+        # Mount point is everything from field 6 onward — a path can contain
+        # spaces, and "Volumes/My Disk" is ordinary on a Mac.
+        mount = $6
+        for (i = 7; i <= NF; i++) mount = mount " " $i
+        if (mount == "") next
+
+        # macOS mounts a handful of synthetic volumes that all report the same
+        # underlying container, so listing them is seven rows of noise around
+        # the one number anybody wants.
+        if (mount ~ /^\/System\/Volumes\// && mount != "/System/Volumes/Data") next
+        if (mount ~ /^\/(dev|private\/var\/vm)$/) next
+
+        # An APFS boot drive is split across a read-only system volume at "/"
+        # and a Data volume, sharing one container. Reporting both is what makes
+        # the pane say 440GB free twice at two different percentages — true, and
+        # unreadable. The startup disk is one thing to the person looking at it,
+        # so Data carries it and "/" is dropped.
+        if (mount == "/") next
+
+        total = $2 + 0
+        used  = $3 + 0
+        avail = $4 + 0
+        if (total <= 0) next
+
+        pct = used * 100 / total
+        fill = used / total
+
+        name = mount
+        sub(/.*\//, "", name)
+        if (name == "") name = "/"
+        if (mount == "/System/Volumes/Data") { name = "Startup disk"; mount = "/" }
+
+        printf "%s\t%s\t%.4f\t%d\t%d\n", name, mount, fill, pct, avail
+    }
+')
+
+# No reportable volume is not an empty pane: the CPU and memory rows were
+# computed a moment ago and discarding them was throwing away the two thirds of
+# this extension that had worked.
+if [ -z "$rows" ] && [ -z "$json_rows" ]; then
+    printf '{"schema":1,"state":"empty","message":"Nothing to report"}\n'
+    exit 0
+fi
+
+while IFS="$(printf '\t')" read -r name mount fill pct avail; do
+    [ -n "$name" ] || continue
+    index=$((index + 1))
+    [ "$pct" -gt "$worst" ] && worst=$pct
+    count=$((count + 1))
+
+    free_label=$(human "$avail")
+    tint=$(tint_for "$pct")
+    sep=""
+    [ -n "$json_rows" ] && sep=","
+
+    # A subtitle that repeats the title is noise, which is what "/ /" was.
+    subtitle=""
+    [ "$mount" = "$name" ] || subtitle=$(printf ',"subtitle":"%s"' "$(json_escape "$mount")")
+
+    json_rows="$json_rows$sep$(printf '{"id":"v%s","title":"%s"%s,"value":"%s free","footnote":"%s%% used","track":{"fill":%s,"tint":"%s"}}' \
+        "$index" \
+        "$(json_escape "$name")" \
+        "$subtitle" \
+        "$free_label" \
+        "$pct" \
+        "$fill" \
+        "$tint")"
+done <<EOF
+$rows
+EOF
+
+# The badge reflects the worst of everything on screen, so the tab says
+# something useful without being opened.
+if [ "$worst" -ge 90 ]; then
+    badge='{"text":"HIGH","tone":"danger"}'
+elif [ "$worst" -ge 75 ]; then
+    badge='{"text":"BUSY","tone":"warning"}'
+else
+    badge='{"text":"OK","tone":"success"}'
+fi
+
+printf '{"schema":1,"state":"ok","header":{"title":"System","badge":%s,"trailing":"%s%% peak"},"rows":[%s],"actions":[{"id":"refresh","label":"Refresh","key":"r"}]}\n' \
+    "$badge" "$worst" "$json_rows"

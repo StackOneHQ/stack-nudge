@@ -85,6 +85,7 @@ struct PanelContentView: View {
     @ObservedObject var nav: PanelNav
     @ObservedObject var phrases: PhrasesViewModel
     @ObservedObject var extensions: ExtensionHost
+    @ObservedObject var extensionCatalog: ExtensionCatalog
 
     // The disk-backed name store. Observed here (rather than inside EventRow)
     // so resolving a nudge's session label stays a render-time lookup that
@@ -154,6 +155,10 @@ struct PanelContentView: View {
                     ExtensionTabView(host: extensions, id: id).id(id)
                 case .settings: SettingsView(nav: nav)
                 case .phrases:  PhrasesView(model: phrases) { nav.mode = .settings }
+                case .extensions:
+                    ExtensionsView(catalog: extensionCatalog, host: extensions) {
+                        nav.mode = .settings
+                    }
                 case .updateConfirm:
                     UpdateConfirmView(
                         nav: nav,
@@ -195,7 +200,8 @@ struct PanelContentView: View {
         case .extensionTab(let id): return nav.extensionTab(id: id)?.label ?? id
         // Listed, not defaulted: a new tab should fail to compile here rather
         // than render an unlabelled one.
-        case .phrases, .updateConfirm, .updating, .postUpdate, .bootstrap, .uninstall:
+        case .phrases, .extensions, .updateConfirm, .updating, .postUpdate,
+             .bootstrap, .uninstall:
             return ""
         }
     }
@@ -875,10 +881,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private let sessions = SessionStore()
     let nav = PanelNav()
     private let phrases = PhrasesViewModel()
+    private lazy var extensionCatalog = ExtensionCatalog(
+        fetchCatalogue: { ExtensionInstaller.fetchCatalogue() },
+        performInstall: { entry in
+            ExtensionInstaller.install(entry, from: ExtensionInstaller.releaseSources())
+        },
+        didChange: { [weak self] in self?.extensions.load() })
     // Extensions publish their tabs through nav, so nav stays the single source
     // of tab order and this stays the single source of what's in them.
     private lazy var extensions = ExtensionHost(onTabsChanged: { [weak self] tabs in
         self?.nav.extensionTabs = tabs
+    }, onRefusalsChanged: { [weak self] count in
+        self?.nav.refusedExtensionCount = count
     })
     private var listener: EventListener?
     private var menuBar: MenuBarController?
@@ -998,7 +1012,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
         let host = NSHostingView(rootView: PanelContentView(
             store: store, sessions: sessions, nav: nav, phrases: phrases,
-            extensions: extensions,
+            extensions: extensions, extensionCatalog: extensionCatalog,
             onGrantPermissions: { [weak self] in self?.handleGrantPermissions() }
         ).environmentObject(SessionPersistence.shared))
         // Don't let SwiftUI's preferred / intrinsic content size drive
@@ -1043,6 +1057,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self?.phrases.selectedRow = nil
                 self?.nav.mode = .phrases
             },
+            browseExtensions: { [weak self] in self?.nav.mode = .extensions },
             openReleaseNotes: {
                 // Versioned tag URL when we know the bundle version,
                 // otherwise the releases index. Tag URL falls through
@@ -3700,6 +3715,29 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // Space toggles the selected default, ⌫ removes the selected
         // custom, Esc returns to Settings. Typing / Tab / Enter for
         // adding still fall through to SwiftUI's TextField.
+        // Extensions browser: Esc returns to Settings and R reloads the
+        // catalogue. Everything else is swallowed rather than passed on — the
+        // same rule the extension tabs follow, for the same reason.
+        if nav.mode == .extensions {
+            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            guard plain else { return false }
+            let rows = ExtensionCatalog.rows(catalogue: extensionCatalog.entries,
+                                             installed: extensions.manifests,
+                                             refused: extensions.refused)
+            switch event.keyCode {
+            case KeyCode.escape: nav.mode = .settings
+            case KeyCode.upArrow:   extensionCatalog.moveSelection(among: rows, by: -1)
+            case KeyCode.downArrow: extensionCatalog.moveSelection(among: rows, by: 1)
+            case KeyCode.returnKey, KeyCode.numpadEnter, KeyCode.space:
+                extensionCatalog.activateSelection(among: rows)
+            // Not on autorepeat: holding R would otherwise issue one fetch per
+            // event, each blocking a pool thread.
+            case KeyCode.rKey where !event.isARepeat: extensionCatalog.reload()
+            default:             break
+            }
+            return true
+        }
+
         if nav.mode == .phrases {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain else { return false }

@@ -80,6 +80,15 @@ struct ExtensionDocument: Equatable {
     // rather than sitting blank. The fallbacks exist because `message` is
     // optional in the schema and an extension that omits it still gets a pane
     // that reads as deliberate.
+    // Whether any row pairs a fill with a paler bar behind it. The renderer
+    // insets the fill so the two edges can't hide each other, and asks this
+    // per-*document* rather than per-row: within one list every bar should be
+    // the same thickness, but a document that never uses a ghost has no reason
+    // to draw a thin line in a fat groove.
+    var usesGhostBars: Bool {
+        rows.contains { $0.track?.ghost != nil }
+    }
+
     var placeholder: String? {
         switch state {
         case .ok:    return rows.isEmpty ? (message ?? "Nothing to show") : nil
@@ -126,11 +135,14 @@ struct ExtensionDocument: Equatable {
             // id and title are what a row *is* — one addresses it, the other is
             // the only thing guaranteed to be drawn. Everything else degrades.
             guard let id = row.id, !id.isEmpty, seen.insert(id).inserted,
-                  let title = row.title
+                  // Title is not optional-with-a-default: it is the only thing
+                  // guaranteed to be drawn, so a blank one is a row with nothing
+                  // in it rather than a row missing a detail.
+                  let title = clamp(row.title)
             else { return nil }
             return Row(id: id,
                        lead: clamp(row.lead),
-                       title: clamp(title),  // non-optional overload
+                       title: title,
                        subtitle: clamp(row.subtitle),
                        value: clamp(row.value),
                        footnote: clamp(row.footnote),
@@ -180,8 +192,14 @@ struct ExtensionDocument: Equatable {
         text.count <= maxTextLength ? text : String(text.prefix(maxTextLength))
     }
 
+    // An empty optional field is an absent one. A script that emits "" for a
+    // value it doesn't have — which is the natural thing for a shell script to
+    // do — would otherwise get a rendered element reserving space for nothing,
+    // so one row sits indented past its neighbours for no visible reason.
     private static func clamp(_ text: String?) -> String? {
-        text.map(clamp)
+        guard let text else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : clamp(text)
     }
 
     private static func clampFraction(_ value: Double) -> Double {

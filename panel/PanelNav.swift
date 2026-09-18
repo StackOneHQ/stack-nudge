@@ -12,6 +12,9 @@ enum PanelMode: Hashable {
     case extensionTab(String)
     case settings
     case phrases
+    // The extension browser. Absent from orderedTabs like .phrases: it is a
+    // sub-page of Settings, not a tab.
+    case extensions
     // Confirmation step after the user clicks the "Update available" row.
     // Shows release notes (when available) + Cancel / Update Now buttons.
     case updateConfirm
@@ -168,12 +171,14 @@ enum SettingsRow: Hashable, CaseIterable {
     case githubLinks, hideShipped, disconnectGithub
     case historyPerSession
     case editPhrases, checkPermissions, openConfig, releaseNotes, checkUpdates, uninstall, quit
+    case browseExtensions
 }
 
 struct SettingsActions {
     let checkPermissions: () -> Void
     let openConfig:       () -> Void
     let editPhrases:      () -> Void
+    let browseExtensions: () -> Void
     let openReleaseNotes: () -> Void
     let checkForUpdates:  () -> Void
     let beginUpdate:      () -> Void
@@ -897,6 +902,11 @@ final class PanelNav: ObservableObject {
     // the extension runtime populates it.
     // didSet rather than a call site: a reconcile you have to remember to call
     // is one you forget, and its tests pass either way.
+    // Mirrored onto nav so Settings can show it without reaching into the host —
+    // the row is rendered by the same exhaustive switch as every other setting,
+    // which only has nav.
+    @Published var refusedExtensionCount = 0
+
     @Published var extensionTabs: [ExtensionTab] = [] {
         didSet { reconcileModeWithTabs() }
     }
@@ -1099,6 +1109,11 @@ final class PanelNav: ObservableObject {
             return [.slackPaste, .slackIdentity, .slackTest,
                     .slackEnabled, .slackIdle, .slackDetail, .slackStop,
                     .githubLinks, .hideShipped, .disconnectGithub]
+        // Its own category rather than a row under Actions: extensions declare
+        // STACKNUDGE_EXT_ keys, so per-extension configuration needs somewhere
+        // to live, and it should not arrive by growing an unrelated category.
+        case .extensions:
+            return [.browseExtensions]
         case .panel:
             return [.hotkey, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin, .tabTitleNames]
         case .events:
@@ -1491,6 +1506,7 @@ final class PanelNav: ObservableObject {
             if voiceModelDownloading { cancelVoiceModelDownload() } else { startVoiceModelDownload() }
         case .disconnectGithub: disconnectGithub()
         case .editPhrases:      actions?.editPhrases()
+        case .browseExtensions: actions?.browseExtensions()
         case .checkPermissions: actions?.checkPermissions()
         case .openConfig:       actions?.openConfig()
         case .clearHistory:     actions?.clearEventHistory()
@@ -1516,7 +1532,8 @@ final class PanelNav: ObservableObject {
     var selectedRowRespondsToArrows: Bool {
         switch selectedRow {
         case .wireAgents, .dismissAgents,
-             .disconnectGithub, .editPhrases, .checkPermissions, .openConfig,
+             .disconnectGithub, .editPhrases, .browseExtensions,
+             .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
              .slackPaste, .slackIdentity, .slackTest, .none:
             return false
@@ -1785,7 +1802,8 @@ final class PanelNav: ObservableObject {
         // rewrites agent hook configs and Not now persists a dismissal, so
         // neither should fire on an arrow-key graze. Enter/Space only.
         case .wireAgents, .dismissAgents,
-             .disconnectGithub, .editPhrases, .checkPermissions, .openConfig,
+             .disconnectGithub, .editPhrases, .browseExtensions,
+             .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
              .slackPaste, .slackIdentity, .slackTest, .none:
             break
@@ -1861,7 +1879,7 @@ struct ExtensionTab: Equatable, Identifiable {
 // subjects — "Toggles" held ten rows spanning notifications, panel behaviour and
 // session naming, while "Hotkey" was a category of one.
 enum SettingsCategory: String, CaseIterable {
-    case notifications, voice, appearance, usage, integrations, panel, events, actions
+    case notifications, voice, appearance, usage, integrations, extensions, panel, events, actions
 
     // Kept short: the sidebar is ~120pt.
     var label: String {
@@ -1871,6 +1889,7 @@ enum SettingsCategory: String, CaseIterable {
         case .appearance:    return "Appearance"
         case .usage:         return "Usage"
         case .integrations:  return "Integrations"
+        case .extensions:    return "Extensions"
         case .panel:         return "Panel"
         case .events:        return "Events"
         case .actions:       return "Actions"

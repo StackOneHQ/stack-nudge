@@ -47,6 +47,7 @@ let package = Package(
                 "phrases",
                 "hooks",
                 "docs",
+                "extensions",
 
                 // Tests own this directory; declare here so SPM doesn't
                 // sweep the test sources into the library target.

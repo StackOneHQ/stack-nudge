@@ -53,6 +53,18 @@ jobs:
         with:
           severity: warning
 
+  extensions:
+    name: validate extensions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+
+      # Curation is the security model for extensions, and a reviewer reads a
+      # diff — which does not show where a symlink points. This is the part of
+      # the review a human cannot reliably do by eye.
+      - name: validate
+        run: ./scripts/package-extensions.sh validate
+
   build-macos:
     name: swift build (${{ matrix.arch }})
     runs-on: macos-15

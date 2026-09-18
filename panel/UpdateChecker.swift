@@ -110,7 +110,11 @@ final class UpdateChecker {
         let suffix = "-macos-\(arch).tar.gz"
         return assets.contains { asset in
             guard let name = asset["name"] as? String else { return false }
-            return name.hasSuffix(suffix) && !name.hasSuffix(".sha256")
+            // Prefix as well as suffix: the release also carries extension
+            // packages, and one of those satisfying this would show an update
+            // badge for a download the updater then refuses. Matches the
+            // anchored selection in Updater.performUpdate.
+            return name.hasPrefix("stack-nudge-") && name.hasSuffix(suffix)
         }
     }
 
