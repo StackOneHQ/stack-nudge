@@ -14,9 +14,11 @@ import SwiftUI
 // be driven in a test without touching the real config file.
 final class ExtensionConfigModel: ObservableObject {
 
-    let id: String
-    let name: String
-    let keys: [ExtensionManifest.ConfigKey]
+    let row: ExtensionRow
+
+    var id: String { row.id }
+    var name: String { row.name }
+    var keys: [ExtensionManifest.ConfigKey] { row.config }
 
     @Published var values: [String: String]
     // Cleared by the next edit, so the confirmation belongs to what is on
@@ -25,18 +27,18 @@ final class ExtensionConfigModel: ObservableObject {
 
     private let persist: (String, String?) -> Void
     private let didChange: () -> Void
+    let onRemove: () -> Void
 
-    init(id: String,
-         name: String,
-         keys: [ExtensionManifest.ConfigKey],
+    init(row: ExtensionRow,
          read: () -> [String: String] = ConfigFile.read,
          persist: @escaping (String, String?) -> Void = ExtensionConfigModel.writeToConfigFile,
-         didChange: @escaping () -> Void = {}) {
-        self.id = id
-        self.name = name
-        self.keys = keys
+         didChange: @escaping () -> Void = {},
+         onRemove: @escaping () -> Void = {}) {
+        self.row = row
         self.persist = persist
         self.didChange = didChange
+        self.onRemove = onRemove
+        let keys = row.config
 
         // Only the declared keys. Reading the whole file into the form would
         // put forty unrelated settings — one of them a Slack token — behind an
@@ -142,7 +144,17 @@ struct ExtensionConfigView: View {
             Divider().opacity(0.4)
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    ForEach(model.keys, id: \.key) { field($0) }
+                    summary
+                    if model.keys.isEmpty {
+                        // Not a dead page. Every installed extension opens one,
+                        // because this is where Remove lives and a row that
+                        // opened nothing would make Enter mean something
+                        // different depending on the extension.
+                        Text("This extension has no settings.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        ForEach(model.keys, id: \.key) { field($0) }
+                    }
                     footerRow
                 }
                 .padding(.horizontal, 14)
@@ -179,6 +191,32 @@ struct ExtensionConfigView: View {
         .padding(.vertical, 8)
     }
 
+    // What the card in Settings showed, so arriving here doesn't lose the
+    // context you clicked from.
+    private var summary: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                if let version = model.row.installedVersion {
+                    Text(version).font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
+                }
+                if model.row.updateAvailable, let available = model.row.availableVersion {
+                    Text("update to \(available)").font(.caption2).foregroundStyle(.orange)
+                }
+            }
+            if let reason = model.row.refusedReason {
+                Text(reason).font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if !model.row.description.isEmpty {
+                Text(model.row.description).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !model.row.requires.isEmpty {
+                Text("Needs \(model.row.requires.joined(separator: ", "))")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+    }
+
     private func field(_ key: ExtensionManifest.ConfigKey) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(key.displayLabel).font(.caption.weight(.medium))
@@ -206,14 +244,19 @@ struct ExtensionConfigView: View {
 
     private var footerRow: some View {
         HStack(spacing: 8) {
-            CardButton(title: "Save", prominent: true, enabled: model.isValid) {
-                model.save()
-            }
-            if model.saved {
-                Text("Saved").font(.caption2).foregroundStyle(.secondary)
+            if !model.keys.isEmpty {
+                CardButton(title: "Save", prominent: true, enabled: model.isValid) {
+                    model.save()
+                }
+                if model.saved {
+                    Text("Saved").font(.caption2).foregroundStyle(.secondary)
+                }
             }
             Spacer()
+            // Here rather than on the Settings card, so Enter on an installed
+            // extension opens it instead of deleting it.
+            CardButton(title: "Remove") { model.onRemove() }
         }
-        .padding(.top, 2)
+        .padding(.top, 6)
     }
 }

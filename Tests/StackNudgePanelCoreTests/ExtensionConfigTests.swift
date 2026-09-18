@@ -15,9 +15,13 @@ final class ExtensionConfigTests: XCTestCase {
     private func model(keys: [ExtensionManifest.ConfigKey],
                        existing: [String: String] = [:],
                        persist: @escaping (String, String?) -> Void = { _, _ in },
-                       didChange: @escaping () -> Void = {}) -> ExtensionConfigModel {
-        ExtensionConfigModel(id: "derby", name: "Token Derby", keys: keys,
-                             read: { existing }, persist: persist, didChange: didChange)
+                       didChange: @escaping () -> Void = {},
+                       onRemove: @escaping () -> Void = {}) -> ExtensionConfigModel {
+        let row = ExtensionRow(id: "derby", name: "Token Derby", description: "",
+                               installedVersion: "1.0.0", availableVersion: nil,
+                               refusedReason: nil, requires: [], config: keys)
+        return ExtensionConfigModel(row: row, read: { existing }, persist: persist,
+                                    didChange: didChange, onRemove: onRemove)
     }
 
     // MARK: - Seeding
@@ -108,6 +112,23 @@ final class ExtensionConfigTests: XCTestCase {
         // retract a confirmation that no longer describes the form.
         m.binding(for: key("STACKNUDGE_EXT_DERBY_ORG")).wrappedValue = "stackone"
         XCTAssertFalse(m.saved)
+    }
+
+    // Every installed extension opens a page, including one declaring no keys:
+    // the page is where Remove lives, and a row that opened nothing would make
+    // Enter mean something different depending on the extension.
+    func testAnExtensionWithNoKeysStillHasAPage() {
+        let m = model(keys: [])
+        XCTAssertTrue(m.keys.isEmpty)
+        XCTAssertTrue(m.isValid)
+        XCTAssertEqual(m.name, "Token Derby")
+    }
+
+    func testRemoveIsAskedForRatherThanDoneHere() {
+        var removals = 0
+        let m = model(keys: [], onRemove: { removals += 1 })
+        m.onRemove()
+        XCTAssertEqual(removals, 1)
     }
 
     // MARK: - Validation

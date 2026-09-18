@@ -889,20 +889,42 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private let sessions = SessionStore()
     let nav = PanelNav()
     private let phrases = PhrasesViewModel()
-    // Into one extension's own configuration. The model is built here rather
-    // than in the view because it needs the config file and the host, and
-    // because its unsaved edits have to survive a re-render.
+    // Into one extension's own page. The model is built here rather than in the
+    // view because it needs the config file and the host, and because its
+    // unsaved edits have to survive a re-render.
+    //
+    // Every installed extension gets a page, including one that declares no
+    // config keys: the page is where Remove lives, and a row that opens nothing
+    // would make Enter mean something different depending on the extension.
     func configureExtension(_ row: ExtensionRow) {
-        guard row.isConfigurable, row.refusedReason == nil else { return }
         nav.extensionConfig = ExtensionConfigModel(
-            id: row.id,
-            name: row.name,
-            keys: row.config,
+            row: row,
             // Saving is not enough on its own: the environment is rebuilt for
             // each invocation, so the tab only shows the new value once the
             // extension runs again.
-            didChange: { [weak self] in self?.extensions.refresh(row.id) })
+            didChange: { [weak self] in self?.extensions.refresh(row.id) },
+            onRemove: { [weak self] in self?.removeExtension(row.id) })
         nav.mode = .extensionConfig(row.id)
+    }
+
+    // From a Settings row, which knows only the id.
+    func openExtension(_ id: String) {
+        guard let row = nav.installedExtensions.first(where: { $0.id == id }) else { return }
+        configureExtension(row)
+    }
+
+    private func removeExtension(_ id: String) {
+        extensionCatalog.remove(id)
+        nav.mode = .settings
+    }
+
+    // Installed and refused, as the Extensions settings category renders them.
+    // Rebuilt from the host on every change it already reports, so the settings
+    // list and the tab strip can't disagree about what is installed.
+    private func refreshInstalledExtensions() {
+        nav.installedExtensions = ExtensionCatalog.rows(catalogue: [],
+                                                        installed: extensions.manifests,
+                                                        refused: extensions.refused)
     }
 
     private lazy var extensionCatalog = ExtensionCatalog(
@@ -915,8 +937,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // of tab order and this stays the single source of what's in them.
     private lazy var extensions = ExtensionHost(onTabsChanged: { [weak self] tabs in
         self?.nav.extensionTabs = tabs
+        self?.refreshInstalledExtensions()
     }, onRefusalsChanged: { [weak self] count in
         self?.nav.refusedExtensionCount = count
+        self?.refreshInstalledExtensions()
     })
     private var listener: EventListener?
     private var menuBar: MenuBarController?
@@ -1083,6 +1107,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self?.nav.mode = .phrases
             },
             browseExtensions: { [weak self] in self?.nav.mode = .extensions },
+            openExtension: { [weak self] id in self?.openExtension(id) },
             openReleaseNotes: {
                 // Versioned tag URL when we know the bundle version,
                 // otherwise the releases index. Tag URL falls through
@@ -3792,7 +3817,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 case KeyCode.returnKey, KeyCode.numpadEnter:
                     if let id = extensionCatalog.selectedID,
                        let row = visibleRows().first(where: { $0.id == id }),
-                       row.isConfigurable, row.refusedReason == nil {
+                       row.isInstalled {
                         configureExtension(row)
                     }
                     return true

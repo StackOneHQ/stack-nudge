@@ -193,12 +193,18 @@ final class ExtensionCatalogTests: XCTestCase {
         XCTAssertEqual(installed, ["available"])
     }
 
-    func testActivatingAnInstalledRowRemovesIt() {
+    // Enter never removes. Removal is on the extension's own page now, reached
+    // from Settings → Extensions — Enter on a list where most rows install and
+    // one deletes is a keystroke whose meaning depends on where the selection
+    // happens to be, and the destructive end of that is the one you hit by
+    // accident.
+    func testActivatingAnInstalledRowDoesNotRemoveIt() {
         var removed: [String] = []
         let c = catalog(remove: { removed.append($0); return .success($0) })
         c.selectedID = "installed"
         c.activateSelection(among: threeRows)
-        XCTAssertEqual(removed, ["installed"])
+        XCTAssertTrue(removed.isEmpty)
+        XCTAssertNil(c.work["installed"])
     }
 
     // A failed row is showing a reason, so Enter clears it rather than

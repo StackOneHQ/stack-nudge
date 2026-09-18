@@ -160,18 +160,20 @@ final class ExtensionCatalog: ObservableObject {
         selectedID = rows[next].id
     }
 
-    // What Enter does to the selected row. Install when it isn't installed,
-    // update when there is one, otherwise remove — and dismiss a failure first,
-    // since that is what the row is showing.
+    // What Enter does to the selected row: install it, or update it, or dismiss
+    // the failure it is showing.
+    //
+    // Deliberately never removes. Removal is on the extension's own page now,
+    // reached from Settings → Extensions — Enter on a list where most rows
+    // install and one deletes is a keystroke whose meaning depends on where the
+    // selection happens to be.
     func activateSelection(among rows: [ExtensionRow]) {
         guard let row = rows.first(where: { $0.id == selectedID }) else { return }
         if failure(for: row.id) != nil { return dismissFailure(for: row.id) }
-        guard !isBusy(row.id) else { return }
-        if row.updateAvailable || !row.isInstalled {
-            if let entry = entries.first(where: { $0.id == row.id }) { install(entry) }
-        } else {
-            remove(row.id)
-        }
+        guard !isBusy(row.id), row.updateAvailable || !row.isInstalled,
+              let entry = entries.first(where: { $0.id == row.id })
+        else { return }
+        install(entry)
     }
 
     // Keeps the selection on a row that still exists after a reload or a
@@ -270,7 +272,9 @@ extension ExtensionCatalog {
                     ?? entry.config.map { .init(key: $0, label: nil, help: nil, placeholder: nil) }))
         }
         // Installed but unpublished — still listed, so it can be seen and
-        // removed rather than being invisible and permanent.
+        // removed rather than being invisible and permanent. In the browser
+        // that is a hand-placed extension; in the Settings list (which passes
+        // no catalogue) it is every installed extension.
         for manifest in installed where seen.insert(manifest.id).inserted {
             rows.append(ExtensionRow(
                 id: manifest.id, name: manifest.name, description: "",
@@ -346,8 +350,8 @@ struct ExtensionsView: View {
                 FooterHint(label: "Search", keys: ["/"])
                 FooterHint(label: "Select", keys: ["↑", "↓"])
                 FooterHint(label: activationLabel(in: rows), keys: ["⏎"])
-                if selectedRow(in: rows)?.isConfigurable == true {
-                    FooterHint(label: "Configure", keys: ["⌘⏎"])
+                if selectedRow(in: rows)?.isInstalled == true {
+                    FooterHint(label: "Settings", keys: ["⌘⏎"])
                 }
                 // ⌘R rather than R: a plain letter seeds the search field, the
                 // same trade the history pane makes.
@@ -396,7 +400,7 @@ struct ExtensionsView: View {
         guard let row = selectedRow(in: rows) else { return "Select" }
         if catalog.failure(for: row.id) != nil { return "Dismiss" }
         if row.updateAvailable { return "Update" }
-        return row.isInstalled ? "Remove" : "Install"
+        return row.isInstalled ? "Installed" : "Install"
     }
 
     private var searchField: some View {
@@ -586,15 +590,12 @@ struct ExtensionsView: View {
                 if row.updateAvailable, let entry = entry(for: row.id) {
                     cardButton("Update", prominent: true) { catalog.install(entry) }
                 }
-                // Above Remove, because it is the thing somebody opens an
-                // installed extension's card to do. A refused extension is not
-                // offered one — its manifest is what failed, so there is no
-                // trustworthy list of keys to render a form from.
-                if row.isConfigurable && row.refusedReason == nil {
-                    cardButton("Configure") { onConfigure(row) }
-                }
+                // Settings is where an installed extension is configured and
+                // removed; this page is for finding ones you don't have. An
+                // installed row says so and offers the way there rather than
+                // duplicating the controls.
                 if row.isInstalled {
-                    cardButton("Remove") { catalog.remove(row.id) }
+                    cardButton("Settings") { onConfigure(row) }
                 } else if let entry = entry(for: row.id) {
                     cardButton("Install", prominent: true) { catalog.install(entry) }
                 }

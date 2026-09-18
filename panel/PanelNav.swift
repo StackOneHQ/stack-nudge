@@ -158,7 +158,7 @@ enum EventsPane: String, CaseIterable {
 
 // CaseIterable so a row can't be dropped when categories are reshuffled — the
 // completeness test enumerates this.
-enum SettingsRow: Hashable, CaseIterable {
+enum SettingsRow: Hashable {
     // One slot per button in the agent-reconciliation banner, so both are
     // keyboard-reachable rather than mouse-only.
     case wireAgents, dismissAgents
@@ -176,6 +176,47 @@ enum SettingsRow: Hashable, CaseIterable {
     case historyPerSession
     case editPhrases, checkPermissions, openConfig, releaseNotes, checkUpdates, uninstall, quit
     case browseExtensions
+    // One per installed extension, rendered as a card rather than a label/value
+    // row. The associated value is what costs the synthesised CaseIterable
+    // below; every `switch` over SettingsRow stays exhaustive, which is what
+    // actually keeps a new row from being forgotten.
+    case installedExtension(String)
+}
+
+// Hand-written because `installedExtension` carries a value. The representative
+// entry is the point: dropping it would leave testEverySettingsRowHasAHome
+// iterating only the static cases, so the one row that can be forgotten in
+// `activate()` — the switch with a `default:` — would be the one the guard
+// stopped covering. A guard that looks right and does nothing is the failure
+// this codebase keeps producing.
+extension SettingsRow: CaseIterable {
+
+    static let representativeExtensionID = "derby"
+
+    static var allCases: [SettingsRow] {
+        staticCases + [.installedExtension(representativeExtensionID)]
+    }
+
+    private static let staticCases: [SettingsRow] = [
+        .wireAgents, .dismissAgents,
+        .permissions, .update, .hotkey,
+        .banner, .muteWhenFocused, .mute, .muteDuration, .remindUnanswered,
+        .stalledSessions, .tabTitleNames, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin,
+        .widget, .snapToCorners, .widgetCorner, .widgetOpacity, .widgetContent,
+        .mascot, .theme,
+        .eventHistory, .clearHistory,
+        .slackPaste, .slackIdentity, .slackTest,
+        .slackEnabled, .slackIdle, .slackDetail, .slackStop,
+        .soundEnabled, .agentDoneSound, .permissionSound,
+        .voiceEnabled, .voice, .voiceSpeed, .speakHotkey, .downloadVoiceModel,
+        .quotaTracking, .quotaAlerts, .alertThreshold, .pollFrequency,
+        .contextAlert, .showRemaining,
+        .githubLinks, .hideShipped, .disconnectGithub,
+        .historyPerSession,
+        .editPhrases, .checkPermissions, .openConfig, .releaseNotes,
+        .checkUpdates, .uninstall, .quit,
+        .browseExtensions,
+    ]
 }
 
 struct SettingsActions {
@@ -183,6 +224,7 @@ struct SettingsActions {
     let openConfig:       () -> Void
     let editPhrases:      () -> Void
     let browseExtensions: () -> Void
+    let openExtension:     (String) -> Void
     let openReleaseNotes: () -> Void
     let checkForUpdates:  () -> Void
     let beginUpdate:      () -> Void
@@ -919,6 +961,12 @@ final class PanelNav: ObservableObject {
     // the row is rendered by the same exhaustive switch as every other setting,
     // which only has nav.
     @Published var refusedExtensionCount = 0
+    // Installed and refused extensions, as the Extensions category renders
+    // them. Published here rather than read from the host in the view because
+    // SettingsView takes only nav — and because nav is already where the host
+    // pushes its tab list, so this extends one data flow rather than adding a
+    // second.
+    @Published var installedExtensions: [ExtensionRow] = []
     // The form behind .extensionConfig. Held here rather than built in the view
     // so its unsaved edits survive a re-render, and cleared on the way out so a
     // second visit reads the file again rather than showing the last visit's
@@ -1130,8 +1178,15 @@ final class PanelNav: ObservableObject {
         // Its own category rather than a row under Actions: extensions declare
         // STACKNUDGE_EXT_ keys, so per-extension configuration needs somewhere
         // to live, and it should not arrive by growing an unrelated category.
+        //
+        // The installed ones are listed here rather than only inside the
+        // browser, because what you have installed is a setting and the browser
+        // is for finding what you don't. Refusals are in this list too: a
+        // refused extension is an installed thing that is broken, and splitting
+        // it away from the installed ones is what produced an orange "Remove"
+        // sitting directly above a card offering "Install".
         case .extensions:
-            return [.browseExtensions]
+            return installedExtensions.map { .installedExtension($0.id) } + [.browseExtensions]
         case .panel:
             return [.hotkey, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin, .tabTitleNames]
         case .events:
@@ -1525,6 +1580,10 @@ final class PanelNav: ObservableObject {
         case .disconnectGithub: disconnectGithub()
         case .editPhrases:      actions?.editPhrases()
         case .browseExtensions: actions?.browseExtensions()
+        // Listed explicitly. This switch ends in `default: applyCycle`, so an
+        // omission here is not a build error — it is Enter quietly doing
+        // nothing, on the one row whose whole purpose is being opened.
+        case .installedExtension(let id): actions?.openExtension(id)
         case .checkPermissions: actions?.checkPermissions()
         case .openConfig:       actions?.openConfig()
         case .clearHistory:     actions?.clearEventHistory()
@@ -1550,7 +1609,7 @@ final class PanelNav: ObservableObject {
     var selectedRowRespondsToArrows: Bool {
         switch selectedRow {
         case .wireAgents, .dismissAgents,
-             .disconnectGithub, .editPhrases, .browseExtensions,
+             .disconnectGithub, .editPhrases, .browseExtensions, .installedExtension,
              .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
              .slackPaste, .slackIdentity, .slackTest, .none:
@@ -1820,7 +1879,7 @@ final class PanelNav: ObservableObject {
         // rewrites agent hook configs and Not now persists a dismissal, so
         // neither should fire on an arrow-key graze. Enter/Space only.
         case .wireAgents, .dismissAgents,
-             .disconnectGithub, .editPhrases, .browseExtensions,
+             .disconnectGithub, .editPhrases, .browseExtensions, .installedExtension,
              .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
              .slackPaste, .slackIdentity, .slackTest, .none:

@@ -482,6 +482,60 @@ struct SettingsView: View {
         return refused == 0 ? installedLabel : "\(installedLabel) · \(refused) not loaded"
     }
 
+    @ViewBuilder private func extensionCard(_ id: String) -> some View {
+        if let extensionRow = nav.installedExtensions.first(where: { $0.id == id }) {
+            let selected = nav.settingsDetailFocused
+                && nav.selectedSettingIndex == nav.index(of: .installedExtension(id))
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: extensionRow.refusedReason == nil
+                      ? "puzzlepiece.extension.fill" : "exclamationmark.triangle.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(extensionRow.refusedReason == nil ? Color.green : Color.orange)
+                    .frame(width: 18)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(extensionRow.name).font(.callout.weight(.medium)).lineLimit(1)
+                        if let version = extensionRow.installedVersion {
+                            Text(version).font(.caption2.monospacedDigit())
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    if let reason = extensionRow.refusedReason {
+                        Text(reason).font(.caption).foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if !extensionRow.description.isEmpty {
+                        Text(extensionRow.description).font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if !extensionRow.config.isEmpty {
+                        Text("Reads \(extensionRow.configKeyList)")
+                            .font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
+                    }
+                    if !extensionRow.requires.isEmpty {
+                        Text("Needs \(extensionRow.requires.joined(separator: ", "))")
+                            .font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
+                    }
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(extensionRow.refusedReason == nil
+                      ? Color.primary.opacity(selected ? 0.12 : 0.05)
+                      : Color.orange.opacity(selected ? 0.16 : 0.08)))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.accentColor.opacity(selected ? 0.6 : 0), lineWidth: 1.5))
+            .contentShape(Rectangle())
+            .onTapGesture { nav.actions?.openExtension(id) }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(selected ? [.isSelected] : [])
+            .id(nav.index(of: .installedExtension(id)))
+        }
+    }
+
     @ViewBuilder private func settingRow(_ id: SettingsRow) -> some View {
         switch id {
         // Notifications
@@ -555,11 +609,18 @@ struct SettingsView: View {
         case .eventHistory:      row(.eventHistory, label: "Event history", kind: .toggle, value: nav.eventHistoryEnabled ? "On" : "Off")
         case .clearHistory:      row(.clearHistory, label: "Clear event history", kind: .action, value: nav.historyRecords.isEmpty ? "empty" : "\(nav.historyRecords.count) kept")
 
+        // One card per installed extension, rather than the flat label/value
+        // row every other category uses. The card carries version, description,
+        // the keys it reads and what it needs, and none of that fits a value
+        // column — but it is still a SettingsRow, so the selection ring, the
+        // scroll-to-index and the arrow keys work on it unchanged.
+        case .installedExtension(let id): extensionCard(id)
+
         // Actions
         case .editPhrases:      row(.editPhrases, label: "Edit phrases…", kind: .action, value: "")
         // The count is the useful part at a glance; a refusal is worth surfacing
         // here too, since the whole point of the sub-page is that it explains one.
-        case .browseExtensions: row(.browseExtensions, label: "Extensions…", kind: .action,
+        case .browseExtensions: row(.browseExtensions, label: "Browse extensions…", kind: .action,
                                     value: extensionsRowValue)
         case .checkPermissions: row(.checkPermissions, label: "Check permissions…", kind: .action, value: "")
         case .openConfig:       row(.openConfig, label: "Open config file…", kind: .action, value: "")
