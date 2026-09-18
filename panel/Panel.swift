@@ -78,6 +78,19 @@ final class FloatingPanel: NSPanel {
     }
 }
 
+// Widths of the tab strip's scroller and of the tabs inside it. Two keys rather
+// than one because the answer is a comparison of the two, and a single key would
+// have the last writer win.
+private struct TabsContentWidth: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+private struct TabsViewportWidth: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 struct PanelContentView: View {
 
     @ObservedObject var store: EventStore
@@ -107,6 +120,13 @@ struct PanelContentView: View {
     // Owned here rather than inside historyPane so the key handler's gate
     // (nav.historySearchFocused) and the actual first responder can't drift.
     @FocusState private var historyFieldFocused: Bool
+
+    // Measured, not guessed: whether the tab strip has more tabs than fit is a
+    // function of the installed extensions, their label lengths and the panel's
+    // width, and the strip only fades its edges when there is something past
+    // them. See scrollingTabs.
+    @State private var tabsContentWidth: CGFloat = 0
+    @State private var tabsViewportWidth: CGFloat = 0
 
     let onGrantPermissions: () -> Void
 
@@ -254,27 +274,132 @@ struct PanelContentView: View {
             Image(nsImage: MenuBarController.brandMarkImage(height: 14))
                 .padding(.trailing, 4)
 
-            // Driven off orderedTabs rather than listed here, so the strip and
-            // the shortcuts can't disagree about what sits where.
-            ForEach(nav.orderedTabs, id: \.self) { mode in
-                tab(mode, label: tabLabel(mode), count: tabCount(mode),
-                    dotColor: tabDot(mode))
-            }
+            scrollingTabs
 
-            Spacer()
-
+            // Pinned outside the scroller, and sized before it: an extension
+            // brings its own tab, so the strip is the one row in the panel whose
+            // width is set by something the user installs. Inside the scroller
+            // they would scroll away with the tabs, and the mute state is not
+            // something to have to go looking for.
             muteBell
+                .layoutPriority(1)
 
-            // One combined hint instead of per-tab keycaps — keeps the strip
-            // uncluttered while still surfacing the shortcut range.
+            // One combined hint instead of per-tab keycaps, which keeps the
+            // strip uncluttered while still surfacing the shortcut range.
             HStack(spacing: 2) {
                 KeyCapView(symbol: "⌘")
                 KeyCapView(symbol: "1-\(min(nav.orderedTabs.count, PanelNav.maxNumberedTabs))")
             }
             .opacity(0.7)
+            .layoutPriority(1)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    // The tabs themselves, which scroll sideways once they stop fitting.
+    //
+    // They used to be bare in the strip's HStack, which has no way to say "too
+    // many": at the panel's 560pt minimum width the labels wrapped mid-word
+    // ("Ses-sions", "Out-come s") and the tabs past the trailing edge were
+    // unreachable by mouse. ⌘←→ still stepped onto them, which meant selecting
+    // a tab nobody could see.
+    private var scrollingTabs: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal) {
+                HStack(spacing: 4) {
+                    // Driven off orderedTabs rather than listed here, so the
+                    // strip and the shortcuts can't disagree about what sits
+                    // where.
+                    ForEach(nav.orderedTabs, id: \.self) { mode in
+                        tab(mode, label: tabLabel(mode), count: tabCount(mode),
+                            dotColor: tabDot(mode))
+                            .id(mode)
+                    }
+                }
+                // The selected tab's fill runs to the edge of its own bounds, so
+                // without this the first and last lose a pixel of it to the clip.
+                .padding(.horizontal, 1)
+                .background(widthReader(TabsContentWidth.self))
+                // On the content, not the ScrollView: the helper walks
+                // superviews for the NSScrollView, as ThinScrollers does.
+                .background(NoHorizontalScroller())
+            }
+            .scrollIndicators(.hidden)
+            .background(widthReader(TabsViewportWidth.self))
+            .onPreferenceChange(TabsContentWidth.self) { tabsContentWidth = $0 }
+            .onPreferenceChange(TabsViewportWidth.self) { tabsViewportWidth = $0 }
+            .mask(tabsMask)
+            // ⌘1-9 and ⌘←→ move the selection without touching the scroll
+            // offset, so a tab picked by keyboard could sit off the edge; the
+            // same reason the Settings sidebar scrolls to its category.
+            .onChange(of: nav.mode) { mode in
+                guard let anchor = Self.tabStripAnchor(for: mode, in: nav.orderedTabs) else { return }
+                withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(anchor, anchor: nil) }
+            }
+            .onAppear {
+                guard let anchor = Self.tabStripAnchor(for: nav.mode, in: nav.orderedTabs) else { return }
+                proxy.scrollTo(anchor, anchor: nil)
+            }
+        }
+        // Greedy in its own axis, so without this it takes the width the bell
+        // and the keycaps need. They carry the layout priority; this yields it.
+        .layoutPriority(-1)
+    }
+
+    private var tabsOverflow: Bool { tabsContentWidth > tabsViewportWidth + 1 }
+
+    // Narrower than the narrowest tab, so a tab is never hidden by the thing
+    // whose job is to say a tab is hidden.
+    private static let tabFadeWidth: CGFloat = 12
+
+    // The affordance, and the only one there is: a strip that simply clipped
+    // gave no sign that a tab was past the edge, which is the state the panel is
+    // in on any machine with a few extensions on it.
+    //
+    // Both edges, because macOS 13 gives no scroll offset to read and guessing
+    // which side the hidden tabs are on would be wrong half the time. Fixed
+    // width rather than a fraction of the strip: a proportional fade grows with
+    // the panel, and at full width it would reach across a whole tab.
+    //
+    // Collapses to nothing when everything fits, so a panel showing all its tabs
+    // has no fade eating the first one's leading edge.
+    private var tabsMask: some View {
+        HStack(spacing: 0) {
+            fadeEdge(leading: true)
+            Rectangle().fill(.black)
+            fadeEdge(leading: false)
+        }
+    }
+
+    private func fadeEdge(leading: Bool) -> some View {
+        LinearGradient(colors: leading ? [.clear, .black] : [.black, .clear],
+                       startPoint: .leading, endPoint: .trailing)
+            .frame(width: tabsOverflow ? Self.tabFadeWidth : 0)
+    }
+
+    private func widthReader<Key: PreferenceKey>(_ key: Key.Type) -> some View
+    where Key.Value == CGFloat {
+        GeometryReader { geometry in
+            Color.clear.preference(key: key, value: geometry.size.width)
+        }
+    }
+
+    // Which tab the strip should keep in view for a mode. Settings' own
+    // sub-pages are not tabs, so scrolling to the mode itself targets an id the
+    // strip never renders and silently does nothing; the tab they belong to is
+    // what should stay visible while you are inside one.
+    static func tabStripAnchor(for mode: PanelMode, in tabs: [PanelMode]) -> PanelMode? {
+        if tabs.contains(mode) { return mode }
+        switch mode {
+        case .phrases, .extensions, .extensionConfig, .updateConfirm, .uninstall:
+            return tabs.contains(.settings) ? .settings : nil
+        // No strip is drawn in these, so there is nothing to bring into view.
+        case .updating, .postUpdate, .bootstrap:
+            return nil
+        default:
+            return nil
+        }
     }
 
     // Global-mute toggle in the header. A click mutes for the configured
@@ -311,6 +436,12 @@ struct PanelContentView: View {
             HStack(spacing: 5) {
                 Text(label)
                     .font(.caption.weight(isActive ? .semibold : .regular))
+                    // A tab keeps its natural width and scrolls out of view
+                    // instead of being squeezed. Squeezed is what it did: at the
+                    // panel's 560pt minimum the labels broke mid-word into
+                    // "Ses-sions" and "Out-come s".
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 if count > 0 {
                     Text("\(count)")
                         .font(.caption2.monospacedDigit())
