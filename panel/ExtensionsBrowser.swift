@@ -228,7 +228,18 @@ struct ExtensionRow: Equatable, Identifiable {
 
     // Only an installed extension has anywhere to put a value, and only one
     // that declared a key has anything to put there.
-    var isConfigurable: Bool { isInstalled && !config.isEmpty }
+    var isConfigurable: Bool { isInstalled && !configurableKeys.isEmpty }
+
+    // The keys a form may actually offer.
+    //
+    // Empty for a refused extension, whatever the index says it declares. A
+    // refusal means its manifest did not parse, so the only key list available
+    // is the catalogue's — and rendering fields from that writes values into
+    // the user's config file for an extension that will never read them, under
+    // labels its own manifest never agreed to.
+    var configurableKeys: [ExtensionManifest.ConfigKey] {
+        refusedReason == nil ? config : []
+    }
 
     // Only when both are known and differ. An extension that is installed but
     // unpublished has nothing to update to, which is not the same as being
@@ -350,7 +361,10 @@ struct ExtensionsView: View {
                 FooterHint(label: "Search", keys: ["/"])
                 FooterHint(label: "Select", keys: ["↑", "↓"])
                 FooterHint(label: activationLabel(in: rows), keys: ["⏎"])
-                if selectedRow(in: rows)?.isInstalled == true {
+                // Only where Enter is busy doing something else. An installed
+                // row with an update pending takes Enter for the update, so
+                // without this there would be no keyboard route to its page.
+                if selectedRow(in: rows)?.updateAvailable == true {
                     FooterHint(label: "Settings", keys: ["⌘⏎"])
                 }
                 // ⌘R rather than R: a plain letter seeds the search field, the
@@ -400,7 +414,11 @@ struct ExtensionsView: View {
         guard let row = selectedRow(in: rows) else { return "Select" }
         if catalog.failure(for: row.id) != nil { return "Dismiss" }
         if row.updateAvailable { return "Update" }
-        return row.isInstalled ? "Installed" : "Install"
+        // Named for what Enter does, which on an installed row is open its
+        // page — the same thing the card's button does. It used to say
+        // "Installed", which is a state rather than an action, on a row where
+        // Enter did nothing at all.
+        return row.isInstalled ? "Settings" : "Install"
     }
 
     private var searchField: some View {

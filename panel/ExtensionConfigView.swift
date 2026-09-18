@@ -25,7 +25,7 @@ final class ExtensionConfigModel: ObservableObject {
 
     var id: String { row.id }
     var name: String { row.name }
-    var keys: [ExtensionManifest.ConfigKey] { row.config }
+    var keys: [ExtensionManifest.ConfigKey] { row.configurableKeys }
 
     @Published var values: [String: String]
     // Cleared by the next edit, so the confirmation belongs to what is on
@@ -47,14 +47,13 @@ final class ExtensionConfigModel: ObservableObject {
         self.persist = persist
         self.didChange = didChange
         self.onRemove = onRemove
-        let keys = row.config
 
         // Only the declared keys. Reading the whole file into the form would
         // put forty unrelated settings — one of them a Slack token — behind an
         // extension's page.
         let existing = read()
         var seeded: [String: String] = [:]
-        for key in keys { seeded[key.key] = existing[key.key] ?? "" }
+        for key in row.configurableKeys { seeded[key.key] = existing[key.key] ?? "" }
         values = seeded
     }
 
@@ -176,7 +175,15 @@ struct ExtensionConfigView: View {
 
             PageFooter {
                 FooterHint(label: "Back", keys: ["Esc"])
-                FooterHint(label: "Save", keys: ["⏎"])
+                // Only where there is something to save. This page now opens
+                // for every installed extension, including ones declaring no
+                // keys — and a refused one, which is the most common case of
+                // all — so an unconditional Save hint promised a key that had
+                // no button and no handler behind it.
+                if !model.keys.isEmpty {
+                    FooterHint(label: "Save", keys: ["⏎"])
+                }
+                FooterHint(label: "Remove", keys: ["⌘⌫"])
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

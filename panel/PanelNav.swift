@@ -966,7 +966,23 @@ final class PanelNav: ObservableObject {
     // SettingsView takes only nav — and because nav is already where the host
     // pushes its tab list, so this extends one data flow rather than adding a
     // second.
-    @Published var installedExtensions: [ExtensionRow] = []
+    @Published var installedExtensions: [ExtensionRow] = [] {
+        // The one list that is genuinely dynamic *within* a category, and the
+        // only one that had no hook. Every other input that reshapes
+        // settingsRows re-anchors: updateAvailable, missingPermissions and
+        // unwiredAgents all do.
+        //
+        // Without it, removing an extension left selectedSettingIndex pointing
+        // at the same *number* in a shorter list — so the ring moved onto the
+        // card below the one just deleted, and pressing ⏎ again opened an
+        // extension nobody chose, with its Remove button under the cursor that
+        // had just clicked Remove. Removing several in a row is exactly the
+        // flow that happens in.
+        didSet {
+            guard oldValue.map(\.id) != installedExtensions.map(\.id) else { return }
+            reanchorSettingSelection()
+        }
+    }
     // The form behind .extensionConfig. Held here rather than built in the view
     // so its unsaved edits survive a re-render, and cleared on the way out so a
     // second visit reads the file again rather than showing the last visit's

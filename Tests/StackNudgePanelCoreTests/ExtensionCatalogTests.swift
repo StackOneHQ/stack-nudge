@@ -207,6 +207,24 @@ final class ExtensionCatalogTests: XCTestCase {
         XCTAssertNil(c.work["installed"])
     }
 
+    // A refusal means the manifest did not parse, so the only key list
+    // available is the catalogue's — and rendering fields from that writes
+    // values into the config file for an extension that will never read them,
+    // under labels its own manifest never agreed to.
+    func testARefusedExtensionOffersNoConfigurableKeys() {
+        let key = ExtensionManifest.ConfigKey(key: "STACKNUDGE_EXT_A", label: nil,
+                                              help: nil, placeholder: nil)
+        let refused = ExtensionRow(id: "broken", name: "broken", description: "",
+                                   installedVersion: nil, availableVersion: "1.0.0",
+                                   refusedReason: "needs manifest schema 2",
+                                   requires: [], config: [key])
+        XCTAssertTrue(refused.configurableKeys.isEmpty)
+        XCTAssertFalse(refused.isConfigurable)
+        // Still listed, and still removable — it is the thing somebody opened
+        // this page to get rid of.
+        XCTAssertTrue(refused.isInstalled)
+    }
+
     // A failed row is showing a reason, so Enter clears it rather than
     // immediately retrying something the user has not read yet.
     func testActivatingAFailedRowDismissesTheFailureFirst() {

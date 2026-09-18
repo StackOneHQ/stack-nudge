@@ -3773,6 +3773,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // field's own .onSubmit rather than here, so it saves from whichever
         // field has focus.
         if case .extensionConfig = nav.mode {
+            let onlyCommand = mods.intersection([.command, .control, .option, .shift]) == [.command]
+            // ⌘⌫ rather than a bare ⌫, which is what the field editor wants,
+            // and deliberately the macOS "move to trash" combination: this is
+            // the one destructive action on the page and it takes no
+            // confirmation.
+            if onlyCommand, event.keyCode == KeyCode.delete || event.keyCode == KeyCode.forwardDelete {
+                nav.extensionConfig?.onRemove()
+                return true
+            }
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain, event.keyCode == KeyCode.escape else { return false }
             // Wherever this page was opened from, which is the Settings list as
@@ -3843,7 +3852,20 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 extensionCatalog.focusSearch()
             case .moveSelection(let delta):
                 extensionCatalog.moveSelection(among: visibleRows(), by: delta)
-            case .activate:     extensionCatalog.activateSelection(among: visibleRows())
+            case .activate:
+                // An installed row with nothing to update has no install action
+                // left, and Enter used to sit there doing nothing while the
+                // footer advertised it. Opening its page is what the card's own
+                // button does, so Enter now agrees with the button.
+                let rows = visibleRows()
+                if let id = extensionCatalog.selectedID,
+                   let row = rows.first(where: { $0.id == id }),
+                   row.isInstalled, !row.updateAvailable,
+                   extensionCatalog.failure(for: id) == nil {
+                    configureExtension(row, from: .extensions)
+                } else {
+                    extensionCatalog.activateSelection(among: rows)
+                }
             case .swallow:      break
             }
             return true

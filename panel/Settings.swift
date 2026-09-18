@@ -529,7 +529,15 @@ struct SettingsView: View {
             .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .strokeBorder(Color.accentColor.opacity(selected ? 0.6 : 0), lineWidth: 1.5))
             .contentShape(Rectangle())
-            .onTapGesture { nav.actions?.openExtension(id) }
+            // Moves the keyboard selection too, exactly as the shared row()
+            // helper does. Without it a click left selectedSettingIndex parked
+            // on whatever was selected before — and if the click removed an
+            // extension, that index then pointed past the end of a shorter
+            // list, so nothing was highlighted while ⏎ still acted on a row.
+            .onTapGesture {
+                nav.selectedSettingIndex = nav.index(of: .installedExtension(id))
+                nav.actions?.openExtension(id)
+            }
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(selected ? [.isSelected] : [])
             .id(nav.index(of: .installedExtension(id)))

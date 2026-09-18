@@ -135,6 +135,56 @@ final class SettingsCategoryTests: XCTestCase {
             pasteSlackSetup: {}, detectSlackUser: {}, sendSlackTest: {})
     }
 
+    // Removing an extension left selectedSettingIndex pointing at the same
+    // *number* in a shorter list, so the ring moved onto the card below the one
+    // just deleted — and ⏎ then opened an extension nobody chose, with its
+    // Remove button under the cursor that had just clicked Remove.
+    func testRemovingAnExtensionAboveTheSelectionKeepsTheSelectedOne() {
+        let nav = PanelNav()
+        nav.installedExtensions = [row("a"), row("b"), row("c")]
+        nav.settingsCategory = .extensions
+        nav.selectedSettingIndex = nav.index(of: .installedExtension("b")) ?? 0
+        XCTAssertEqual(nav.selectedRow, .installedExtension("b"))
+
+        // "b" moves from index 1 to index 0. An index that stayed put would now
+        // be pointing at "c" — a card the user never selected, whose Remove
+        // button sits exactly where the last one did.
+        nav.installedExtensions = [row("b"), row("c")]
+        XCTAssertEqual(nav.selectedRow, .installedExtension("b"))
+        XCTAssertEqual(nav.selectedSettingIndex, nav.index(of: .installedExtension("b")))
+    }
+
+    // The row it was on is gone, so it falls back to the first row of the
+    // category rather than to whatever inherited the index.
+    func testRemovingTheSelectedExtensionFallsBackToTheFirstRow() {
+        let nav = PanelNav()
+        nav.installedExtensions = [row("a"), row("b")]
+        nav.settingsCategory = .extensions
+        nav.selectedSettingIndex = nav.index(of: .installedExtension("b")) ?? 0
+
+        nav.installedExtensions = [row("a")]
+        XCTAssertEqual(nav.selectedRow, .installedExtension("a"))
+    }
+
+    // A change that doesn't reshape the list must not move the selection —
+    // re-anchoring on every publish would fight the user's own arrow keys.
+    func testAnUnchangedExtensionListLeavesTheSelectionAlone() {
+        let nav = PanelNav()
+        nav.installedExtensions = [row("a"), row("b")]
+        nav.settingsCategory = .extensions
+        nav.selectedSettingIndex = nav.index(of: .browseExtensions) ?? 0
+        let before = nav.selectedSettingIndex
+
+        nav.installedExtensions = [row("a"), row("b")]
+        XCTAssertEqual(nav.selectedSettingIndex, before)
+        XCTAssertEqual(nav.selectedRow, .browseExtensions)
+    }
+
+    private func row(_ id: String) -> ExtensionRow {
+        ExtensionRow(id: id, name: id, description: "", installedVersion: "1.0.0",
+                     availableVersion: nil, refusedReason: nil, requires: [], config: [])
+    }
+
     func testAttentionRowsAreAbsentUntilTheyApply() {
         let nav = PanelNav()
         XCTAssertTrue(nav.settingsAttentionRows.isEmpty)
