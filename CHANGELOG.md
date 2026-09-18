@@ -4,6 +4,14 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [2.0.1](https://github.com/StackOneHQ/stack-nudge/compare/v2.0.0...v2.0.1) (2026-09-18)
+
+
+### Bug Fixes
+
+* **panel:** extensions keyboard nav, tab strip and scroll bars ([#194](https://github.com/StackOneHQ/stack-nudge/issues/194)) ([f779ad1](https://github.com/StackOneHQ/stack-nudge/commit/f779ad158416ddfa5fd9381843c560193583a583))
+* **panel:** walk every control on the extensions browser ([#196](https://github.com/StackOneHQ/stack-nudge/issues/196)) ([ffed721](https://github.com/StackOneHQ/stack-nudge/commit/ffed721276457ca228836a14ad09b2a614343318))
+
 ## [2.0.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.35.0...v2.0.0) (2026-09-18)
 
 
