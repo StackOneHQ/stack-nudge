@@ -176,11 +176,25 @@ final class ExtensionCatalog: ObservableObject {
         install(entry)
     }
 
-    // Keeps the selection on a row that still exists after a reload or a
-    // removal, rather than pointing at nothing.
+    // ⌘↑↓, which every other list page in the panel answers.
+    func selectEdge(among rows: [ExtensionRow], top: Bool) {
+        guard !rows.isEmpty else { return }
+        selectedID = top ? rows.first?.id : rows.last?.id
+    }
+
+    // Keeps the selection on a row that still exists after a reload, a removal
+    // or a query, and puts it on the first row when there is nothing valid to
+    // keep. Dropping to nil was half the job: it left the page with a footer
+    // advertising ⏎ against no selection, which is also how it opened: the
+    // catalogue arrives after the view does, so there was nothing to select at
+    // onAppear and nothing selected it afterwards either.
+    //
+    // Row order is what makes seeding safe to do unprompted: refusals sort
+    // first, then what is installed, and only then what is merely published. On
+    // any machine with an extension on it ⏎ lands on a page, not an install.
     func reconcileSelection(among rows: [ExtensionRow]) {
-        guard let selectedID else { return }
-        if !rows.contains(where: { $0.id == selectedID }) { self.selectedID = nil }
+        if let selectedID, rows.contains(where: { $0.id == selectedID }) { return }
+        selectedID = rows.first?.id
     }
 
     // Pure, so the matching rule is testable without a view.
@@ -342,16 +356,29 @@ struct ExtensionsView: View {
             header
             searchField
             Divider().opacity(0.4)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    catalogueBody(rows)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        catalogueBody(rows)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    // On the content, not on the ScrollView: ThinScrollers walks
+                    // superviews for the NSScrollView, and every other call site in
+                    // the tree attaches it this way.
+                    .background(ThinScrollers())
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                // On the content, not on the ScrollView: ThinScrollers walks
-                // superviews for the NSScrollView, and every other call site in
-                // the tree attaches it this way.
-                .background(ThinScrollers())
+                // Nearest-edge, matching the Settings detail pane. Cards here
+                // carry a description, a "Reads …" line and a "Needs …" line,
+                // so about two of them fit at the panel's 260pt minimum, and
+                // without this ↑↓ moved a highlight straight off the bottom of
+                // a catalogue of any size, which is the whole page.
+                .onChange(of: catalog.selectedID) { id in
+                    guard let id else { return }
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        proxy.scrollTo(id, anchor: nil)
+                    }
+                }
             }
 
             PageFooter {
@@ -359,8 +386,15 @@ struct ExtensionsView: View {
                 // there is a query to clear first.
                 FooterHint(label: catalog.query.isEmpty ? "Back" : "Clear", keys: ["Esc"])
                 FooterHint(label: "Search", keys: ["/"])
-                FooterHint(label: "Select", keys: ["↑", "↓"])
+                // Dimmed rather than dropped when a query, or an empty
+                // catalogue, leaves nothing to walk: the bar must not reflow as
+                // the list filters, and an advertised key that does nothing is
+                // the thing this page kept doing. Same treatment the Settings
+                // footer gives its Cycle hint.
+                FooterHint(label: "Select", keys: ["↑↓", "⌘↑↓"])
+                    .opacity(rows.isEmpty ? 0.35 : 1)
                 FooterHint(label: activationLabel(in: rows), keys: ["⏎"])
+                    .opacity(rows.isEmpty ? 0.35 : 1)
                 // Only where Enter is busy doing something else. An installed
                 // row with an update pending takes Enter for the update, so
                 // without this there would be no keyboard route to its page.
@@ -375,6 +409,10 @@ struct ExtensionsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             catalog.loadIfNeeded()
+            // Whatever is already on disk. The catalogue lands later and the
+            // onChange below seeds again from it, but an installed or refused
+            // extension is selectable from the first frame.
+            catalog.reconcileSelection(among: rows)
             // Deliberately NOT focused. A focused field is first responder, and
             // FloatingPanel.keyDown only fires for what the first responder
             // declines — so focusing on arrival handed the field Esc, ↑↓ and ⏎
@@ -495,7 +533,12 @@ struct ExtensionsView: View {
                 }
                 ForEach(rows) { row in extensionRow(row) }
             }
-        case .idle, .loading where rows.isEmpty:
+        // A where clause binds to the pattern it follows, not to the list, so
+        // this read as ".idle, or .loading with nothing to show"; and .idle is
+        // the state the first frame renders in, before onAppear has started the
+        // fetch. An extension already on disk was hidden behind "Looking for
+        // extensions…" for that frame.
+        case .idle where rows.isEmpty, .loading where rows.isEmpty:
             // Only when there is nothing to show. Reloading a populated
             // catalogue used to replace the whole list with this, while the
             // header spinner — which is the actual reload indicator — was
@@ -582,6 +625,8 @@ struct ExtensionsView: View {
                           lineWidth: 1.5))
         .contentShape(Rectangle())
         .onTapGesture { catalog.selectedID = row.id }
+        // The scroll anchor, keyed by what the selection is keyed by.
+        .id(row.id)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(catalog.selectedID == row.id ? [.isSelected] : [])
     }

@@ -22,7 +22,8 @@ final class PanelKeyRoutingTests: XCTestCase {
     // checks, which is how extensionTab slipped through the first version.
     private let allModes: [PanelMode] = [
         .events, .sessions, .usage, .outcomes, .extensionTab("any"),
-        .settings, .phrases, .updateConfirm, .updating, .postUpdate,
+        .settings, .phrases, .extensions, .extensionConfig("any"),
+        .updateConfirm, .updating, .postUpdate,
         .bootstrap, .uninstall,
     ]
 
@@ -37,5 +38,14 @@ final class PanelKeyRoutingTests: XCTestCase {
         for id in ["derby", "", "events"] {
             XCTAssertFalse(PanelController.eventsOwnsKeyboard(.extensionTab(id)))
         }
+    }
+
+    // Both Settings sub-pages carry an id or sit off the tab strip, which is
+    // how .extensionTab was missed from this list the first time round.
+    func testTheExtensionSubPagesNeverOwnThemEither() {
+        for id in ["derby", "", "events"] {
+            XCTAssertFalse(PanelController.eventsOwnsKeyboard(.extensionConfig(id)))
+        }
+        XCTAssertFalse(PanelController.eventsOwnsKeyboard(.extensions))
     }
 }

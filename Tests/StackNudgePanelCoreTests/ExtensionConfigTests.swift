@@ -52,6 +52,99 @@ final class ExtensionConfigTests: XCTestCase {
         XCTAssertFalse(m.values.values.contains { $0.hasPrefix("xoxb-") })
     }
 
+    // ⏎ saves and hands focus back in one keystroke, and a field commits its
+    // value as it loses focus. An unguarded setter wrote the same string back
+    // and cleared the confirmation in the same frame the save set it, so the
+    // only thing on screen that said the save had happened flickered out.
+    func testWritingTheSameValueBackDoesNotClearTheConfirmation() {
+        let m = model(keys: [key("STACKNUDGE_EXT_DERBY_ORG")],
+                      existing: ["STACKNUDGE_EXT_DERBY_ORG": "stackone"])
+        m.save()
+        XCTAssertTrue(m.saved)
+        m.binding(for: key("STACKNUDGE_EXT_DERBY_ORG")).wrappedValue = "stackone"
+        XCTAssertTrue(m.saved, "a commit of the unchanged value is not an edit")
+    }
+
+    func testAnActualEditStillClearsTheConfirmation() {
+        let m = model(keys: [key("STACKNUDGE_EXT_DERBY_ORG")],
+                      existing: ["STACKNUDGE_EXT_DERBY_ORG": "stackone"])
+        m.save()
+        m.binding(for: key("STACKNUDGE_EXT_DERBY_ORG")).wrappedValue = "other"
+        XCTAssertFalse(m.saved)
+        XCTAssertEqual(m.values["STACKNUDGE_EXT_DERBY_ORG"], "other")
+    }
+
+    // MARK: - Keyboard
+
+    // The page opens with no field focused: a focused field is first responder
+    // and takes every key before FloatingPanel.keyDown runs, so the selection
+    // is what ⏎ hands focus to. Unseeded, ⏎ did nothing at all on arrival
+    // while the footer advertised it.
+    func testTheFirstFieldIsSelectedOnArrival() {
+        let m = model(keys: [key("STACKNUDGE_EXT_DERBY_ORG"), key("STACKNUDGE_EXT_DERBY_BASE")])
+        XCTAssertEqual(m.selectedKey, "STACKNUDGE_EXT_DERBY_ORG")
+    }
+
+    func testAnExtensionWithNoKeysSelectsNothing() {
+        XCTAssertNil(model(keys: []).selectedKey)
+    }
+
+    func testArrowsWalkTheFieldsAndStopAtTheEnds() {
+        let m = model(keys: [key("A"), key("B"), key("C")])
+        m.moveSelection(by: 1)
+        XCTAssertEqual(m.selectedKey, "B")
+        m.moveSelection(by: 1)
+        m.moveSelection(by: 1)
+        XCTAssertEqual(m.selectedKey, "C", "stops rather than wrapping")
+        m.moveSelection(by: -1)
+        XCTAssertEqual(m.selectedKey, "B")
+    }
+
+    // Both no-ops rather than special cases at the call site: an extension
+    // declaring nothing has no fields, and one declaring a single key has
+    // nowhere to go.
+    func testMovingIsANoOpWithNothingToMoveBetween() {
+        let none = model(keys: [])
+        none.moveSelection(by: 1)
+        XCTAssertNil(none.selectedKey)
+
+        let one = model(keys: [key("A")])
+        one.moveSelection(by: 1)
+        XCTAssertEqual(one.selectedKey, "A")
+    }
+
+    func testCommandArrowsJumpToTheFirstAndLastField() {
+        let m = model(keys: [key("A"), key("B"), key("C")])
+        m.selectEdge(top: false)
+        XCTAssertEqual(m.selectedKey, "C")
+        m.selectEdge(top: true)
+        XCTAssertEqual(m.selectedKey, "A")
+    }
+
+    // ⏎ hands the selected field first-responder status, which the view
+    // cannot be asked for directly: @FocusState is view state, so the model
+    // raises a request the way ExtensionCatalog does for its search field.
+    func testEnterAsksForTheSelectedFieldToTakeFocus() {
+        let m = model(keys: [key("A")])
+        m.focusSelectedField()
+        XCTAssertEqual(m.fieldFocusRequests, 1)
+    }
+
+    // Nothing to focus, so nothing is asked for. The view would otherwise set
+    // focus to nil, which reads as a keystroke that dismissed the selection.
+    func testEnterAsksForNothingWhenThereAreNoFields() {
+        let m = model(keys: [])
+        m.focusSelectedField()
+        XCTAssertEqual(m.fieldFocusRequests, 0)
+    }
+
+    func testTheSelectionFallsBackToTheFirstFieldWhenItsKeyIsGone() {
+        let m = model(keys: [key("A"), key("B")])
+        m.selectedKey = "GONE"
+        m.reconcileSelection()
+        XCTAssertEqual(m.selectedKey, "A")
+    }
+
     // MARK: - Saving
 
     func testSavingWritesEveryDeclaredKey() {

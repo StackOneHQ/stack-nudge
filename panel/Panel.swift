@@ -90,6 +90,12 @@ struct PanelContentView: View {
     // needs the config file and the host, so the controller owns it and the
     // view just asks.
     let onConfigureExtension: (ExtensionRow) -> Void
+    // Leaving one of the Settings sub-pages. Owned by the controller for the
+    // same reason: both exits leave Settings a note about which row to resume
+    // the keyboard on, and the chevron here and Esc in the key handler have to
+    // do the identical thing.
+    let onCloseExtensionsBrowser: () -> Void
+    let onCloseExtensionConfig: () -> Void
 
     // The disk-backed name store. Observed here (rather than inside EventRow)
     // so resolving a nudge's session label stays a render-time lookup that
@@ -163,14 +169,14 @@ struct PanelContentView: View {
                     ExtensionsView(catalog: extensionCatalog,
                                    host: extensions,
                                    onConfigure: onConfigureExtension,
-                                   onBack: { nav.mode = .settings })
+                                   onBack: onCloseExtensionsBrowser)
                 // .id(id) for the same reason .extensionTab has one: the
                 // associated value isn't part of a ViewBuilder case's identity,
                 // so two extensions' forms would share one view and the second
                 // would open showing the first's values.
                 case .extensionConfig(let id):
                     if let model = nav.extensionConfig, model.id == id {
-                        ExtensionConfigView(model: model) { nav.mode = model.origin }
+                        ExtensionConfigView(model: model, onBack: onCloseExtensionConfig)
                             .id(id)
                     } else {
                         // Unreachable in practice — the model is set before the
@@ -179,7 +185,7 @@ struct PanelContentView: View {
                         ExtensionsView(catalog: extensionCatalog,
                                        host: extensions,
                                        onConfigure: onConfigureExtension,
-                                       onBack: { nav.mode = .settings })
+                                       onBack: onCloseExtensionsBrowser)
                     }
                 case .updateConfirm:
                     UpdateConfirmView(
@@ -914,11 +920,32 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         configureExtension(row, from: .settings)
     }
 
+    // The two ways back out, in one place each so Esc and the chevron cannot
+    // disagree. Both leave Settings a note about where the keyboard was, which
+    // it consumes on the way in.
+    func closeExtensionsBrowser() {
+        nav.settingsResumeRow = .browseExtensions
+        nav.mode = .settings
+    }
+
+    func closeExtensionConfig() {
+        let origin = nav.extensionConfig?.origin ?? .extensions
+        if origin == .settings, let id = nav.extensionConfig?.id {
+            nav.settingsResumeRow = .installedExtension(id)
+        }
+        nav.mode = origin
+    }
+
     private func removeExtension(_ id: String) {
         extensionCatalog.remove(id)
+        let origin = nav.extensionConfig?.origin ?? .settings
+        // Not the extension's own row, which is the one thing that is about to
+        // stop existing. Browse is the row next to it and the obvious next move
+        // after removing something.
+        if origin == .settings { nav.settingsResumeRow = .browseExtensions }
         // Back where the page was opened from — the extension it described no
         // longer exists, so staying on it is not an option.
-        nav.mode = nav.extensionConfig?.origin ?? .settings
+        nav.mode = origin
     }
 
     // Installed and refused, as the Extensions settings category renders them.
@@ -1065,6 +1092,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             store: store, sessions: sessions, nav: nav, phrases: phrases,
             extensions: extensions, extensionCatalog: extensionCatalog,
             onConfigureExtension: { [weak self] row in self?.configureExtension(row) },
+            onCloseExtensionsBrowser: { [weak self] in self?.closeExtensionsBrowser() },
+            onCloseExtensionConfig: { [weak self] in self?.closeExtensionConfig() },
             onGrantPermissions: { [weak self] in self?.handleGrantPermissions() }
         ).environmentObject(SessionPersistence.shared))
         // Don't let SwiftUI's preferred / intrinsic content size drive
@@ -3764,29 +3793,58 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return true
         }
 
-        // Phrases mode: ↑/↓ navigate every row (defaults + custom),
-        // Space toggles the selected default, ⌫ removes the selected
-        // custom, Esc returns to Settings. Typing / Tab / Enter for
-        // adding still fall through to SwiftUI's TextField.
-        // An extension's configuration form: Esc returns to the browser and
-        // everything else belongs to the text fields. Enter is handled by the
-        // field's own .onSubmit rather than here, so it saves from whichever
-        // field has focus.
+        // An extension's configuration form. Two levels, like the browser below
+        // and the Usage tab: the page opens with no field focused, so this
+        // branch owns ↑↓ (move between fields), ⏎ (hand the selected field
+        // focus), ⌘S (save) and ⌘⌫ (remove). Once a field *is* first
+        // responder it consumes keys before NSWindow.keyDown, and the field's
+        // own .onSubmit and .onExitCommand save and step back out.
+        //
+        // It used to own Esc and ⌘⌫ and nothing else, which left the form
+        // reachable only with the mouse or with Tab: ⏎ was advertised in the
+        // footer and did nothing at all until something had been clicked.
         if case .extensionConfig = nav.mode {
             let onlyCommand = mods.intersection([.command, .control, .option, .shift]) == [.command]
-            // ⌘⌫ rather than a bare ⌫, which is what the field editor wants,
-            // and deliberately the macOS "move to trash" combination: this is
-            // the one destructive action on the page and it takes no
-            // confirmation.
-            if onlyCommand, event.keyCode == KeyCode.delete || event.keyCode == KeyCode.forwardDelete {
-                nav.extensionConfig?.onRemove()
-                return true
+            if onlyCommand {
+                switch event.keyCode {
+                // ⌘⌫ rather than a bare ⌫, which is what the field editor
+                // wants, and deliberately the macOS "move to trash"
+                // combination: this is the one destructive action on the page
+                // and it takes no confirmation.
+                case KeyCode.delete, KeyCode.forwardDelete:
+                    nav.extensionConfig?.onRemove()
+                    return true
+                // The only way to commit an edit the user stepped out of with
+                // Esc, and the only Save at all on a page where ⏎ has handed
+                // focus back.
+                //
+                // Level one only, verified in the app rather than assumed: a
+                // focused field swallows this exactly as it swallows ⌘⌫, so
+                // the footer advertises it only while nothing is focused and
+                // names ⏎ as the way to save from inside a field.
+                case KeyCode.sKey:
+                    nav.extensionConfig?.save()
+                    return true
+                // Leave every other ⌘ combination to the app: ⌘Q and friends.
+                default:
+                    return false
+                }
             }
-            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
-            guard plain, event.keyCode == KeyCode.escape else { return false }
-            // Wherever this page was opened from, which is the Settings list as
-            // often as the browser.
-            nav.mode = nav.extensionConfig?.origin ?? .extensions
+            guard mods.intersection([.command, .control, .option]).isEmpty else { return false }
+            switch Self.extensionConfigKeyAction(
+                keyCode: event.keyCode,
+                hasFields: !(nav.extensionConfig?.keys.isEmpty ?? true)) {
+            case .back:
+                // Wherever this page was opened from, which is the Settings list
+                // as often as the browser.
+                closeExtensionConfig()
+            case .moveSelection(let delta):
+                nav.extensionConfig?.moveSelection(by: delta)
+            case .editSelectedField:
+                nav.extensionConfig?.focusSelectedField()
+            case .swallow:
+                break
+            }
             return true
         }
 
@@ -3835,7 +3893,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                         configureExtension(row)
                     }
                     return true
-                // Leave every other ⌘ combination to the app — ⌘Q and friends.
+                // Leave every other ⌘ combination to the app: ⌘Q and friends.
                 default: return false
                 }
             }
@@ -3844,7 +3902,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             switch Self.extensionsKeyAction(keyCode: event.keyCode,
                                             characters: event.charactersIgnoringModifiers,
                                             queryIsEmpty: extensionCatalog.query.isEmpty) {
-            case .back:         nav.mode = .settings
+            case .back:         closeExtensionsBrowser()
             case .clearQuery:   extensionCatalog.query = ""
             case .focusSearch:  extensionCatalog.focusSearch()
             case .appendToQuery(let typed):
@@ -3871,6 +3929,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return true
         }
 
+        // Phrases mode: ↑/↓ navigate every row (defaults + custom),
+        // Space toggles the selected default, ⌫ removes the selected
+        // custom, Esc returns to Settings. Typing / Tab / Enter for
+        // adding still fall through to SwiftUI's TextField.
         if nav.mode == .phrases {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain else { return false }
@@ -4193,6 +4255,40 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         case swallow
     }
 
+    // The config form's level one, where no field has focus. A page of text
+    // fields cannot walk itself with ↑↓: a focused field is first responder
+    // and takes them before NSWindow.keyDown runs, so the traversal lives here
+    // and ⏎ is what hands over.
+    enum ExtensionConfigKeyAction: Equatable {
+        case back
+        case moveSelection(Int)
+        case editSelectedField
+        // Swallowed rather than passed on, the same rule every sub-page follows:
+        // a stray key must not reach the Events bindings and answer a permission
+        // prompt on a tab this page isn't showing.
+        case swallow
+    }
+
+    // `hasFields` rather than a count: ⏎ has nothing to hand focus to on an
+    // extension that declares no config keys, which is every refused one and
+    // every extension as plain as `system`. Tab joins ⏎ because it is what a
+    // macOS form is entered with, and at level one nothing else claims it.
+    static func extensionConfigKeyAction(keyCode: UInt16,
+                                         hasFields: Bool) -> ExtensionConfigKeyAction {
+        switch keyCode {
+        case KeyCode.escape:
+            return .back
+        case KeyCode.upArrow:
+            return .moveSelection(-1)
+        case KeyCode.downArrow:
+            return .moveSelection(1)
+        case KeyCode.returnKey, KeyCode.numpadEnter, KeyCode.tab:
+            return hasFields ? .editSelectedField : .swallow
+        default:
+            return .swallow
+        }
+    }
+
     static func extensionsKeyAction(keyCode: UInt16,
                                     characters: String?,
                                     queryIsEmpty: Bool) -> ExtensionsKeyAction {
@@ -4406,6 +4502,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             top ? nav.selectPrevCategory() : nav.selectNextCategory()
         case .phrases:
             top ? phrases.selectFirst() : phrases.selectLast()
+        case .extensions:
+            extensionCatalog.selectEdge(
+                among: ExtensionCatalog.matching(
+                    ExtensionCatalog.rows(catalogue: extensionCatalog.entries,
+                                          installed: extensions.manifests,
+                                          refused: extensions.refused),
+                    query: extensionCatalog.query),
+                top: top)
+        case .extensionConfig:
+            // Nothing to jump on an extension that declares no keys, so the
+            // keystroke passes through rather than being silently eaten.
+            guard let config = nav.extensionConfig, !config.keys.isEmpty else { return false }
+            config.selectEdge(top: top)
         default:
             return false  // modal / single-purpose screens have nothing to jump
         }
