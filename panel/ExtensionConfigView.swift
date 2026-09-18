@@ -146,6 +146,13 @@ struct ExtensionConfigView: View {
     @ObservedObject var model: ExtensionConfigModel
     let onBack: () -> Void
 
+    // ⌘⌫ is a standard field-editor binding (deleteToBeginningOfLine), so a
+    // focused field takes it before FloatingPanel.keyDown ever sees it. Rather
+    // than advertise a key that stops working the moment anyone clicks into a
+    // field, the hint dims — the same treatment the Settings footer gives its
+    // Cycle hint on rows where the arrows do nothing.
+    @FocusState private var fieldFocused: Bool
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -184,6 +191,7 @@ struct ExtensionConfigView: View {
                     FooterHint(label: "Save", keys: ["⏎"])
                 }
                 FooterHint(label: "Remove", keys: ["⌘⌫"])
+                    .opacity(fieldFocused ? 0.35 : 1)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -239,6 +247,7 @@ struct ExtensionConfigView: View {
             TextField(key.placeholder ?? "", text: model.binding(for: key))
                 .textFieldStyle(.roundedBorder)
                 .font(.caption)
+                .focused($fieldFocused)
                 .onSubmit { model.save() }
                 // A focused field is first responder, and FloatingPanel.keyDown
                 // only fires for what the first responder declines — so without

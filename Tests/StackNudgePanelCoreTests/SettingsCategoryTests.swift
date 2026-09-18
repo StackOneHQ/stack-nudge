@@ -210,6 +210,22 @@ final class SettingsCategoryTests: XCTestCase {
                      availableVersion: nil, refusedReason: nil, requires: [], config: [])
     }
 
+    // An extension's page is a level below its tab and goes the same way when
+    // the extension does. Removing one in-app navigates away already; this is
+    // the out-of-band case — the directory deleted under the panel — which
+    // would otherwise leave the mode on a page describing something gone.
+    func testAnExtensionRemovedUnderThePanelClosesItsPage() {
+        let nav = PanelNav()
+        nav.installedExtensions = [row("derby")]
+        nav.mode = .extensionConfig("derby")
+        nav.reconcileModeWithTabs()
+        XCTAssertEqual(nav.mode, .extensionConfig("derby"))
+
+        nav.installedExtensions = []
+        nav.reconcileModeWithTabs()
+        XCTAssertEqual(nav.mode, .settings)
+    }
+
     func testAttentionRowsAreAbsentUntilTheyApply() {
         let nav = PanelNav()
         XCTAssertTrue(nav.settingsAttentionRows.isEmpty)

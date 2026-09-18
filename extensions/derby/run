@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
-"""The Token Derby, as a stack-nudge extension.
+"""The Token Derby: a horse race where each runner advances on the tokens its
+owner burns.
 
-A horse race where each runner advances on the tokens its owner burns. The
-service (token-derby.mauricode.co.uk) is a third party and this is read-only:
-we GET a race and describe it. Nothing about this machine is ever sent.
+Read-only against a third-party service (token-derby.mauricode.co.uk); nothing
+about this machine is sent. Colour clamping, sprite geometry and the polling
+schedule are the host's — declared in manifest.json, not here.
 
-This began life as a built-in Swift tab. Everything host-shaped went away in
-the move — the colour clamping, the sprite geometry, the polling schedule are
-all the host's now, declared in manifest.json rather than coded here. What is
-left is the part that is actually about racing.
-
-Python rather than /bin/sh because this parses JSON from the network. The
-shell version would have wanted awk for that, and awk taking program text
-built from a server's response is how the packaging script in this repo
-acquired an arbitrary-code-execution bug.
+Python rather than /bin/sh because this parses JSON from the network, and the
+shell version would have wanted awk for it. Awk taking program text built from
+a server's response is how this repo's packaging script acquired an
+arbitrary-code-execution bug.
 
 See docs/extensions.md for the schema this prints.
 """
@@ -30,14 +26,14 @@ from datetime import datetime, timezone
 DEFAULT_BASE = "https://token-derby.mauricode.co.uk/api"
 ORG_KEY = "STACKNUDGE_EXT_DERBY_ORG"
 BASE_KEY = "STACKNUDGE_EXT_DERBY_BASE"
-TIMEOUT = 8  # The host's own budget is 12s for two round trips plus overhead.
+# Two sequential hops inside the host's 12s budget, so this cannot be half of
+# it: two slow-but-successful requests at 8s each took 16s and the host killed
+# the process before the script could print its own error document.
+TIMEOUT = 5
 
-# A horse, 16x11. Palette keys only: "H" is the coat, "M" the mane and tail,
-# "." transparent. The host sizes the canvas from the largest frame and rides
-# it on the head of the fill, so the two frames only have to differ.
-#
-# At 1.5pt a cell the silhouette is doing all the work, so the legs gather and
-# splay rather than articulate.
+# A horse, 16x11. "H" is the coat, "M" the mane and tail, "." transparent. At
+# 1.5pt a cell the silhouette carries it, so the legs gather and splay rather
+# than articulate.
 HORSE_STANDING = [
     "...........HHHH.",
     "..........MHHHHH",
@@ -64,20 +60,15 @@ DEFAULT_COAT = "#7FD1B9"
 
 
 # --- Formatting -------------------------------------------------------------
-# Both of these mirror a Swift helper the panel uses for its own tabs
-# (TokenFormat.short and QuotaReset.shortLabel in panel/Formatting.swift). An
-# extension can't reach them, and a Derby row that abbreviates differently from
-# the Usage tab beside it reads as two apps in one panel.
+# Both mirror a Swift helper in panel/Formatting.swift (TokenFormat.short,
+# QuotaReset.shortLabel). An extension can't reach them, and a Derby row that
+# abbreviates differently from the Usage tab beside it reads as two apps.
 
 def short_tokens(count):
     """1234567 -> "1.2M", 218000 -> "218K", 42 -> "42".
 
-    The K branch rounds half *away from zero*, not with Python's round(), which
-    is half-to-even: 2500 is "3K" here and "2K" under round(). Swift's
-    Double.rounded() is half-away-from-zero, and matching it is the entire
-    point of this function — every x500 with an even thousands part disagreed,
-    so a Derby row and the Usage tab beside it abbreviated the same number
-    differently.
+    The K branch rounds half away from zero to match Swift's Double.rounded().
+    Python's round() is half-to-even, which made 2500 "2K" here and "3K" there.
     """
     count = int(count)
     if count >= 1_000_000:
@@ -105,14 +96,11 @@ def short_countdown(seconds):
 # --- Colour -----------------------------------------------------------------
 
 def mane_for(hex_color, fraction=0.45):
-    """The mane and tail, shaded from the horse's own coat.
+    """The mane and tail, shaded from the coat so the silhouette has an edge.
 
-    Darker than the coat, except on a coat too dark to darken — #000000 shaded
-    toward black is #000000, and the field has real black horses in it, which
-    made them flat silhouettes with no mane at all. Those get a lighter mane
-    instead. Either way the two differ, which is the whole requirement: the
-    host's legibility clamp acts on each palette entry separately, so this only
-    has to give the silhouette an edge.
+    Darker, except on a coat too dark to darken: #000000 shaded toward black is
+    still #000000, and the field has real black horses in it. Those lighten
+    instead. All that matters is that the two differ.
     """
     parsed = parse_hex(hex_color)
     if parsed is None:
@@ -125,13 +113,11 @@ def mane_for(hex_color, fraction=0.45):
 
 
 def parse_hex(value):
-    """"#RGB", "#RRGGBB" or the same without the hash -> (r, g, b), else None.
+    """"#RGB", "#RRGGBB" or either without the hash -> (r, g, b), else None.
 
-    Deliberately more tolerant than the host, which requires the hash and
-    would drop a bare "ff0000" back to the accent colour. Reading loosely and
-    writing strictly is what keeps a horse's own colour from being lost to a
-    punctuation difference — see normalise_hex, which every emitted colour
-    goes through.
+    More tolerant than the host, which requires the hash. Read loosely, write
+    strictly: everything emitted goes through normalise_hex, so a horse doesn't
+    lose its silks to a punctuation difference.
     """
     if not isinstance(value, str):
         return None
@@ -147,13 +133,7 @@ def parse_hex(value):
 
 
 def normalise_hex(value):
-    """A colour in the exact form the host accepts, or None.
-
-    Everything this script emits goes through here. The host parses "#RRGGBB"
-    and "#RGB" and nothing else, and a palette entry it can't read falls back —
-    so a tint that survived our own parser but not its one is a horse that
-    quietly loses its silks.
-    """
+    """A colour in the exact form the host accepts, or None."""
     parsed = parse_hex(value)
     return None if parsed is None else "#%02X%02X%02X" % parsed
 
@@ -161,11 +141,8 @@ def normalise_hex(value):
 # --- The race ---------------------------------------------------------------
 
 def parse_time(value):
-    """An ISO 8601 stamp, with or without fractional seconds.
-
-    The service stamps milliseconds and a trailing "Z", which
-    datetime.fromisoformat refused before 3.11.
-    """
+    """An ISO 8601 stamp. The service sends milliseconds and a trailing "Z",
+    which datetime.fromisoformat refused before 3.11."""
     if not isinstance(value, str) or not value:
         return None
     text = value.strip()
@@ -188,40 +165,30 @@ def duration_seconds(start, end):
 
 
 def number(value, default=0.0):
-    """current_tokens arrives as an int for some horses and a half-token float
-    for others, so neither type can be assumed. A bool is an int in Python and
-    is not a token count.
+    """A token count, whatever shape the API sent it in.
 
-    Non-finite is refused for a sharper reason than tidiness: json.loads accepts
-    the bare literals Infinity, -Infinity and NaN, and int(inf) raises rather
-    than returning something wrong — so a server sending one crashed the script
-    instead of producing a document. A NaN also serialises back out as a bare
-    NaN token, which the host's JSONDecoder rejects.
+    Ints and floats both arrive. A bool is an int in Python and is not a count.
+    Non-finite is refused because json.loads accepts bare Infinity/NaN, int(inf)
+    raises rather than returning something wrong, and a NaN serialises back out
+    as a bare NaN token the host's decoder rejects.
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return default
-    if not math.isfinite(value):
-        return default
-    return float(value)
+    return float(value) if math.isfinite(value) else default
 
 
 def pick(races):
     """The race worth showing, by the same rule the derby's own site uses.
 
-    Newest live, else newest finished, else the soonest pending — note the
-    last one sorts the other way, because a race that hasn't started is
-    interesting for being *next* rather than for being recent. Matching the
-    website matters: an extension that quietly picked a different race from
-    the page it mirrors would read as stale data rather than as a difference
-    of opinion.
+    Newest live, else newest finished, else the *soonest* pending — that last
+    one sorts the other way because a race that hasn't started is interesting
+    for being next rather than recent. Matching the site matters: picking a
+    different race from the page this mirrors would read as stale data.
 
-    One deliberate divergence. The site sorts on `new Date(start_time)`, so an
-    unreadable stamp yields NaN, every comparison against it is false, and the
-    entry keeps whatever position it arrived in. Here it sorts as the epoch,
-    which puts it last among live or finished races and first among pending
-    ones. Both are arbitrary; this one is at least stated, and reproducing a
-    NaN comparator to match a tie-break nobody relies on would be a worse
-    thing to leave in the file.
+    One divergence: the site sorts on `new Date(start_time)`, so an unreadable
+    stamp compares equal to everything and keeps its position; here it sorts as
+    the epoch. Both are arbitrary, and reproducing a NaN comparator to match a
+    tie-break nobody relies on is not worth the code.
     """
     usable = [r for r in races if isinstance(r, dict) and r.get("join_code")]
 
@@ -258,11 +225,9 @@ def elapsed_fraction(race):
 def position(tokens, leader, elapsed):
     """Where a horse sits on the track.
 
-    Scaled by elapsed time, not just by the leader. Leader-relative alone pins
-    the front-runner to the finish line from the first minute, which makes a
-    twelve-hour race look permanently over. This way the leader's position *is*
-    the race's progress, the field keeps its relative gaps, and the winner
-    reaches the line at the bell.
+    Scaled by elapsed time as well as by the leader. Leader-relative alone pins
+    the front-runner to the finish line from the first minute, making a
+    twelve-hour race look permanently over.
     """
     if leader <= 0:
         return 0.0
@@ -270,11 +235,11 @@ def position(tokens, leader, elapsed):
 
 
 def scored(horse):
-    """What the race is ranked on, and therefore what the bar must draw.
+    """What the race is ranked on, and therefore what the bar draws.
 
-    Drawing current_tokens instead put a 4th-placed horse's bar ahead of 2nd's:
-    the league discounts raw usage, so the two diverge. scored_tokens is absent
-    on a race that isn't scoring, so fall back rather than drawing nothing.
+    Drawing current_tokens put a 4th-placed horse's bar ahead of 2nd's — the
+    league discounts raw usage. Absent on a race that isn't scoring, so it
+    falls back rather than drawing nothing.
     """
     raw = number(horse.get("current_tokens"))
     return number(horse.get("scored_tokens"), raw)
@@ -282,12 +247,25 @@ def scored(horse):
 
 # --- The document -----------------------------------------------------------
 
+def row_id(entry):
+    """The row's id, or None when there isn't one.
+
+    `is None` rather than truthiness, and derived once so the dedupe key and
+    the emitted id can't differ. horse_id 0 is falsy and is still an id:
+    dropping it cost its row *and* promoted the next horse to the finish line,
+    since the leader is a max over whatever survived.
+    """
+    raw = entry.get("horse_id")
+    if raw is None:
+        return None
+    return str(raw).strip() or None
+
+
 def text(value):
     """A string field, trimmed, or "" if there is nothing in it.
 
-    The host treats an empty optional field as absent and drops a row whose
-    title is blank, so "present but only spaces" has to be resolved here rather
-    than left for it to discover.
+    The host drops a row whose title comes out blank, so "present but only
+    spaces" is resolved here rather than left for it to discover.
     """
     return str(value).strip() if isinstance(value, str) else ""
 
@@ -314,8 +292,7 @@ def footnote_for(horse, names):
 
 
 def ornament_for(coat, animated):
-    """A still horse gets one frame and no fps, so the host doesn't start a
-    timeline that redraws the row to show the same thing."""
+    """A still horse gets one frame and no fps, so the host starts no timeline."""
     frames = [HORSE_STANDING, HORSE_EXTENDED] if animated else [HORSE_STANDING]
     return {
         "kind": "sprite",
@@ -326,7 +303,7 @@ def ornament_for(coat, animated):
     }
 
 
-def row_for(horse, leader, elapsed, live, names):
+def row_for(identifier, horse, leader, elapsed, live, names):
     colours = horse.get("colors")
     coat = normalise_hex(colours.get("body") if isinstance(colours, dict) else None)
     if coat is None:
@@ -335,7 +312,7 @@ def row_for(horse, leader, elapsed, live, names):
     rank = horse.get("rank")
     pace = number(horse.get("pace_15m"))
     return {
-        "id": str(horse.get("horse_id")),  # deduplicated in document()
+        "id": identifier,
         # An en dash rather than a blank, so an unranked horse still lines its
         # name up with the ranked ones above it.
         "lead": str(rank) if isinstance(rank, int) and not isinstance(rank, bool) else "–",
@@ -357,24 +334,23 @@ def row_for(horse, leader, elapsed, live, names):
 def document(race):
     """One race as a view document."""
     # Deduplicated here rather than left to the host, which drops the second of
-    # a duplicate pair without saying so. str() also collides 1 with "1", and
-    # the id is what an action names a row by — two rows answering to one id is
-    # a row that acts on the wrong horse.
+    # a duplicate pair without saying so. The id is what an action names a row
+    # by, so two rows answering to one id is a row that acts on the wrong horse.
     horses = []
     seen_ids = set()
     for entry in race.get("horses") or []:
         if not isinstance(entry, dict):
             continue
-        identifier = text(entry.get("horse_id")) or str(entry.get("horse_id") or "")
-        if not identifier or identifier in seen_ids:
+        identifier = row_id(entry)
+        if identifier is None or identifier in seen_ids:
             continue
         seen_ids.add(identifier)
-        horses.append(entry)
+        horses.append((identifier, entry))
     names = [n for n in race.get("league_division_names") or [] if isinstance(n, str)]
     status = str(race.get("status") or "")
     live = status == "live"
     elapsed = elapsed_fraction(race)
-    leader = max([scored(h) for h in horses], default=0.0)
+    leader = max([scored(h) for _, h in horses], default=0.0)
 
     header = {
         "title": str(race.get("name") or "Race"),
@@ -394,7 +370,7 @@ def document(race):
         "message": None if horses else "No runners in this race yet.",
         "header": header,
         # Server order is the ranking; re-sorting here risks disagreeing with it.
-        "rows": [row_for(h, leader, elapsed, live, names) for h in horses],
+        "rows": [row_for(i, h, leader, elapsed, live, names) for i, h in horses],
         "actions": [{"id": "refresh", "label": "Sync now", "key": "r"}],
     }
 
@@ -416,7 +392,12 @@ def valid_base(value):
     if not value:
         return DEFAULT_BASE
     parsed = urllib.parse.urlsplit(value)
-    if parsed.scheme != "https" or not parsed.netloc or parsed.username:
+    if parsed.scheme != "https" or not parsed.netloc:
+        return None
+    # Both halves: urlsplit gives username "" for a ":pw@host" userinfo, and ""
+    # is falsy, so checking the username alone let a password-only credential
+    # through.
+    if parsed.username or parsed.password:
         return None
     return value.rstrip("/")
 
@@ -424,11 +405,9 @@ def valid_base(value):
 class NotJSON(Exception):
     """The request succeeded and returned something that isn't data.
 
-    Worth its own type rather than falling in with a parse error. The derby is
-    a single-page app behind a CDN, and a request it doesn't recognise is
-    answered with the app's own index.html and a 200 rather than a 404 — so a
-    mistyped organisation arrives looking exactly like a corrupt response, and
-    the two want very different things said about them.
+    The derby is a single-page app behind a CDN: a request it doesn't recognise
+    gets the app's own index.html and a 200 rather than a 404, so a mistyped
+    organisation looks exactly like a corrupt response.
     """
 
 
@@ -436,8 +415,7 @@ class UnknownOrg(Exception):
     """No organisation by that name.
 
     Its own type because the name is case-sensitive and nothing about the
-    failure says so: "StackOne" works and "stackone" gets the web page. That is
-    the single most likely thing to be wrong, and it is not guessable.
+    failure says so: "StackOne" works, "stackone" gets the web page.
     """
 
 
@@ -451,14 +429,10 @@ def _refuse_constant(literal):
 class NoDowngrade(urllib.request.HTTPRedirectHandler):
     """Refuse a redirect that leaves https.
 
-    valid_base() checks the scheme of the URL we *type*, which is only half a
-    promise: urllib follows redirects, and Python's stock handler is happy to
-    send you from https to http. The settings field tells the user only https
-    addresses are allowed, so the guarantee should survive a hop rather than
-    describing the first request alone.
-
-    There are no credentials on these requests, so nothing leaks — this is
-    about the claim being true, not about a disclosure.
+    valid_base() checks the URL we type; urllib follows redirects and Python's
+    stock handler will send you from https to http. The settings field promises
+    only https addresses, so the promise should survive a hop. No credentials
+    ride on these requests — this is about the claim being true.
     """
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):

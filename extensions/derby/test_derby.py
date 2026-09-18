@@ -83,6 +83,16 @@ class Formatting(unittest.TestCase):
         self.assertIsNone(derby.short_countdown(-5))
 
 
+class Budget(unittest.TestCase):
+
+    # Two sequential hops inside the host's 12s budget. At 8s each, two
+    # slow-but-successful requests took 16s and the host killed the process
+    # before the script could print its own error document — so a slow service
+    # looked like a crashed extension.
+    def test_two_sequential_requests_fit_the_hosts_budget(self):
+        self.assertLess(derby.TIMEOUT * 2, 12)
+
+
 class Colour(unittest.TestCase):
 
     def test_hex_parsing_accepts_both_lengths(self):
@@ -391,6 +401,28 @@ class Document(unittest.TestCase):
         doc = self.build(horses=[horse(1), horse("1"), horse(2)])
         self.assertEqual([r["id"] for r in doc["rows"]], ["1", "2"])
 
+    # 0 and False are falsy and are still ids. Dropping one cost its whole row
+    # *and* promoted the next horse to the finish line, because the leader is a
+    # max over whatever survived — so the wrong horse appeared to be winning.
+    def test_a_falsy_id_is_still_an_id(self):
+        doc = self.build(horses=[horse(0, name="Zero", scored_tokens=100),
+                                 horse(1, name="One", scored_tokens=50)])
+        self.assertEqual([r["id"] for r in doc["rows"]], ["0", "1"])
+        self.assertGreater(doc["rows"][0]["track"]["fill"],
+                           doc["rows"][1]["track"]["fill"])
+
+    def test_a_horse_with_no_id_at_all_is_dropped(self):
+        entry = horse()
+        del entry["horse_id"]
+        self.assertEqual(self.build(horses=[entry, horse("h2")])["rows"][0]["id"], "h2")
+
+    # The dedupe key and the emitted id are derived once, so they cannot differ:
+    # trimming in one place and emitting untrimmed in the other had " 1 "
+    # dedupe as "1" and then render with its spaces.
+    def test_the_deduped_id_is_the_emitted_id(self):
+        doc = self.build(horses=[horse(" 1 "), horse("1"), horse("2")])
+        self.assertEqual([r["id"] for r in doc["rows"]], ["1", "2"])
+
     def test_an_entry_without_an_id_is_not_a_horse(self):
         doc = self.build(horses=[horse(), {"name": "nameless"}, "nonsense", None])
         self.assertEqual([r["id"] for r in doc["rows"]], ["h1"])
@@ -483,7 +515,11 @@ class Base(unittest.TestCase):
     def test_anything_but_https_is_refused(self):
         for raw in ["http://example.test/api", "file:///etc/passwd",
                     "ftp://example.test", "https://", "example.test",
-                    "https://user:pw@example.test/api"]:
+                    "https://user:pw@example.test/api",
+                    # urlsplit gives username "" for a password-only userinfo,
+                    # and "" is falsy — so checking username alone let it pass.
+                    "https://:pw@example.test/api",
+                    "https://user@example.test/api"]:
             self.assertIsNone(derby.valid_base(raw), raw)
 
 
@@ -535,17 +571,27 @@ class Fetching(unittest.TestCase):
         return FakeOpener()
 
     def raising_stub(self, make_error):
+        raised = self.raised
+
         class FakeOpener:
             def open(self, request, timeout=None):
-                raise make_error(request.full_url)
+                error = make_error(request.full_url)
+                raised.append(error)
+                raise error
 
         return FakeOpener()
 
     def setUp(self):
         self._real = derby._opener
+        # HTTPError wraps an open file object. Left unclosed it surfaces as
+        # "ResourceWarning: Implicitly cleaning up <HTTPError ...>" in the CI
+        # log, which makes a green run look like it isn't one.
+        self.raised = []
 
     def tearDown(self):
         derby._opener = self._real
+        for error in self.raised:
+            error.close()
 
     def test_a_json_response_is_parsed(self):
         derby._opener = self.stub(
@@ -644,13 +690,17 @@ class Fetching(unittest.TestCase):
         listing = FakeResponse('{"races": [{"join_code": "A", "status": "live"}]}',
                                "application/json")
 
+        raised = self.raised
+
         class FakeOpener:
             def open(self, request, timeout=None):
                 calls["n"] += 1
                 if calls["n"] == 1:
                     return listing
-                raise derby.urllib.error.HTTPError(
+                error = derby.urllib.error.HTTPError(
                     request.full_url, 404, "gone", {}, io.BytesIO(b"{}"))
+                raised.append(error)
+                raise error
 
         derby._opener = FakeOpener()
         os_environ = derby.os.environ

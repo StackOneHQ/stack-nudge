@@ -1027,6 +1027,16 @@ final class PanelNav: ObservableObject {
     // An extension removed while its tab is open leaves mode on a tab that no
     // longer exists, which renders nothing.
     func reconcileModeWithTabs() {
+        // An extension's own page is a level below its tab and goes the same
+        // way when the extension does. Removing one in-app already navigates
+        // away, so this catches the out-of-band case — the directory deleted
+        // under the panel — which would otherwise leave the mode on a page
+        // describing something that no longer exists.
+        if case .extensionConfig(let id) = mode,
+           !installedExtensions.contains(where: { $0.id == id }) {
+            mode = .settings
+            return
+        }
         guard case .extensionTab = mode, !orderedTabs.contains(mode) else { return }
         mode = .events
     }

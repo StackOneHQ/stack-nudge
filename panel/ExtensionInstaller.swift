@@ -97,11 +97,6 @@ enum ExtensionInstaller {
         } catch {
             return .failure(.malformedIndex("not valid JSON"))
         }
-        // Note: entries decode leniently (see Lenient below), so one entry this
-        // version can't read costs that entry rather than the whole catalogue.
-        // Decoding the array strictly meant a single new field of the wrong
-        // shape took Settings → Extensions out entirely, with "the extension
-        // index didn't parse" as the only explanation.
         guard document.schema == indexSchema else {
             return .failure(.unsupportedIndexSchema(document.schema))
         }
