@@ -350,21 +350,116 @@ agent_supports_decision() {
   esac
 }
 
-# tool_name from the hook payload. Only macOS 15+ preinstalls jq, and this value
-# decides whether a prompt gets an Allow button, so fall back to python3 rather
-# than silently answering "no tool".
-hook_tool_name() {
+# A top-level string field from the hook payload. Only macOS 15+ preinstalls jq,
+# and these values decide whether a prompt gets an Allow button and whether it
+# nudges at all, so fall back to python3 rather than silently answering "absent".
+hook_json_field() {
+  local field="$1"
   [[ -z "$HOOK_JSON" ]] && return
   if command -v jq &>/dev/null; then
-    printf '%s' "$HOOK_JSON" | jq -r '.tool_name // empty' 2>/dev/null
+    printf '%s' "$HOOK_JSON" | jq -r --arg field "$field" '.[$field] // empty' 2>/dev/null
     return
   fi
   command -v python3 &>/dev/null || return
-  printf '%s' "$HOOK_JSON" | python3 -c 'import json, sys
+  printf '%s' "$HOOK_JSON" | NUDGE_HOOK_FIELD="$field" python3 -c 'import json, os, sys
 try:
-    print(json.load(sys.stdin).get("tool_name") or "")
+    value = json.load(sys.stdin).get(os.environ["NUDGE_HOOK_FIELD"])
+    print(value if isinstance(value, str) else "")
 except Exception:
     pass' 2>/dev/null
+}
+
+hook_tool_name() {
+  hook_json_field tool_name
+}
+
+# Label for a hook that fired inside a subagent; empty for a main-thread one.
+#
+# Claude Code (Task tool) and Codex (spawn_agent) run a subagent's tool calls
+# through the same PermissionRequest hook as the main thread, so an Explore
+# agent's `Bash` call arrives here indistinguishable from one the user asked
+# for. Both put `agent_id` on the payload only when the hook fired inside a
+# subagent, and `agent_type` alongside it as the name.
+#
+# Key off agent_id, never agent_type on its own: Claude Code also sets
+# agent_type on the main thread of a session started with `--agent`.
+#
+# Stop needs no check: both agents convert a subagent's turn end to their own
+# SubagentStop event, which stack-nudge doesn't wire, so the stop path is
+# main-agent-only by construction. Gemini, Antigravity and pi carry no
+# equivalent field (pi has no subagents at all), hence the agent gate.
+subagent_label() {
+  case "$AGENT" in
+    claude-code|codex) ;;
+    *)                 return ;;
+  esac
+  [[ -n "$(hook_json_field agent_id)" ]] || return
+  local agent_type
+  agent_type=$(hook_json_field agent_type)
+  # Plugin-supplied subagents report a plugin-scoped agent_type
+  # (`stackone-deep-dive:security-reviewer`); the scope is noise in a banner
+  # title that already names the agent, so keep the part that identifies it.
+  agent_type="${agent_type##*:}"
+  [[ ${#agent_type} -gt 24 ]] && agent_type="${agent_type:0:23}…"
+  printf '%s' "${agent_type:-subagent}"
+}
+
+# True when the transcript shows the main agent handed control back while a
+# background subagent is still running. Claude Code runs a detached Task/Agent
+# as its own turn: launching one ends the main turn (firing Stop), but the
+# session auto-resumes when the child finishes, so a "ready for you" nudge there
+# is a false finish — nothing is waiting on the user.
+#
+# The obvious tell (an unresolved Task/Agent tool_use) does NOT work: a detached
+# agent's tool_use is resolved immediately by a "launched" acknowledgement, and
+# the real finish arrives later as a separate task-notification message keyed by
+# the same tool-use id. So the signal is: the most recent tool-using turn spawned
+# a Task/Agent whose completion task-notification has not been written yet. We
+# look only at the latest tool-using turn so a stale, never-notified launch from
+# earlier in the session cannot wedge every future nudge shut.
+#
+# Fails open (returns 1, nudge normally) when the transcript is absent or
+# unreadable: a missed suppression is one stray nudge, but a wrong positive
+# would swallow a genuine finish.
+background_subagent_pending() {
+  local transcript
+  transcript="$(hook_json_field transcript_path)"
+  [[ -n "$transcript" && -r "$transcript" ]] || return 1
+  command -v python3 &>/dev/null || return 1
+  NUDGE_TRANSCRIPT="$transcript" python3 -c 'import json, os, re, sys
+spawners = {"Task", "Agent"}
+completed = set()
+latest_launch_ids = []
+notified = re.compile(r"<tool-use-id>\s*([^<\s]+)\s*</tool-use-id>")
+try:
+    with open(os.environ["NUDGE_TRANSCRIPT"], encoding="utf-8", errors="replace") as handle:
+        for raw in handle:
+            if "task-notification" in raw:
+                completed.update(notified.findall(raw))
+            try:
+                record = json.loads(raw)
+            except ValueError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            message = record.get("message") if isinstance(record.get("message"), dict) else record
+            content = message.get("content") if isinstance(message, dict) else None
+            if not isinstance(content, list):
+                continue
+            launch_ids = []
+            saw_tool_use = False
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "tool_use":
+                    saw_tool_use = True
+                    if block.get("name") in spawners and block.get("id"):
+                        launch_ids.append(block["id"])
+            if saw_tool_use:
+                latest_launch_ids = launch_ids
+except OSError:
+    sys.exit(1)
+sys.exit(0 if any(i not in completed for i in latest_launch_ids) else 1)' 2>/dev/null
 }
 
 # Agent-initiated question (multi-select / open prompt) or plan approval, not a
@@ -863,6 +958,27 @@ play_windows() {
 }
 
 TITLE="$(agent_label "$AGENT")"
+
+# Say which subagent a nudge came from, so "I didn't ask for that" has an
+# answer. `off` drops subagent events entirely instead: the agent still falls
+# back to prompting in its own terminal, so nothing is auto-approved; but an
+# unattended session then waits on a prompt nothing told you about, which is
+# why tagging is the default.
+SUBAGENT_LABEL="$(subagent_label)"
+if [[ -n "$SUBAGENT_LABEL" ]]; then
+  [[ "${STACKNUDGE_SUBAGENT_NUDGES:-tag}" == "off" ]] && exit 0
+  TITLE="${TITLE} · ${SUBAGENT_LABEL}"
+fi
+
+# A Stop fires whenever the main agent hands control back — including when it
+# launches a background subagent that will auto-resume the session on its own.
+# Nudging "ready for you" there is a false finish: nothing is waiting on the
+# user, and the real Stop arrives when the resumed session actually ends. Skip
+# it. Claude Code only — the check reads Claude Code's transcript shape.
+if [[ "$EVENT" == "stop" && "$AGENT" == "claude-code" ]] && background_subagent_pending; then
+  nudge_debug "stop nudge suppressed: a background subagent is still in flight"
+  exit 0
+fi
 
 case "$OS" in
   Darwin)

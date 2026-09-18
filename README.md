@@ -168,6 +168,8 @@ Records live in `~/.stack-nudge/events.jsonl` (mode 0600), one JSON object per l
 
 Reminders only fire for prompts stack-nudge can *prove* are unanswered. Claude Code and Codex permission hooks block on a FIFO that's removed the moment the hook exits, so its presence means nobody has answered — in the panel, on the banner, or in the terminal. Gemini and Antigravity route permissions through fire-and-forget notification hooks with no such signal, so they get the single banner they always did rather than reminders that might be about something you already handled. Reminders stop at three, and stop early once the hook hits its own 550-second timeout and the agent falls back to prompting in the terminal. A per-session mute silences them like any other nudge. A *global* mute silences the banner and sound but not the Slack DM — see the Slack section for why.
 
+**Prompts raised by a subagent say so.** Claude Code's `Task` agents and Codex's `spawn_agent` children run their tool calls through the same permission hook as the main thread, so a prompt from an `Explore` agent used to be indistinguishable from one you'd asked for; that's the case where attribution matters most, since the reaction to an unexpected approval prompt is *"I didn't ask for that"*. Those banners now read **Claude Code · Explore** (plugin-scoped agent names are shown unscoped). If you'd rather not hear from them at all, set `STACKNUDGE_SUBAGENT_NUDGES=off` and they're dropped: the agent still prompts in its own terminal, so nothing is auto-approved, but nothing tells you it's waiting either, which is why tagging is the default. Turn-end nudges never needed this: both agents convert a subagent's turn end to their own `SubagentStop` event, which stack-nudge doesn't wire.
+
 **Slack, for when you're not at the Mac.** Banners only work if you're looking at the screen. Point stack-nudge at a Slack bot token and a permission prompt also arrives as a DM **from StackNudge** — which, unlike a message you send yourself, actually notifies you.
 
 | Setting | Default | |
@@ -477,6 +479,7 @@ make install    # full install (build + copy + register hooks + launchd)
 make reload     # rebuild + replace installed app + refresh notify.sh + bounce the daemon
 make dev        # watch sources; auto-reload on .swift / Info.plist / notify.sh / phrase changes
 make uninstall  # remove app, hooks, launchd agents, ~/.stack-nudge/
+make test-notify # drive notify.sh against a fake panel socket (macOS, no Xcode)
 ```
 
 `make dev` is the inner-loop tool — leave it running in another terminal, save a Swift file or `notify.sh`, and the daemon bounces with the new build in ~2 seconds.
