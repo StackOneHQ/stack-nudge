@@ -174,8 +174,9 @@ final class ExtensionsCategoryTests: XCTestCase {
 
 // About replaces the full-width version bar that used to sit under every
 // category. The bar cost ~45pt of fixed height on a page whose chrome already
-// did not fit the panel's minimum, and the hook-script warning it carried had
-// nowhere else to go.
+// did not fit the panel's minimum. Its hook-script warning did not come here —
+// that is a nudges-are-broken signal, so it moved up to the attention banners
+// that render above every category.
 @MainActor
 final class AboutCategoryTests: XCTestCase {
 

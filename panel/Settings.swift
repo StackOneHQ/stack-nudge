@@ -19,7 +19,7 @@ struct SettingsView: View {
     @ObservedObject var nav: PanelNav
 
     // Hook-script freshness, sampled on appear (two small file reads) rather than
-    // recomputed every render. Surfaced in aboutHeader.
+    // recomputed every render. Surfaced in hookScriptRow.
     @State private var installedHookVersion: String?
     @State private var hookScriptStale = false
 
@@ -430,35 +430,59 @@ struct SettingsView: View {
         }
     }
 
+    // Hook-script staleness, pinned above every category like the permission and
+    // update nudges. The app rewrites a stale script at launch, so a mismatch
+    // that survives to here means the rewrite failed (read-only dotdir, wrong
+    // owner) and hook payloads may be missing fields the panel needs — which
+    // shows up as nudges quietly not firing, so it has to be visible wherever
+    // the user happens to be rather than only on the About page.
+    //
+    // No chevron and no keyboard index: unlike the other two there is nothing to
+    // open. The automatic repair has already failed, and the fix is a reinstall
+    // outside the panel. Same orange as the permissions nudge, which is also
+    // "something here is not working".
+    private var hookScriptRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.body)
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Hook script is out of date")
+                    .font(.subheadline.weight(.medium))
+                Text("\(installedHookVersion.map { "v\($0)" } ?? "Unstamped") installed · reinstall StackNudge to refresh")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.orange.opacity(0.18))
+        )
+    }
+
     // Bundle version, rendered at the foot of the category sidebar and again at
     // the head of the About category.
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
     }
 
-    // Non-navigable readouts at the head of the About category: the version, and
-    // the hook-script warning when one applies. Neither is a row — there is
-    // nothing to activate, and a selectable row that ignores Enter reads as
+    // Non-navigable readout at the head of the About category. Not a row — there
+    // is nothing to activate, and a selectable row that ignores Enter reads as
     // broken.
+    //
+    // It carries a row's padding and font deliberately: the pane's first line
+    // has to land where every other category's first line lands, or stepping
+    // Actions → About shifts the text and reads as the page twitching.
     private var aboutHeader: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("StackNudge v\(appVersion)")
-                .font(.subheadline.monospacedDigit())
-            // The app rewrites a stale hook script at launch, so a mismatch that
-            // survives to here means the rewrite failed (read-only dotdir, wrong
-            // owner) and hook payloads may be missing fields the panel needs.
-            // Read on appear, not per render, to keep this off the render path.
-            if hookScriptStale {
-                Text("Hook script \(installedHookVersion.map { "v\($0)" } ?? "unstamped") is out of date; reinstall to refresh")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10)
-        .padding(.top, 2)
-        .padding(.bottom, 8)
+        Text("StackNudge v\(appVersion)")
+            .font(.subheadline.monospacedDigit())
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
     }
 
     // One renderer over nav.rows(in:), rather than eight hand-kept lists beside
@@ -574,7 +598,9 @@ struct SettingsView: View {
     }
 
     // Attention items stay above the split and outside any category, so they're
-    // visible whichever one you're in. They index first, matching that order.
+    // visible whichever one you're in. The ones that lead somewhere index first,
+    // matching this order; the mute and hook-script notices are readouts with
+    // nothing to open, so they render here without taking a keyboard slot.
     @ViewBuilder private var settingsBanners: some View {
         VStack(alignment: .leading, spacing: 10) {
             muteBanner
@@ -588,6 +614,9 @@ struct SettingsView: View {
             }
             if let version = nav.updateAvailable {
                 updateRow(version: version)
+            }
+            if hookScriptStale {
+                hookScriptRow
             }
         }
         .padding(.horizontal, 14)
