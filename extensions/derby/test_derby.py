@@ -40,6 +40,17 @@ class Formatting(unittest.TestCase):
         # A half-token double is a real value from this API, not a typo.
         self.assertEqual(derby.short_tokens(1500.5), "2K")
 
+    # Half rounds *away from zero*, matching Swift's Double.rounded(). Python's
+    # round() is half-to-even, so every x500 with an even thousands part
+    # disagreed — and 1500, the only boundary the first version of this test
+    # checked, is the one where the two happen to agree.
+    def test_the_K_branch_rounds_half_away_from_zero(self):
+        self.assertEqual(derby.short_tokens(2500), "3K")
+        self.assertEqual(derby.short_tokens(4500), "5K")
+        self.assertEqual(derby.short_tokens(6500), "7K")
+        self.assertEqual(derby.short_tokens(1500), "2K")
+        self.assertEqual(derby.short_tokens(3500), "4K")
+
     def test_countdowns_abbreviate_like_the_panel_does(self):
         self.assertEqual(derby.short_countdown(20_700), "5h45m")
         self.assertEqual(derby.short_countdown(7200), "2h")
@@ -482,6 +493,27 @@ class Fetching(unittest.TestCase):
         derby.urllib.request.urlopen = self.stub(FakeResponse('{"races": []}', ""))
         with self.assertRaises(derby.NotJSON):
             derby.get_json("https://example.test/api")
+
+    # The field is the service's, and a non-string there put a JSON object
+    # where the host's decoder wants a string — which fails the *whole*
+    # document, so the pane would say "wrong type for message" instead of
+    # showing the API's error.
+    def test_a_non_string_error_message_does_not_reach_the_document(self):
+        import urllib.error, io
+        for body in ['{"code":"X","message":{"a":1}}', '{"code":"X","message":7}',
+                     '{"code":"X"}', 'not json']:
+            def raiser(request, timeout=None, _b=body):
+                raise urllib.error.HTTPError(
+                    request.full_url, 500, "err", {}, io.BytesIO(_b.encode()))
+            derby.urllib.request.urlopen = raiser
+            os_environ = derby.os.environ
+            derby.os.environ = {derby.ORG_KEY: "StackOne"}
+            try:
+                doc = derby.build()
+            finally:
+                derby.os.environ = os_environ
+            self.assertIsInstance(doc["message"], str, body)
+            self.assertEqual(json.loads(json.dumps(doc)), doc)
 
     def test_a_web_page_on_the_org_route_means_no_such_org(self):
         derby.urllib.request.urlopen = self.stub(

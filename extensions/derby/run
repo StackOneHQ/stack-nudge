@@ -70,12 +70,20 @@ DEFAULT_COAT = "#7FD1B9"
 # the Usage tab beside it reads as two apps in one panel.
 
 def short_tokens(count):
-    """1234567 -> "1.2M", 218000 -> "218K", 42 -> "42"."""
+    """1234567 -> "1.2M", 218000 -> "218K", 42 -> "42".
+
+    The K branch rounds half *away from zero*, not with Python's round(), which
+    is half-to-even: 2500 is "3K" here and "2K" under round(). Swift's
+    Double.rounded() is half-away-from-zero, and matching it is the entire
+    point of this function — every x500 with an even thousands part disagreed,
+    so a Derby row and the Usage tab beside it abbreviated the same number
+    differently.
+    """
     count = int(count)
     if count >= 1_000_000:
         return "%.1fM" % (count / 1_000_000)
     if count >= 1_000:
-        return "%dK" % round(count / 1_000)
+        return "%dK" % int(count / 1_000 + 0.5)
     return str(count)
 
 
@@ -206,6 +214,14 @@ def pick(races):
     website matters: an extension that quietly picked a different race from
     the page it mirrors would read as stale data rather than as a difference
     of opinion.
+
+    One deliberate divergence. The site sorts on `new Date(start_time)`, so an
+    unreadable stamp yields NaN, every comparison against it is false, and the
+    entry keeps whatever position it arrived in. Here it sorts as the epoch,
+    which puts it last among live or finished races and first among pending
+    ones. Both are arbitrary; this one is at least stated, and reproducing a
+    NaN comparator to match a tie-break nobody relies on would be a worse
+    thing to leave in the file.
     """
     usable = [r for r in races if isinstance(r, dict) and r.get("join_code")]
 
@@ -470,6 +486,11 @@ def build():
             return message("empty", 'No organisation named "%s".' % org)
         if code == "UNAUTHENTICATED":
             return message("error", "This organisation's races aren't public.")
+        # Only if it is a string. The field is the service's, and a non-string
+        # there put a JSON object where the host's decoder wants a string —
+        # which fails the *whole* document, so the pane says "wrong type for
+        # message" rather than showing the API's error.
+        detail = detail if isinstance(detail, str) and detail else None
         return message("error", detail or "The derby returned %d." % error.code)
     except urllib.error.URLError as error:
         return message("error", "Couldn't reach the derby — %s." % error.reason)
