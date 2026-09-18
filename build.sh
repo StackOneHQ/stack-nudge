@@ -43,6 +43,12 @@ build_app() {
   if [[ -f "$repo_root/notify.conf.example" ]]; then
     cp "$repo_root/notify.conf.example" "$contents/Resources/notify.conf.example"
   fi
+  # Settings > About reads the entry for the running version straight out of the
+  # bundle — not copied to ~/.stack-nudge like the payload above, and not fetched,
+  # so the notes can never disagree with the binary sitting beside them.
+  if [[ -f "$repo_root/CHANGELOG.md" ]]; then
+    cp "$repo_root/CHANGELOG.md" "$contents/Resources/CHANGELOG.md"
+  fi
 
   # Optional: bundle a self-contained Python + stackvox into Resources/venv/.
   # Skipped for local iteration (slow); enabled by CI for release artifacts.
