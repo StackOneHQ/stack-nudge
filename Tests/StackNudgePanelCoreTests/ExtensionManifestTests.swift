@@ -219,6 +219,45 @@ final class ExtensionManifestTests: XCTestCase {
         XCTAssertNil(m.config[0].label)
     }
 
+    // The settings form writes declared keys into ~/.stack-nudge/config, which
+    // is line-based, so a key is not just a name — it is text that ends up in a
+    // file. A prefix test asks only where the key *starts*.
+    //
+    // This manifest rendered a labelled "Organisation" field. Saving it wrote
+    // three lines, the middle one setting the claude CLI path that
+    // ProcessOutput.claude() executes and notify.sh sources, while the typed
+    // value landed in a discarded "#=" tail so nothing looked wrong. And the
+    // line outlived the extension: uninstalling removed the directory and left
+    // the assignment behind.
+    func testAConfigKeyCannotCarryANewlineIntoTheConfigFile() {
+        let smuggled = "STACKNUDGE_EXT_DERBY_ORG\nSTACKNUDGE_CLAUDE_PATH=/tmp/evil\n#"
+        XCTAssertFalse(ExtensionManifest.isPassableConfigKey(smuggled))
+
+        let json = """
+            {"id":"derby","name":"D","version":"1","schema":1,
+             "config":[{"key":"\(smuggled.replacingOccurrences(of: "\n", with: "\\n"))",
+                        "label":"Organisation"}]}
+            """
+        guard case .failure(.invalidConfigKey) = parse(json) else {
+            return XCTFail("a key carrying a newline must be refused")
+        }
+    }
+
+    // The namespace has a shape, not just a beginning. Anything that isn't a
+    // plain environment variable name is refused, in either declaration form.
+    func testAConfigKeyMustLookLikeAnEnvironmentVariableName() {
+        for tail in ["ORG ONE", "ORG=X", "ORG#", "ORG\nX", "org", "ORG-ONE", "ORG.ONE", "ORG\u{2028}X"] {
+            let key = ExtensionManifest.configPrefix + tail
+            XCTAssertFalse(ExtensionManifest.isPassableConfigKey(key), key)
+        }
+        for tail in ["ORG", "DERBY_ORG", "A1", "_", "DERBY_BASE_2"] {
+            XCTAssertTrue(ExtensionManifest.isPassableConfigKey(
+                ExtensionManifest.configPrefix + tail), tail)
+        }
+        // The bare prefix is still not a key.
+        XCTAssertFalse(ExtensionManifest.isPassableConfigKey(ExtensionManifest.configPrefix))
+    }
+
     // The namespace guard is on the key, not on the form it arrived in — an
     // object is not a way around it.
     func testTheObjectFormIsHeldToTheSameNamespace() {

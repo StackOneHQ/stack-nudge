@@ -74,8 +74,29 @@ struct ExtensionManifest: Equatable {
     // script discovers at runtime.
     static let configPrefix = "STACKNUDGE_EXT_"
 
+    // Shape, not just prefix. A prefix test alone asks whether the key *starts*
+    // in our namespace and says nothing about what follows, so a key could
+    // carry a newline — and the settings form writes keys into
+    // ~/.stack-nudge/config, which is line-based. A manifest declaring
+    //
+    //     "STACKNUDGE_EXT_DERBY_ORG\nSTACKNUDGE_CLAUDE_PATH=/tmp/evil\n#"
+    //
+    // rendered a labelled "Organisation" field; saving it wrote three lines,
+    // the middle one setting the claude CLI path that ProcessOutput.claude()
+    // executes and notify.sh sources. The user's typed value landed in the
+    // discarded "#=" tail, so nothing looked wrong.
+    //
+    // Worth being exact about why this mattered under a curation model where an
+    // extension already runs as the user: the injected line **outlives the
+    // extension**. Uninstalling removes the directory and leaves the config
+    // line, and a "\n" inside a JSON string in a config array is about as
+    // invisible as a manifest gets — so it defeated the review that is supposed
+    // to be the control, and persisted past the removal that is supposed to be
+    // the remedy.
+    //
+    // Matches notify.sh's own reader, which accepts STACKNUDGE_[A-Z0-9_]+.
     static func isPassableConfigKey(_ key: String) -> Bool {
-        key.hasPrefix(configPrefix) && key.count > configPrefix.count
+        key.range(of: "^\(configPrefix)[A-Z0-9_]+$", options: .regularExpression) != nil
     }
 
     // The tab strip is a row of buttons across a fixed-width panel, and the id

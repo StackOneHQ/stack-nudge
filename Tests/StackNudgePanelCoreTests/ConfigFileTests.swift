@@ -144,4 +144,45 @@ final class ConfigFileTests: XCTestCase {
         XCTAssertTrue(updated.contains("STACKNUDGE_PANEL=true"))
         XCTAssertTrue(updated.hasSuffix("\n"))
     }
+
+    // MARK: - Key shape
+
+    // The file is line-based and `apply` writes "key=value", so a key is not
+    // just a name — it is text that lands in the file. An extension manifest
+    // declaring a key with a newline in it used the settings form to write a
+    // second, unrelated assignment; this is the sink-side half of that fix, so
+    // a future caller building a key from anything but a literal can't reopen
+    // it.
+    func testAKeyCarryingANewlineIsNotWritable() {
+        XCTAssertFalse(ConfigFile.isWritableKey("STACKNUDGE_A\nSTACKNUDGE_CLAUDE_PATH=/tmp/evil\n#"))
+        XCTAssertFalse(ConfigFile.isWritableKey("STACKNUDGE_A\rB"))
+    }
+
+    func testAKeyCarryingAnEqualsOrSpaceIsNotWritable() {
+        for key in ["STACKNUDGE_A=B", "STACKNUDGE A", "STACKNUDGE_A#", "", "  ",
+                    "STACKNUDGE_A\u{2028}B", "STACKNUDGE_\u{0660}"] {
+            XCTAssertFalse(ConfigFile.isWritableKey(key), key)
+        }
+    }
+
+    func testOrdinaryKeysStayWritable() {
+        // Every existing caller passes a literal of this shape.
+        for key in ["STACKNUDGE_EXT_DERBY_ORG", "STACKNUDGE_SLACK_BOT_TOKEN",
+                    "STACKNUDGE_EVENTS_PER_SESSION", "A1", "_"] {
+            XCTAssertTrue(ConfigFile.isWritableKey(key), key)
+        }
+    }
+
+    // What the injection actually produced, so the shape of the bug is on
+    // record rather than only its fix: one appended line became three, and the
+    // middle one was a live assignment the reader honours.
+    func testTheInjectedAssignmentWouldHaveBeenReadBack() {
+        let smuggled = "STACKNUDGE_EXT_DERBY_ORG\nSTACKNUDGE_CLAUDE_PATH=/tmp/evil\n#"
+        let written = ConfigFile.apply("", key: smuggled, value: "StackOne")
+        XCTAssertEqual(ConfigFile.parse(written)["STACKNUDGE_CLAUDE_PATH"], "/tmp/evil")
+        // ...and the value the user actually typed went nowhere.
+        XCTAssertNil(ConfigFile.parse(written)["STACKNUDGE_EXT_DERBY_ORG"])
+        // Which is why write() refuses the key rather than trusting apply().
+        XCTAssertFalse(ConfigFile.isWritableKey(smuggled))
+    }
 }
