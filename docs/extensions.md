@@ -46,13 +46,52 @@ does not buy.
 | `tab.label` | no | Defaults to `name`. Trimmed, capped at 16 characters, falls back to `id` if empty. |
 | `run` | no | Defaults to `./run`. Relative to the extension directory, no `..`, no absolute or `~` paths. |
 | `requires` | no | Interpreters the extension needs. Checked at install time by **running** each one, not by resolving it. |
-| `config` | no | Environment keys to pass through. Must be under `STACKNUDGE_EXT_`. |
+| `config` | no | Environment keys to pass through. Must be under `STACKNUDGE_EXT_`. See [Configuration](#configuration). |
 | `refresh.onOpen` | no | Default `true`. Fetch when the tab is opened. |
 | `refresh.intervalSeconds` | no | Default off. Floored at 5 — every tick is a process spawn. |
 | `refresh.whileFocusedOnly` | no | Default `true`. Only poll while your tab is the one on screen. |
 
 A manifest that fails any of these is **refused**, and the reason is reported —
 it does not silently produce a missing tab.
+
+## Configuration
+
+A `config` entry may be a bare key name, or an object describing it:
+
+```json
+"config": [
+  "STACKNUDGE_EXT_DERBY_TRACE",
+  {
+    "key": "STACKNUDGE_EXT_DERBY_ORG",
+    "label": "Organisation",
+    "help": "Whose races to show. Ask whoever runs your league.",
+    "placeholder": "stackone"
+  }
+]
+```
+
+Both forms declare the same thing — a key the host will pass to your script.
+The object form adds what **Settings → Extensions → your extension** needs to
+render a labelled field for it rather than a raw environment variable name.
+Without a `label` the field is titled by the key with its namespace stripped,
+so a bare string still gets a usable form.
+
+One list rather than two: a parallel array describing the keys would drift from
+the list of keys actually passed, and what you would get is a form field for a
+key nobody reads, or a key nobody can set.
+
+Values are stored in `~/.stack-nudge/config`, which is line-based and shell-
+sourced, so the form refuses a value containing a line break. A value naming a
+URL scheme must name `https`. Clearing a field removes the key rather than
+writing an empty one, which matters because a declared-but-unset key is
+**omitted** from your environment rather than passed empty — so `[ -z "$KEY" ]`
+and "the variable isn't there" are the same case, and you only have to handle
+one of them.
+
+> The object form needs a host that understands it. An older host reads the
+> bare-string form only. In practice this is not something to plan around: the
+> index is published per app release, so an older host never fetches a newer
+> manifest.
 
 ## The environment
 
@@ -234,10 +273,20 @@ version ships.
 
 ```
 extensions/
+    derby/
+        manifest.json
+        run
+        test_derby.py
     system/
         manifest.json
         run
 ```
+
+Tests are optional but encouraged, and they ship inside the package on purpose:
+`derby` is what somebody reads when writing their own, and "how do I test one of
+these?" is a question the reference should answer. Any `extensions/*/test_*.py`
+is run by CI and by `make test-extensions`; a suite that discovers zero tests is
+a failure rather than a pass.
 
 `scripts/package-extensions.sh validate` is what CI runs, and you can run it
 yourself. It refuses:
@@ -261,10 +310,16 @@ picks up extensionless files by shebang, at `severity: warning`.
 ### What a release publishes
 
 ```
-system-1.1.1.tar.gz
-system-1.1.1.tar.gz.sha256      <- "<hash>  <basename>"
+extension-derby-1.0.0.tar.gz
+extension-derby-1.0.0.tar.gz.sha256      <- "<hash>  <basename>"
+extension-system-1.1.1.tar.gz
+extension-system-1.1.1.tar.gz.sha256
 extensions-index.json
 ```
+
+The `extension-` prefix is not decoration. Extensions share a release with the
+app, and the updater picks its own download by name — without the namespace an
+extension called `stack-nudge` would be offered to the updater as an app build.
 
 The index is attached to the app's own release, so there is one trust anchor and
 one fetch path. It ships even when there are no extensions, so the app always has
@@ -301,7 +356,10 @@ reviewer should check that are easy to miss:
   paths, but a symlink in a tarball is how a manifest tells a reviewer one thing
   and does another.
 - **Declared `config` keys.** They are restricted to `STACKNUDGE_EXT_`, but that
-  namespace is still yours to justify.
+  namespace is still yours to justify — and a declared key now appears as a
+  field in Settings, so it is also a request for the user's attention. An
+  extension that asks for five values it could infer is asking for five
+  decisions nobody wanted to make.
 
 ## Limits, in one place
 
