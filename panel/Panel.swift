@@ -3831,17 +3831,21 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 }
             }
             guard mods.intersection([.command, .control, .option]).isEmpty else { return false }
-            switch Self.extensionConfigKeyAction(
-                keyCode: event.keyCode,
-                hasFields: !(nav.extensionConfig?.keys.isEmpty ?? true)) {
+            switch Self.extensionConfigKeyAction(keyCode: event.keyCode) {
             case .back:
                 // Wherever this page was opened from, which is the Settings list
                 // as often as the browser.
                 closeExtensionConfig()
             case .moveSelection(let delta):
                 nav.extensionConfig?.moveSelection(by: delta)
-            case .editSelectedField:
-                nav.extensionConfig?.focusSelectedField()
+            case .activateSelection:
+                switch nav.extensionConfig?.selection {
+                case .field:  nav.extensionConfig?.focusSelectedField()
+                case .save:   nav.extensionConfig?.save()
+                case .remove: nav.extensionConfig?.onRemove()
+                case .back:   closeExtensionConfig()
+                case nil:     break
+                }
             case .swallow:
                 break
             }
@@ -4262,19 +4266,21 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     enum ExtensionConfigKeyAction: Equatable {
         case back
         case moveSelection(Int)
-        case editSelectedField
+        // What that does depends on where the selection is, which the controller
+        // resolves: focus a field, save, remove, or walk back out.
+        case activateSelection
         // Swallowed rather than passed on, the same rule every sub-page follows:
         // a stray key must not reach the Events bindings and answer a permission
         // prompt on a tab this page isn't showing.
         case swallow
     }
 
-    // `hasFields` rather than a count: ⏎ has nothing to hand focus to on an
-    // extension that declares no config keys, which is every refused one and
-    // every extension as plain as `system`. Tab joins ⏎ because it is what a
-    // macOS form is entered with, and at level one nothing else claims it.
-    static func extensionConfigKeyAction(keyCode: UInt16,
-                                         hasFields: Bool) -> ExtensionConfigKeyAction {
+    // Tab joins ⏎ because it is what a macOS form is entered with, and at level
+    // one nothing else claims it. Neither is gated on the page having fields:
+    // the selection walks the back chevron, Save and Remove as well, so there is
+    // always something for ⏎ to act on, and what that is belongs to the model
+    // rather than to a key table.
+    static func extensionConfigKeyAction(keyCode: UInt16) -> ExtensionConfigKeyAction {
         switch keyCode {
         case KeyCode.escape:
             return .back
@@ -4283,7 +4289,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         case KeyCode.downArrow:
             return .moveSelection(1)
         case KeyCode.returnKey, KeyCode.numpadEnter, KeyCode.tab:
-            return hasFields ? .editSelectedField : .swallow
+            return .activateSelection
         default:
             return .swallow
         }
@@ -4511,9 +4517,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                     query: extensionCatalog.query),
                 top: top)
         case .extensionConfig:
-            // Nothing to jump on an extension that declares no keys, so the
-            // keystroke passes through rather than being silently eaten.
-            guard let config = nav.extensionConfig, !config.keys.isEmpty else { return false }
+            // Always somewhere to go: the back chevron and Remove are targets on
+            // every extension's page, including one declaring no config keys.
+            guard let config = nav.extensionConfig else { return false }
             config.selectEdge(top: top)
         default:
             return false  // modal / single-purpose screens have nothing to jump

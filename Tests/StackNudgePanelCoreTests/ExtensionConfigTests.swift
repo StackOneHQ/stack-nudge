@@ -82,43 +82,59 @@ final class ExtensionConfigTests: XCTestCase {
     // while the footer advertised it.
     func testTheFirstFieldIsSelectedOnArrival() {
         let m = model(keys: [key("STACKNUDGE_EXT_DERBY_ORG"), key("STACKNUDGE_EXT_DERBY_BASE")])
-        XCTAssertEqual(m.selectedKey, "STACKNUDGE_EXT_DERBY_ORG")
+        XCTAssertEqual(m.selection, .field("STACKNUDGE_EXT_DERBY_ORG"))
     }
 
-    func testAnExtensionWithNoKeysSelectsNothing() {
-        XCTAssertNil(model(keys: []).selectedKey)
+    // The page draws a back chevron, a Save and a Remove as well as its fields.
+    // A traversal over the fields alone walks past three buttons nobody can
+    // reach, which is what it did.
+    func testTheTraversalCoversEveryControlOnThePage() {
+        let m = model(keys: [key("A"), key("B")])
+        XCTAssertEqual(m.targets, [.back, .field("A"), .field("B"), .save, .remove])
     }
 
-    func testArrowsWalkTheFieldsAndStopAtTheEnds() {
-        let m = model(keys: [key("A"), key("B"), key("C")])
-        m.moveSelection(by: 1)
-        XCTAssertEqual(m.selectedKey, "B")
-        m.moveSelection(by: 1)
-        m.moveSelection(by: 1)
-        XCTAssertEqual(m.selectedKey, "C", "stops rather than wrapping")
+    // No Save button on a page with nothing to save, so no Save target either.
+    // Back and Remove are on every extension's page, so ↑↓ always do something.
+    func testAnExtensionWithNoKeysStillHasBackAndRemoveToWalk() {
+        let m = model(keys: [])
+        XCTAssertEqual(m.targets, [.back, .remove])
+        XCTAssertEqual(m.selection, .back)
+    }
+
+    func testArrowsWalkEveryTargetAndStopAtTheEnds() {
+        let m = model(keys: [key("A"), key("B")])
+        XCTAssertEqual(m.selection, .field("A"))
         m.moveSelection(by: -1)
-        XCTAssertEqual(m.selectedKey, "B")
+        XCTAssertEqual(m.selection, .back, "up from the first field reaches the chevron")
+        m.moveSelection(by: -1)
+        XCTAssertEqual(m.selection, .back, "stops rather than wrapping")
+        for _ in 0..<5 { m.moveSelection(by: 1) }
+        XCTAssertEqual(m.selection, .remove, "and stops at the far end too")
     }
 
-    // Both no-ops rather than special cases at the call site: an extension
-    // declaring nothing has no fields, and one declaring a single key has
-    // nowhere to go.
-    func testMovingIsANoOpWithNothingToMoveBetween() {
-        let none = model(keys: [])
-        none.moveSelection(by: 1)
-        XCTAssertNil(none.selectedKey)
-
-        let one = model(keys: [key("A")])
-        one.moveSelection(by: 1)
-        XCTAssertEqual(one.selectedKey, "A")
+    func testMovingWalksFromAFieldOntoTheButtons() {
+        let m = model(keys: [key("A")])
+        m.moveSelection(by: 1)
+        XCTAssertEqual(m.selection, .save)
+        m.moveSelection(by: 1)
+        XCTAssertEqual(m.selection, .remove)
     }
 
-    func testCommandArrowsJumpToTheFirstAndLastField() {
-        let m = model(keys: [key("A"), key("B"), key("C")])
+    func testCommandArrowsJumpToTheFirstAndLastTarget() {
+        let m = model(keys: [key("A"), key("B")])
         m.selectEdge(top: false)
-        XCTAssertEqual(m.selectedKey, "C")
+        XCTAssertEqual(m.selection, .remove)
         m.selectEdge(top: true)
+        XCTAssertEqual(m.selection, .back)
+    }
+
+    // Only a field has anywhere to put focus. ⏎ on a button acts on it
+    // instead, which the controller resolves off this selection.
+    func testTheSelectedKeyIsOnlyAFieldsKey() {
+        let m = model(keys: [key("A")])
         XCTAssertEqual(m.selectedKey, "A")
+        m.selection = .remove
+        XCTAssertNil(m.selectedKey)
     }
 
     // ⏎ hands the selected field first-responder status, which the view
@@ -130,19 +146,30 @@ final class ExtensionConfigTests: XCTestCase {
         XCTAssertEqual(m.fieldFocusRequests, 1)
     }
 
-    // Nothing to focus, so nothing is asked for. The view would otherwise set
-    // focus to nil, which reads as a keystroke that dismissed the selection.
-    func testEnterAsksForNothingWhenThereAreNoFields() {
-        let m = model(keys: [])
+    // Nothing to focus while the selection is on a button. The view would
+    // otherwise set focus to nil, which reads as a keystroke that dismissed the
+    // selection rather than one that pressed the button.
+    func testEnterOnAButtonAsksForNoFieldFocus() {
+        let m = model(keys: [key("A")])
+        m.selection = .remove
         m.focusSelectedField()
         XCTAssertEqual(m.fieldFocusRequests, 0)
     }
 
-    func testTheSelectionFallsBackToTheFirstFieldWhenItsKeyIsGone() {
+    func testTheSelectionFallsBackWhenItsTargetIsGone() {
         let m = model(keys: [key("A"), key("B")])
-        m.selectedKey = "GONE"
+        m.selection = .field("GONE")
         m.reconcileSelection()
-        XCTAssertEqual(m.selectedKey, "A")
+        XCTAssertEqual(m.selection, .back)
+    }
+
+    // The Save target goes with the Save button on an extension declaring
+    // nothing, so a selection carried onto such a page has to move.
+    func testASaveSelectionIsReconciledOnAPageWithNoSaveButton() {
+        let m = model(keys: [])
+        m.selection = .save
+        m.reconcileSelection()
+        XCTAssertEqual(m.selection, .back)
     }
 
     // MARK: - Saving

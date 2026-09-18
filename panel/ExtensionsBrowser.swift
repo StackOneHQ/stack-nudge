@@ -684,6 +684,11 @@ struct CardButton: View {
     let title: String
     var prominent = false
     var enabled = true
+    // Where the keyboard is, on a page whose ↑↓ walk the buttons as well as the
+    // fields. A ring rather than a deeper fill: the prominent variant is already
+    // accent-filled and cannot deepen its own fill legibly, which is the same
+    // reason the Settings "Set up" banner button rings instead.
+    var selected = false
     let action: () -> Void
 
     var body: some View {
@@ -694,6 +699,8 @@ struct CardButton: View {
                 .padding(.vertical, 5)
                 .background(RoundedRectangle(cornerRadius: 6)
                     .fill(prominent ? Color.accentColor.opacity(0.9) : Color.primary.opacity(0.08)))
+                .overlay(RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Color.primary.opacity(selected ? 0.7 : 0), lineWidth: 2))
                 .foregroundStyle(prominent ? Color.white : Color.primary)
         }
         .buttonStyle(.plain)

@@ -470,9 +470,8 @@ final class ExtensionsKeyActionTests: XCTestCase {
 // the footer advertised Return.
 final class ExtensionConfigKeyActionTests: XCTestCase {
 
-    private func action(_ keyCode: UInt16,
-                        hasFields: Bool = true) -> PanelController.ExtensionConfigKeyAction {
-        PanelController.extensionConfigKeyAction(keyCode: keyCode, hasFields: hasFields)
+    private func action(_ keyCode: UInt16) -> PanelController.ExtensionConfigKeyAction {
+        PanelController.extensionConfigKeyAction(keyCode: keyCode)
     }
 
     func test_escapeStepsBackOffThePage() {
@@ -485,23 +484,12 @@ final class ExtensionConfigKeyActionTests: XCTestCase {
     }
 
     // Return and Tab are both how a macOS form is entered, and at this level
-    // nothing else claims either of them.
-    func test_returnAndTabHandTheSelectedFieldFocus() {
-        XCTAssertEqual(action(36), .editSelectedField)
-        XCTAssertEqual(action(76), .editSelectedField)
-        XCTAssertEqual(action(48), .editSelectedField)
-    }
-
-    // An extension declaring no config keys is every refused one and every
-    // extension as plain as `system`. There is nothing to hand focus to, and
-    // setting focus to nothing reads as a keystroke that lost the selection.
-    func test_withNoFieldsThereIsNothingToFocus() {
-        XCTAssertEqual(action(36, hasFields: false), .swallow)
-        XCTAssertEqual(action(48, hasFields: false), .swallow)
-        // Moving is still answered here rather than passed on; the model makes
-        // it a no-op. Swallowing it in one place and no-opping it in the other
-        // would be two rules for one key.
-        XCTAssertEqual(action(126, hasFields: false), .moveSelection(-1))
+    // nothing else claims either of them. What they act on is the selection,
+    // which the controller resolves: a field takes focus, a button fires.
+    func test_returnAndTabActOnWhateverIsSelected() {
+        XCTAssertEqual(action(36), .activateSelection)
+        XCTAssertEqual(action(76), .activateSelection)
+        XCTAssertEqual(action(48), .activateSelection)
     }
 
     func test_horizontalArrowsDoNothingOnAForm() {
@@ -514,7 +502,6 @@ final class ExtensionConfigKeyActionTests: XCTestCase {
     func test_everyKeyIsAccountedFor() {
         for code in UInt16(0)...UInt16(130) {
             _ = action(code)
-            _ = action(code, hasFields: false)
         }
     }
 }
@@ -524,30 +511,67 @@ final class ExtensionConfigKeyActionTests: XCTestCase {
 // field had been clicked, and on extensions that declare no fields at all.
 final class ExtensionConfigFooterTests: XCTestCase {
 
-    private func hints(keyCount: Int, editing: Bool, valid: Bool = true) -> [FooterHintSpec] {
-        ExtensionConfigView.footerHints(keyCount: keyCount, editing: editing, valid: valid)
+    private func hints(keyCount: Int, editing: Bool,
+                       selection: ExtensionConfigModel.Target? = nil,
+                       valid: Bool = true) -> [FooterHintSpec] {
+        ExtensionConfigView.footerHints(keyCount: keyCount, editing: editing,
+                                        selection: selection, valid: valid)
     }
 
     private func labels(_ specs: [FooterHintSpec]) -> [String] { specs.map(\.label) }
 
     // Every installed extension opens a page, because that is where Remove
-    // lives. One declaring nothing has no field to edit, move between or save.
-    func test_noKeys_offersOnlyBackAndRemove() {
-        XCTAssertEqual(labels(hints(keyCount: 0, editing: false)), ["Back", "Remove"])
+    // lives. One declaring nothing still has the chevron and Remove to walk, so
+    // the traversal is advertised; there is just no Save and no Edit.
+    func test_noKeys_stillOffersTheTraversal() {
+        XCTAssertEqual(labels(hints(keyCount: 0, editing: false, selection: .back)),
+                       ["Move", "Back", "Remove"])
     }
 
-    // One field is somewhere to go into, but nowhere to move to.
-    func test_oneKey_offersEditAndSaveButNotMove() {
-        XCTAssertEqual(labels(hints(keyCount: 1, editing: false)),
-                       ["Edit", "Save", "Back", "Remove"])
+    // One hint per action. A separate primary hint naming the selected target
+    // printed the bar's own labels twice the moment the ring reached the
+    // chevron: "Back ⏎ · Move · Back Esc".
+    func test_noLabelIsAdvertisedTwice() {
+        for selection: ExtensionConfigModel.Target in [.back, .field("A"), .save, .remove] {
+            let names = labels(hints(keyCount: 2, editing: false, selection: selection))
+            XCTAssertEqual(Set(names).count, names.count, "duplicate in \(names)")
+        }
     }
 
     func test_severalKeys_advertiseTheTraversal() {
-        let specs = hints(keyCount: 2, editing: false)
+        let specs = hints(keyCount: 2, editing: false, selection: .field("A"))
         XCTAssertEqual(labels(specs), ["Edit", "Move", "Save", "Back", "Remove"])
         // Both the step and the jump, riding on one label rather than paying
         // for a second, exactly as the Events bar carries its own.
         XCTAssertEqual(specs.first { $0.label == "Move" }?.keys, ["↑↓", "⌘↑↓"])
+    }
+
+    // ⏎ rides on the hint for whatever the ring is on, so the bar always says
+    // what the next keystroke will do without repeating itself.
+    func test_returnRidesOnTheSelectedTargetsOwnHint() {
+        func keys(_ selection: ExtensionConfigModel.Target, _ label: String) -> [String]? {
+            hints(keyCount: 2, editing: false, selection: selection)
+                .first { $0.label == label }?.keys
+        }
+        XCTAssertEqual(keys(.field("A"), "Edit"), ["⏎"])
+        XCTAssertEqual(keys(.save, "Save"), ["⏎", "⌘S"])
+        XCTAssertEqual(keys(.remove, "Remove"), ["⏎", "⌘⌫"])
+        XCTAssertEqual(keys(.back, "Back"), ["⏎", "Esc"])
+    }
+
+    // And only there. A hint the ring is not on keeps its own key alone.
+    func test_returnIsNotAdvertisedOnUnselectedTargets() {
+        let specs = hints(keyCount: 2, editing: false, selection: .field("A"))
+        XCTAssertEqual(specs.first { $0.label == "Save" }?.keys, ["⌘S"])
+        XCTAssertEqual(specs.first { $0.label == "Back" }?.keys, ["Esc"])
+        XCTAssertEqual(specs.first { $0.label == "Remove" }?.keys, ["⌘⌫"])
+    }
+
+    // Edit has no key of its own, so it is the one hint that exists only while
+    // the ring is on a field.
+    func test_editAppearsOnlyOnAField() {
+        XCTAssertFalse(labels(hints(keyCount: 2, editing: false, selection: .remove)).contains("Edit"))
+        XCTAssertTrue(labels(hints(keyCount: 2, editing: false, selection: .field("A"))).contains("Edit"))
     }
 
     // Inside a field the page has given the keyboard away: Return saves,
@@ -583,7 +607,7 @@ final class ExtensionConfigFooterTests: XCTestCase {
     // the hint is real, it just does not apply to what is typed.
     func test_saveDimsOnAValueTheFormWillRefuse() {
         for editing in [true, false] {
-            let spec = hints(keyCount: 1, editing: editing, valid: false)
+            let spec = hints(keyCount: 1, editing: editing, selection: .field("A"), valid: false)
                 .first { $0.label == "Save" }
             XCTAssertEqual(spec?.dimmed, true, "editing: \(editing)")
         }
@@ -592,7 +616,7 @@ final class ExtensionConfigFooterTests: XCTestCase {
     // Nothing on this bar may be dropped before the two that navigate it.
     func test_backAndRemoveAreNeverSheddable() {
         for editing in [true, false] {
-            for spec in hints(keyCount: 2, editing: editing)
+            for spec in hints(keyCount: 2, editing: editing, selection: .field("A"))
             where ["Back", "Done", "Remove"].contains(spec.label) {
                 XCTAssertNil(spec.shedOrder, "\(spec.label) must not shed")
             }

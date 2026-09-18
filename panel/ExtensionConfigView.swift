@@ -32,18 +32,44 @@ final class ExtensionConfigModel: ObservableObject {
     // screen rather than to whatever was saved a minute ago.
     @Published private(set) var saved = false
 
-    // Which field the keyboard is on while no field has focus. The page is a
-    // list of fields and every other list in the panel is walked with the
-    // arrows, but a focused text field is first responder and takes ↑↓ before
-    // FloatingPanel.keyDown ever sees them, so the traversal has to live at the
-    // level above the fields, exactly as the browser's does above its search
-    // field. Seeded rather than left nil: arriving with nothing selected makes
-    // the footer's Edit hint describe a key that does nothing.
-    @Published var selectedKey: String?
+    // Everything on the page the keyboard can land on, in the order it is drawn.
+    // Not just the fields: the page renders a back chevron, a Save and a Remove,
+    // and a traversal that walks past three buttons nobody can reach is the
+    // thing that makes a keyboard-native panel feel half-wired. Each has a
+    // shortcut of its own as well, which is what they had instead.
+    enum Target: Equatable {
+        case back
+        case field(String)
+        case save
+        case remove
+    }
+
+    // Where the keyboard is while no field has focus. A focused text field is
+    // first responder and takes ↑↓ before FloatingPanel.keyDown ever sees them,
+    // so the traversal has to live at the level above the fields, exactly as the
+    // browser's does above its search field. Seeded rather than left nil:
+    // arriving with nothing selected makes the footer describe a key that does
+    // nothing.
+    @Published var selection: Target?
     // Bumped to hand the selected field first-responder status, mirroring
     // ExtensionCatalog.searchFocusRequests. The page deliberately opens
     // *unfocused* so ⌘⌫, ↑↓ and Esc all work on arrival; ⏎ hands over.
     @Published private(set) var fieldFocusRequests = 0
+
+    // Drawing order, which is also the order ↑↓ walk. Save is absent on an
+    // extension declaring no keys, because there is no Save button on that page
+    // either; back and remove are always there, so the list is never empty and
+    // ↑↓ always do something.
+    var targets: [Target] {
+        [.back] + keys.map { Target.field($0.key) } + (keys.isEmpty ? [] : [.save]) + [.remove]
+    }
+
+    // The field the selection is on, if it is on one. The view needs this to
+    // drive @FocusState, which is keyed by the config key.
+    var selectedKey: String? {
+        if case .field(let key) = selection { return key }
+        return nil
+    }
 
     func focusSelectedField() {
         guard selectedKey != nil else { return }
@@ -73,36 +99,32 @@ final class ExtensionConfigModel: ObservableObject {
         var seeded: [String: String] = [:]
         for key in row.configurableKeys { seeded[key.key] = existing[key.key] ?? "" }
         values = seeded
-        selectedKey = row.configurableKeys.first?.key
+        // The first field where there is one, so ⏎ on arrival starts editing
+        // rather than walking back out of the page.
+        selection = row.configurableKeys.first.map { .field($0.key) } ?? .back
     }
 
     // MARK: - Keyboard
 
-    // Clamps rather than wrapping, like every other list in the panel. An
-    // extension declaring no keys has nothing to move between, and one
-    // declaring a single key has nowhere to go; both are no-ops rather than
-    // special cases at the call site.
+    // Clamps rather than wrapping, like every other list in the panel.
     func moveSelection(by delta: Int) {
-        guard !keys.isEmpty else { return }
-        let current = keys.firstIndex { $0.key == selectedKey }
-        let next = current.map { min(max($0 + delta, 0), keys.count - 1) }
-            ?? (delta > 0 ? 0 : keys.count - 1)
-        selectedKey = keys[next].key
+        let all = targets
+        let current = all.firstIndex { $0 == selection }
+        let next = current.map { min(max($0 + delta, 0), all.count - 1) }
+            ?? (delta > 0 ? 0 : all.count - 1)
+        selection = all[next]
     }
 
     func selectEdge(top: Bool) {
-        guard !keys.isEmpty else { return }
-        selectedKey = top ? keys.first?.key : keys.last?.key
+        selection = top ? targets.first : targets.last
     }
 
-    // Keeps the selection on a key this extension still declares. The model is
+    // Keeps the selection on something this page still draws. The model is
     // rebuilt per visit so this cannot drift today, but a form that grew its
     // fields from anywhere other than the constructor would dangle here first.
     func reconcileSelection() {
-        guard let selectedKey else { return }
-        if !keys.contains(where: { $0.key == selectedKey }) {
-            self.selectedKey = keys.first?.key
-        }
+        guard let selection, !targets.contains(selection) else { return }
+        self.selection = targets.first
     }
 
     // An unset key is removed rather than written empty: the runtime treats a
@@ -246,17 +268,19 @@ struct ExtensionConfigView: View {
                 // enough to scroll and sit still in one that isn't. Without any
                 // of this the highlight moved somewhere the user could not see,
                 // which at the panel's 260pt minimum is the second field on.
-                .onChange(of: model.selectedKey) { key in
-                    guard let key else { return }
+                .onChange(of: model.selection) { target in
+                    guard let anchor = Self.anchor(for: target) else { return }
                     withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo(key, anchor: nil)
+                        proxy.scrollTo(anchor, anchor: nil)
                     }
                 }
             }
 
             PageFooter {
                 let hints = Self.footerHints(keyCount: model.keys.count,
-                                             editing: editing, valid: model.isValid)
+                                             editing: editing,
+                                             selection: model.selection,
+                                             valid: model.isValid)
                 ForEach(hints.indices, id: \.self) { FooterHintRow(spec: hints[$0]) }
             }
         }
@@ -277,7 +301,21 @@ struct ExtensionConfigView: View {
         // front of you; the same disagreement between mouse and keyboard the
         // Settings cards fixed by moving the index on tap.
         .onChange(of: focusedKey) { key in
-            if let key { model.selectedKey = key }
+            if let key { model.selection = .field(key) }
+        }
+    }
+
+    // The back chevron sits above the scroller and needs no anchor of its own;
+    // scrolling to the first field is what brings it into view.
+    static let saveAnchor = "extension-config-save"
+    static let removeAnchor = "extension-config-remove"
+
+    static func anchor(for target: ExtensionConfigModel.Target?) -> String? {
+        switch target {
+        case .field(let key): return key
+        case .save:           return saveAnchor
+        case .remove:         return removeAnchor
+        case .back, nil:      return nil
         }
     }
 
@@ -286,7 +324,9 @@ struct ExtensionConfigView: View {
     // stay on both: it is a field-editor binding (deleteToBeginningOfLine) and a
     // focused field takes it first, so it dims rather than disappearing; the
     // bar must not reflow as focus moves.
-    static func footerHints(keyCount: Int, editing: Bool,
+    static func footerHints(keyCount: Int,
+                            editing: Bool,
+                            selection: ExtensionConfigModel.Target? = nil,
                             valid: Bool = true) -> [FooterHintSpec] {
         var hints: [FooterHintSpec] = []
         if editing {
@@ -301,38 +341,57 @@ struct ExtensionConfigView: View {
             }
             hints.append(FooterHintSpec(label: "Done", keys: ["Esc"]))
         } else {
-            // Only where there is something to edit. This page opens for every
-            // installed extension, including ones declaring no keys, and a
-            // refused one, which is the most common case of all, so an
-            // unconditional hint promises a key with no handler behind it.
-            if keyCount > 0 {
+            // One hint per action, with ⏎ added to whichever the ring is on.
+            // The alternative, a separate primary hint naming the selected
+            // target, prints the bar's own labels twice: "Back ⏎ · Move · Back
+            // Esc" the moment the selection reaches the chevron.
+            //
+            // Only a field has no key of its own, so it is the only one that
+            // needs a hint conjured for it.
+            if case .field = selection {
                 hints.append(FooterHintSpec(label: "Edit", keys: ["⏎"], primary: true))
             }
-            if keyCount > 1 {
-                hints.append(FooterHintSpec(label: "Move", keys: ["↑↓", "⌘↑↓"]))
-            }
+            // Always more than one target: back and Remove are on every page,
+            // whatever the extension declares.
+            hints.append(FooterHintSpec(label: "Move", keys: ["↑↓", "⌘↑↓"]))
             // The only way to commit an edit backed out of with Esc, and the
             // only Save at all once the field has given focus back. Level one
             // only: a focused field swallows ⌘S the way it swallows ⌘⌫, which
             // is why the editing bar names ⏎ instead.
             if keyCount > 0 {
-                hints.append(FooterHintSpec(label: "Save", keys: ["⌘S"],
-                                            dimmed: !valid, shedOrder: 1))
+                hints.append(FooterHintSpec(label: "Save",
+                                            keys: selection == .save ? ["⏎", "⌘S"] : ["⌘S"],
+                                            primary: selection == .save,
+                                            dimmed: !valid,
+                                            shedOrder: selection == .save ? nil : 1))
             }
-            hints.append(FooterHintSpec(label: "Back", keys: ["Esc"]))
+            hints.append(FooterHintSpec(label: "Back",
+                                        keys: selection == .back ? ["⏎", "Esc"] : ["Esc"],
+                                        primary: selection == .back))
         }
-        hints.append(FooterHintSpec(label: "Remove", keys: ["⌘⌫"], dimmed: editing))
+        let removeSelected = selection == .remove && !editing
+        hints.append(FooterHintSpec(label: "Remove",
+                                    keys: removeSelected ? ["⏎", "⌘⌫"] : ["⌘⌫"],
+                                    primary: removeSelected,
+                                    dimmed: editing))
         return hints
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        let selected = model.selection == .back && !editing
+        return HStack(spacing: 8) {
             Button(action: onBack) {
                 HStack(spacing: 4) {
                     Image(systemName: "chevron.left").font(.caption.weight(.semibold))
                     Text(model.backLabel).font(.caption)
                 }
-                .foregroundStyle(.secondary)
+                .foregroundStyle(selected ? Color.primary : .secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.accentColor.opacity(selected ? 0.18 : 0)))
+                .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(Color.accentColor.opacity(selected ? 0.6 : 0), lineWidth: 1.5))
             }
             .buttonStyle(.plain)
 
@@ -373,7 +432,7 @@ struct ExtensionConfigView: View {
         // Selected is the keyboard's position while nothing is focused. Once a
         // field is first responder the field's own ring says where you are, and
         // a second highlight behind it reads as two cursors.
-        let selected = model.selectedKey == key.key && !editing
+        let selected = model.selection == .field(key.key) && !editing
         return VStack(alignment: .leading, spacing: 4) {
             Text(key.displayLabel).font(.caption.weight(.medium))
             TextField(key.placeholder ?? "", text: model.binding(for: key))
@@ -424,9 +483,11 @@ struct ExtensionConfigView: View {
     private var footerRow: some View {
         HStack(spacing: 8) {
             if !model.keys.isEmpty {
-                CardButton(title: "Save", prominent: true, enabled: model.isValid) {
+                CardButton(title: "Save", prominent: true, enabled: model.isValid,
+                           selected: model.selection == .save && !editing) {
                     model.save()
                 }
+                .id(Self.saveAnchor)
                 if model.saved {
                     Text("Saved").font(.caption2).foregroundStyle(.secondary)
                 }
@@ -434,7 +495,9 @@ struct ExtensionConfigView: View {
             Spacer()
             // Here rather than on the Settings card, so Enter on an installed
             // extension opens it instead of deleting it.
-            CardButton(title: "Remove") { model.onRemove() }
+            CardButton(title: "Remove",
+                       selected: model.selection == .remove && !editing) { model.onRemove() }
+                .id(Self.removeAnchor)
         }
         .padding(.top, 6)
     }
