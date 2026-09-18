@@ -23,6 +23,11 @@ struct SettingsView: View {
     @State private var installedHookVersion: String?
     @State private var hookScriptStale = false
 
+    // The bundled changelog entry for this build, read and parsed on appear for
+    // the same reason: it is a file read plus a scan of ~700 lines, and the
+    // answer cannot change while the panel is open.
+    @State private var changelogEntry: ChangelogEntry?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             categorySplit
@@ -81,6 +86,9 @@ struct SettingsView: View {
             hookScriptStale = Bootstrap.notifyScriptOutdated(
                 bundled: Bootstrap.bundledNotifyScript(),
                 installedPath: Bootstrap.notifyPath)
+            if changelogEntry == nil, let source = Changelog.bundledSource() {
+                changelogEntry = Changelog.entry(for: appVersion, in: source)
+            }
         }
     }
 
@@ -470,19 +478,33 @@ struct SettingsView: View {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
     }
 
-    // Non-navigable readout at the head of the About category. Not a row — there
-    // is nothing to activate, and a selectable row that ignores Enter reads as
-    // broken.
+    // Non-navigable readouts at the head of the About category: the version, and
+    // the changelog entry for it. Neither is a row — there is nothing to
+    // activate, and a selectable row that ignores Enter reads as broken.
     //
-    // It carries a row's padding and font deliberately: the pane's first line
-    // has to land where every other category's first line lands, or stepping
-    // Actions → About shifts the text and reads as the page twitching.
+    // The version line carries a row's padding and font deliberately: the pane's
+    // first line has to land where every other category's first line lands, or
+    // stepping Actions → About shifts the text and reads as the page twitching.
     private var aboutHeader: some View {
-        Text("StackNudge v\(appVersion)")
-            .font(.subheadline.monospacedDigit())
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+        VStack(alignment: .leading, spacing: 6) {
+            Text("StackNudge v\(appVersion)")
+                .font(.subheadline.monospacedDigit())
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+
+            if let entry = changelogEntry {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(entry.date.map { "What's new in \(entry.version) · \($0)" }
+                         ?? "What's new in \(entry.version)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    MarkdownNotesView(source: entry.body)
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 8)
+            }
+        }
     }
 
     // One renderer over nav.rows(in:), rather than eight hand-kept lists beside
