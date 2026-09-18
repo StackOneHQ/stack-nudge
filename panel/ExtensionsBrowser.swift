@@ -336,6 +336,15 @@ struct ExtensionsView: View {
             catalog.loadIfNeeded()
             searchFocused = true
         }
+        // The selection has to survive the list changing under it, and it was
+        // never reconciled from anywhere — the method existed and only the
+        // tests called it. Searching made that visible: a query that filters
+        // out the selected row leaves selectedID pointing at something not on
+        // screen, and Enter then does nothing at all rather than acting on
+        // whatever is in front of you.
+        .onChange(of: visibleRows.map(\.id)) { _ in
+            catalog.reconcileSelection(among: visibleRows)
+        }
     }
 
     private var selectedRow: ExtensionRow? {

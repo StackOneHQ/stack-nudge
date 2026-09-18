@@ -394,5 +394,103 @@ class Base(unittest.TestCase):
             self.assertIsNone(derby.valid_base(raw), raw)
 
 
+class FakeResponse:
+    """Just enough of http.client.HTTPResponse for get_json."""
+
+    def __init__(self, body, content_type):
+        self._body = body.encode("utf-8")
+        self.headers = {"Content-Type": content_type}
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+
+class Fetching(unittest.TestCase):
+    """The two functions that touch the network, with the socket taken out.
+
+    These exist because of what the derby actually does with a name it doesn't
+    recognise, which is not what anything about the response suggests: it
+    answers with the single-page app's own index.html and a 200, so a mistyped
+    organisation is indistinguishable from a corrupt response unless something
+    checks the content type.
+    """
+
+    def stub(self, *responses):
+        remaining = list(responses)
+        calls = []
+
+        def urlopen(request, timeout=None):
+            calls.append(request.full_url)
+            return remaining.pop(0)
+
+        self.calls = calls
+        return urlopen
+
+    def setUp(self):
+        self._real = derby.urllib.request.urlopen
+
+    def tearDown(self):
+        derby.urllib.request.urlopen = self._real
+
+    def test_a_json_response_is_parsed(self):
+        derby.urllib.request.urlopen = self.stub(
+            FakeResponse('{"races": []}', "application/json"))
+        self.assertEqual(derby.get_json("https://example.test/api"), {"races": []})
+
+    # The guard the whole error message rests on. Without it, index.html
+    # reaches json.loads and the failure reads as "the response wasn't
+    # readable" — which sends somebody looking for a fault that isn't there.
+    def test_a_web_page_is_refused_rather_than_parsed(self):
+        derby.urllib.request.urlopen = self.stub(
+            FakeResponse("<!DOCTYPE html>", "text/html; charset=utf-8"))
+        with self.assertRaises(derby.NotJSON):
+            derby.get_json("https://example.test/api")
+
+    def test_a_response_with_no_content_type_is_refused(self):
+        derby.urllib.request.urlopen = self.stub(FakeResponse('{"races": []}', ""))
+        with self.assertRaises(derby.NotJSON):
+            derby.get_json("https://example.test/api")
+
+    def test_a_web_page_on_the_org_route_means_no_such_org(self):
+        derby.urllib.request.urlopen = self.stub(
+            FakeResponse("<!DOCTYPE html>", "text/html"))
+        with self.assertRaises(derby.UnknownOrg):
+            derby.fetch("https://example.test/api", "stackone")
+
+    def test_the_org_name_reaches_the_url_percent_encoded(self):
+        derby.urllib.request.urlopen = self.stub(
+            FakeResponse('{"races": [{"join_code": "A B", "status": "live"}]}',
+                         "application/json"),
+            FakeResponse('{"join_code": "A B", "horses": []}', "application/json"))
+        derby.fetch("https://example.test/api", "Stack One")
+        self.assertEqual(self.calls[0], "https://example.test/api/organisations/Stack%20One/races")
+        self.assertEqual(self.calls[1], "https://example.test/api/races/A%20B")
+
+    def test_an_org_with_no_races_is_nothing_rather_than_an_error(self):
+        derby.urllib.request.urlopen = self.stub(
+            FakeResponse('{"races": []}', "application/json"))
+        self.assertIsNone(derby.fetch("https://example.test/api", "StackOne"))
+
+    # An unknown org is empty, not an error: nothing is broken and nothing
+    # needs reporting — the name just isn't one.
+    def test_build_reports_an_unknown_org_as_empty_and_says_why(self):
+        derby.urllib.request.urlopen = self.stub(
+            FakeResponse("<!DOCTYPE html>", "text/html"))
+        os_environ = derby.os.environ
+        derby.os.environ = {derby.ORG_KEY: "stackone"}
+        try:
+            doc = derby.build()
+        finally:
+            derby.os.environ = os_environ
+        self.assertEqual(doc["state"], "empty")
+        self.assertIn("case-sensitive", doc["message"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -461,6 +461,24 @@ final class ExtensionCatalogTests: XCTestCase {
         XCTAssertTrue(ExtensionCatalog.matching(sample, query: "zzz").isEmpty)
     }
 
+    // Filtering is exactly the case that made reconcileSelection matter: the
+    // method existed from the start and nothing but a test ever called it, so a
+    // selection could point at a row that is no longer on screen and Enter
+    // would silently do nothing.
+    func testAQueryThatHidesTheSelectedRowDropsTheSelection() {
+        let c = catalog()
+        c.selectedID = "derby"
+        c.reconcileSelection(among: ExtensionCatalog.matching(sample, query: "system"))
+        XCTAssertNil(c.selectedID)
+    }
+
+    func testAQueryThatStillShowsTheSelectedRowKeepsIt() {
+        let c = catalog()
+        c.selectedID = "derby"
+        c.reconcileSelection(among: ExtensionCatalog.matching(sample, query: "derby"))
+        XCTAssertEqual(c.selectedID, "derby")
+    }
+
     func testMatchingPreservesTheOrderItWasGiven() {
         // The rows arrive already sorted — refusals first, then installed — and
         // a filter that reordered them would move the selection under the user.
