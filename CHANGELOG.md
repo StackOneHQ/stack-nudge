@@ -4,6 +4,17 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [2.0.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.35.0...v2.0.0) (2026-09-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **extensions:** the Token Derby, and a settings form for extension config ([#190](https://github.com/StackOneHQ/stack-nudge/issues/190))
+
+### Features
+
+* **extensions:** the Token Derby, and a settings form for extension config ([#190](https://github.com/StackOneHQ/stack-nudge/issues/190)) ([cb20f30](https://github.com/StackOneHQ/stack-nudge/commit/cb20f303b0acec813c5c982c706409653d6b691c))
+
 ## [1.35.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.34.1...v1.35.0) (2026-09-18)
 
 
