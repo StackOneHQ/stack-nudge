@@ -292,6 +292,33 @@ struct ThinScrollers: NSViewRepresentable {
     }
 }
 
+// Take the horizontal scroller off a ScrollView entirely.
+//
+// `.scrollIndicators(.hidden)` is not enough: with "Show scroll bars: Always"
+// set in System Settings the scroller is a legacy inset NSScroller, which claims
+// a row of its own. On the tab strip that is a full-width bar under the tabs and
+// several points of height in a header that has about twenty to give.
+//
+// Same superview walk as ThinScrollers, for the same reason: SwiftUI exposes no
+// handle on the NSScrollView it makes.
+struct NoHorizontalScroller: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { NSView(frame: .zero) }
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            var current: NSView? = nsView
+            while let view = current {
+                if let scrollView = view as? NSScrollView {
+                    scrollView.scrollerStyle = .overlay
+                    scrollView.hasHorizontalScroller = false
+                    scrollView.autohidesScrollers = true
+                    return
+                }
+                current = view.superview
+            }
+        }
+    }
+}
+
 // Collapse the focused field editor's selection to a caret at its end.
 //
 // AppKit selects a field's entire contents when it becomes first responder,

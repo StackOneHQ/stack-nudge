@@ -64,9 +64,10 @@ struct SettingsView: View {
         .onAppear {
             // Matching UsageView: never land back inside the detail from a
             // previous visit, where ↑↓ move rows rather than categories and the
-            // attention-row count may have changed while away.
-            nav.settingsDetailFocused = false
-            nav.selectFirstCategoryRow()
+            // attention-row count may have changed while away, unless this is
+            // a return from one of this page's own sub-pages, which resumes on
+            // the row that opened it. See PanelNav.resumeSettingsSelection.
+            nav.resumeSettingsSelection()
             nav.loadFromConfig()
             nav.refreshVoiceModelCached()
             if nav.voiceModelCached, nav.voicesAvailable.isEmpty {

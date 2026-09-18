@@ -78,6 +78,19 @@ final class FloatingPanel: NSPanel {
     }
 }
 
+// Widths of the tab strip's scroller and of the tabs inside it. Two keys rather
+// than one because the answer is a comparison of the two, and a single key would
+// have the last writer win.
+private struct TabsContentWidth: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+private struct TabsViewportWidth: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 struct PanelContentView: View {
 
     @ObservedObject var store: EventStore
@@ -90,6 +103,12 @@ struct PanelContentView: View {
     // needs the config file and the host, so the controller owns it and the
     // view just asks.
     let onConfigureExtension: (ExtensionRow) -> Void
+    // Leaving one of the Settings sub-pages. Owned by the controller for the
+    // same reason: both exits leave Settings a note about which row to resume
+    // the keyboard on, and the chevron here and Esc in the key handler have to
+    // do the identical thing.
+    let onCloseExtensionsBrowser: () -> Void
+    let onCloseExtensionConfig: () -> Void
 
     // The disk-backed name store. Observed here (rather than inside EventRow)
     // so resolving a nudge's session label stays a render-time lookup that
@@ -101,6 +120,13 @@ struct PanelContentView: View {
     // Owned here rather than inside historyPane so the key handler's gate
     // (nav.historySearchFocused) and the actual first responder can't drift.
     @FocusState private var historyFieldFocused: Bool
+
+    // Measured, not guessed: whether the tab strip has more tabs than fit is a
+    // function of the installed extensions, their label lengths and the panel's
+    // width, and the strip only fades its edges when there is something past
+    // them. See scrollingTabs.
+    @State private var tabsContentWidth: CGFloat = 0
+    @State private var tabsViewportWidth: CGFloat = 0
 
     let onGrantPermissions: () -> Void
 
@@ -163,14 +189,14 @@ struct PanelContentView: View {
                     ExtensionsView(catalog: extensionCatalog,
                                    host: extensions,
                                    onConfigure: onConfigureExtension,
-                                   onBack: { nav.mode = .settings })
+                                   onBack: onCloseExtensionsBrowser)
                 // .id(id) for the same reason .extensionTab has one: the
                 // associated value isn't part of a ViewBuilder case's identity,
                 // so two extensions' forms would share one view and the second
                 // would open showing the first's values.
                 case .extensionConfig(let id):
                     if let model = nav.extensionConfig, model.id == id {
-                        ExtensionConfigView(model: model) { nav.mode = model.origin }
+                        ExtensionConfigView(model: model, onBack: onCloseExtensionConfig)
                             .id(id)
                     } else {
                         // Unreachable in practice — the model is set before the
@@ -179,7 +205,7 @@ struct PanelContentView: View {
                         ExtensionsView(catalog: extensionCatalog,
                                        host: extensions,
                                        onConfigure: onConfigureExtension,
-                                       onBack: { nav.mode = .settings })
+                                       onBack: onCloseExtensionsBrowser)
                     }
                 case .updateConfirm:
                     UpdateConfirmView(
@@ -248,27 +274,132 @@ struct PanelContentView: View {
             Image(nsImage: MenuBarController.brandMarkImage(height: 14))
                 .padding(.trailing, 4)
 
-            // Driven off orderedTabs rather than listed here, so the strip and
-            // the shortcuts can't disagree about what sits where.
-            ForEach(nav.orderedTabs, id: \.self) { mode in
-                tab(mode, label: tabLabel(mode), count: tabCount(mode),
-                    dotColor: tabDot(mode))
-            }
+            scrollingTabs
 
-            Spacer()
-
+            // Pinned outside the scroller, and sized before it: an extension
+            // brings its own tab, so the strip is the one row in the panel whose
+            // width is set by something the user installs. Inside the scroller
+            // they would scroll away with the tabs, and the mute state is not
+            // something to have to go looking for.
             muteBell
+                .layoutPriority(1)
 
-            // One combined hint instead of per-tab keycaps — keeps the strip
-            // uncluttered while still surfacing the shortcut range.
+            // One combined hint instead of per-tab keycaps, which keeps the
+            // strip uncluttered while still surfacing the shortcut range.
             HStack(spacing: 2) {
                 KeyCapView(symbol: "⌘")
                 KeyCapView(symbol: "1-\(min(nav.orderedTabs.count, PanelNav.maxNumberedTabs))")
             }
             .opacity(0.7)
+            .layoutPriority(1)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    // The tabs themselves, which scroll sideways once they stop fitting.
+    //
+    // They used to be bare in the strip's HStack, which has no way to say "too
+    // many": at the panel's 560pt minimum width the labels wrapped mid-word
+    // ("Ses-sions", "Out-come s") and the tabs past the trailing edge were
+    // unreachable by mouse. ⌘←→ still stepped onto them, which meant selecting
+    // a tab nobody could see.
+    private var scrollingTabs: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal) {
+                HStack(spacing: 4) {
+                    // Driven off orderedTabs rather than listed here, so the
+                    // strip and the shortcuts can't disagree about what sits
+                    // where.
+                    ForEach(nav.orderedTabs, id: \.self) { mode in
+                        tab(mode, label: tabLabel(mode), count: tabCount(mode),
+                            dotColor: tabDot(mode))
+                            .id(mode)
+                    }
+                }
+                // The selected tab's fill runs to the edge of its own bounds, so
+                // without this the first and last lose a pixel of it to the clip.
+                .padding(.horizontal, 1)
+                .background(widthReader(TabsContentWidth.self))
+                // On the content, not the ScrollView: the helper walks
+                // superviews for the NSScrollView, as ThinScrollers does.
+                .background(NoHorizontalScroller())
+            }
+            .scrollIndicators(.hidden)
+            .background(widthReader(TabsViewportWidth.self))
+            .onPreferenceChange(TabsContentWidth.self) { tabsContentWidth = $0 }
+            .onPreferenceChange(TabsViewportWidth.self) { tabsViewportWidth = $0 }
+            .mask(tabsMask)
+            // ⌘1-9 and ⌘←→ move the selection without touching the scroll
+            // offset, so a tab picked by keyboard could sit off the edge; the
+            // same reason the Settings sidebar scrolls to its category.
+            .onChange(of: nav.mode) { mode in
+                guard let anchor = Self.tabStripAnchor(for: mode, in: nav.orderedTabs) else { return }
+                withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(anchor, anchor: nil) }
+            }
+            .onAppear {
+                guard let anchor = Self.tabStripAnchor(for: nav.mode, in: nav.orderedTabs) else { return }
+                proxy.scrollTo(anchor, anchor: nil)
+            }
+        }
+        // Greedy in its own axis, so without this it takes the width the bell
+        // and the keycaps need. They carry the layout priority; this yields it.
+        .layoutPriority(-1)
+    }
+
+    private var tabsOverflow: Bool { tabsContentWidth > tabsViewportWidth + 1 }
+
+    // Narrower than the narrowest tab, so a tab is never hidden by the thing
+    // whose job is to say a tab is hidden.
+    private static let tabFadeWidth: CGFloat = 12
+
+    // The affordance, and the only one there is: a strip that simply clipped
+    // gave no sign that a tab was past the edge, which is the state the panel is
+    // in on any machine with a few extensions on it.
+    //
+    // Both edges, because macOS 13 gives no scroll offset to read and guessing
+    // which side the hidden tabs are on would be wrong half the time. Fixed
+    // width rather than a fraction of the strip: a proportional fade grows with
+    // the panel, and at full width it would reach across a whole tab.
+    //
+    // Collapses to nothing when everything fits, so a panel showing all its tabs
+    // has no fade eating the first one's leading edge.
+    private var tabsMask: some View {
+        HStack(spacing: 0) {
+            fadeEdge(leading: true)
+            Rectangle().fill(.black)
+            fadeEdge(leading: false)
+        }
+    }
+
+    private func fadeEdge(leading: Bool) -> some View {
+        LinearGradient(colors: leading ? [.clear, .black] : [.black, .clear],
+                       startPoint: .leading, endPoint: .trailing)
+            .frame(width: tabsOverflow ? Self.tabFadeWidth : 0)
+    }
+
+    private func widthReader<Key: PreferenceKey>(_ key: Key.Type) -> some View
+    where Key.Value == CGFloat {
+        GeometryReader { geometry in
+            Color.clear.preference(key: key, value: geometry.size.width)
+        }
+    }
+
+    // Which tab the strip should keep in view for a mode. Settings' own
+    // sub-pages are not tabs, so scrolling to the mode itself targets an id the
+    // strip never renders and silently does nothing; the tab they belong to is
+    // what should stay visible while you are inside one.
+    static func tabStripAnchor(for mode: PanelMode, in tabs: [PanelMode]) -> PanelMode? {
+        if tabs.contains(mode) { return mode }
+        switch mode {
+        case .phrases, .extensions, .extensionConfig, .updateConfirm, .uninstall:
+            return tabs.contains(.settings) ? .settings : nil
+        // No strip is drawn in these, so there is nothing to bring into view.
+        case .updating, .postUpdate, .bootstrap:
+            return nil
+        default:
+            return nil
+        }
     }
 
     // Global-mute toggle in the header. A click mutes for the configured
@@ -305,6 +436,12 @@ struct PanelContentView: View {
             HStack(spacing: 5) {
                 Text(label)
                     .font(.caption.weight(isActive ? .semibold : .regular))
+                    // A tab keeps its natural width and scrolls out of view
+                    // instead of being squeezed. Squeezed is what it did: at the
+                    // panel's 560pt minimum the labels broke mid-word into
+                    // "Ses-sions" and "Out-come s".
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 if count > 0 {
                     Text("\(count)")
                         .font(.caption2.monospacedDigit())
@@ -914,11 +1051,32 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         configureExtension(row, from: .settings)
     }
 
+    // The two ways back out, in one place each so Esc and the chevron cannot
+    // disagree. Both leave Settings a note about where the keyboard was, which
+    // it consumes on the way in.
+    func closeExtensionsBrowser() {
+        nav.settingsResumeRow = .browseExtensions
+        nav.mode = .settings
+    }
+
+    func closeExtensionConfig() {
+        let origin = nav.extensionConfig?.origin ?? .extensions
+        if origin == .settings, let id = nav.extensionConfig?.id {
+            nav.settingsResumeRow = .installedExtension(id)
+        }
+        nav.mode = origin
+    }
+
     private func removeExtension(_ id: String) {
         extensionCatalog.remove(id)
+        let origin = nav.extensionConfig?.origin ?? .settings
+        // Not the extension's own row, which is the one thing that is about to
+        // stop existing. Browse is the row next to it and the obvious next move
+        // after removing something.
+        if origin == .settings { nav.settingsResumeRow = .browseExtensions }
         // Back where the page was opened from — the extension it described no
         // longer exists, so staying on it is not an option.
-        nav.mode = nav.extensionConfig?.origin ?? .settings
+        nav.mode = origin
     }
 
     // Installed and refused, as the Extensions settings category renders them.
@@ -1065,6 +1223,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             store: store, sessions: sessions, nav: nav, phrases: phrases,
             extensions: extensions, extensionCatalog: extensionCatalog,
             onConfigureExtension: { [weak self] row in self?.configureExtension(row) },
+            onCloseExtensionsBrowser: { [weak self] in self?.closeExtensionsBrowser() },
+            onCloseExtensionConfig: { [weak self] in self?.closeExtensionConfig() },
             onGrantPermissions: { [weak self] in self?.handleGrantPermissions() }
         ).environmentObject(SessionPersistence.shared))
         // Don't let SwiftUI's preferred / intrinsic content size drive
@@ -3764,29 +3924,62 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return true
         }
 
-        // Phrases mode: ↑/↓ navigate every row (defaults + custom),
-        // Space toggles the selected default, ⌫ removes the selected
-        // custom, Esc returns to Settings. Typing / Tab / Enter for
-        // adding still fall through to SwiftUI's TextField.
-        // An extension's configuration form: Esc returns to the browser and
-        // everything else belongs to the text fields. Enter is handled by the
-        // field's own .onSubmit rather than here, so it saves from whichever
-        // field has focus.
+        // An extension's configuration form. Two levels, like the browser below
+        // and the Usage tab: the page opens with no field focused, so this
+        // branch owns ↑↓ (move between fields), ⏎ (hand the selected field
+        // focus), ⌘S (save) and ⌘⌫ (remove). Once a field *is* first
+        // responder it consumes keys before NSWindow.keyDown, and the field's
+        // own .onSubmit and .onExitCommand save and step back out.
+        //
+        // It used to own Esc and ⌘⌫ and nothing else, which left the form
+        // reachable only with the mouse or with Tab: ⏎ was advertised in the
+        // footer and did nothing at all until something had been clicked.
         if case .extensionConfig = nav.mode {
             let onlyCommand = mods.intersection([.command, .control, .option, .shift]) == [.command]
-            // ⌘⌫ rather than a bare ⌫, which is what the field editor wants,
-            // and deliberately the macOS "move to trash" combination: this is
-            // the one destructive action on the page and it takes no
-            // confirmation.
-            if onlyCommand, event.keyCode == KeyCode.delete || event.keyCode == KeyCode.forwardDelete {
-                nav.extensionConfig?.onRemove()
-                return true
+            if onlyCommand {
+                switch event.keyCode {
+                // ⌘⌫ rather than a bare ⌫, which is what the field editor
+                // wants, and deliberately the macOS "move to trash"
+                // combination: this is the one destructive action on the page
+                // and it takes no confirmation.
+                case KeyCode.delete, KeyCode.forwardDelete:
+                    nav.extensionConfig?.onRemove()
+                    return true
+                // The only way to commit an edit the user stepped out of with
+                // Esc, and the only Save at all on a page where ⏎ has handed
+                // focus back.
+                //
+                // Level one only, verified in the app rather than assumed: a
+                // focused field swallows this exactly as it swallows ⌘⌫, so
+                // the footer advertises it only while nothing is focused and
+                // names ⏎ as the way to save from inside a field.
+                case KeyCode.sKey:
+                    nav.extensionConfig?.save()
+                    return true
+                // Leave every other ⌘ combination to the app: ⌘Q and friends.
+                default:
+                    return false
+                }
             }
-            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
-            guard plain, event.keyCode == KeyCode.escape else { return false }
-            // Wherever this page was opened from, which is the Settings list as
-            // often as the browser.
-            nav.mode = nav.extensionConfig?.origin ?? .extensions
+            guard mods.intersection([.command, .control, .option]).isEmpty else { return false }
+            switch Self.extensionConfigKeyAction(keyCode: event.keyCode) {
+            case .back:
+                // Wherever this page was opened from, which is the Settings list
+                // as often as the browser.
+                closeExtensionConfig()
+            case .moveSelection(let delta):
+                nav.extensionConfig?.moveSelection(by: delta)
+            case .activateSelection:
+                switch nav.extensionConfig?.selection {
+                case .field:  nav.extensionConfig?.focusSelectedField()
+                case .save:   nav.extensionConfig?.save()
+                case .remove: nav.extensionConfig?.onRemove()
+                case .back:   closeExtensionConfig()
+                case nil:     break
+                }
+            case .swallow:
+                break
+            }
             return true
         }
 
@@ -3835,7 +4028,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                         configureExtension(row)
                     }
                     return true
-                // Leave every other ⌘ combination to the app — ⌘Q and friends.
+                // Leave every other ⌘ combination to the app: ⌘Q and friends.
                 default: return false
                 }
             }
@@ -3844,7 +4037,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             switch Self.extensionsKeyAction(keyCode: event.keyCode,
                                             characters: event.charactersIgnoringModifiers,
                                             queryIsEmpty: extensionCatalog.query.isEmpty) {
-            case .back:         nav.mode = .settings
+            case .back:         closeExtensionsBrowser()
             case .clearQuery:   extensionCatalog.query = ""
             case .focusSearch:  extensionCatalog.focusSearch()
             case .appendToQuery(let typed):
@@ -3871,6 +4064,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return true
         }
 
+        // Phrases mode: ↑/↓ navigate every row (defaults + custom),
+        // Space toggles the selected default, ⌫ removes the selected
+        // custom, Esc returns to Settings. Typing / Tab / Enter for
+        // adding still fall through to SwiftUI's TextField.
         if nav.mode == .phrases {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain else { return false }
@@ -4193,6 +4390,42 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         case swallow
     }
 
+    // The config form's level one, where no field has focus. A page of text
+    // fields cannot walk itself with ↑↓: a focused field is first responder
+    // and takes them before NSWindow.keyDown runs, so the traversal lives here
+    // and ⏎ is what hands over.
+    enum ExtensionConfigKeyAction: Equatable {
+        case back
+        case moveSelection(Int)
+        // What that does depends on where the selection is, which the controller
+        // resolves: focus a field, save, remove, or walk back out.
+        case activateSelection
+        // Swallowed rather than passed on, the same rule every sub-page follows:
+        // a stray key must not reach the Events bindings and answer a permission
+        // prompt on a tab this page isn't showing.
+        case swallow
+    }
+
+    // Tab joins ⏎ because it is what a macOS form is entered with, and at level
+    // one nothing else claims it. Neither is gated on the page having fields:
+    // the selection walks the back chevron, Save and Remove as well, so there is
+    // always something for ⏎ to act on, and what that is belongs to the model
+    // rather than to a key table.
+    static func extensionConfigKeyAction(keyCode: UInt16) -> ExtensionConfigKeyAction {
+        switch keyCode {
+        case KeyCode.escape:
+            return .back
+        case KeyCode.upArrow:
+            return .moveSelection(-1)
+        case KeyCode.downArrow:
+            return .moveSelection(1)
+        case KeyCode.returnKey, KeyCode.numpadEnter, KeyCode.tab:
+            return .activateSelection
+        default:
+            return .swallow
+        }
+    }
+
     static func extensionsKeyAction(keyCode: UInt16,
                                     characters: String?,
                                     queryIsEmpty: Bool) -> ExtensionsKeyAction {
@@ -4406,6 +4639,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             top ? nav.selectPrevCategory() : nav.selectNextCategory()
         case .phrases:
             top ? phrases.selectFirst() : phrases.selectLast()
+        case .extensions:
+            extensionCatalog.selectEdge(
+                among: ExtensionCatalog.matching(
+                    ExtensionCatalog.rows(catalogue: extensionCatalog.entries,
+                                          installed: extensions.manifests,
+                                          refused: extensions.refused),
+                    query: extensionCatalog.query),
+                top: top)
+        case .extensionConfig:
+            // Always somewhere to go: the back chevron and Remove are targets on
+            // every extension's page, including one declaring no config keys.
+            guard let config = nav.extensionConfig else { return false }
+            config.selectEdge(top: top)
         default:
             return false  // modal / single-purpose screens have nothing to jump
         }

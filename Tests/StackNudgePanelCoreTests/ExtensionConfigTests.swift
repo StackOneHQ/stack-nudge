@@ -52,6 +52,126 @@ final class ExtensionConfigTests: XCTestCase {
         XCTAssertFalse(m.values.values.contains { $0.hasPrefix("xoxb-") })
     }
 
+    // ⏎ saves and hands focus back in one keystroke, and a field commits its
+    // value as it loses focus. An unguarded setter wrote the same string back
+    // and cleared the confirmation in the same frame the save set it, so the
+    // only thing on screen that said the save had happened flickered out.
+    func testWritingTheSameValueBackDoesNotClearTheConfirmation() {
+        let m = model(keys: [key("STACKNUDGE_EXT_DERBY_ORG")],
+                      existing: ["STACKNUDGE_EXT_DERBY_ORG": "stackone"])
+        m.save()
+        XCTAssertTrue(m.saved)
+        m.binding(for: key("STACKNUDGE_EXT_DERBY_ORG")).wrappedValue = "stackone"
+        XCTAssertTrue(m.saved, "a commit of the unchanged value is not an edit")
+    }
+
+    func testAnActualEditStillClearsTheConfirmation() {
+        let m = model(keys: [key("STACKNUDGE_EXT_DERBY_ORG")],
+                      existing: ["STACKNUDGE_EXT_DERBY_ORG": "stackone"])
+        m.save()
+        m.binding(for: key("STACKNUDGE_EXT_DERBY_ORG")).wrappedValue = "other"
+        XCTAssertFalse(m.saved)
+        XCTAssertEqual(m.values["STACKNUDGE_EXT_DERBY_ORG"], "other")
+    }
+
+    // MARK: - Keyboard
+
+    // The page opens with no field focused: a focused field is first responder
+    // and takes every key before FloatingPanel.keyDown runs, so the selection
+    // is what ⏎ hands focus to. Unseeded, ⏎ did nothing at all on arrival
+    // while the footer advertised it.
+    func testTheFirstFieldIsSelectedOnArrival() {
+        let m = model(keys: [key("STACKNUDGE_EXT_DERBY_ORG"), key("STACKNUDGE_EXT_DERBY_BASE")])
+        XCTAssertEqual(m.selection, .field("STACKNUDGE_EXT_DERBY_ORG"))
+    }
+
+    // The page draws a back chevron, a Save and a Remove as well as its fields.
+    // A traversal over the fields alone walks past three buttons nobody can
+    // reach, which is what it did.
+    func testTheTraversalCoversEveryControlOnThePage() {
+        let m = model(keys: [key("A"), key("B")])
+        XCTAssertEqual(m.targets, [.back, .field("A"), .field("B"), .save, .remove])
+    }
+
+    // No Save button on a page with nothing to save, so no Save target either.
+    // Back and Remove are on every extension's page, so ↑↓ always do something.
+    func testAnExtensionWithNoKeysStillHasBackAndRemoveToWalk() {
+        let m = model(keys: [])
+        XCTAssertEqual(m.targets, [.back, .remove])
+        XCTAssertEqual(m.selection, .back)
+    }
+
+    func testArrowsWalkEveryTargetAndStopAtTheEnds() {
+        let m = model(keys: [key("A"), key("B")])
+        XCTAssertEqual(m.selection, .field("A"))
+        m.moveSelection(by: -1)
+        XCTAssertEqual(m.selection, .back, "up from the first field reaches the chevron")
+        m.moveSelection(by: -1)
+        XCTAssertEqual(m.selection, .back, "stops rather than wrapping")
+        for _ in 0..<5 { m.moveSelection(by: 1) }
+        XCTAssertEqual(m.selection, .remove, "and stops at the far end too")
+    }
+
+    func testMovingWalksFromAFieldOntoTheButtons() {
+        let m = model(keys: [key("A")])
+        m.moveSelection(by: 1)
+        XCTAssertEqual(m.selection, .save)
+        m.moveSelection(by: 1)
+        XCTAssertEqual(m.selection, .remove)
+    }
+
+    func testCommandArrowsJumpToTheFirstAndLastTarget() {
+        let m = model(keys: [key("A"), key("B")])
+        m.selectEdge(top: false)
+        XCTAssertEqual(m.selection, .remove)
+        m.selectEdge(top: true)
+        XCTAssertEqual(m.selection, .back)
+    }
+
+    // Only a field has anywhere to put focus. ⏎ on a button acts on it
+    // instead, which the controller resolves off this selection.
+    func testTheSelectedKeyIsOnlyAFieldsKey() {
+        let m = model(keys: [key("A")])
+        XCTAssertEqual(m.selectedKey, "A")
+        m.selection = .remove
+        XCTAssertNil(m.selectedKey)
+    }
+
+    // ⏎ hands the selected field first-responder status, which the view
+    // cannot be asked for directly: @FocusState is view state, so the model
+    // raises a request the way ExtensionCatalog does for its search field.
+    func testEnterAsksForTheSelectedFieldToTakeFocus() {
+        let m = model(keys: [key("A")])
+        m.focusSelectedField()
+        XCTAssertEqual(m.fieldFocusRequests, 1)
+    }
+
+    // Nothing to focus while the selection is on a button. The view would
+    // otherwise set focus to nil, which reads as a keystroke that dismissed the
+    // selection rather than one that pressed the button.
+    func testEnterOnAButtonAsksForNoFieldFocus() {
+        let m = model(keys: [key("A")])
+        m.selection = .remove
+        m.focusSelectedField()
+        XCTAssertEqual(m.fieldFocusRequests, 0)
+    }
+
+    func testTheSelectionFallsBackWhenItsTargetIsGone() {
+        let m = model(keys: [key("A"), key("B")])
+        m.selection = .field("GONE")
+        m.reconcileSelection()
+        XCTAssertEqual(m.selection, .back)
+    }
+
+    // The Save target goes with the Save button on an extension declaring
+    // nothing, so a selection carried onto such a page has to move.
+    func testASaveSelectionIsReconciledOnAPageWithNoSaveButton() {
+        let m = model(keys: [])
+        m.selection = .save
+        m.reconcileSelection()
+        XCTAssertEqual(m.selection, .back)
+    }
+
     // MARK: - Saving
 
     func testSavingWritesEveryDeclaredKey() {

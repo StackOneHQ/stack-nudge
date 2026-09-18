@@ -457,3 +457,169 @@ final class ExtensionsKeyActionTests: XCTestCase {
         }
     }
 }
+
+// Where each keystroke goes on an extension's own configuration form, and what
+// its footer promises at each of the two levels. Raw virtual key codes, since
+// the panel's KeyCode table is private: 53 Esc, 126/125 up/down, 36 Return,
+// 76 numpad Enter, 48 Tab, 123/124 left/right, 1 "s", 51 delete.
+//
+// The page is a list of text fields, and a focused field is first responder, so
+// it takes every key before FloatingPanel.keyDown runs. That is why the
+// traversal lives one level above the fields: the form used to own Esc and
+// nothing else, which left it reachable only with the mouse or with Tab while
+// the footer advertised Return.
+final class ExtensionConfigKeyActionTests: XCTestCase {
+
+    private func action(_ keyCode: UInt16) -> PanelController.ExtensionConfigKeyAction {
+        PanelController.extensionConfigKeyAction(keyCode: keyCode)
+    }
+
+    func test_escapeStepsBackOffThePage() {
+        XCTAssertEqual(action(53), .back)
+    }
+
+    func test_verticalArrowsMoveBetweenFields() {
+        XCTAssertEqual(action(126), .moveSelection(-1))
+        XCTAssertEqual(action(125), .moveSelection(1))
+    }
+
+    // Return and Tab are both how a macOS form is entered, and at this level
+    // nothing else claims either of them. What they act on is the selection,
+    // which the controller resolves: a field takes focus, a button fires.
+    func test_returnAndTabActOnWhateverIsSelected() {
+        XCTAssertEqual(action(36), .activateSelection)
+        XCTAssertEqual(action(76), .activateSelection)
+        XCTAssertEqual(action(48), .activateSelection)
+    }
+
+    func test_horizontalArrowsDoNothingOnAForm() {
+        XCTAssertEqual(action(123), .swallow)
+        XCTAssertEqual(action(124), .swallow)
+    }
+
+    // Nothing falls through to the Events bindings, which map Return to
+    // approving a permission prompt on a tab this page isn't showing.
+    func test_everyKeyIsAccountedFor() {
+        for code in UInt16(0)...UInt16(130) {
+            _ = action(code)
+        }
+    }
+}
+
+// The same form's footer. Each hint has to be true at the level it appears on:
+// the bar used to advertise Save on a page where Return did nothing until a
+// field had been clicked, and on extensions that declare no fields at all.
+final class ExtensionConfigFooterTests: XCTestCase {
+
+    private func hints(keyCount: Int, editing: Bool,
+                       selection: ExtensionConfigModel.Target? = nil,
+                       valid: Bool = true) -> [FooterHintSpec] {
+        ExtensionConfigView.footerHints(keyCount: keyCount, editing: editing,
+                                        selection: selection, valid: valid)
+    }
+
+    private func labels(_ specs: [FooterHintSpec]) -> [String] { specs.map(\.label) }
+
+    // Every installed extension opens a page, because that is where Remove
+    // lives. One declaring nothing still has the chevron and Remove to walk, so
+    // the traversal is advertised; there is just no Save and no Edit.
+    func test_noKeys_stillOffersTheTraversal() {
+        XCTAssertEqual(labels(hints(keyCount: 0, editing: false, selection: .back)),
+                       ["Move", "Back", "Remove"])
+    }
+
+    // One hint per action. A separate primary hint naming the selected target
+    // printed the bar's own labels twice the moment the ring reached the
+    // chevron: "Back ⏎ · Move · Back Esc".
+    func test_noLabelIsAdvertisedTwice() {
+        for selection: ExtensionConfigModel.Target in [.back, .field("A"), .save, .remove] {
+            let names = labels(hints(keyCount: 2, editing: false, selection: selection))
+            XCTAssertEqual(Set(names).count, names.count, "duplicate in \(names)")
+        }
+    }
+
+    func test_severalKeys_advertiseTheTraversal() {
+        let specs = hints(keyCount: 2, editing: false, selection: .field("A"))
+        XCTAssertEqual(labels(specs), ["Edit", "Move", "Save", "Back", "Remove"])
+        // Both the step and the jump, riding on one label rather than paying
+        // for a second, exactly as the Events bar carries its own.
+        XCTAssertEqual(specs.first { $0.label == "Move" }?.keys, ["↑↓", "⌘↑↓"])
+    }
+
+    // ⏎ rides on the hint for whatever the ring is on, so the bar always says
+    // what the next keystroke will do without repeating itself.
+    func test_returnRidesOnTheSelectedTargetsOwnHint() {
+        func keys(_ selection: ExtensionConfigModel.Target, _ label: String) -> [String]? {
+            hints(keyCount: 2, editing: false, selection: selection)
+                .first { $0.label == label }?.keys
+        }
+        XCTAssertEqual(keys(.field("A"), "Edit"), ["⏎"])
+        XCTAssertEqual(keys(.save, "Save"), ["⏎", "⌘S"])
+        XCTAssertEqual(keys(.remove, "Remove"), ["⏎", "⌘⌫"])
+        XCTAssertEqual(keys(.back, "Back"), ["⏎", "Esc"])
+    }
+
+    // And only there. A hint the ring is not on keeps its own key alone.
+    func test_returnIsNotAdvertisedOnUnselectedTargets() {
+        let specs = hints(keyCount: 2, editing: false, selection: .field("A"))
+        XCTAssertEqual(specs.first { $0.label == "Save" }?.keys, ["⌘S"])
+        XCTAssertEqual(specs.first { $0.label == "Back" }?.keys, ["Esc"])
+        XCTAssertEqual(specs.first { $0.label == "Remove" }?.keys, ["⌘⌫"])
+    }
+
+    // Edit has no key of its own, so it is the one hint that exists only while
+    // the ring is on a field.
+    func test_editAppearsOnlyOnAField() {
+        XCTAssertFalse(labels(hints(keyCount: 2, editing: false, selection: .remove)).contains("Edit"))
+        XCTAssertTrue(labels(hints(keyCount: 2, editing: false, selection: .field("A"))).contains("Edit"))
+    }
+
+    // Inside a field the page has given the keyboard away: Return saves,
+    // Esc hands it back rather than leaving the page.
+    func test_editing_namesWhatTheKeysDoFromInsideAField() {
+        XCTAssertEqual(labels(hints(keyCount: 2, editing: true)),
+                       ["Save", "Next field", "Done", "Remove"])
+    }
+
+    func test_editing_dropsTabWithOnlyOneField() {
+        XCTAssertEqual(labels(hints(keyCount: 1, editing: true)), ["Save", "Done", "Remove"])
+    }
+
+    // ⌘⌫ is a field-editor binding (deleteToBeginningOfLine), so a focused
+    // field takes it before the panel sees it. It dims rather than
+    // disappearing: the bar must not reflow as focus moves.
+    func test_removeDimsWhileEditingRatherThanVanishing() {
+        let idle = hints(keyCount: 1, editing: false).first { $0.label == "Remove" }
+        let busy = hints(keyCount: 1, editing: true).first { $0.label == "Remove" }
+        XCTAssertEqual(idle?.dimmed, false)
+        XCTAssertEqual(busy?.dimmed, true)
+    }
+
+    // ⌘S is not a field-editor binding, so unlike ⌘⌫ it works from inside a
+    // field too; at that level Return is the shorter way to the same thing.
+    func test_saveIsReachableAtBothLevels() {
+        XCTAssertEqual(hints(keyCount: 1, editing: false).first { $0.label == "Save" }?.keys, ["⌘S"])
+        XCTAssertEqual(hints(keyCount: 1, editing: true).first { $0.label == "Save" }?.keys, ["⏎"])
+    }
+
+    // A value the form will refuse gets the same answer from the bar that it
+    // gets from the button, which disables itself. Dimmed rather than dropped:
+    // the hint is real, it just does not apply to what is typed.
+    func test_saveDimsOnAValueTheFormWillRefuse() {
+        for editing in [true, false] {
+            let spec = hints(keyCount: 1, editing: editing, selection: .field("A"), valid: false)
+                .first { $0.label == "Save" }
+            XCTAssertEqual(spec?.dimmed, true, "editing: \(editing)")
+        }
+    }
+
+    // Nothing on this bar may be dropped before the two that navigate it.
+    func test_backAndRemoveAreNeverSheddable() {
+        for editing in [true, false] {
+            for spec in hints(keyCount: 2, editing: editing, selection: .field("A"))
+            where ["Back", "Done", "Remove"].contains(spec.label) {
+                XCTAssertNil(spec.shedOrder, "\(spec.label) must not shed")
+            }
+        }
+    }
+}

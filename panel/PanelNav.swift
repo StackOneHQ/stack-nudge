@@ -1003,6 +1003,17 @@ final class PanelNav: ObservableObject {
     // values.
     @Published var extensionConfig: ExtensionConfigModel?
 
+    // The row Settings should land on when it is re-entered from one of its own
+    // sub-pages, consumed once by SettingsView.onAppear.
+    //
+    // That view resets to the category sidebar on every appearance, which is
+    // right for a fresh visit and wrong for a return: the Extensions category
+    // now holds a card per installed extension, so opening the third one and
+    // pressing Esc put the keyboard back on the sidebar, four keystrokes from
+    // where it had just been. Configuring two extensions in a row is exactly
+    // the flow that happens in.
+    var settingsResumeRow: SettingsRow?
+
     @Published var extensionTabs: [ExtensionTab] = [] {
         didSet { reconcileModeWithTabs() }
     }
@@ -1250,6 +1261,26 @@ final class PanelNav: ObservableObject {
     // into the banners, which is where they're drawn.
     func selectFirstCategoryRow() {
         selectedSettingIndex = settingsAttentionRows.count
+    }
+
+    // What SettingsView.onAppear calls instead of resetting outright. With no
+    // row pending this is the old behaviour exactly; with one it re-enters the
+    // detail on that row, switching category if the row lives in another one so
+    // a resume can't silently land on index 0, which is an attention banner
+    // whenever there is one, and ⏎ on that runs the updater.
+    func resumeSettingsSelection() {
+        let pending = settingsResumeRow
+        settingsResumeRow = nil
+        guard let pending,
+              let category = SettingsCategory.allCases.first(where: { rows(in: $0).contains(pending) })
+        else {
+            settingsDetailFocused = false
+            selectFirstCategoryRow()
+            return
+        }
+        settingsCategory = category
+        settingsDetailFocused = true
+        selectedSettingIndex = index(of: pending)
     }
 
     // Put the selection back on the row it was on, wherever that row has moved

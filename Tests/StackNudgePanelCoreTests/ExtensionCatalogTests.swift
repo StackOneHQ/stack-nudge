@@ -251,13 +251,54 @@ final class ExtensionCatalogTests: XCTestCase {
 
     // A selection pointing at a row that has gone would highlight nothing and
     // make Enter a no-op.
-    func testTheSelectionIsDroppedWhenItsRowDisappears() {
+    func testTheSelectionMovesToTheFirstRowWhenItsOwnRowDisappears() {
         let c = catalog()
         c.selectedID = "installed"
         c.reconcileSelection(among: threeRows)
         XCTAssertEqual(c.selectedID, "installed")
 
+        c.reconcileSelection(among: threeRows.filter { $0.id != "installed" })
+        XCTAssertEqual(c.selectedID, "broken", "lands somewhere rather than nowhere")
+    }
+
+    func testWithNoRowsAtAllThereIsNothingToSelect() {
+        let c = catalog()
+        c.selectedID = "installed"
         c.reconcileSelection(among: [])
+        XCTAssertNil(c.selectedID)
+    }
+
+    // The page used to open with nothing selected, so Return did nothing while
+    // the footer advertised it. The catalogue arrives after the view does, so
+    // seeding has to survive the rows changing under it.
+    func testArrivingSelectsTheFirstRow() {
+        let c = catalog()
+        XCTAssertNil(c.selectedID)
+        c.reconcileSelection(among: threeRows)
+        XCTAssertEqual(c.selectedID, "broken")
+    }
+
+    // Row order is what makes seeding safe to do unprompted: refusals sort
+    // first, then what is installed, and only then what is merely published, so
+    // Return lands on a page rather than on an install nobody asked for.
+    func testTheSeededRowIsNeverAnInstallWhenAnythingIsInstalled() {
+        let c = catalog()
+        c.reconcileSelection(among: threeRows)
+        let seeded = threeRows.first { $0.id == c.selectedID }
+        XCTAssertEqual(seeded?.isInstalled, true)
+    }
+
+    func testCommandArrowsJumpToTheFirstAndLastRow() {
+        let c = catalog()
+        c.selectEdge(among: threeRows, top: false)
+        XCTAssertEqual(c.selectedID, "available")
+        c.selectEdge(among: threeRows, top: true)
+        XCTAssertEqual(c.selectedID, "broken")
+    }
+
+    func testJumpingIsANoOpWithNoRows() {
+        let c = catalog()
+        c.selectEdge(among: [], top: true)
         XCTAssertNil(c.selectedID)
     }
 
@@ -522,11 +563,15 @@ final class ExtensionCatalogTests: XCTestCase {
     // method existed from the start and nothing but a test ever called it, so a
     // selection could point at a row that is no longer on screen and Enter
     // would silently do nothing.
-    func testAQueryThatHidesTheSelectedRowDropsTheSelection() {
+    //
+    // It moves to what is left rather than to nothing, which was only half the
+    // fix: an empty selection leaves Enter doing exactly the nothing this was
+    // written about, under a footer still advertising it.
+    func testAQueryThatHidesTheSelectedRowMovesItToWhatIsLeft() {
         let c = catalog()
         c.selectedID = "derby"
         c.reconcileSelection(among: ExtensionCatalog.matching(sample, query: "system"))
-        XCTAssertNil(c.selectedID)
+        XCTAssertEqual(c.selectedID, "system")
     }
 
     func testAQueryThatStillShowsTheSelectedRowKeepsIt() {
