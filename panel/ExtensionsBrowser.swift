@@ -29,6 +29,16 @@ final class ExtensionCatalog: ObservableObject {
     // Keyboard selection. The panel is keyboard-native and this page's own
     // footer advertises key hints, but every action on it was mouse-only.
     @Published var selectedID: String?
+    // What the search field holds. Filtering happens at render time rather than
+    // over `entries`, so a query never hides an *installed* extension from the
+    // merge that produces the rows — it only hides it from this list.
+    @Published var query = ""
+    // Bumped to hand the field first-responder status, mirroring
+    // PanelNav.historyFilterFocusRequests. The page deliberately opens with the
+    // field *unfocused* so the key handler owns the keyboard; typing hands over.
+    @Published private(set) var searchFocusRequests = 0
+
+    func focusSearch() { searchFocusRequests += 1 }
 
     private let fetchCatalogue: () -> Result<[ExtensionInstaller.IndexEntry], ExtensionInstaller.Failure>
     private let performInstall: (ExtensionInstaller.IndexEntry) -> Result<String, ExtensionInstaller.Failure>
@@ -150,18 +160,20 @@ final class ExtensionCatalog: ObservableObject {
         selectedID = rows[next].id
     }
 
-    // What Enter does to the selected row. Install when it isn't installed,
-    // update when there is one, otherwise remove — and dismiss a failure first,
-    // since that is what the row is showing.
+    // What Enter does to the selected row: install it, or update it, or dismiss
+    // the failure it is showing.
+    //
+    // Deliberately never removes. Removal is on the extension's own page now,
+    // reached from Settings → Extensions — Enter on a list where most rows
+    // install and one deletes is a keystroke whose meaning depends on where the
+    // selection happens to be.
     func activateSelection(among rows: [ExtensionRow]) {
         guard let row = rows.first(where: { $0.id == selectedID }) else { return }
         if failure(for: row.id) != nil { return dismissFailure(for: row.id) }
-        guard !isBusy(row.id) else { return }
-        if row.updateAvailable || !row.isInstalled {
-            if let entry = entries.first(where: { $0.id == row.id }) { install(entry) }
-        } else {
-            remove(row.id)
-        }
+        guard !isBusy(row.id), row.updateAvailable || !row.isInstalled,
+              let entry = entries.first(where: { $0.id == row.id })
+        else { return }
+        install(entry)
     }
 
     // Keeps the selection on a row that still exists after a reload or a
@@ -169,6 +181,22 @@ final class ExtensionCatalog: ObservableObject {
     func reconcileSelection(among rows: [ExtensionRow]) {
         guard let selectedID else { return }
         if !rows.contains(where: { $0.id == selectedID }) { self.selectedID = nil }
+    }
+
+    // Pure, so the matching rule is testable without a view.
+    //
+    // Matches the id as well as the name and description because the id is what
+    // the config keys, the directory and the docs all use — somebody who knows
+    // an extension as "derby" should not have to remember it is called "Token
+    // Derby" to find it.
+    static func matching(_ rows: [ExtensionRow], query: String) -> [ExtensionRow] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return rows }
+        return rows.filter { row in
+            [row.id, row.name, row.description].contains {
+                $0.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+            }
+        }
     }
 
     func dismissFailure(for id: String) {
@@ -190,9 +218,28 @@ struct ExtensionRow: Equatable, Identifiable {
     let availableVersion: String?
     let refusedReason: String?
     let requires: [String]
-    let config: [String]
+    let config: [ExtensionManifest.ConfigKey]
 
     var isInstalled: Bool { installedVersion != nil || refusedReason != nil }
+
+    // The environment keys, not their labels: this line is about what the
+    // extension can read, and the key is the thing a reviewer recognises.
+    var configKeyList: String { config.map(\.key).joined(separator: ", ") }
+
+    // Only an installed extension has anywhere to put a value, and only one
+    // that declared a key has anything to put there.
+    var isConfigurable: Bool { isInstalled && !configurableKeys.isEmpty }
+
+    // The keys a form may actually offer.
+    //
+    // Empty for a refused extension, whatever the index says it declares. A
+    // refusal means its manifest did not parse, so the only key list available
+    // is the catalogue's — and rendering fields from that writes values into
+    // the user's config file for an extension that will never read them, under
+    // labels its own manifest never agreed to.
+    var configurableKeys: [ExtensionManifest.ConfigKey] {
+        refusedReason == nil ? config : []
+    }
 
     // Only when both are known and differ. An extension that is installed but
     // unpublished has nothing to update to, which is not the same as being
@@ -223,10 +270,22 @@ extension ExtensionCatalog {
                 availableVersion: entry.version,
                 refusedReason: refusedByID[entry.id],
                 requires: entry.requires,
-                config: entry.config))
+                // The installed manifest wins when there is one: it is the
+                // version that actually runs, and the form is for configuring
+                // *it*. Taking the index's list instead would offer a field for
+                // a key a newer release added and this install ignores.
+                //
+                // With nothing installed there is only the index, which carries
+                // key names and no metadata — enough for the "Reads …" line,
+                // which is all an uninstalled row shows. isConfigurable already
+                // requires an install, so a label-less key never reaches a form.
+                config: installedByID[entry.id]?.config
+                    ?? entry.config.map { .init(key: $0, label: nil, help: nil, placeholder: nil) }))
         }
         // Installed but unpublished — still listed, so it can be seen and
-        // removed rather than being invisible and permanent.
+        // removed rather than being invisible and permanent. In the browser
+        // that is a hand-placed extension; in the Settings list (which passes
+        // no catalogue) it is every installed extension.
         for manifest in installed where seen.insert(manifest.id).inserted {
             rows.append(ExtensionRow(
                 id: manifest.id, name: manifest.name, description: "",
@@ -266,15 +325,26 @@ struct ExtensionsView: View {
 
     @ObservedObject var catalog: ExtensionCatalog
     @ObservedObject var host: ExtensionHost
+    let onConfigure: (ExtensionRow) -> Void
     let onBack: () -> Void
 
+    // Focused on arrival, so the page is type-to-find rather than
+    // click-then-type. It is why R lost its bare binding — see the key routing
+    // in Panel.
+    @FocusState private var searchFocused: Bool
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        // Once per body pass. visibleRows is a merge of three lists plus a sort
+        // and a filter, and it was read from the ScrollView, from .onChange's
+        // value expression, from its closure and twice from the footer.
+        let rows = visibleRows
+        return VStack(alignment: .leading, spacing: 0) {
             header
+            searchField
             Divider().opacity(0.4)
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
-                    catalogueBody
+                    catalogueBody(rows)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
@@ -285,31 +355,107 @@ struct ExtensionsView: View {
             }
 
             PageFooter {
-                FooterHint(label: "Back", keys: ["Esc"])
+                // Named for what Esc does from here, which depends on whether
+                // there is a query to clear first.
+                FooterHint(label: catalog.query.isEmpty ? "Back" : "Clear", keys: ["Esc"])
+                FooterHint(label: "Search", keys: ["/"])
                 FooterHint(label: "Select", keys: ["↑", "↓"])
-                FooterHint(label: activationLabel, keys: ["⏎"])
-                FooterHint(label: "Reload", keys: ["R"])
+                FooterHint(label: activationLabel(in: rows), keys: ["⏎"])
+                // Only where Enter is busy doing something else. An installed
+                // row with an update pending takes Enter for the update, so
+                // without this there would be no keyboard route to its page.
+                if selectedRow(in: rows)?.updateAvailable == true {
+                    FooterHint(label: "Settings", keys: ["⌘⏎"])
+                }
+                // ⌘R rather than R: a plain letter seeds the search field, the
+                // same trade the history pane makes.
+                FooterHint(label: "Reload", keys: ["⌘R"])
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onAppear { catalog.loadIfNeeded() }
+        .onAppear {
+            catalog.loadIfNeeded()
+            // Deliberately NOT focused. A focused field is first responder, and
+            // FloatingPanel.keyDown only fires for what the first responder
+            // declines — so focusing on arrival handed the field Esc, ↑↓ and ⏎
+            // and left every hint in the footer describing a key that no longer
+            // did anything. Same contract the history pane states at
+            // Panel.swift:4042, reached the same way: typing hands over.
+            searchFocused = false
+        }
+        .onChange(of: catalog.searchFocusRequests) { _ in searchFocused = true }
+        // AppKit selects the field's whole contents when it becomes first
+        // responder, which throws away the character that asked for focus:
+        // type "de" and get "e". The history filter hands focus over the same
+        // way and needs the same collapse — see FieldEditor for why this keys
+        // off focus actually becoming true rather than a scheduled hop.
+        .onChange(of: searchFocused) { focused in
+            if focused { FieldEditor.collapseSelectionToEnd() }
+        }
+        // The selection has to survive the list changing under it, and it was
+        // never reconciled from anywhere — the method existed and only the
+        // tests called it. Searching made that visible: a query that filters
+        // out the selected row leaves selectedID pointing at something not on
+        // screen, and Enter then does nothing at all rather than acting on
+        // whatever is in front of you.
+        .onChange(of: rows.map(\.id)) { _ in
+            catalog.reconcileSelection(among: rows)
+        }
+    }
+
+    private func selectedRow(in rows: [ExtensionRow]) -> ExtensionRow? {
+        guard let id = catalog.selectedID else { return nil }
+        return rows.first { $0.id == id }
     }
 
     // Named for what Enter will actually do to the selected row, rather than a
     // generic verb that is wrong two thirds of the time.
-    private var activationLabel: String {
-        guard let id = catalog.selectedID,
-              let row = visibleRows.first(where: { $0.id == id })
-        else { return "Select" }
-        if catalog.failure(for: id) != nil { return "Dismiss" }
+    private func activationLabel(in rows: [ExtensionRow]) -> String {
+        guard let row = selectedRow(in: rows) else { return "Select" }
+        if catalog.failure(for: row.id) != nil { return "Dismiss" }
         if row.updateAvailable { return "Update" }
-        return row.isInstalled ? "Remove" : "Install"
+        // Named for what Enter does, which on an installed row is open its
+        // page — the same thing the card's button does. It used to say
+        // "Installed", which is a state rather than an action, on a row where
+        // Enter did nothing at all.
+        return row.isInstalled ? "Settings" : "Install"
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.caption2).foregroundStyle(.tertiary)
+            TextField("Search extensions", text: $catalog.query)
+                .textFieldStyle(.plain)
+                .font(.caption)
+                .focused($searchFocused)
+                // Once the field *is* first responder it consumes keys before
+                // NSWindow.keyDown, so Esc and Enter have to be handled here or
+                // not at all. Esc clears the query, then steps out of the field
+                // — the same two-step the history filter uses; Enter releases
+                // focus so ↑↓ and ⏎ go back to acting on the list.
+                .onExitCommand {
+                    if catalog.query.isEmpty { searchFocused = false } else { catalog.query = "" }
+                }
+                .onSubmit { searchFocused = false }
+            if !catalog.query.isEmpty {
+                Button { catalog.query = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.bottom, 8)
     }
 
     var visibleRows: [ExtensionRow] {
-        ExtensionCatalog.rows(catalogue: catalog.entries,
-                              installed: host.manifests,
-                              refused: host.refused)
+        ExtensionCatalog.matching(
+            ExtensionCatalog.rows(catalogue: catalog.entries,
+                                  installed: host.manifests,
+                                  refused: host.refused),
+            query: catalog.query)
     }
 
     private var header: some View {
@@ -334,8 +480,7 @@ struct ExtensionsView: View {
     }
 
     @ViewBuilder
-    private var catalogueBody: some View {
-        let rows = visibleRows
+    private func catalogueBody(_ rows: [ExtensionRow]) -> some View {
         switch catalog.load {
         // A failed *catalogue* fetch does not hide what is installed — those
         // rows are read from disk and are still true, and one of them may be
@@ -358,7 +503,11 @@ struct ExtensionsView: View {
             note("Looking for extensions…")
         default:
             if rows.isEmpty {
-                note("No extensions are published yet.")
+                // Distinguished, because "nothing is published" and "nothing
+                // matches what you typed" want very different next actions.
+                note(catalog.query.isEmpty
+                     ? "No extensions are published yet."
+                     : "Nothing matches \"\(catalog.query)\".")
             } else {
                 ForEach(rows) { row in extensionRow(row) }
             }
@@ -403,7 +552,7 @@ struct ExtensionsView: View {
                     // rather than after. The namespace is narrow by design, but
                     // narrow is not the same as nothing.
                     if !row.config.isEmpty {
-                        Text("Reads \(row.config.joined(separator: ", "))")
+                        Text("Reads \(row.configKeyList)")
                             .font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
                     }
                     if !row.requires.isEmpty {
@@ -459,8 +608,12 @@ struct ExtensionsView: View {
                 if row.updateAvailable, let entry = entry(for: row.id) {
                     cardButton("Update", prominent: true) { catalog.install(entry) }
                 }
+                // Settings is where an installed extension is configured and
+                // removed; this page is for finding ones you don't have. An
+                // installed row says so and offers the way there rather than
+                // duplicating the controls.
                 if row.isInstalled {
-                    cardButton("Remove") { catalog.remove(row.id) }
+                    cardButton("Settings") { onConfigure(row) }
                 } else if let entry = entry(for: row.id) {
                     cardButton("Install", prominent: true) { catalog.install(entry) }
                 }
@@ -474,6 +627,21 @@ struct ExtensionsView: View {
 
     private func cardButton(_ title: String, prominent: Bool = false,
                             action: @escaping () -> Void) -> some View {
+        CardButton(title: title, prominent: prominent, action: action)
+    }
+}
+
+// The button on an extension card. Its own type rather than a method, because
+// the per-extension config page needs the same one and two copies of a button
+// style is how two pages in one panel start looking like two apps.
+struct CardButton: View {
+
+    let title: String
+    var prominent = false
+    var enabled = true
+    let action: () -> Void
+
+    var body: some View {
         Button(action: action) {
             Text(title)
                 .font(.caption.weight(.medium))
@@ -484,5 +652,7 @@ struct ExtensionsView: View {
                 .foregroundStyle(prominent ? Color.white : Color.primary)
         }
         .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.45)
     }
 }

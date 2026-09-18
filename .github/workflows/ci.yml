@@ -54,7 +54,7 @@ jobs:
           severity: warning
 
   extensions:
-    name: validate extensions
+    name: validate + test extensions
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
@@ -64,6 +64,11 @@ jobs:
       # the review a human cannot reliably do by eye.
       - name: validate
         run: ./scripts/package-extensions.sh validate
+
+      # The same script `make test-extensions` runs, so the gate and the local
+      # loop cannot drift.
+      - name: test extensions
+        run: ./scripts/test-extensions.sh
 
   build-macos:
     name: swift build (${{ matrix.arch }})

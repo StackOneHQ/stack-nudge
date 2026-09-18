@@ -65,8 +65,14 @@ struct ExtensionDocument: Equatable {
         let value: String?
         let footnote: String?
         let track: Track?
-        let ornament: Ornament?
+        // Plural, because one row can want more than one decoration: a marker
+        // fixed at the end of the track and something riding the fill are two
+        // different things anchored two different ways. `ornament` stays as the
+        // singular reading — a row wanting one shouldn't have to write a list.
+        let ornaments: [Ornament]
         let actions: [Action]
+
+        var ornament: Ornament? { ornaments.first }
     }
 
     let schema: Int
@@ -153,7 +159,7 @@ struct ExtensionDocument: Equatable {
                                      tint: track.tint)
                            }
                        },
-                       ornament: row.ornament.flatMap(ornament(from:)),
+                       ornaments: ornaments(from: row),
                        actions: actions(from: row.actions))
         } ?? []
         // Capped after parsing rather than before, so dropping a malformed row
@@ -226,6 +232,18 @@ struct ExtensionDocument: Equatable {
     static let maxSpriteRows = 24
     static let maxSpriteColumns = 64
     static let maxSpriteFPS: Double = 30
+
+    // Both spellings, in the order they were written: the singular first, then
+    // the list. An extension may send either or both — a second decoration is
+    // additive, so a document written against the old spelling keeps working
+    // and one written against the new one is not obliged to repeat itself.
+    static let maxOrnaments = 4
+
+    private static func ornaments(from row: Decoded.Row) -> [Ornament] {
+        var parsed = [row.ornament.flatMap(ornament(from:))].compactMap { $0 }
+        parsed += (row.ornaments ?? []).compactMap(ornament(from:))
+        return Array(parsed.prefix(maxOrnaments))
+    }
 
     private static func ornament(from raw: Decoded.Ornament) -> Ornament? {
         guard (raw.kind ?? "sprite") == "sprite" else { return nil }
@@ -300,6 +318,7 @@ struct ExtensionDocument: Equatable {
             let footnote: String?
             let track: Track?
             let ornament: Ornament?
+            let ornaments: [Ornament]?
             let actions: [Action]?
         }
         let schema: Int

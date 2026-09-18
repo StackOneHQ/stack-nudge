@@ -1,0 +1,25 @@
+{
+  "id": "derby",
+  "name": "Token Derby",
+  "description": "A horse race where each runner advances on the tokens its owner burns.",
+  "version": "1.0.0",
+  "schema": 1,
+  "tab": { "label": "Derby" },
+  "run": "./run",
+  "requires": ["python3"],
+  "config": [
+    {
+      "key": "STACKNUDGE_EXT_DERBY_ORG",
+      "label": "Organisation",
+      "help": "Whose races to show, exactly as spelled — the name is case-sensitive.",
+      "placeholder": "StackOne"
+    },
+    {
+      "key": "STACKNUDGE_EXT_DERBY_BASE",
+      "label": "API base",
+      "help": "Leave blank for the public instance. https:// only.",
+      "placeholder": "https://token-derby.mauricode.co.uk/api"
+    }
+  ],
+  "refresh": { "onOpen": true, "intervalSeconds": 30, "whileFocusedOnly": true }
+}

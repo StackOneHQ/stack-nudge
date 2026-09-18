@@ -39,20 +39,68 @@ does not buy.
 
 | Field | Required | Notes |
 |---|---|---|
-| `id` | yes | `^[a-z0-9-]{1,32}$`, and **must equal the directory name**. It becomes a path component, so it is validated before it is ever used as one. |
+| `id` | yes | `^[a-z0-9][a-z0-9-]{0,31}$`, and **must equal the directory name**. It becomes a path component, so it is validated before it is ever used as one. |
 | `name` | yes | Human-readable. Used as the tab label when `tab.label` is absent. |
 | `version` | yes | Yours to manage; the host only records it. |
 | `schema` | yes | Must be `1`. Anything else is refused outright — see [Versioning](#versioning). |
 | `tab.label` | no | Defaults to `name`. Trimmed, capped at 16 characters, falls back to `id` if empty. |
 | `run` | no | Defaults to `./run`. Relative to the extension directory, no `..`, no absolute or `~` paths. |
 | `requires` | no | Interpreters the extension needs. Checked at install time by **running** each one, not by resolving it. |
-| `config` | no | Environment keys to pass through. Must be under `STACKNUDGE_EXT_`. |
+| `config` | no | Environment keys to pass through. Each must match `^STACKNUDGE_EXT_[A-Z0-9_]+$`. See [Configuration](#configuration). |
 | `refresh.onOpen` | no | Default `true`. Fetch when the tab is opened. |
 | `refresh.intervalSeconds` | no | Default off. Floored at 5 — every tick is a process spawn. |
 | `refresh.whileFocusedOnly` | no | Default `true`. Only poll while your tab is the one on screen. |
 
 A manifest that fails any of these is **refused**, and the reason is reported —
 it does not silently produce a missing tab.
+
+## Configuration
+
+A `config` entry may be a bare key name, or an object describing it:
+
+```json
+"config": [
+  "STACKNUDGE_EXT_DERBY_TRACE",
+  {
+    "key": "STACKNUDGE_EXT_DERBY_ORG",
+    "label": "Organisation",
+    "help": "Whose races to show. Ask whoever runs your league.",
+    "placeholder": "stackone"
+  }
+]
+```
+
+Both forms declare the same thing — a key the host will pass to your script.
+The object form adds what **Settings → Extensions → your extension** needs to
+render a labelled field for it rather than a raw environment variable name.
+Without a `label` the field is titled by the key with its namespace stripped,
+so a bare string still gets a usable form.
+
+One list rather than two: a parallel array describing the keys would drift from
+the list of keys actually passed, and what you would get is a form field for a
+key nobody reads, or a key nobody can set.
+
+A key must match `^STACKNUDGE_EXT_[A-Z0-9_]+$` — the whole name, not just the
+prefix. Keys are written into `~/.stack-nudge/config` as `KEY=value` lines, so
+a key is text that lands in a file: one containing a newline would write a
+second, unrelated assignment, and one containing `=` would be read as setting
+something else.
+
+Values are stored in that same file, so the form refuses a value containing a
+line break. A value naming a
+URL scheme must name `https`. Clearing a field removes the key rather than
+writing an empty one, which matters because a declared-but-unset key is
+**omitted** from your environment rather than passed empty — so `[ -z "$KEY" ]`
+and "the variable isn't there" are the same case, and you only have to handle
+one of them.
+
+The object form is a **manifest** field, not an index field. The published
+`extensions-index.json` carries key *names* only, whichever form the manifest
+used — deliberately, because the index is a wire format read by binaries of
+every version: the app fetches it from `/releases/latest`, so an old host reads
+the *newest* index. The settings form never needs the metadata there, since it
+renders for an extension that is already installed and reads that extension's
+own manifest.
 
 ## The environment
 
@@ -162,7 +210,14 @@ so a `#FFFFFF` bar is not invisible in light mode. Hue is preserved.
 
 ### `ornament`
 
-An animated pixel grid, drawn on the row's track band.
+An animated pixel grid, drawn on the row's track band. A row may carry several —
+send `ornaments` as a list instead, or alongside `ornament`, which reads first.
+Up to 4; they draw in the order written, so the last one is on top.
+
+Two are what a race needs: a still chequered post anchored `trailing`, which
+stays at the end of the track, and the runner anchored `fill-edge`, which rides
+the head of the fill. One `ornament` could only ever be one of them.
+
 
 - `kind` — only `"sprite"` today. An unknown kind is dropped rather than guessed at.
 - `fps` — `0` or absent means a still image. Capped at 30.
@@ -234,16 +289,26 @@ version ships.
 
 ```
 extensions/
+    derby/
+        manifest.json
+        run
+        test_derby.py
     system/
         manifest.json
         run
 ```
 
+Tests are optional but encouraged, and they ship inside the package on purpose:
+`derby` is what somebody reads when writing their own, and "how do I test one of
+these?" is a question the reference should answer. Any `extensions/*/test_*.py`
+is run by CI and by `make test-extensions`; a suite that discovers zero tests is
+a failure rather than a pass.
+
 `scripts/package-extensions.sh validate` is what CI runs, and you can run it
 yourself. It refuses:
 
 - a manifest that doesn't parse, or whose `id` disagrees with the directory name
-- an `id` outside `^[a-z0-9-]{1,32}$`, or a `schema` that isn't 1
+- an `id` outside `^[a-z0-9][a-z0-9-]{0,31}$`, or a `schema` that isn't 1
 - a `run` path that is absolute or contains `..`
 - a `run` file that is missing, not a regular file, or not executable
 - **any symlink or non-regular file anywhere in the package**
@@ -261,10 +326,16 @@ picks up extensionless files by shebang, at `severity: warning`.
 ### What a release publishes
 
 ```
-system-1.1.1.tar.gz
-system-1.1.1.tar.gz.sha256      <- "<hash>  <basename>"
+extension-derby-1.0.0.tar.gz
+extension-derby-1.0.0.tar.gz.sha256      <- "<hash>  <basename>"
+extension-system-1.1.1.tar.gz
+extension-system-1.1.1.tar.gz.sha256
 extensions-index.json
 ```
+
+The `extension-` prefix is not decoration. Extensions share a release with the
+app, and the updater picks its own download by name — without the namespace an
+extension called `stack-nudge` would be offered to the updater as an app build.
 
 The index is attached to the app's own release, so there is one trust anchor and
 one fetch path. It ships even when there are no extensions, so the app always has
@@ -300,8 +371,12 @@ reviewer should check that are easy to miss:
 - **`run` and every path in the package.** Containment is enforced on resolved
   paths, but a symlink in a tarball is how a manifest tells a reviewer one thing
   and does another.
-- **Declared `config` keys.** They are restricted to `STACKNUDGE_EXT_`, but that
-  namespace is still yours to justify.
+- **Declared `config` keys.** They are restricted to the `STACKNUDGE_EXT_`
+  namespace and to a plain environment-variable shape, but that namespace is
+  still yours to justify — and a declared key now appears as a
+  field in Settings, so it is also a request for the user's attention. An
+  extension that asks for five values it could infer is asking for five
+  decisions nobody wanted to make.
 
 ## Limits, in one place
 
@@ -312,6 +387,7 @@ reviewer should check that are easy to miss:
 | actions | 16 per list |
 | text fields | 256 characters |
 | sprite | 32 frames × 24 rows × 64 columns, 30 fps |
+| ornaments | 4 per row |
 | tab label | 16 characters |
 | poll interval | 5 s minimum |
 

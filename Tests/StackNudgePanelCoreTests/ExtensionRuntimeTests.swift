@@ -395,7 +395,9 @@ final class ExtensionRuntimeTests: XCTestCase {
         // environment builder refuses it too — both halves are guarded.
         let manifest = ExtensionManifest(
             id: "derby", name: "D", version: "1", schema: 1, tab: .init(label: "D"),
-            run: "./run", requires: [], config: [key], refresh: .never)
+            run: "./run", requires: [],
+            config: [.init(key: key, label: nil, help: nil, placeholder: nil)],
+            refresh: .never)
         let env = ExtensionRuntime.environment(for: manifest,
                                                config: [key: "xoxb-a-real-looking-token"],
                                                home: "/Users/test")

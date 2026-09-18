@@ -86,6 +86,10 @@ struct PanelContentView: View {
     @ObservedObject var phrases: PhrasesViewModel
     @ObservedObject var extensions: ExtensionHost
     @ObservedObject var extensionCatalog: ExtensionCatalog
+    // Navigating into an extension's own configuration builds a model that
+    // needs the config file and the host, so the controller owns it and the
+    // view just asks.
+    let onConfigureExtension: (ExtensionRow) -> Void
 
     // The disk-backed name store. Observed here (rather than inside EventRow)
     // so resolving a nudge's session label stays a render-time lookup that
@@ -156,8 +160,26 @@ struct PanelContentView: View {
                 case .settings: SettingsView(nav: nav)
                 case .phrases:  PhrasesView(model: phrases) { nav.mode = .settings }
                 case .extensions:
-                    ExtensionsView(catalog: extensionCatalog, host: extensions) {
-                        nav.mode = .settings
+                    ExtensionsView(catalog: extensionCatalog,
+                                   host: extensions,
+                                   onConfigure: onConfigureExtension,
+                                   onBack: { nav.mode = .settings })
+                // .id(id) for the same reason .extensionTab has one: the
+                // associated value isn't part of a ViewBuilder case's identity,
+                // so two extensions' forms would share one view and the second
+                // would open showing the first's values.
+                case .extensionConfig(let id):
+                    if let model = nav.extensionConfig, model.id == id {
+                        ExtensionConfigView(model: model) { nav.mode = model.origin }
+                            .id(id)
+                    } else {
+                        // Unreachable in practice — the model is set before the
+                        // mode is — but a half-entered navigation must not be a
+                        // blank panel with no way back.
+                        ExtensionsView(catalog: extensionCatalog,
+                                       host: extensions,
+                                       onConfigure: onConfigureExtension,
+                                       onBack: { nav.mode = .settings })
                     }
                 case .updateConfirm:
                     UpdateConfirmView(
@@ -200,8 +222,8 @@ struct PanelContentView: View {
         case .extensionTab(let id): return nav.extensionTab(id: id)?.label ?? id
         // Listed, not defaulted: a new tab should fail to compile here rather
         // than render an unlabelled one.
-        case .phrases, .extensions, .updateConfirm, .updating, .postUpdate,
-             .bootstrap, .uninstall:
+        case .phrases, .extensions, .extensionConfig, .updateConfirm, .updating,
+             .postUpdate, .bootstrap, .uninstall:
             return ""
         }
     }
@@ -337,28 +359,14 @@ struct PanelContentView: View {
         .onChange(of: nav.historyFilterFocusRequests) { _ in
             historyFieldFocused = true
         }
-        // AppKit selects a field's entire contents when it becomes first
-        // responder, which would throw away the character that asked for focus
-        // in the first place (type "eng", get "ng"). Collapsing to a caret at
-        // the end fixes that, but it has to happen once the field editor really
-        // is first responder — and a miss doesn't fail safe, it reintroduces the
-        // very bug, intermittently. So key off focus actually becoming true
-        // rather than predicting when it will: the editor is already installed
-        // by the time this fires (with the select-all range in place), which a
-        // scheduled hop only happened to be late enough for.
-        //
-        // It also makes / on an existing filter extend it rather than replace
-        // it, the more useful default for a box that Esc already clears.
+        // Keyed off focus actually becoming true rather than a scheduled hop —
+        // see FieldEditor.collapseSelectionToEnd for why a miss here doesn't
+        // fail safe. It also makes / on an existing filter extend it rather
+        // than replace it, the more useful default for a box Esc already
+        // clears.
         .onChange(of: historyFieldFocused) { focused in
-            if focused { Self.collapseFilterSelectionToEnd() }
+            if focused { FieldEditor.collapseSelectionToEnd() }
         }
-    }
-
-    // The history filter is the only field focused at this point, so the key
-    // window's field editor is it.
-    private static func collapseFilterSelectionToEnd() {
-        guard let editor = NSApp.keyWindow?.firstResponder as? NSTextView else { return }
-        editor.setSelectedRange(NSRange(location: editor.string.count, length: 0))
     }
 
     // Durable log, newest first. Read-only by design: these records have no
@@ -881,6 +889,47 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private let sessions = SessionStore()
     let nav = PanelNav()
     private let phrases = PhrasesViewModel()
+    // Into one extension's own page. The model is built here rather than in the
+    // view because it needs the config file and the host, and because its
+    // unsaved edits have to survive a re-render.
+    //
+    // Every installed extension gets a page, including one that declares no
+    // config keys: the page is where Remove lives, and a row that opens nothing
+    // would make Enter mean something different depending on the extension.
+    func configureExtension(_ row: ExtensionRow, from origin: PanelMode = .extensions) {
+        nav.extensionConfig = ExtensionConfigModel(
+            row: row,
+            origin: origin,
+            // Saving is not enough on its own: the environment is rebuilt for
+            // each invocation, so the tab only shows the new value once the
+            // extension runs again.
+            didChange: { [weak self] in self?.extensions.refresh(row.id) },
+            onRemove: { [weak self] in self?.removeExtension(row.id) })
+        nav.mode = .extensionConfig(row.id)
+    }
+
+    // From a Settings row, which knows only the id.
+    func openExtension(_ id: String) {
+        guard let row = nav.installedExtensions.first(where: { $0.id == id }) else { return }
+        configureExtension(row, from: .settings)
+    }
+
+    private func removeExtension(_ id: String) {
+        extensionCatalog.remove(id)
+        // Back where the page was opened from — the extension it described no
+        // longer exists, so staying on it is not an option.
+        nav.mode = nav.extensionConfig?.origin ?? .settings
+    }
+
+    // Installed and refused, as the Extensions settings category renders them.
+    // Rebuilt from the host on every change it already reports, so the settings
+    // list and the tab strip can't disagree about what is installed.
+    private func refreshInstalledExtensions() {
+        nav.installedExtensions = ExtensionCatalog.rows(catalogue: [],
+                                                        installed: extensions.manifests,
+                                                        refused: extensions.refused)
+    }
+
     private lazy var extensionCatalog = ExtensionCatalog(
         fetchCatalogue: { ExtensionInstaller.fetchCatalogue() },
         performInstall: { entry in
@@ -891,8 +940,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // of tab order and this stays the single source of what's in them.
     private lazy var extensions = ExtensionHost(onTabsChanged: { [weak self] tabs in
         self?.nav.extensionTabs = tabs
+        self?.refreshInstalledExtensions()
     }, onRefusalsChanged: { [weak self] count in
         self?.nav.refusedExtensionCount = count
+        self?.refreshInstalledExtensions()
     })
     private var listener: EventListener?
     private var menuBar: MenuBarController?
@@ -1013,6 +1064,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         let host = NSHostingView(rootView: PanelContentView(
             store: store, sessions: sessions, nav: nav, phrases: phrases,
             extensions: extensions, extensionCatalog: extensionCatalog,
+            onConfigureExtension: { [weak self] row in self?.configureExtension(row) },
             onGrantPermissions: { [weak self] in self?.handleGrantPermissions() }
         ).environmentObject(SessionPersistence.shared))
         // Don't let SwiftUI's preferred / intrinsic content size drive
@@ -1058,6 +1110,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self?.nav.mode = .phrases
             },
             browseExtensions: { [weak self] in self?.nav.mode = .extensions },
+            openExtension: { [weak self] id in self?.openExtension(id) },
             openReleaseNotes: {
                 // Versioned tag URL when we know the bundle version,
                 // otherwise the releases index. Tag URL falls through
@@ -3715,25 +3768,105 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // Space toggles the selected default, ⌫ removes the selected
         // custom, Esc returns to Settings. Typing / Tab / Enter for
         // adding still fall through to SwiftUI's TextField.
-        // Extensions browser: Esc returns to Settings and R reloads the
-        // catalogue. Everything else is swallowed rather than passed on — the
-        // same rule the extension tabs follow, for the same reason.
-        if nav.mode == .extensions {
+        // An extension's configuration form: Esc returns to the browser and
+        // everything else belongs to the text fields. Enter is handled by the
+        // field's own .onSubmit rather than here, so it saves from whichever
+        // field has focus.
+        if case .extensionConfig = nav.mode {
+            let onlyCommand = mods.intersection([.command, .control, .option, .shift]) == [.command]
+            // ⌘⌫ rather than a bare ⌫, which is what the field editor wants,
+            // and deliberately the macOS "move to trash" combination: this is
+            // the one destructive action on the page and it takes no
+            // confirmation.
+            if onlyCommand, event.keyCode == KeyCode.delete || event.keyCode == KeyCode.forwardDelete {
+                nav.extensionConfig?.onRemove()
+                return true
+            }
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
-            guard plain else { return false }
-            let rows = ExtensionCatalog.rows(catalogue: extensionCatalog.entries,
-                                             installed: extensions.manifests,
-                                             refused: extensions.refused)
-            switch event.keyCode {
-            case KeyCode.escape: nav.mode = .settings
-            case KeyCode.upArrow:   extensionCatalog.moveSelection(among: rows, by: -1)
-            case KeyCode.downArrow: extensionCatalog.moveSelection(among: rows, by: 1)
-            case KeyCode.returnKey, KeyCode.numpadEnter, KeyCode.space:
-                extensionCatalog.activateSelection(among: rows)
-            // Not on autorepeat: holding R would otherwise issue one fetch per
-            // event, each blocking a pool thread.
-            case KeyCode.rKey where !event.isARepeat: extensionCatalog.reload()
-            default:             break
+            guard plain, event.keyCode == KeyCode.escape else { return false }
+            // Wherever this page was opened from, which is the Settings list as
+            // often as the browser.
+            nav.mode = nav.extensionConfig?.origin ?? .extensions
+            return true
+        }
+
+        // Extensions browser. The page opens with its search field unfocused, so
+        // this branch owns the keyboard: Esc steps back (clearing the query
+        // first if there is one), / hands over to the field, and any printable
+        // character seeds the query and hands over — so type-to-search costs no
+        // extra keystroke despite the field not grabbing focus. Once the field
+        // *is* first responder it consumes keys before NSWindow.keyDown, and its
+        // own .onExitCommand and .onSubmit handle Esc and Enter.
+        //
+        // Exactly the history pane's contract, and for the same reason. The
+        // first attempt at this focused the field on arrival and changed the
+        // default branch to `return false` so letters could "reach SwiftUI" —
+        // which had it backwards. A focused field already takes every key before
+        // this function runs, so nothing needed releasing; all that changed was
+        // that Esc, ↑↓ and ⏎ stopped working while the footer went on
+        // advertising them.
+        //
+        // Reload keeps ⌘R and configure takes ⌘⏎, since a plain letter is a
+        // search term.
+        if nav.mode == .extensions {
+            // Built where it is needed rather than up front: this is a merge of
+            // three lists plus a sort and a filter, and it ran on every key
+            // event including the ones this branch doesn't handle.
+            func visibleRows() -> [ExtensionRow] {
+                ExtensionCatalog.matching(
+                    ExtensionCatalog.rows(catalogue: extensionCatalog.entries,
+                                          installed: extensions.manifests,
+                                          refused: extensions.refused),
+                    query: extensionCatalog.query)
+            }
+            let onlyCommand = mods.intersection([.command, .control, .option, .shift]) == [.command]
+
+            if onlyCommand {
+                switch event.keyCode {
+                // Not on autorepeat: holding it would otherwise issue one fetch
+                // per event, each blocking a pool thread.
+                case KeyCode.rKey where !event.isARepeat:
+                    extensionCatalog.reload()
+                    return true
+                case KeyCode.returnKey, KeyCode.numpadEnter:
+                    if let id = extensionCatalog.selectedID,
+                       let row = visibleRows().first(where: { $0.id == id }),
+                       row.isInstalled {
+                        configureExtension(row)
+                    }
+                    return true
+                // Leave every other ⌘ combination to the app — ⌘Q and friends.
+                default: return false
+                }
+            }
+            guard mods.intersection([.command, .control, .option]).isEmpty else { return false }
+
+            switch Self.extensionsKeyAction(keyCode: event.keyCode,
+                                            characters: event.charactersIgnoringModifiers,
+                                            queryIsEmpty: extensionCatalog.query.isEmpty) {
+            case .back:         nav.mode = .settings
+            case .clearQuery:   extensionCatalog.query = ""
+            case .focusSearch:  extensionCatalog.focusSearch()
+            case .appendToQuery(let typed):
+                extensionCatalog.query += typed
+                extensionCatalog.focusSearch()
+            case .moveSelection(let delta):
+                extensionCatalog.moveSelection(among: visibleRows(), by: delta)
+            case .activate:
+                // An installed row with nothing to update has no install action
+                // left, and Enter used to sit there doing nothing while the
+                // footer advertised it. Opening its page is what the card's own
+                // button does, so Enter now agrees with the button.
+                let rows = visibleRows()
+                if let id = extensionCatalog.selectedID,
+                   let row = rows.first(where: { $0.id == id }),
+                   row.isInstalled, !row.updateAvailable,
+                   extensionCatalog.failure(for: id) == nil {
+                    configureExtension(row, from: .extensions)
+                } else {
+                    extensionCatalog.activateSelection(among: rows)
+                }
+            case .swallow:      break
             }
             return true
         }
@@ -4041,6 +4174,48 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // to a read-only log, and a → key repeat landing in the filter is
         // exactly what this stops.
         case swallow
+    }
+
+    // What a key does on the extensions browser. Pure and beside
+    // historyKeyAction for the same reason that one is: this is a table, and a
+    // table is worth asserting rather than reasoning about — the first version
+    // of this page's key handling was wrong in a way no test could see because
+    // there was nothing to test.
+    enum ExtensionsKeyAction: Equatable {
+        case back
+        case clearQuery
+        case focusSearch
+        case appendToQuery(String)
+        case moveSelection(Int)
+        case activate
+        // Never falls through to the tab shortcuts below — they act on a list
+        // this page isn't showing.
+        case swallow
+    }
+
+    static func extensionsKeyAction(keyCode: UInt16,
+                                    characters: String?,
+                                    queryIsEmpty: Bool) -> ExtensionsKeyAction {
+        switch keyCode {
+        case KeyCode.escape:
+            return queryIsEmpty ? .back : .clearQuery
+        case KeyCode.slash:
+            return .focusSearch
+        case KeyCode.upArrow:
+            return .moveSelection(-1)
+        case KeyCode.downArrow:
+            return .moveSelection(1)
+        case KeyCode.returnKey, KeyCode.numpadEnter:
+            return .activate
+        default:
+            // Same input test the history filter uses, and for the same reason:
+            // AppKit reports arrows and function keys as private-use scalars,
+            // which are neither control characters nor illegal ones, so "not a
+            // control character" would seed the query with invisible junk and
+            // hand the field focus off the back of it.
+            guard let characters, isFilterInput(characters) else { return .swallow }
+            return .appendToQuery(characters)
+        }
     }
 
     static func historyKeyAction(keyCode: UInt16,

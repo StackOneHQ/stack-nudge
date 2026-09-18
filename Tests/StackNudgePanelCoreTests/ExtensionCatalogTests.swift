@@ -51,10 +51,43 @@ final class ExtensionCatalogTests: XCTestCase {
 
     // MARK: - The merged row model
 
-    private func manifest(_ id: String, version: String) -> ExtensionManifest {
+    private func manifest(_ id: String, version: String,
+                          config: [ExtensionManifest.ConfigKey] = []) -> ExtensionManifest {
         ExtensionManifest(id: id, name: id.capitalized, version: version, schema: 1,
                           tab: .init(label: id), run: "./run",
-                          requires: [], config: [], refresh: .never)
+                          requires: [], config: config, refresh: .never)
+    }
+
+    // The form configures the version that actually runs. Taking the index's
+    // list instead would offer a field for a key a newer release added and this
+    // install ignores.
+    func testAnInstalledExtensionsOwnKeysWinOverTheIndexs() {
+        var published = entry("derby", version: "2.0.0")
+        published = .init(id: published.id, name: published.name, version: published.version,
+                          description: published.description, asset: published.asset,
+                          sha256: published.sha256, requires: published.requires,
+                          config: ["STACKNUDGE_EXT_NEW"])
+        let installed = manifest("derby", version: "1.0.0",
+                                 config: [.init(key: "STACKNUDGE_EXT_OLD", label: nil,
+                                                help: nil, placeholder: nil)])
+        let rows = ExtensionCatalog.rows(catalogue: [published],
+                                         installed: [installed], refused: [])
+        XCTAssertEqual(rows[0].config.map(\.key), ["STACKNUDGE_EXT_OLD"])
+    }
+
+    // The index carries key names and no metadata, on purpose: it is a wire
+    // format read by binaries of every version. An uninstalled row only shows
+    // the "Reads …" line, and isConfigurable requires an install, so a
+    // label-less key never reaches a form.
+    func testAnUninstalledRowTakesItsKeyNamesFromTheIndex() {
+        var published = entry("derby")
+        published = .init(id: published.id, name: published.name, version: published.version,
+                          description: published.description, asset: published.asset,
+                          sha256: published.sha256, requires: published.requires,
+                          config: ["STACKNUDGE_EXT_DERBY_ORG"])
+        let rows = ExtensionCatalog.rows(catalogue: [published], installed: [], refused: [])
+        XCTAssertEqual(rows[0].configKeyList, "STACKNUDGE_EXT_DERBY_ORG")
+        XCTAssertFalse(rows[0].isConfigurable)
     }
 
     // The browser used to render the catalogue, the installed set and the
@@ -160,12 +193,36 @@ final class ExtensionCatalogTests: XCTestCase {
         XCTAssertEqual(installed, ["available"])
     }
 
-    func testActivatingAnInstalledRowRemovesIt() {
+    // Enter never removes. Removal is on the extension's own page now, reached
+    // from Settings → Extensions — Enter on a list where most rows install and
+    // one deletes is a keystroke whose meaning depends on where the selection
+    // happens to be, and the destructive end of that is the one you hit by
+    // accident.
+    func testActivatingAnInstalledRowDoesNotRemoveIt() {
         var removed: [String] = []
         let c = catalog(remove: { removed.append($0); return .success($0) })
         c.selectedID = "installed"
         c.activateSelection(among: threeRows)
-        XCTAssertEqual(removed, ["installed"])
+        XCTAssertTrue(removed.isEmpty)
+        XCTAssertNil(c.work["installed"])
+    }
+
+    // A refusal means the manifest did not parse, so the only key list
+    // available is the catalogue's — and rendering fields from that writes
+    // values into the config file for an extension that will never read them,
+    // under labels its own manifest never agreed to.
+    func testARefusedExtensionOffersNoConfigurableKeys() {
+        let key = ExtensionManifest.ConfigKey(key: "STACKNUDGE_EXT_A", label: nil,
+                                              help: nil, placeholder: nil)
+        let refused = ExtensionRow(id: "broken", name: "broken", description: "",
+                                   installedVersion: nil, availableVersion: "1.0.0",
+                                   refusedReason: "needs manifest schema 2",
+                                   requires: [], config: [key])
+        XCTAssertTrue(refused.configurableKeys.isEmpty)
+        XCTAssertFalse(refused.isConfigurable)
+        // Still listed, and still removable — it is the thing somebody opened
+        // this page to get rid of.
+        XCTAssertTrue(refused.isInstalled)
     }
 
     // A failed row is showing a reason, so Enter clears it rather than
@@ -421,5 +478,91 @@ final class ExtensionCatalogTests: XCTestCase {
         let c = catalog(remove: { _ in .failure(.installFailed("permission denied")) })
         c.remove("derby")
         guard case .failed = c.work["derby"] else { return XCTFail("expected a failure") }
+    }
+
+    // MARK: - Search
+
+    private func row(_ id: String, name: String, description: String = "",
+                     installed: Bool = false,
+                     config: [ExtensionManifest.ConfigKey] = []) -> ExtensionRow {
+        ExtensionRow(id: id, name: name, description: description,
+                     installedVersion: installed ? "1.0.0" : nil,
+                     availableVersion: "1.0.0", refusedReason: nil,
+                     requires: [], config: config)
+    }
+
+    private var sample: [ExtensionRow] {
+        [row("derby", name: "Token Derby", description: "A horse race."),
+         row("system", name: "System", description: "CPU, memory and disk.")]
+    }
+
+    func testAnEmptyQueryFiltersNothing() {
+        XCTAssertEqual(ExtensionCatalog.matching(sample, query: "").count, 2)
+        XCTAssertEqual(ExtensionCatalog.matching(sample, query: "   ").count, 2)
+    }
+
+    func testTheQueryMatchesTheNameCaseInsensitively() {
+        XCTAssertEqual(ExtensionCatalog.matching(sample, query: "token").map(\.id), ["derby"])
+        XCTAssertEqual(ExtensionCatalog.matching(sample, query: "TOKEN").map(\.id), ["derby"])
+    }
+
+    // The id is what the config keys, the directory and the docs all use.
+    // Somebody who knows an extension as "derby" should not have to remember
+    // that it is called "Token Derby" to find it.
+    func testTheQueryMatchesTheIDAndTheDescription() {
+        XCTAssertEqual(ExtensionCatalog.matching(sample, query: "derby").map(\.id), ["derby"])
+        XCTAssertEqual(ExtensionCatalog.matching(sample, query: "memory").map(\.id), ["system"])
+    }
+
+    func testAQueryThatMatchesNothingReturnsNothingRatherThanEverything() {
+        XCTAssertTrue(ExtensionCatalog.matching(sample, query: "zzz").isEmpty)
+    }
+
+    // Filtering is exactly the case that made reconcileSelection matter: the
+    // method existed from the start and nothing but a test ever called it, so a
+    // selection could point at a row that is no longer on screen and Enter
+    // would silently do nothing.
+    func testAQueryThatHidesTheSelectedRowDropsTheSelection() {
+        let c = catalog()
+        c.selectedID = "derby"
+        c.reconcileSelection(among: ExtensionCatalog.matching(sample, query: "system"))
+        XCTAssertNil(c.selectedID)
+    }
+
+    func testAQueryThatStillShowsTheSelectedRowKeepsIt() {
+        let c = catalog()
+        c.selectedID = "derby"
+        c.reconcileSelection(among: ExtensionCatalog.matching(sample, query: "derby"))
+        XCTAssertEqual(c.selectedID, "derby")
+    }
+
+    func testMatchingPreservesTheOrderItWasGiven() {
+        // The rows arrive already sorted — refusals first, then installed — and
+        // a filter that reordered them would move the selection under the user.
+        let rows = ExtensionCatalog.matching(sample, query: "e")
+        XCTAssertEqual(rows.map(\.id), sample.filter { rows.contains($0) }.map(\.id))
+    }
+
+    // MARK: - Configurability
+
+    func testOnlyAnInstalledExtensionThatDeclaredAKeyIsConfigurable() {
+        let key = ExtensionManifest.ConfigKey(key: "STACKNUDGE_EXT_DERBY_ORG",
+                                              label: nil, help: nil, placeholder: nil)
+        XCTAssertTrue(row("derby", name: "D", installed: true, config: [key]).isConfigurable)
+        // Nothing declared: there is no form to render.
+        XCTAssertFalse(row("derby", name: "D", installed: true).isConfigurable)
+        // Not installed: there is nowhere for the value to take effect.
+        XCTAssertFalse(row("derby", name: "D", config: [key]).isConfigurable)
+    }
+
+    func testTheCardListsTheKeysRatherThanTheirLabels() {
+        // This line is about what the extension can read, and the key is the
+        // thing a reviewer recognises from the manifest.
+        let keys = [ExtensionManifest.ConfigKey(key: "STACKNUDGE_EXT_A", label: "Alpha",
+                                                help: nil, placeholder: nil),
+                    ExtensionManifest.ConfigKey(key: "STACKNUDGE_EXT_B", label: nil,
+                                                help: nil, placeholder: nil)]
+        XCTAssertEqual(row("derby", name: "D", config: keys).configKeyList,
+                       "STACKNUDGE_EXT_A, STACKNUDGE_EXT_B")
     }
 }

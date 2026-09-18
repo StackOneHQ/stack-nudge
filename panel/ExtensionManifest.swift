@@ -17,6 +17,31 @@ struct ExtensionManifest: Equatable {
         static let never = Refresh(onOpen: true, intervalSeconds: nil, whileFocusedOnly: true)
     }
 
+    // A config key the extension declares. A bare string is the original form
+    // and stays valid; the object form adds what a settings form needs in order
+    // to render a field for it rather than a raw environment variable name.
+    //
+    // One list rather than two. The tempting shape is to leave `config` as names
+    // and add a parallel array describing them — which is the same mistake as
+    // the asset name that used to be written in both the packer and the index
+    // writer. The two drift, and what you get is a form field for a key that is
+    // never passed, or a passed key with nowhere to set it.
+    struct ConfigKey: Equatable {
+        let key: String
+        let label: String?
+        let help: String?
+        let placeholder: String?
+
+        // What a form puts next to the field. Falling back to the key with its
+        // namespace stripped is not pretty, but it is always right and it is
+        // better than the bare STACKNUDGE_EXT_DERBY_ORG — an extension that
+        // doesn't bother still gets a usable field.
+        var displayLabel: String {
+            if let label, !label.trimmingCharacters(in: .whitespaces).isEmpty { return label }
+            return String(key.dropFirst(key.hasPrefix(ExtensionManifest.configPrefix) ? ExtensionManifest.configPrefix.count : 0))
+        }
+    }
+
     let id: String
     let name: String
     let version: String
@@ -24,7 +49,7 @@ struct ExtensionManifest: Equatable {
     let tab: Tab
     let run: String
     let requires: [String]
-    let config: [String]
+    let config: [ConfigKey]
     let refresh: Refresh
 
     var tabEntry: ExtensionTab { ExtensionTab(id: id, label: tab.label) }
@@ -49,8 +74,38 @@ struct ExtensionManifest: Equatable {
     // script discovers at runtime.
     static let configPrefix = "STACKNUDGE_EXT_"
 
+    // Shape, not just prefix. A prefix test alone asks whether the key *starts*
+    // in our namespace and says nothing about what follows, so a key could
+    // carry a newline — and the settings form writes keys into
+    // ~/.stack-nudge/config, which is line-based. A manifest declaring
+    //
+    //     "STACKNUDGE_EXT_DERBY_ORG\nSTACKNUDGE_CLAUDE_PATH=/tmp/evil\n#"
+    //
+    // rendered a labelled "Organisation" field; saving it wrote three lines,
+    // the middle one setting the claude CLI path that ProcessOutput.claude()
+    // executes and notify.sh sources. The user's typed value landed in the
+    // discarded "#=" tail, so nothing looked wrong.
+    //
+    // Worth being exact about why this mattered under a curation model where an
+    // extension already runs as the user: the injected line **outlives the
+    // extension**. Uninstalling removes the directory and leaves the config
+    // line, and a "\n" inside a JSON string in a config array is about as
+    // invisible as a manifest gets — so it defeated the review that is supposed
+    // to be the control, and persisted past the removal that is supposed to be
+    // the remedy.
+    //
+    // Matches notify.sh's own reader, which accepts STACKNUDGE_[A-Z0-9_]+.
+    //
+    // \A and \z rather than ^ and $ because the two regex APIs disagree about
+    // the end anchor, and the whole guard rests on it. With "$", the pattern is
+    // safe under String.range(of:options:.regularExpression) — which treats it
+    // as end-of-string — and unsafe under NSRegularExpression, where "$" also
+    // matches before a single trailing line terminator, so a key ending in "\n"
+    // would pass. Hoisting this into a compiled NSRegularExpression is an
+    // obvious enough refactor that the pattern should not depend on nobody
+    // doing it. \z is absolute in both.
     static func isPassableConfigKey(_ key: String) -> Bool {
-        key.hasPrefix(configPrefix) && key.count > configPrefix.count
+        key.range(of: "\\A\(configPrefix)[A-Z0-9_]+\\z", options: .regularExpression) != nil
     }
 
     // The tab strip is a row of buttons across a fixed-width panel, and the id
@@ -125,9 +180,14 @@ struct ExtensionManifest: Equatable {
         guard isValidID(decoded.id) else { return .failure(.invalidID(decoded.id)) }
         let run = decoded.run ?? "./run"
         guard isValidRunPath(run) else { return .failure(.invalidRunPath(run)) }
-        let config = decoded.config ?? []
-        if let stray = config.first(where: { !isPassableConfigKey($0) }) {
-            return .failure(.invalidConfigKey(stray))
+        // Deduplicated by key, first occurrence winning. A manifest naming the
+        // same key twice is a typo rather than a refusal, but the settings form
+        // renders one field per entry and two fields writing one key is a form
+        // where the answer depends on which box you filled in last.
+        var seenConfigKeys = Set<String>()
+        let config = (decoded.config ?? []).filter { seenConfigKeys.insert($0.key).inserted }
+        if let stray = config.first(where: { !isPassableConfigKey($0.key) }) {
+            return .failure(.invalidConfigKey(stray.key))
         }
 
         return .success(ExtensionManifest(
@@ -174,7 +234,42 @@ struct ExtensionManifest: Equatable {
         let tab: Tab?
         let run: String?
         let requires: [String]?
-        let config: [String]?
+        let config: [ConfigKey]?
         let refresh: Refresh?
+    }
+}
+
+// Decoded from either a bare key name or an object describing it. Written back
+// in whichever form it came in, so a round-trip through the index doesn't turn
+// every extension's plain key list into a wall of objects.
+extension ExtensionManifest.ConfigKey: Codable {
+
+    private enum CodingKeys: String, CodingKey {
+        case key, label, help, placeholder
+    }
+
+    init(from decoder: Decoder) throws {
+        let single = try decoder.singleValueContainer()
+        if let name = try? single.decode(String.self) {
+            self.init(key: name, label: nil, help: nil, placeholder: nil)
+            return
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(key: try container.decode(String.self, forKey: .key),
+                  label: try container.decodeIfPresent(String.self, forKey: .label),
+                  help: try container.decodeIfPresent(String.self, forKey: .help),
+                  placeholder: try container.decodeIfPresent(String.self, forKey: .placeholder))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        guard label != nil || help != nil || placeholder != nil else {
+            var single = encoder.singleValueContainer()
+            return try single.encode(key)
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(key, forKey: .key)
+        try container.encodeIfPresent(label, forKey: .label)
+        try container.encodeIfPresent(help, forKey: .help)
+        try container.encodeIfPresent(placeholder, forKey: .placeholder)
     }
 }

@@ -449,4 +449,64 @@ final class ExtensionDocumentTests: XCTestCase {
             """
         XCTAssertEqual(document(json)?.actions, [.init(id: "quit", label: "Quit", key: nil)])
     }
+
+    // MARK: - Multiple ornaments
+
+    // A row can want more than one decoration: a marker fixed at the end of the
+    // track and something riding the fill are anchored two different ways, and
+    // one `ornament` could only ever be one of them.
+    func testARowCanCarrySeveralOrnaments() {
+        guard case .success(let document) = ExtensionDocument.parse(Data("""
+            {"schema":1,"rows":[{"id":"a","title":"A","ornaments":[
+              {"anchor":"trailing","palette":{"W":"#fff"},"frames":[["W","W"]]},
+              {"anchor":"fill-edge","fps":7,"palette":{"H":"#f00"},"frames":[["HH"],["H"]]}
+            ]}]}
+            """.utf8)) else { return XCTFail("didn't parse") }
+        let ornaments = document.rows[0].ornaments
+        XCTAssertEqual(ornaments.count, 2)
+        XCTAssertEqual(ornaments[0].anchor, .trailing)
+        XCTAssertEqual(ornaments[1].anchor, .fillEdge)
+    }
+
+    // The singular spelling is what every document written before this used, so
+    // it keeps working and keeps meaning the same thing.
+    func testTheSingularSpellingStillWorks() {
+        guard case .success(let document) = ExtensionDocument.parse(Data("""
+            {"schema":1,"rows":[{"id":"a","title":"A",
+             "ornament":{"anchor":"leading","palette":{"H":"#fff"},"frames":[["H"]]}}]}
+            """.utf8)) else { return XCTFail("didn't parse") }
+        XCTAssertEqual(document.rows[0].ornaments.count, 1)
+        XCTAssertEqual(document.rows[0].ornament?.anchor, .leading)
+    }
+
+    // Both, in the order written — the singular reads first, so a document
+    // using it plus a list doesn't have its original decoration reordered.
+    func testBothSpellingsCombineInOrder() {
+        guard case .success(let document) = ExtensionDocument.parse(Data("""
+            {"schema":1,"rows":[{"id":"a","title":"A",
+             "ornament":{"anchor":"leading","palette":{"H":"#fff"},"frames":[["H"]]},
+             "ornaments":[{"anchor":"trailing","palette":{"W":"#fff"},"frames":[["W"]]}]}]}
+            """.utf8)) else { return XCTFail("didn't parse") }
+        XCTAssertEqual(document.rows[0].ornaments.map(\.anchor), [.leading, .trailing])
+    }
+
+    // Capped like everything else a document can send a list of.
+    func testOrnamentsAreCapped() {
+        // ## delimiters: the payload contains "#fff", and "# would close a
+        // single-# raw string in the middle of it.
+        let one = ##"{"anchor":"leading","palette":{"H":"#fff"},"frames":[["H"]]}"##
+        let many = Array(repeating: one, count: 10).joined(separator: ",")
+        guard case .success(let document) = ExtensionDocument.parse(Data("""
+            {"schema":1,"rows":[{"id":"a","title":"A","ornaments":[\(many)]}]}
+            """.utf8)) else { return XCTFail("didn't parse") }
+        XCTAssertEqual(document.rows[0].ornaments.count, ExtensionDocument.maxOrnaments)
+    }
+
+    func testARowWithNoOrnamentHasAnEmptyList() {
+        guard case .success(let document) =
+                ExtensionDocument.parse(Data(#"{"schema":1,"rows":[{"id":"a","title":"A"}]}"#.utf8))
+        else { return XCTFail("didn't parse") }
+        XCTAssertTrue(document.rows[0].ornaments.isEmpty)
+        XCTAssertNil(document.rows[0].ornament)
+    }
 }

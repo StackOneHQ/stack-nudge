@@ -31,6 +31,16 @@ final class SettingsCategoryTests: XCTestCase {
         // Attention rows are conditional, so name them rather than reading a
         // state where they happen to be absent.
         var covered: Set<SettingsRow> = [.wireAgents, .dismissAgents, .permissions, .update]
+        // The Extensions category lists one row per installed extension, so the
+        // representative that SettingsRow.allCases carries needs an extension
+        // to be a row for. Seeding it here rather than excusing the case is the
+        // whole point: allCases includes it precisely so this guard covers the
+        // one row `activate()` can forget silently.
+        nav.installedExtensions = [
+            ExtensionRow(id: SettingsRow.representativeExtensionID, name: "Derby",
+                         description: "", installedVersion: "1.0.0", availableVersion: nil,
+                         refusedReason: nil, requires: [], config: []),
+        ]
         // The voice category swaps rows on whether the model is cached; both
         // branches are reachable, so both count as homes.
         for cached in [true, false] {
@@ -41,6 +51,179 @@ final class SettingsCategoryTests: XCTestCase {
         }
         let orphaned = Set(SettingsRow.allCases).subtracting(covered)
         XCTAssertTrue(orphaned.isEmpty, "rows with no category: \(orphaned)")
+
+        // The other direction, which is the half that was missing and the half
+        // that now matters most. allCases used to be synthesised; it is
+        // hand-written since SettingsRow gained an associated value, so a case
+        // can silently fall out of the list — and subtracting a smaller
+        // allCases from `covered` only ever makes the assertion above *greener*.
+        // A row that the UI renders and allCases has forgotten is invisible to
+        // every test that iterates allCases, which is the point of having one.
+        //
+        // Together the two make allCases exactly the set of rows reachable in
+        // the UI, in both directions.
+        let unlisted = covered.subtracting(SettingsRow.allCases)
+        XCTAssertTrue(unlisted.isEmpty, "rows missing from allCases: \(unlisted)")
+    }
+
+    // The category grows and shrinks with what is installed, and the browse row
+    // is always last so the list reads as "what you have, then how to get more".
+    func testTheExtensionsCategoryListsWhatIsInstalled() {
+        let nav = PanelNav()
+        XCTAssertEqual(nav.rows(in: .extensions), [.browseExtensions])
+
+        nav.installedExtensions = [
+            ExtensionRow(id: "derby", name: "Derby", description: "",
+                         installedVersion: "1.0.0", availableVersion: nil,
+                         refusedReason: nil, requires: [], config: []),
+            ExtensionRow(id: "system", name: "System", description: "",
+                         installedVersion: "1.1.1", availableVersion: nil,
+                         refusedReason: nil, requires: [], config: []),
+        ]
+        XCTAssertEqual(nav.rows(in: .extensions),
+                       [.installedExtension("derby"), .installedExtension("system"),
+                        .browseExtensions])
+    }
+
+    // A refusal is an installed thing that is broken, so it belongs with the
+    // installed ones. Splitting it away from them is what produced an orange
+    // "Remove" sitting directly above a card offering "Install".
+    func testARefusedExtensionIsListedHereToo() {
+        let nav = PanelNav()
+        nav.installedExtensions = [
+            ExtensionRow(id: "broken", name: "broken", description: "",
+                         installedVersion: nil, availableVersion: nil,
+                         refusedReason: "needs manifest schema 2", requires: [], config: []),
+        ]
+        XCTAssertEqual(nav.rows(in: .extensions),
+                       [.installedExtension("broken"), .browseExtensions])
+    }
+
+    // Enter on an extension card opens it. activate()'s switch ends in
+    // `default: applyCycle`, so omitting the case is not a build error — it is
+    // Enter quietly doing nothing on the one row whose purpose is being opened.
+    // Two extensions, and the *second* is selected: with only one seeded — and
+    // named the same as the representative allCases carries — the test could
+    // not tell "opens the selected row" from "opens a constant".
+    func testEnterOnAnExtensionCardOpensTheSelectedOne() {
+        let nav = PanelNav()
+        var opened: [String] = []
+        nav.actions = Self.actions(openExtension: { opened.append($0) })
+        nav.installedExtensions = [row("derby"), row("system")]
+        nav.settingsCategory = .extensions
+        nav.selectedSettingIndex = nav.index(of: .installedExtension("system")) ?? 0
+        nav.activate()
+        XCTAssertEqual(opened, ["system"])
+    }
+
+    // Arrows must not act on it — the card is an action row, and ←/→ grazing it
+    // should do nothing rather than half-open something.
+    //
+    // Drives cycleForward/cycleBackward rather than only reading the predicate.
+    // The predicate and applyCycle are two switches 200 lines apart, and a test
+    // that reads one of them compares it to itself: moving .installedExtension
+    // into applyCycle's *acting* group made ←/→ fire checkPermissions() and no
+    // test noticed.
+    func testArrowsDoNothingOnAnExtensionCard() {
+        let nav = PanelNav()
+        var opened: [String] = []
+        var permissionChecks = 0
+        nav.actions = Self.actions(openExtension: { opened.append($0) },
+                                   checkPermissions: { permissionChecks += 1 })
+        nav.installedExtensions = [row("derby")]
+        nav.settingsCategory = .extensions
+        nav.selectedSettingIndex = nav.index(of: .installedExtension("derby")) ?? 0
+
+        XCTAssertFalse(nav.selectedRowRespondsToArrows)
+        nav.cycleForward()
+        nav.cycleBackward()
+        XCTAssertTrue(opened.isEmpty, "arrows must not open an extension")
+        XCTAssertEqual(permissionChecks, 0, "arrows must not fire another row's action")
+        XCTAssertEqual(nav.selectedRow, .installedExtension("derby"))
+    }
+
+    // SettingsActions has one closure per wired effect and a memberwise init,
+    // so a stub has to name all of them — which is the point: adding an action
+    // fails to compile here rather than silently going unexercised.
+    private static func actions(
+        openExtension: @escaping (String) -> Void = { _ in },
+        checkPermissions: @escaping () -> Void = {}
+    ) -> SettingsActions {
+        SettingsActions(
+            checkPermissions: checkPermissions, openConfig: {}, editPhrases: {},
+            browseExtensions: {}, openExtension: openExtension,
+            openReleaseNotes: {}, checkForUpdates: {}, beginUpdate: {}, runUpdate: {},
+            beginUninstall: {}, runUninstall: {}, runBootstrap: {}, quit: {},
+            expandFromCompact: {}, exitCompactMode: {},
+            muteFor: { _ in }, resumeNotifications: {},
+            applyEventHistorySetting: {}, clearEventHistory: {},
+            pasteSlackSetup: {}, detectSlackUser: {}, sendSlackTest: {})
+    }
+
+    // Removing an extension left selectedSettingIndex pointing at the same
+    // *number* in a shorter list, so the ring moved onto the card below the one
+    // just deleted — and ⏎ then opened an extension nobody chose, with its
+    // Remove button under the cursor that had just clicked Remove.
+    func testRemovingAnExtensionAboveTheSelectionKeepsTheSelectedOne() {
+        let nav = PanelNav()
+        nav.installedExtensions = [row("a"), row("b"), row("c")]
+        nav.settingsCategory = .extensions
+        nav.selectedSettingIndex = nav.index(of: .installedExtension("b")) ?? 0
+        XCTAssertEqual(nav.selectedRow, .installedExtension("b"))
+
+        // "b" moves from index 1 to index 0. An index that stayed put would now
+        // be pointing at "c" — a card the user never selected, whose Remove
+        // button sits exactly where the last one did.
+        nav.installedExtensions = [row("b"), row("c")]
+        XCTAssertEqual(nav.selectedRow, .installedExtension("b"))
+        XCTAssertEqual(nav.selectedSettingIndex, nav.index(of: .installedExtension("b")))
+    }
+
+    // The row it was on is gone, so it falls back to the first row of the
+    // category rather than to whatever inherited the index.
+    func testRemovingTheSelectedExtensionFallsBackToTheFirstRow() {
+        let nav = PanelNav()
+        nav.installedExtensions = [row("a"), row("b")]
+        nav.settingsCategory = .extensions
+        nav.selectedSettingIndex = nav.index(of: .installedExtension("b")) ?? 0
+
+        nav.installedExtensions = [row("a")]
+        XCTAssertEqual(nav.selectedRow, .installedExtension("a"))
+    }
+
+    // A change that doesn't reshape the list must not move the selection —
+    // re-anchoring on every publish would fight the user's own arrow keys.
+    func testAnUnchangedExtensionListLeavesTheSelectionAlone() {
+        let nav = PanelNav()
+        nav.installedExtensions = [row("a"), row("b")]
+        nav.settingsCategory = .extensions
+        nav.selectedSettingIndex = nav.index(of: .browseExtensions) ?? 0
+        let before = nav.selectedSettingIndex
+
+        nav.installedExtensions = [row("a"), row("b")]
+        XCTAssertEqual(nav.selectedSettingIndex, before)
+        XCTAssertEqual(nav.selectedRow, .browseExtensions)
+    }
+
+    private func row(_ id: String) -> ExtensionRow {
+        ExtensionRow(id: id, name: id, description: "", installedVersion: "1.0.0",
+                     availableVersion: nil, refusedReason: nil, requires: [], config: [])
+    }
+
+    // An extension's page is a level below its tab and goes the same way when
+    // the extension does. Removing one in-app navigates away already; this is
+    // the out-of-band case — the directory deleted under the panel — which
+    // would otherwise leave the mode on a page describing something gone.
+    func testAnExtensionRemovedUnderThePanelClosesItsPage() {
+        let nav = PanelNav()
+        nav.installedExtensions = [row("derby")]
+        nav.mode = .extensionConfig("derby")
+        nav.reconcileModeWithTabs()
+        XCTAssertEqual(nav.mode, .extensionConfig("derby"))
+
+        nav.installedExtensions = []
+        nav.reconcileModeWithTabs()
+        XCTAssertEqual(nav.mode, .settings)
     }
 
     func testAttentionRowsAreAbsentUntilTheyApply() {

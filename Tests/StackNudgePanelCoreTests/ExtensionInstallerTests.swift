@@ -32,6 +32,28 @@ final class ExtensionInstallerTests: XCTestCase {
 
     // An index with nothing in it is what a release ships before the first
     // extension exists, so it must be ordinary rather than an error.
+    // The index is fetched from /releases/latest by every host at every
+    // version, so a newer release's index reaches older binaries. Decoding the
+    // array strictly made any future entry-shape change a break rather than a
+    // degrade: one entry carrying a field this version can't read took the
+    // whole catalogue out, and Settings → Extensions said only "the extension
+    // index didn't parse".
+    func testAnUnreadableEntryCostsThatEntryAndNotTheCatalogue() {
+        let json = """
+            {"schema":1,"extensions":[
+              {"id":"system","name":"System","version":"1.1.1","description":"",
+               "asset":"extension-system-1.1.1.tar.gz","sha256":"ab","requires":[],"config":[]},
+              {"id":"future","name":"Future","version":"2.0.0","description":"",
+               "asset":"extension-future-2.0.0.tar.gz","sha256":"cd","requires":[],
+               "config":[{"key":"STACKNUDGE_EXT_X","label":"X"}]}
+            ]}
+            """
+        guard case .success(let entries) = ExtensionInstaller.parseIndex(Data(json.utf8)) else {
+            return XCTFail("one unreadable entry must not fail the whole index")
+        }
+        XCTAssertEqual(entries.map(\.id), ["system"])
+    }
+
     func testAnEmptyIndexIsNotAFailure() {
         guard case .success(let entries) = index(#"{"schema":1,"extensions":[]}"#) else {
             return XCTFail("expected success")

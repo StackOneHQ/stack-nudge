@@ -19,14 +19,31 @@ enum ConfigFile {
     }
 
     static func write(key: String, value: String) {
+        guard isWritableKey(key) else { return }
         let contents = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
         persist(apply(contents, key: key, value: value))
+    }
+
+    // The second half of the fix for an extension manifest writing arbitrary
+    // config keys (see ExtensionManifest.isPassableConfigKey). That one closes
+    // it where the key enters; this closes it where the key is used, so a
+    // future caller that builds a key from anything but a literal can't reopen
+    // it. The file is line-based and `apply` writes "key=value", so a key
+    // containing a newline writes lines rather than one, and a key containing
+    // "=" writes an assignment the reader splits somewhere else.
+    //
+    // Every existing caller passes a compile-time constant, so nothing
+    // legitimate is turned away by this.
+    static func isWritableKey(_ key: String) -> Bool {
+        // ASCII first: Character.isNumber is true for non-ASCII digits too.
+        !key.isEmpty && key.allSatisfy { $0.isASCII && ($0 == "_" || $0.isLetter || $0.isNumber) }
     }
 
     // Drop a key entirely. Used to scrub a secret that was planted here for
     // provisioning once it has been moved into the Keychain.
     static func remove(key: String) {
-        guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else { return }
+        guard isWritableKey(key),
+              let contents = try? String(contentsOfFile: path, encoding: .utf8) else { return }
         persist(strip(contents, key: key))
     }
 
