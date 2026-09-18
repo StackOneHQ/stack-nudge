@@ -1,0 +1,456 @@
+#!/usr/bin/env python3
+"""The Token Derby, as a stack-nudge extension.
+
+A horse race where each runner advances on the tokens its owner burns. The
+service (token-derby.mauricode.co.uk) is a third party and this is read-only:
+we GET a race and describe it. Nothing about this machine is ever sent.
+
+This began life as a built-in Swift tab. Everything host-shaped went away in
+the move — the colour clamping, the sprite geometry, the polling schedule are
+all the host's now, declared in manifest.json rather than coded here. What is
+left is the part that is actually about racing.
+
+Python rather than /bin/sh because this parses JSON from the network. The
+shell version would have wanted awk for that, and awk taking program text
+built from a server's response is how the packaging script in this repo
+acquired an arbitrary-code-execution bug.
+
+See docs/extensions.md for the schema this prints.
+"""
+
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timezone
+
+DEFAULT_BASE = "https://token-derby.mauricode.co.uk/api"
+ORG_KEY = "STACKNUDGE_EXT_DERBY_ORG"
+BASE_KEY = "STACKNUDGE_EXT_DERBY_BASE"
+TIMEOUT = 8  # The host's own budget is 12s for two round trips plus overhead.
+
+# A horse, 16x11. Palette keys only: "H" is the coat, "M" the mane and tail,
+# "." transparent. The host sizes the canvas from the largest frame and rides
+# it on the head of the fill, so the two frames only have to differ.
+#
+# At 1.5pt a cell the silhouette is doing all the work, so the legs gather and
+# splay rather than articulate.
+HORSE_STANDING = [
+    "...........HHHH.",
+    "..........MHHHHH",
+    ".........MMHH...",
+    "M.......MMH.....",
+    "MMM...HHHHH.....",
+    ".MMHHHHHHHH.....",
+    "..MHHHHHHHH.....",
+    "...HHHHHHH......",
+    "...H.H..H.H.....",
+    "...H.H..H.H.....",
+    "...H.H..H.H.....",
+]
+HORSE_EXTENDED = HORSE_STANDING[:8] + [
+    "..H...H.H...H...",
+    "..H...H.H...H...",
+    "..H...H.H...H...",
+]
+
+# Anything the service doesn't give a colour for. The host clamps whatever it
+# is handed toward legibility against the current appearance, so this only has
+# to be roughly right rather than correct in both modes.
+DEFAULT_COAT = "#7FD1B9"
+
+
+# --- Formatting -------------------------------------------------------------
+# Both of these mirror a Swift helper the panel uses for its own tabs
+# (TokenFormat.short and QuotaReset.shortLabel in panel/Formatting.swift). An
+# extension can't reach them, and a Derby row that abbreviates differently from
+# the Usage tab beside it reads as two apps in one panel.
+
+def short_tokens(count):
+    """1234567 -> "1.2M", 218000 -> "218K", 42 -> "42"."""
+    count = int(count)
+    if count >= 1_000_000:
+        return "%.1fM" % (count / 1_000_000)
+    if count >= 1_000:
+        return "%dK" % round(count / 1_000)
+    return str(count)
+
+
+def short_countdown(seconds):
+    """Seconds remaining as "2d3h" / "5h44m" / "12m"."""
+    seconds = int(seconds)
+    if seconds <= 0:
+        return None
+    if seconds >= 86400:
+        days, hours = seconds // 86400, (seconds % 86400) // 3600
+        return "%dd%dh" % (days, hours) if hours else "%dd" % days
+    if seconds >= 3600:
+        hours, minutes = seconds // 3600, (seconds % 3600) // 60
+        return "%dh%dm" % (hours, minutes) if minutes else "%dh" % hours
+    # Sub-minute is genuinely about to end, and "0m" reads as a stopped clock.
+    return "%dm" % max(1, seconds // 60)
+
+
+# --- Colour -----------------------------------------------------------------
+
+def darken(hex_color, fraction=0.45):
+    """Blend a colour toward black, for the mane against its own coat.
+
+    Without it the mane is the same colour as the body and the horse is a
+    blob. The host's legibility clamp acts on each palette entry separately,
+    so this only has to make the two differ.
+    """
+    parsed = parse_hex(hex_color)
+    if parsed is None:
+        return hex_color
+    keep = 1 - fraction
+    return "#%02X%02X%02X" % tuple(int(round(c * keep)) for c in parsed)
+
+
+def parse_hex(value):
+    """"#RGB", "#RRGGBB" or the same without the hash -> (r, g, b), else None.
+
+    Deliberately more tolerant than the host, which requires the hash and
+    would drop a bare "ff0000" back to the accent colour. Reading loosely and
+    writing strictly is what keeps a horse's own colour from being lost to a
+    punctuation difference — see normalise_hex, which every emitted colour
+    goes through.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip().lstrip("#")
+    if len(text) == 3:
+        text = "".join(c * 2 for c in text)
+    if len(text) != 6:
+        return None
+    try:
+        return tuple(int(text[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return None
+
+
+def normalise_hex(value):
+    """A colour in the exact form the host accepts, or None.
+
+    Everything this script emits goes through here. The host parses "#RRGGBB"
+    and "#RGB" and nothing else, and a palette entry it can't read falls back —
+    so a tint that survived our own parser but not its one is a horse that
+    quietly loses its silks.
+    """
+    parsed = parse_hex(value)
+    return None if parsed is None else "#%02X%02X%02X" % parsed
+
+
+# --- The race ---------------------------------------------------------------
+
+def parse_time(value):
+    """An ISO 8601 stamp, with or without fractional seconds.
+
+    The service stamps milliseconds and a trailing "Z", which
+    datetime.fromisoformat refused before 3.11.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def duration_seconds(start, end):
+    """How long the race runs, or None if either end is unreadable."""
+    first, last = parse_time(start), parse_time(end)
+    if first is None or last is None:
+        return None
+    seconds = (last - first).total_seconds()
+    return seconds if seconds > 0 else None
+
+
+def number(value, default=0.0):
+    """current_tokens arrives as an int for some horses and a half-token float
+    for others, so neither type can be assumed. A bool is an int in Python and
+    is not a token count."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return float(value)
+
+
+def pick(races):
+    """The race worth showing, by the same rule the derby's own site uses.
+
+    Newest live, else newest finished, else the soonest pending — note the
+    last one sorts the other way, because a race that hasn't started is
+    interesting for being *next* rather than for being recent. Matching the
+    website matters: an extension that quietly picked a different race from
+    the page it mirrors would read as stale data rather than as a difference
+    of opinion.
+    """
+    usable = [r for r in races if isinstance(r, dict) and r.get("join_code")]
+
+    def started(race):
+        when = parse_time(race.get("start_time"))
+        return when.timestamp() if when else 0.0
+
+    for status, newest_first in (("live", True), ("finished", True), ("pending", False)):
+        matching = sorted([r for r in usable if r.get("status") == status],
+                          key=started, reverse=newest_first)
+        if matching:
+            return matching[0]
+    return None
+
+
+def elapsed_fraction(race):
+    """How much of the race has run, 0...1.
+
+    A finished race is fully run whatever the clock says; a pending one hasn't
+    started, so the field is still at the gate.
+    """
+    status = race.get("status")
+    if status == "finished":
+        return 1.0
+    if status != "live":
+        return 0.0
+    total = duration_seconds(race.get("start_time"), race.get("end_time"))
+    left = race.get("time_left_seconds")
+    if not total or not isinstance(left, (int, float)) or isinstance(left, bool):
+        return 0.0
+    return min(1.0, max(0.0, 1 - float(left) / total))
+
+
+def position(tokens, leader, elapsed):
+    """Where a horse sits on the track.
+
+    Scaled by elapsed time, not just by the leader. Leader-relative alone pins
+    the front-runner to the finish line from the first minute, which makes a
+    twelve-hour race look permanently over. This way the leader's position *is*
+    the race's progress, the field keeps its relative gaps, and the winner
+    reaches the line at the bell.
+    """
+    if leader <= 0:
+        return 0.0
+    return (tokens / leader) * elapsed
+
+
+def scored(horse):
+    """What the race is ranked on, and therefore what the bar must draw.
+
+    Drawing current_tokens instead put a 4th-placed horse's bar ahead of 2nd's:
+    the league discounts raw usage, so the two diverge. scored_tokens is absent
+    on a race that isn't scoring, so fall back rather than drawing nothing.
+    """
+    raw = number(horse.get("current_tokens"))
+    return number(horse.get("scored_tokens"), raw)
+
+
+# --- The document -----------------------------------------------------------
+
+def division_of(horse, names):
+    """`division` is 1-based into league_division_names."""
+    index = horse.get("division")
+    if not isinstance(index, int) or isinstance(index, bool):
+        return None
+    if 1 <= index <= len(names) and isinstance(names[index - 1], str):
+        return names[index - 1]
+    return None
+
+
+def footnote_for(horse, names):
+    pace = number(horse.get("pace_15m"))
+    division = division_of(horse, names)
+    parts = []
+    if pace > 0:
+        parts.append("%s/15m" % short_tokens(pace))
+    if division:
+        parts.append(division)
+    return " · ".join(parts)
+
+
+def ornament_for(coat, animated):
+    """A still horse gets one frame and no fps, so the host doesn't start a
+    timeline that redraws the row to show the same thing."""
+    frames = [HORSE_STANDING, HORSE_EXTENDED] if animated else [HORSE_STANDING]
+    return {
+        "kind": "sprite",
+        "fps": 7 if animated else 0,
+        "anchor": "fill-edge",
+        "palette": {"H": coat, "M": darken(coat)},
+        "frames": frames,
+    }
+
+
+def row_for(horse, leader, elapsed, live, names):
+    colours = horse.get("colors")
+    coat = normalise_hex(colours.get("body") if isinstance(colours, dict) else None)
+    if coat is None:
+        coat = DEFAULT_COAT
+    tokens = scored(horse)
+    rank = horse.get("rank")
+    pace = number(horse.get("pace_15m"))
+    return {
+        "id": str(horse.get("horse_id")),
+        # An en dash rather than a blank, so an unranked horse still lines its
+        # name up with the ranked ones above it.
+        "lead": str(rank) if isinstance(rank, int) and not isinstance(rank, bool) else "–",
+        "title": str(horse.get("name") or "Unnamed"),
+        "subtitle": str(horse.get("user_name")) if horse.get("user_name") else "",
+        "value": short_tokens(tokens),
+        "footnote": footnote_for(horse, names),
+        "track": {"fill": position(tokens, leader, elapsed), "tint": coat},
+        # Only a live runner that is actually burning tokens animates. A
+        # finished race is a standings table.
+        "ornament": ornament_for(coat, live and pace > 0),
+    }
+
+
+def document(race):
+    """One race as a view document."""
+    horses = [h for h in race.get("horses") or [] if isinstance(h, dict) and h.get("horse_id")]
+    names = [n for n in race.get("league_division_names") or [] if isinstance(n, str)]
+    status = str(race.get("status") or "")
+    live = status == "live"
+    elapsed = elapsed_fraction(race)
+    leader = max([scored(h) for h in horses], default=0.0)
+
+    header = {
+        "title": str(race.get("name") or "Race"),
+        "badge": {"text": status.upper() or "UNKNOWN",
+                  "tone": {"live": "success", "pending": "warning"}.get(status, "neutral")},
+    }
+    if live:
+        left = race.get("time_left_seconds")
+        if isinstance(left, (int, float)) and not isinstance(left, bool):
+            countdown = short_countdown(left)
+            if countdown:
+                header["trailing"] = countdown
+
+    return {
+        "schema": 1,
+        "state": "ok" if horses else "empty",
+        "message": None if horses else "No runners in this race yet.",
+        "header": header,
+        # Server order is the ranking; re-sorting here risks disagreeing with it.
+        "rows": [row_for(h, leader, elapsed, live, names) for h in horses],
+        "actions": [{"id": "refresh", "label": "Sync now", "key": "r"}],
+    }
+
+
+def message(state, text):
+    return {"schema": 1, "state": state, "message": text,
+            "actions": [{"id": "refresh", "label": "Sync now", "key": "r"}]}
+
+
+# --- I/O --------------------------------------------------------------------
+
+def valid_base(value):
+    """https only, and no credentials in the URL.
+
+    The value comes from the config file, which is the user's own, so this is
+    not a trust boundary — but a base silently downgraded to http would send a
+    request the user thinks is encrypted, and that is worth refusing loudly.
+    """
+    if not value:
+        return DEFAULT_BASE
+    parsed = urllib.parse.urlsplit(value)
+    if parsed.scheme != "https" or not parsed.netloc or parsed.username:
+        return None
+    return value.rstrip("/")
+
+
+class NotJSON(Exception):
+    """The request succeeded and returned something that isn't data.
+
+    Worth its own type rather than falling in with a parse error. The derby is
+    a single-page app behind a CDN, and a route the CDN doesn't recognise is
+    served the app's own index.html with a 200 — so "the service is
+    misconfigured" arrives looking exactly like "the response was corrupt",
+    and the two want very different things said about them.
+    """
+
+
+def get_json(url):
+    request = urllib.request.Request(
+        url, headers={"User-Agent": "stack-nudge", "Accept": "application/json"})
+    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+        content_type = (response.headers.get("Content-Type") or "").lower()
+        body = response.read().decode("utf-8", errors="replace")
+    if "json" not in content_type:
+        raise NotJSON(content_type or "no content type")
+    return json.loads(body)
+
+
+def api_error_code(error):
+    """The derby answers a failed call with {"code": ..., "message": ...}."""
+    try:
+        payload = json.loads(error.read().decode("utf-8", errors="replace"))
+    except (ValueError, OSError):
+        return None, None
+    if not isinstance(payload, dict):
+        return None, None
+    return payload.get("code"), payload.get("message")
+
+
+def fetch(base, org):
+    """Two hops: the org's races, then the one worth showing."""
+    listing = get_json("%s/organisations/%s/races" % (base, urllib.parse.quote(org, safe="")))
+    races = listing.get("races") if isinstance(listing, dict) else None
+    chosen = pick(races or [])
+    if not chosen:
+        return None
+    code = urllib.parse.quote(str(chosen["join_code"]), safe="")
+    race = get_json("%s/races/%s" % (base, code))
+    return race if isinstance(race, dict) else None
+
+
+def build():
+    org = (os.environ.get(ORG_KEY) or "").strip()
+    if not org:
+        return message("empty",
+                       "Set an organisation in Settings → Extensions → Token Derby.")
+
+    base = valid_base((os.environ.get(BASE_KEY) or "").strip())
+    if base is None:
+        return message("error", "The API base must be an https:// URL.")
+
+    try:
+        race = fetch(base, org)
+    except NotJSON:
+        # Not a wrong org and not a network fault: the route answered with the
+        # derby's own web page. Say which, because the fix is on the service's
+        # side and nothing the user changes here will help.
+        return message("error",
+                       "The derby's API returned a web page instead of data. "
+                       "Its race endpoints look misconfigured.")
+    except urllib.error.HTTPError as error:
+        code, detail = api_error_code(error)
+        if code == "ORG_NOT_FOUND" or error.code == 404:
+            return message("empty", 'No organisation named "%s".' % org)
+        if code == "UNAUTHENTICATED":
+            return message("error", "This organisation's races aren't public.")
+        return message("error", detail or "The derby returned %d." % error.code)
+    except urllib.error.URLError as error:
+        return message("error", "Couldn't reach the derby — %s." % error.reason)
+    except (ValueError, TimeoutError, OSError):
+        return message("error", "The derby's response wasn't readable.")
+
+    if not race:
+        return message("empty", 'No races found for "%s".' % org)
+    return document(race)
+
+
+def main():
+    # Actions are the host re-running us with flags. There is only one, and its
+    # answer is a fresh document — which is what an argument-free run prints
+    # anyway, so nothing here needs to branch on argv.
+    json.dump(build(), sys.stdout)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -69,6 +69,13 @@ typecheck-tests:
 test-without-xcode:
 	@./scripts/run-tests-without-xcode.sh $(NAME)
 
+# The reference extensions' own tests, the same way CI runs them. They are
+# Python rather than XCTest because the extensions are — nothing in an
+# extension is Swift, and a script's tests belong beside the script.
+.PHONY: test-extensions
+test-extensions:
+	@./scripts/test-extensions.sh
+
 # One-shot dev cycle: rebuild, reinstall the app, refresh notify.sh in
 # ~/.stack-nudge so hook-side changes propagate, kickstart the daemon.
 # Build output goes to $(BUILD_LOG); on failure, last 20 lines tail to stderr.

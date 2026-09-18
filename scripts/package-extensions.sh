@@ -138,7 +138,16 @@ package_one() {
   # expects to find after extraction.
   # -- so an id can never be read as an option, belt and braces alongside the
   # validator's leading-dash rule.
-  tar czf "$outdir/$asset" -C "$ext_root" -- "$id"
+  #
+  # Python bytecode is excluded because the package is built from the working
+  # tree, not from git: an extension with tests leaves __pycache__ behind the
+  # first time anyone runs them, and the packer swept it in. That shipped stale
+  # machine-specific .pyc files to every user, and made the tarball's bytes
+  # depend on whether the person building it had run the tests — which is not a
+  # thing a checksummed artefact may depend on.
+  tar czf "$outdir/$asset" \
+    --exclude '__pycache__' --exclude '*.pyc' --exclude '.DS_Store' \
+    -C "$ext_root" -- "$id"
   # Run from $outdir with a bare basename, shasum already prints exactly
   # "<hash>  <basename>" — so there is nothing for awk to do, and no program
   # text for a manifest value to reach. The awk that used to be here was
