@@ -4046,18 +4046,27 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             case .moveSelection(let delta):
                 extensionCatalog.moveSelection(among: visibleRows(), by: delta)
             case .activate:
-                // An installed row with nothing to update has no install action
-                // left, and Enter used to sit there doing nothing while the
-                // footer advertised it. Opening its page is what the card's own
-                // button does, so Enter now agrees with the button.
-                let rows = visibleRows()
-                if let id = extensionCatalog.selectedID,
-                   let row = rows.first(where: { $0.id == id }),
-                   row.isInstalled, !row.updateAvailable,
-                   extensionCatalog.failure(for: id) == nil {
-                    configureExtension(row, from: .extensions)
-                } else {
-                    extensionCatalog.activateSelection(among: rows)
+                switch extensionCatalog.selection {
+                case .back:
+                    closeExtensionsBrowser()
+                // The same action the ⌘R hint names; the button is the mouse's
+                // way to it and this is the keyboard's.
+                case .retry:
+                    extensionCatalog.reload()
+                case .row, nil:
+                    // An installed row with nothing to update has no install
+                    // action left, and Enter used to sit there doing nothing
+                    // while the footer advertised it. Opening its page is what
+                    // the card's own button does, so Enter now agrees with it.
+                    let rows = visibleRows()
+                    if let id = extensionCatalog.selectedID,
+                       let row = rows.first(where: { $0.id == id }),
+                       row.isInstalled, !row.updateAvailable,
+                       extensionCatalog.failure(for: id) == nil {
+                        configureExtension(row, from: .extensions)
+                    } else {
+                        extensionCatalog.activateSelection(among: rows)
+                    }
                 }
             case .swallow:      break
             }

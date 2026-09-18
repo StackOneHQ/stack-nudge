@@ -26,9 +26,33 @@ final class ExtensionCatalog: ObservableObject {
     @Published private(set) var load: Load = .idle
     @Published private(set) var entries: [ExtensionInstaller.IndexEntry] = []
     @Published private(set) var work: [String: Work] = [:]
+    // Everything on the page the keyboard can land on, in the order it is drawn.
+    // Not just the rows: the page has a back chevron above them and, when the
+    // catalogue fetch failed, a Try again beside the reason. Both had a key
+    // already (Esc and ⌘R) and neither had a ring, so the page looked half
+    // wired next to an extension's own, which walks its buttons.
+    //
+    // The search field is deliberately not a target. Every other control here
+    // needs ⏎ to reach it; the field is reached by typing, which is what the
+    // page does with any printable key, and a ring you step onto to start
+    // typing would be a second way to do the thing that already needs none.
+    enum Target: Equatable {
+        case back
+        case retry
+        case row(String)
+    }
+
     // Keyboard selection. The panel is keyboard-native and this page's own
     // footer advertises key hints, but every action on it was mouse-only.
-    @Published var selectedID: String?
+    @Published var selection: Target?
+
+    // The row the selection is on, if it is on one. Most of the page cares only
+    // about this, and a card highlighting itself should not have to know the
+    // chevron exists.
+    var selectedID: String? {
+        if case .row(let id) = selection { return id }
+        return nil
+    }
     // What the search field holds. Filtering happens at render time rather than
     // over `entries`, so a query never hides an *installed* extension from the
     // merge that produces the rows — it only hides it from this list.
@@ -150,14 +174,22 @@ final class ExtensionCatalog: ObservableObject {
 
     // MARK: - Keyboard
 
+    // Drawing order, which is also the order ↑↓ walk. Try again exists only
+    // while the fetch has failed, because that is the only time the button is
+    // drawn; back is always there, so the list is never empty even on a
+    // catalogue with nothing in it.
+    func targets(among rows: [ExtensionRow]) -> [Target] {
+        [.back] + (load.isFailure ? [.retry] : []) + rows.map { Target.row($0.id) }
+    }
+
     func moveSelection(among rows: [ExtensionRow], by delta: Int) {
-        guard !rows.isEmpty else { return }
-        let current = rows.firstIndex { $0.id == selectedID }
+        let all = targets(among: rows)
+        let current = all.firstIndex { $0 == selection }
         // No selection yet: ↓ takes the first and ↑ the last, so either arrow
         // is a way in. Same rule as the extension tab's row list.
-        let next = current.map { min(max($0 + delta, 0), rows.count - 1) }
-            ?? (delta > 0 ? 0 : rows.count - 1)
-        selectedID = rows[next].id
+        let next = current.map { min(max($0 + delta, 0), all.count - 1) }
+            ?? (delta > 0 ? 0 : all.count - 1)
+        selection = all[next]
     }
 
     // What Enter does to the selected row: install it, or update it, or dismiss
@@ -178,8 +210,8 @@ final class ExtensionCatalog: ObservableObject {
 
     // ⌘↑↓, which every other list page in the panel answers.
     func selectEdge(among rows: [ExtensionRow], top: Bool) {
-        guard !rows.isEmpty else { return }
-        selectedID = top ? rows.first?.id : rows.last?.id
+        let all = targets(among: rows)
+        selection = top ? all.first : all.last
     }
 
     // Keeps the selection on a row that still exists after a reload, a removal
@@ -193,8 +225,16 @@ final class ExtensionCatalog: ObservableObject {
     // first, then what is installed, and only then what is merely published. On
     // any machine with an extension on it ⏎ lands on a page, not an install.
     func reconcileSelection(among rows: [ExtensionRow]) {
-        if let selectedID, rows.contains(where: { $0.id == selectedID }) { return }
-        selectedID = rows.first?.id
+        let all = targets(among: rows)
+        if let selection, all.contains(selection) { return }
+        // A row first where there is one, so ⏎ on arrival acts on the list
+        // rather than walking straight back out of the page. Then Try again,
+        // which is what somebody reading "couldn't download" wants ⏎ to do.
+        // The chevron last, for an empty catalogue that loaded fine: there is
+        // genuinely nothing else on the page.
+        selection = all.first(where: { if case .row = $0 { return true } else { return false } })
+            ?? all.first(where: { $0 == .retry })
+            ?? all.first
     }
 
     // Pure, so the matching rule is testable without a view.
@@ -373,37 +413,22 @@ struct ExtensionsView: View {
                 // so about two of them fit at the panel's 260pt minimum, and
                 // without this ↑↓ moved a highlight straight off the bottom of
                 // a catalogue of any size, which is the whole page.
-                .onChange(of: catalog.selectedID) { id in
-                    guard let id else { return }
+                .onChange(of: catalog.selection) { target in
+                    guard let anchor = Self.anchor(for: target) else { return }
                     withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo(id, anchor: nil)
+                        proxy.scrollTo(anchor, anchor: nil)
                     }
                 }
             }
 
             PageFooter {
-                // Named for what Esc does from here, which depends on whether
-                // there is a query to clear first.
-                FooterHint(label: catalog.query.isEmpty ? "Back" : "Clear", keys: ["Esc"])
-                FooterHint(label: "Search", keys: ["/"])
-                // Dimmed rather than dropped when a query, or an empty
-                // catalogue, leaves nothing to walk: the bar must not reflow as
-                // the list filters, and an advertised key that does nothing is
-                // the thing this page kept doing. Same treatment the Settings
-                // footer gives its Cycle hint.
-                FooterHint(label: "Select", keys: ["↑↓", "⌘↑↓"])
-                    .opacity(rows.isEmpty ? 0.35 : 1)
-                FooterHint(label: activationLabel(in: rows), keys: ["⏎"])
-                    .opacity(rows.isEmpty ? 0.35 : 1)
-                // Only where Enter is busy doing something else. An installed
-                // row with an update pending takes Enter for the update, so
-                // without this there would be no keyboard route to its page.
-                if selectedRow(in: rows)?.updateAvailable == true {
-                    FooterHint(label: "Settings", keys: ["⌘⏎"])
-                }
-                // ⌘R rather than R: a plain letter seeds the search field, the
-                // same trade the history pane makes.
-                FooterHint(label: "Reload", keys: ["⌘R"])
+                let hints = Self.footerHints(
+                    selection: catalog.selection,
+                    activation: activationLabel(in: rows),
+                    updateSelected: selectedRow(in: rows)?.updateAvailable == true,
+                    queryIsEmpty: catalog.query.isEmpty,
+                    hasRows: !rows.isEmpty)
+                ForEach(hints.indices, id: \.self) { FooterHintRow(spec: hints[$0]) }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -438,6 +463,68 @@ struct ExtensionsView: View {
         // whatever is in front of you.
         .onChange(of: rows.map(\.id)) { _ in
             catalog.reconcileSelection(among: rows)
+        }
+    }
+
+    // The bar as data, so it can be asserted rather than read.
+    //
+    // One hint per action, with ⏎ added to whichever the ring is on. A
+    // separate hint naming the selected target prints the bar's own labels
+    // twice the moment the selection reaches the chevron, which is what the
+    // extension config page ran into.
+    static func footerHints(selection: ExtensionCatalog.Target?,
+                            activation: String,
+                            updateSelected: Bool,
+                            queryIsEmpty: Bool,
+                            hasRows: Bool) -> [FooterHintSpec] {
+        var hints: [FooterHintSpec] = []
+        // Named for what Esc does from here, which depends on whether there is a
+        // query to clear first. ⏎ joins it only when the chevron is selected
+        // *and* Esc would leave rather than clear, or the one key would be
+        // advertised for two different things.
+        let backSelected = selection == .back
+        let escapeLeaves = queryIsEmpty
+        hints.append(FooterHintSpec(
+            label: escapeLeaves ? "Back" : "Clear",
+            keys: backSelected && escapeLeaves ? ["⏎", "Esc"] : ["Esc"],
+            primary: backSelected && escapeLeaves))
+        hints.append(FooterHintSpec(label: "Search", keys: ["/"]))
+        // Dimmed rather than dropped when a query, or an empty catalogue, leaves
+        // nothing to walk: the bar must not reflow as the list filters, and an
+        // advertised key that does nothing is the thing this page kept doing.
+        // Same treatment the Settings footer gives its Cycle hint.
+        hints.append(FooterHintSpec(label: "Select", keys: ["↑↓", "⌘↑↓"],
+                                    dimmed: !hasRows))
+        // Only while the ring is on a row. On the chevron or Try again, ⏎
+        // belongs to those, and the row verb would name something it will not do.
+        if case .row = selection {
+            hints.append(FooterHintSpec(label: activation, keys: ["⏎"], primary: true))
+            // Only where Enter is busy doing something else. An installed row
+            // with an update pending takes Enter for the update, so without this
+            // there would be no keyboard route to its page.
+            if updateSelected {
+                hints.append(FooterHintSpec(label: "Settings", keys: ["⌘⏎"]))
+            }
+        }
+        // ⌘R rather than R: a plain letter seeds the search field, the same
+        // trade the history pane makes. Try again and Reload are one action, so
+        // selecting the button adds ⏎ here rather than printing a second hint.
+        let retrySelected = selection == .retry
+        hints.append(FooterHintSpec(label: "Reload",
+                                    keys: retrySelected ? ["⏎", "⌘R"] : ["⌘R"],
+                                    primary: retrySelected))
+        return hints
+    }
+
+    // The back chevron sits above the scroller and needs no anchor; scrolling to
+    // the top of the list is what brings it into view.
+    static let retryAnchor = "extensions-retry"
+
+    static func anchor(for target: ExtensionCatalog.Target?) -> String? {
+        switch target {
+        case .row(let id):   return id
+        case .retry:         return retryAnchor
+        case .back, nil:     return nil
         }
     }
 
@@ -497,13 +584,20 @@ struct ExtensionsView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        let selected = catalog.selection == .back
+        return HStack(spacing: 8) {
             Button(action: onBack) {
                 HStack(spacing: 4) {
                     Image(systemName: "chevron.left").font(.caption.weight(.semibold))
                     Text("Settings").font(.caption)
                 }
-                .foregroundStyle(.secondary)
+                .foregroundStyle(selected ? Color.primary : .secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.accentColor.opacity(selected ? 0.18 : 0)))
+                .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(Color.accentColor.opacity(selected ? 0.6 : 0), lineWidth: 1.5))
             }
             .buttonStyle(.plain)
 
@@ -529,7 +623,9 @@ struct ExtensionsView: View {
                     Text(why).font(.caption).foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 4)
-                    cardButton("Try again", prominent: true) { catalog.reload() }
+                    cardButton("Try again", prominent: true,
+                               selected: catalog.selection == .retry) { catalog.reload() }
+                        .id(Self.retryAnchor)
                 }
                 ForEach(rows) { row in extensionRow(row) }
             }
@@ -624,7 +720,7 @@ struct ExtensionsView: View {
             .strokeBorder(Color.accentColor.opacity(catalog.selectedID == row.id ? 0.6 : 0),
                           lineWidth: 1.5))
         .contentShape(Rectangle())
-        .onTapGesture { catalog.selectedID = row.id }
+        .onTapGesture { catalog.selection = .row(row.id) }
         // The scroll anchor, keyed by what the selection is keyed by.
         .id(row.id)
         .accessibilityElement(children: .combine)
@@ -671,8 +767,9 @@ struct ExtensionsView: View {
     }
 
     private func cardButton(_ title: String, prominent: Bool = false,
+                            selected: Bool = false,
                             action: @escaping () -> Void) -> some View {
-        CardButton(title: title, prominent: prominent, action: action)
+        CardButton(title: title, prominent: prominent, selected: selected, action: action)
     }
 }
 

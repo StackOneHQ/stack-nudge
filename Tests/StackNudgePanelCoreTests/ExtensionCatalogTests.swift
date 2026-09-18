@@ -159,24 +159,59 @@ final class ExtensionCatalogTests: XCTestCase {
                               refused: [.init(id: "broken", reason: "nope")])
     }
 
-    func testArrowsWalkTheRowsAndStopAtTheEnds() {
+    // The chevron is drawn above the list and is a target like anything else, so
+    // it is what ↓ reaches first from nothing and what ↑ stops against.
+    func testArrowsWalkEveryTargetAndStopAtTheEnds() {
         let c = catalog()
         let rows = threeRows
         XCTAssertEqual(rows.map(\.id), ["broken", "installed", "available"])
+        XCTAssertEqual(c.targets(among: rows),
+                       [.back, .row("broken"), .row("installed"), .row("available")])
 
         c.moveSelection(among: rows, by: 1)
-        XCTAssertEqual(c.selectedID, "broken")
-        c.moveSelection(among: rows, by: 1)
-        c.moveSelection(among: rows, by: 1)
-        XCTAssertEqual(c.selectedID, "available")
-        c.moveSelection(among: rows, by: 1)
-        XCTAssertEqual(c.selectedID, "available", "stops rather than wrapping")
+        XCTAssertEqual(c.selection, .back)
+        c.moveSelection(among: rows, by: -1)
+        XCTAssertEqual(c.selection, .back, "stops rather than wrapping")
+        for _ in 0..<4 { c.moveSelection(among: rows, by: 1) }
+        XCTAssertEqual(c.selectedID, "available", "and stops at the far end too")
     }
 
     func testUpFromNoSelectionTakesTheLastRow() {
         let c = catalog()
         c.moveSelection(among: threeRows, by: -1)
         XCTAssertEqual(c.selectedID, "available")
+    }
+
+    // Only while the fetch has failed, because that is the only time the button
+    // is drawn. Offering a ring to a button nobody can see is the same defect as
+    // drawing a button nothing can reach.
+    func testTryAgainIsATargetOnlyWhileTheFetchHasFailed() {
+        let loaded = catalog(fetch: { .success([]) })
+        loaded.reload()
+        XCTAssertEqual(loaded.targets(among: threeRows).contains(.retry), false)
+
+        let failed = catalog(fetch: { .failure(.downloadFailed("x")) })
+        failed.reload()
+        XCTAssertEqual(failed.targets(among: threeRows)[1], .retry,
+                       "drawn between the chevron and the rows, which is where it sits")
+    }
+
+    // A failed fetch does not hide what is installed, so the page still has rows
+    // to seed onto; Try again is reached by walking up to it.
+    func testAFailedFetchStillSeedsOntoARow() {
+        let c = catalog(fetch: { .failure(.downloadFailed("x")) })
+        c.reload()
+        c.reconcileSelection(among: threeRows)
+        XCTAssertEqual(c.selectedID, "broken")
+    }
+
+    // With nothing installed and nothing published there is no row to land on,
+    // and Try again is the only thing on the page worth pressing.
+    func testAFailedFetchWithNoRowsSeedsOntoTryAgain() {
+        let c = catalog(fetch: { .failure(.downloadFailed("x")) })
+        c.reload()
+        c.reconcileSelection(among: [])
+        XCTAssertEqual(c.selection, .retry)
     }
 
     // Enter does whatever the row's own button would: install an uninstalled
@@ -188,7 +223,7 @@ final class ExtensionCatalogTests: XCTestCase {
         let c = catalog(fetch: { .success([self.entry("available")]) },
                         install: { installed.append($0.id); return .success($0.id) })
         c.reload()
-        c.selectedID = "available"
+        c.selection = .row("available")
         c.activateSelection(among: threeRows)
         XCTAssertEqual(installed, ["available"])
     }
@@ -201,7 +236,7 @@ final class ExtensionCatalogTests: XCTestCase {
     func testActivatingAnInstalledRowDoesNotRemoveIt() {
         var removed: [String] = []
         let c = catalog(remove: { removed.append($0); return .success($0) })
-        c.selectedID = "installed"
+        c.selection = .row("installed")
         c.activateSelection(among: threeRows)
         XCTAssertTrue(removed.isEmpty)
         XCTAssertNil(c.work["installed"])
@@ -232,7 +267,7 @@ final class ExtensionCatalogTests: XCTestCase {
         let c = catalog(fetch: { .success([self.entry("available")]) },
                         install: { _ in attempts += 1; return .failure(.installFailed("no")) })
         c.reload()
-        c.selectedID = "available"
+        c.selection = .row("available")
         c.activateSelection(among: threeRows)
         XCTAssertEqual(attempts, 1)
         XCTAssertNotNil(c.failure(for: "available"))
@@ -253,7 +288,7 @@ final class ExtensionCatalogTests: XCTestCase {
     // make Enter a no-op.
     func testTheSelectionMovesToTheFirstRowWhenItsOwnRowDisappears() {
         let c = catalog()
-        c.selectedID = "installed"
+        c.selection = .row("installed")
         c.reconcileSelection(among: threeRows)
         XCTAssertEqual(c.selectedID, "installed")
 
@@ -261,10 +296,13 @@ final class ExtensionCatalogTests: XCTestCase {
         XCTAssertEqual(c.selectedID, "broken", "lands somewhere rather than nowhere")
     }
 
-    func testWithNoRowsAtAllThereIsNothingToSelect() {
+    // The row is gone, so the selection falls back to what the page still draws.
+    // Nothing is not an option: it leaves ⏎ advertised against no target.
+    func testWithNoRowsTheSelectionFallsBackToTheChevron() {
         let c = catalog()
-        c.selectedID = "installed"
+        c.selection = .row("installed")
         c.reconcileSelection(among: [])
+        XCTAssertEqual(c.selection, .back)
         XCTAssertNil(c.selectedID)
     }
 
@@ -288,17 +326,20 @@ final class ExtensionCatalogTests: XCTestCase {
         XCTAssertEqual(seeded?.isInstalled, true)
     }
 
-    func testCommandArrowsJumpToTheFirstAndLastRow() {
+    func testCommandArrowsJumpToTheFirstAndLastTarget() {
         let c = catalog()
         c.selectEdge(among: threeRows, top: false)
         XCTAssertEqual(c.selectedID, "available")
         c.selectEdge(among: threeRows, top: true)
-        XCTAssertEqual(c.selectedID, "broken")
+        XCTAssertEqual(c.selection, .back)
     }
 
-    func testJumpingIsANoOpWithNoRows() {
+    // An empty catalogue still has its chevron, so ⌘↑↓ land somewhere rather
+    // than leaving the page with no ring at all.
+    func testJumpingWithNoRowsLandsOnTheChevron() {
         let c = catalog()
         c.selectEdge(among: [], top: true)
+        XCTAssertEqual(c.selection, .back)
         XCTAssertNil(c.selectedID)
     }
 
@@ -569,14 +610,14 @@ final class ExtensionCatalogTests: XCTestCase {
     // written about, under a footer still advertising it.
     func testAQueryThatHidesTheSelectedRowMovesItToWhatIsLeft() {
         let c = catalog()
-        c.selectedID = "derby"
+        c.selection = .row("derby")
         c.reconcileSelection(among: ExtensionCatalog.matching(sample, query: "system"))
         XCTAssertEqual(c.selectedID, "system")
     }
 
     func testAQueryThatStillShowsTheSelectedRowKeepsIt() {
         let c = catalog()
-        c.selectedID = "derby"
+        c.selection = .row("derby")
         c.reconcileSelection(among: ExtensionCatalog.matching(sample, query: "derby"))
         XCTAssertEqual(c.selectedID, "derby")
     }

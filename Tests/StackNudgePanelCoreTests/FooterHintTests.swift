@@ -623,3 +623,79 @@ final class ExtensionConfigFooterTests: XCTestCase {
         }
     }
 }
+
+// The extensions browser's bar. Its chevron and its Try again are targets now,
+// so ⏎ means different things depending on where the ring is, and the bar has to
+// say which. One hint per action, with ⏎ added to the selected one.
+final class ExtensionsBrowserFooterTests: XCTestCase {
+
+    private func hints(selection: ExtensionCatalog.Target?,
+                       activation: String = "Install",
+                       updateSelected: Bool = false,
+                       queryIsEmpty: Bool = true,
+                       hasRows: Bool = true) -> [FooterHintSpec] {
+        ExtensionsView.footerHints(selection: selection, activation: activation,
+                                   updateSelected: updateSelected,
+                                   queryIsEmpty: queryIsEmpty, hasRows: hasRows)
+    }
+
+    private func labels(_ specs: [FooterHintSpec]) -> [String] { specs.map(\.label) }
+
+    private func keys(_ specs: [FooterHintSpec], _ label: String) -> [String]? {
+        specs.first { $0.label == label }?.keys
+    }
+
+    func test_onARow_theRowVerbTakesReturn() {
+        let specs = hints(selection: .row("derby"), activation: "Settings")
+        XCTAssertEqual(labels(specs), ["Back", "Search", "Select", "Settings", "Reload"])
+        XCTAssertEqual(keys(specs, "Settings"), ["⏎"])
+        XCTAssertEqual(keys(specs, "Reload"), ["⌘R"])
+    }
+
+    // The row verb names something the chevron will not do, so it goes rather
+    // than sitting there wrong.
+    func test_onTheChevron_returnRidesOnBackAndTheRowVerbGoes() {
+        let specs = hints(selection: .back, activation: "Install")
+        XCTAssertEqual(labels(specs), ["Back", "Search", "Select", "Reload"])
+        XCTAssertEqual(keys(specs, "Back"), ["⏎", "Esc"])
+    }
+
+    // Try again and Reload are one action, so the button being selected adds ⏎
+    // to the hint that is already there rather than printing a second one.
+    func test_onTryAgain_returnRidesOnReload() {
+        let specs = hints(selection: .retry)
+        XCTAssertEqual(labels(specs), ["Back", "Search", "Select", "Reload"])
+        XCTAssertEqual(keys(specs, "Reload"), ["⏎", "⌘R"])
+    }
+
+    // With a query typed, Esc clears it rather than leaving, so ⏎ on the chevron
+    // must not be advertised on a hint that now means something else.
+    func test_withAQueryTypedEscapeClearsAndKeepsReturnOffIt() {
+        let specs = hints(selection: .back, queryIsEmpty: false)
+        XCTAssertEqual(keys(specs, "Clear"), ["Esc"])
+        XCTAssertFalse(labels(specs).contains("Back"))
+    }
+
+    func test_noLabelIsAdvertisedTwice() {
+        for selection: ExtensionCatalog.Target? in [nil, .back, .retry, .row("derby")] {
+            let names = labels(hints(selection: selection))
+            XCTAssertEqual(Set(names).count, names.count, "duplicate in \(names)")
+        }
+    }
+
+    // An update pending takes ⏎ for the update, so the row's page needs ⌘⏎ or
+    // there is no keyboard route to it at all.
+    func test_anUpdatePendingAdvertisesTheRouteToTheRowsPage() {
+        let specs = hints(selection: .row("derby"), activation: "Update", updateSelected: true)
+        XCTAssertEqual(keys(specs, "Settings"), ["⌘⏎"])
+    }
+
+    // Nothing to walk, so the hint dims rather than disappearing: the bar must
+    // not reflow as a query filters the list down to nothing.
+    func test_selectDimsWhenThereIsNothingToWalk() {
+        XCTAssertEqual(hints(selection: .back, hasRows: false)
+            .first { $0.label == "Select" }?.dimmed, true)
+        XCTAssertEqual(hints(selection: .row("derby"), hasRows: true)
+            .first { $0.label == "Select" }?.dimmed, false)
+    }
+}
