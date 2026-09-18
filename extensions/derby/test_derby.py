@@ -363,6 +363,34 @@ class Document(unittest.TestCase):
         self.assertEqual(derby.division_of(horse(division=1), ["Premier"]), "Premier")
         self.assertEqual(derby.division_of(horse(division=True), ["Premier"]), None)
 
+    # The host trims every text field and drops a row whose title comes out
+    # empty, so a horse named "   " cost its whole row — rank, value and bar —
+    # not just its name.
+    def test_a_blank_name_costs_the_name_and_not_the_row(self):
+        doc = self.build(horses=[horse(name="   "), horse("h2", name="")])
+        self.assertEqual([r["id"] for r in doc["rows"]], ["h1", "h2"])
+        self.assertEqual([r["title"] for r in doc["rows"]], ["Unnamed", "Unnamed"])
+
+    def test_a_blank_user_name_is_absent_rather_than_blank(self):
+        # An empty optional field is an absent one to the host; a subtitle of
+        # spaces would reserve space for nothing.
+        self.assertEqual(self.build(horses=[horse(user_name="  ")])["rows"][0]["subtitle"], "")
+
+    # The host drops the second of a duplicate pair without saying so, and the
+    # id is what an action names a row by — two rows answering to one id is a
+    # row that acts on the wrong horse.
+    def test_two_horses_sharing_an_id_keep_the_better_placed_one(self):
+        doc = self.build(horses=[horse("dup", rank=1, scored_tokens=900),
+                                 horse("dup", rank=5, scored_tokens=100),
+                                 horse("other", rank=2)])
+        self.assertEqual([r["id"] for r in doc["rows"]], ["dup", "other"])
+        # Document order is rank order, so the survivor is the one in front.
+        self.assertEqual(doc["rows"][0]["lead"], "1")
+
+    def test_an_id_that_is_a_number_does_not_collide_with_its_string(self):
+        doc = self.build(horses=[horse(1), horse("1"), horse(2)])
+        self.assertEqual([r["id"] for r in doc["rows"]], ["1", "2"])
+
     def test_an_entry_without_an_id_is_not_a_horse(self):
         doc = self.build(horses=[horse(), {"name": "nameless"}, "nonsense", None])
         self.assertEqual([r["id"] for r in doc["rows"]], ["h1"])
@@ -605,6 +633,46 @@ class Fetching(unittest.TestCase):
             derby.os.environ = os_environ
         self.assertIn(doc["state"], ("ok", "empty", "error"))
         self.assertEqual(json.loads(json.dumps(doc)), doc)
+
+    # Only a 404 on the *org* hop is about the organisation. The race list is
+    # re-read every 30s, so a race deleted between the two hops 404s the second
+    # one — and blaming the org there sends someone to correct a setting that
+    # was right.
+    def test_a_404_on_the_race_hop_does_not_blame_the_organisation(self):
+        import io
+        calls = {"n": 0}
+        listing = FakeResponse('{"races": [{"join_code": "A", "status": "live"}]}',
+                               "application/json")
+
+        class FakeOpener:
+            def open(self, request, timeout=None):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    return listing
+                raise derby.urllib.error.HTTPError(
+                    request.full_url, 404, "gone", {}, io.BytesIO(b"{}"))
+
+        derby._opener = FakeOpener()
+        os_environ = derby.os.environ
+        derby.os.environ = {derby.ORG_KEY: "StackOne"}
+        try:
+            doc = derby.build()
+        finally:
+            derby.os.environ = os_environ
+        self.assertNotIn("organisation", doc["message"].lower())
+        self.assertIn("race", doc["message"].lower())
+
+    def test_a_404_on_the_org_hop_still_blames_the_organisation(self):
+        import io
+        derby._opener = self.raising_stub(
+            lambda url: derby.urllib.error.HTTPError(url, 404, "no", {}, io.BytesIO(b"{}")))
+        os_environ = derby.os.environ
+        derby.os.environ = {derby.ORG_KEY: "Nope"}
+        try:
+            doc = derby.build()
+        finally:
+            derby.os.environ = os_environ
+        self.assertIn("organisation", doc["message"].lower())
 
     def test_build_reports_an_unknown_org_as_empty_and_says_why(self):
         derby._opener = self.stub(

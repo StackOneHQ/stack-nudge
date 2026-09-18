@@ -47,12 +47,14 @@ with the app:
 
 - `system` — CPU, memory and disk. Makes no network requests.
 - `derby` — the Token Derby, a shared horse race scored on tokens produced. It
-  is off until you set an organisation. When set, it GETs that organisation's
-  current race from **token-derby.mauricode.co.uk**, a third-party service not
-  operated by this project and covered by its own privacy policy. It is
-  read-only: nothing about your machine, your sessions or your usage is sent to
-  it, and the request carries no identifier beyond the organisation name you
-  typed and your IP address.
+  is off until you set an organisation. When set, it makes two GET requests —
+  that organisation's race list, then the race it picks — to
+  **token-derby.mauricode.co.uk** by default, a third-party service not
+  operated by this project and covered by its own privacy policy. The endpoint
+  is overridable in Settings, and must be `https`. It is read-only: nothing
+  about your machine, your sessions or your usage is sent to it. What the
+  requests carry is the organisation name you typed, your IP address, and a
+  `User-Agent` of `stack-nudge`, which identifies the software but not you.
 
 Any other extension you install is subject to whatever *it* does. Extensions are
 reviewed before publication, which is a real control and not the same as a

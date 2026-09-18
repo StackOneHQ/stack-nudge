@@ -95,8 +95,17 @@ struct ExtensionManifest: Equatable {
     // the remedy.
     //
     // Matches notify.sh's own reader, which accepts STACKNUDGE_[A-Z0-9_]+.
+    //
+    // \A and \z rather than ^ and $ because the two regex APIs disagree about
+    // the end anchor, and the whole guard rests on it. With "$", the pattern is
+    // safe under String.range(of:options:.regularExpression) — which treats it
+    // as end-of-string — and unsafe under NSRegularExpression, where "$" also
+    // matches before a single trailing line terminator, so a key ending in "\n"
+    // would pass. Hoisting this into a compiled NSRegularExpression is an
+    // obvious enough refactor that the pattern should not depend on nobody
+    // doing it. \z is absolute in both.
     static func isPassableConfigKey(_ key: String) -> Bool {
-        key.range(of: "^\(configPrefix)[A-Z0-9_]+$", options: .regularExpression) != nil
+        key.range(of: "\\A\(configPrefix)[A-Z0-9_]+\\z", options: .regularExpression) != nil
     }
 
     // The tab strip is a row of buttons across a fixed-width panel, and the id

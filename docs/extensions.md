@@ -46,7 +46,7 @@ does not buy.
 | `tab.label` | no | Defaults to `name`. Trimmed, capped at 16 characters, falls back to `id` if empty. |
 | `run` | no | Defaults to `./run`. Relative to the extension directory, no `..`, no absolute or `~` paths. |
 | `requires` | no | Interpreters the extension needs. Checked at install time by **running** each one, not by resolving it. |
-| `config` | no | Environment keys to pass through. Must be under `STACKNUDGE_EXT_`. See [Configuration](#configuration). |
+| `config` | no | Environment keys to pass through. Each must match `^STACKNUDGE_EXT_[A-Z0-9_]+$`. See [Configuration](#configuration). |
 | `refresh.onOpen` | no | Default `true`. Fetch when the tab is opened. |
 | `refresh.intervalSeconds` | no | Default off. Floored at 5 — every tick is a process spawn. |
 | `refresh.whileFocusedOnly` | no | Default `true`. Only poll while your tab is the one on screen. |
@@ -80,8 +80,14 @@ One list rather than two: a parallel array describing the keys would drift from
 the list of keys actually passed, and what you would get is a form field for a
 key nobody reads, or a key nobody can set.
 
-Values are stored in `~/.stack-nudge/config`, which is line-based and shell-
-sourced, so the form refuses a value containing a line break. A value naming a
+A key must match `^STACKNUDGE_EXT_[A-Z0-9_]+$` — the whole name, not just the
+prefix. Keys are written into `~/.stack-nudge/config` as `KEY=value` lines, so
+a key is text that lands in a file: one containing a newline would write a
+second, unrelated assignment, and one containing `=` would be read as setting
+something else.
+
+Values are stored in that same file, so the form refuses a value containing a
+line break. A value naming a
 URL scheme must name `https`. Clearing a field removes the key rather than
 writing an empty one, which matters because a declared-but-unset key is
 **omitted** from your environment rather than passed empty — so `[ -z "$KEY" ]`
@@ -358,8 +364,9 @@ reviewer should check that are easy to miss:
 - **`run` and every path in the package.** Containment is enforced on resolved
   paths, but a symlink in a tarball is how a manifest tells a reviewer one thing
   and does another.
-- **Declared `config` keys.** They are restricted to `STACKNUDGE_EXT_`, but that
-  namespace is still yours to justify — and a declared key now appears as a
+- **Declared `config` keys.** They are restricted to the `STACKNUDGE_EXT_`
+  namespace and to a plain environment-variable shape, but that namespace is
+  still yours to justify — and a declared key now appears as a
   field in Settings, so it is also a request for the user's attention. An
   extension that asks for five values it could infer is asking for five
   decisions nobody wanted to make.

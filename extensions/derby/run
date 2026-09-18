@@ -282,6 +282,16 @@ def scored(horse):
 
 # --- The document -----------------------------------------------------------
 
+def text(value):
+    """A string field, trimmed, or "" if there is nothing in it.
+
+    The host treats an empty optional field as absent and drops a row whose
+    title is blank, so "present but only spaces" has to be resolved here rather
+    than left for it to discover.
+    """
+    return str(value).strip() if isinstance(value, str) else ""
+
+
 def division_of(horse, names):
     """`division` is 1-based into league_division_names."""
     index = horse.get("division")
@@ -325,12 +335,16 @@ def row_for(horse, leader, elapsed, live, names):
     rank = horse.get("rank")
     pace = number(horse.get("pace_15m"))
     return {
-        "id": str(horse.get("horse_id")),
+        "id": str(horse.get("horse_id")),  # deduplicated in document()
         # An en dash rather than a blank, so an unranked horse still lines its
         # name up with the ranked ones above it.
         "lead": str(rank) if isinstance(rank, int) and not isinstance(rank, bool) else "–",
-        "title": str(horse.get("name") or "Unnamed"),
-        "subtitle": str(horse.get("user_name")) if horse.get("user_name") else "",
+        # Stripped before the fallback, not just tested for falsiness. The host
+        # trims every text field and drops a row whose title comes out empty —
+        # so a horse named "   " cost its whole row, rank and bar included,
+        # rather than just its name.
+        "title": text(horse.get("name")) or "Unnamed",
+        "subtitle": text(horse.get("user_name")),
         "value": short_tokens(tokens),
         "footnote": footnote_for(horse, names),
         "track": {"fill": position(tokens, leader, elapsed), "tint": coat},
@@ -342,7 +356,20 @@ def row_for(horse, leader, elapsed, live, names):
 
 def document(race):
     """One race as a view document."""
-    horses = [h for h in race.get("horses") or [] if isinstance(h, dict) and h.get("horse_id")]
+    # Deduplicated here rather than left to the host, which drops the second of
+    # a duplicate pair without saying so. str() also collides 1 with "1", and
+    # the id is what an action names a row by — two rows answering to one id is
+    # a row that acts on the wrong horse.
+    horses = []
+    seen_ids = set()
+    for entry in race.get("horses") or []:
+        if not isinstance(entry, dict):
+            continue
+        identifier = text(entry.get("horse_id")) or str(entry.get("horse_id") or "")
+        if not identifier or identifier in seen_ids:
+            continue
+        seen_ids.add(identifier)
+        horses.append(entry)
     names = [n for n in race.get("league_division_names") or [] if isinstance(n, str)]
     status = str(race.get("status") or "")
     live = status == "live"
@@ -474,6 +501,14 @@ def fetch(base, org):
         # The web page came back instead of data. On this route that means the
         # organisation isn't one, rather than anything being broken.
         raise UnknownOrg(org) from None
+    except urllib.error.HTTPError as error:
+        # Only a 404 on *this* hop is about the organisation. The race list is
+        # re-read every 30s, so a race deleted between the two hops 404s the
+        # second one — and blaming the org there sends someone to correct a
+        # setting that was right.
+        if error.code == 404:
+            raise UnknownOrg(org) from None
+        raise
     races = listing.get("races") if isinstance(listing, dict) else None
     chosen = pick(races or [])
     if not chosen:
@@ -504,10 +539,15 @@ def build():
         return message("error", "The derby answered with a web page instead of data.")
     except urllib.error.HTTPError as error:
         code, detail = api_error_code(error)
-        if code == "ORG_NOT_FOUND" or error.code == 404:
+        if code == "ORG_NOT_FOUND":
             return message("empty", 'No organisation named "%s".' % org)
         if code == "UNAUTHENTICATED":
             return message("error", "This organisation's races aren't public.")
+        # A bare 404 here is the *race* hop — the org hop raises UnknownOrg —
+        # which means the race went away between reading the list and reading
+        # it. The next poll picks up whatever replaced it.
+        if error.code == 404:
+            return message("empty", "That race has gone. Checking again shortly.")
         # Only if it is a string. The field is the service's, and a non-string
         # there put a JSON object where the host's decoder wants a string —
         # which fails the *whole* document, so the pane says "wrong type for

@@ -27,7 +27,15 @@ ran=0
 for dir in extensions/*/; do
   compgen -G "${dir}test_*.py" > /dev/null || continue
   echo "→ ${dir}"
-  output="$(python3 -m unittest discover -s "$dir" -t "$dir" -p 'test_*.py' 2>&1)"
+  # `if !` rather than a bare assignment: under `set -e` the shell dies at the
+  # assignment itself when the command substitution fails, so the echo below it
+  # never ran and a failing suite went red in CI with no output at all —
+  # nothing naming the test, the assertion or the file.
+  if ! output="$(python3 -m unittest discover -s "$dir" -t "$dir" -p 'test_*.py' 2>&1)"; then
+    echo "$output"
+    echo "tests failed in $dir" >&2
+    exit 1
+  fi
   echo "$output"
   if ! grep -qE '^Ran [1-9][0-9]* tests?' <<< "$output"; then
     echo "no tests ran in $dir" >&2
