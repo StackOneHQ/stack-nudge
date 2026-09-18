@@ -4,6 +4,22 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [1.35.0](https://github.com/StackOneHQ/stack-nudge/compare/v1.34.1...v1.35.0) (2026-09-18)
+
+
+### Features
+
+* **notify:** tag subagent permission prompts and skip their premature stop ([#187](https://github.com/StackOneHQ/stack-nudge/issues/187)) ([f4cebda](https://github.com/StackOneHQ/stack-nudge/commit/f4cebdae4905601a50bb4b9a153432444cfc3b40))
+* **panel:** account-wide codex usage, and a claude cache fast path ([#186](https://github.com/StackOneHQ/stack-nudge/issues/186)) ([676b05d](https://github.com/StackOneHQ/stack-nudge/commit/676b05d957e7d4b18cdcc8d1f1dfd39b2b1d4a53))
+* **panel:** add Settings About, and fit the page to the panel minimum ([#191](https://github.com/StackOneHQ/stack-nudge/issues/191)) ([7654e62](https://github.com/StackOneHQ/stack-nudge/commit/7654e62a56ab17e314df7ed2f61d167d2f03702d))
+* **panel:** download, install and remove extensions ([#188](https://github.com/StackOneHQ/stack-nudge/issues/188)) ([a85b85f](https://github.com/StackOneHQ/stack-nudge/commit/a85b85f007f4881704fee8931d7f28e53e440786))
+* **panel:** run and render out-of-process extensions ([#183](https://github.com/StackOneHQ/stack-nudge/issues/183)) ([e65cfa4](https://github.com/StackOneHQ/stack-nudge/commit/e65cfa4219ef2ed3d28a130c0326c530e2f2a945))
+
+
+### Bug Fixes
+
+* **panel:** keep settings rows anchored to the top ([#189](https://github.com/StackOneHQ/stack-nudge/issues/189)) ([432d977](https://github.com/StackOneHQ/stack-nudge/commit/432d9772ede238a410b3cf4e112907b5d4ee7770))
+
 ## [1.34.1](https://github.com/StackOneHQ/stack-nudge/compare/v1.34.0...v1.34.1) (2026-09-17)
 
 
