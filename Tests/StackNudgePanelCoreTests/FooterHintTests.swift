@@ -386,3 +386,74 @@ final class HistoryFilterInputTests: XCTestCase {
         XCTAssertFalse(PanelController.isFilterInput("ab"))
     }
 }
+
+// Where each keystroke goes on the extensions browser. Raw virtual key codes,
+// since the panel's KeyCode table is private: 53 Esc, 44 /, 126/125 ↑↓,
+// 36 Return, 15 "r", 123/124 ←→, 49 Space.
+//
+// This table exists because the first version of this page's key handling was
+// wrong in a way nothing could see. It focused the search field on arrival and
+// then made the handler fall through for unrecognised keys so letters could
+// "reach SwiftUI" — but a focused field is first responder, and
+// FloatingPanel.keyDown only fires for what the first responder declines, so
+// letters never reached the handler at all. Nothing needed releasing; all that
+// changed was that Esc, ↑↓ and ⏎ stopped working while the footer went on
+// advertising them.
+final class ExtensionsKeyActionTests: XCTestCase {
+
+    private func action(_ keyCode: UInt16,
+                        _ characters: String? = nil,
+                        queryIsEmpty: Bool = true) -> PanelController.ExtensionsKeyAction {
+        PanelController.extensionsKeyAction(keyCode: keyCode,
+                                            characters: characters,
+                                            queryIsEmpty: queryIsEmpty)
+    }
+
+    // Two steps, like the history filter: clear what you typed, then leave.
+    func test_escapeClearsTheQueryBeforeItStepsBack() {
+        XCTAssertEqual(action(53, "\u{1B}", queryIsEmpty: true), .back)
+        XCTAssertEqual(action(53, "\u{1B}", queryIsEmpty: false), .clearQuery)
+    }
+
+    func test_slashHandsOverToTheField() {
+        XCTAssertEqual(action(44, "/"), .focusSearch)
+    }
+
+    func test_verticalArrowsMoveTheSelection() {
+        XCTAssertEqual(action(126, "\u{F700}"), .moveSelection(-1))
+        XCTAssertEqual(action(125, "\u{F701}"), .moveSelection(1))
+    }
+
+    func test_returnActsOnTheSelectedRow() {
+        XCTAssertEqual(action(36, "\r"), .activate)
+        XCTAssertEqual(action(76, "\u{3}"), .activate)
+    }
+
+    // Type-to-search costs no extra keystroke despite the field not grabbing
+    // focus on arrival.
+    func test_aPrintableCharacterSeedsTheQuery() {
+        XCTAssertEqual(action(15, "r"), .appendToQuery("r"))
+        XCTAssertEqual(action(49, " "), .appendToQuery(" "))
+        XCTAssertEqual(action(0, "é"), .appendToQuery("é"))
+    }
+
+    // AppKit reports arrows and function keys as private-use scalars, which are
+    // neither control characters nor illegal ones — a "not a control character"
+    // test seeds the query with invisible junk and hands the field focus off
+    // the back of it.
+    func test_arrowsAndFunctionKeysAreSwallowedRatherThanTyped() {
+        XCTAssertEqual(action(123, "\u{F702}"), .swallow)
+        XCTAssertEqual(action(124, "\u{F703}"), .swallow)
+        XCTAssertEqual(action(122, "\u{F704}"), .swallow)
+        XCTAssertEqual(action(48, "\t"), .swallow)
+        XCTAssertEqual(action(99, nil), .swallow)
+    }
+
+    // Nothing falls through to the tab shortcuts below this branch: they act on
+    // a list this page isn't showing.
+    func test_everyKeyIsAccountedFor() {
+        for code in UInt16(0)...UInt16(130) {
+            _ = action(code, nil)
+        }
+    }
+}

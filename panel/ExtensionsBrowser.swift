@@ -33,6 +33,12 @@ final class ExtensionCatalog: ObservableObject {
     // over `entries`, so a query never hides an *installed* extension from the
     // merge that produces the rows — it only hides it from this list.
     @Published var query = ""
+    // Bumped to hand the field first-responder status, mirroring
+    // PanelNav.historyFilterFocusRequests. The page deliberately opens with the
+    // field *unfocused* so the key handler owns the keyboard; typing hands over.
+    @Published private(set) var searchFocusRequests = 0
+
+    func focusSearch() { searchFocusRequests += 1 }
 
     private let fetchCatalogue: () -> Result<[ExtensionInstaller.IndexEntry], ExtensionInstaller.Failure>
     private let performInstall: (ExtensionInstaller.IndexEntry) -> Result<String, ExtensionInstaller.Failure>
@@ -324,22 +330,32 @@ struct ExtensionsView: View {
             }
 
             PageFooter {
-                FooterHint(label: "Back", keys: ["Esc"])
+                // Named for what Esc does from here, which depends on whether
+                // there is a query to clear first.
+                FooterHint(label: catalog.query.isEmpty ? "Back" : "Clear", keys: ["Esc"])
+                FooterHint(label: "Search", keys: ["/"])
                 FooterHint(label: "Select", keys: ["↑", "↓"])
                 FooterHint(label: activationLabel, keys: ["⏎"])
                 if selectedRow?.isConfigurable == true {
                     FooterHint(label: "Configure", keys: ["⌘⏎"])
                 }
-                // ⌘R rather than R: the search field above has first claim on
-                // every plain letter.
+                // ⌘R rather than R: a plain letter seeds the search field, the
+                // same trade the history pane makes.
                 FooterHint(label: "Reload", keys: ["⌘R"])
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             catalog.loadIfNeeded()
-            searchFocused = true
+            // Deliberately NOT focused. A focused field is first responder, and
+            // FloatingPanel.keyDown only fires for what the first responder
+            // declines — so focusing on arrival handed the field Esc, ↑↓ and ⏎
+            // and left every hint in the footer describing a key that no longer
+            // did anything. Same contract the history pane states at
+            // Panel.swift:4042, reached the same way: typing hands over.
+            searchFocused = false
         }
+        .onChange(of: catalog.searchFocusRequests) { _ in searchFocused = true }
         // The selection has to survive the list changing under it, and it was
         // never reconciled from anywhere — the method existed and only the
         // tests called it. Searching made that visible: a query that filters
@@ -373,6 +389,15 @@ struct ExtensionsView: View {
                 .textFieldStyle(.plain)
                 .font(.caption)
                 .focused($searchFocused)
+                // Once the field *is* first responder it consumes keys before
+                // NSWindow.keyDown, so Esc and Enter have to be handled here or
+                // not at all. Esc clears the query, then steps out of the field
+                // — the same two-step the history filter uses; Enter releases
+                // focus so ↑↓ and ⏎ go back to acting on the list.
+                .onExitCommand {
+                    if catalog.query.isEmpty { searchFocused = false } else { catalog.query = "" }
+                }
+                .onSubmit { searchFocused = false }
             if !catalog.query.isEmpty {
                 Button { catalog.query = "" } label: {
                     Image(systemName: "xmark.circle.fill")

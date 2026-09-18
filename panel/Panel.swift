@@ -3765,15 +3765,25 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return true
         }
 
-        // Extensions browser. Unlike every other page here, this one does *not*
-        // swallow what it doesn't recognise: the search field is focused on
-        // arrival, so a plain letter is a search term and has to reach SwiftUI.
+        // Extensions browser. The page opens with its search field unfocused, so
+        // this branch owns the keyboard: Esc steps back (clearing the query
+        // first if there is one), / hands over to the field, and any printable
+        // character seeds the query and hands over — so type-to-search costs no
+        // extra keystroke despite the field not grabbing focus. Once the field
+        // *is* first responder it consumes keys before NSWindow.keyDown, and its
+        // own .onExitCommand and .onSubmit handle Esc and Enter.
         //
-        // That is what cost R its bare binding. Reload moved to ⌘R and
-        // configure took ⌘⏎, which is why both are read before the plain guard
-        // rather than after it.
+        // Exactly the history pane's contract, and for the same reason. The
+        // first attempt at this focused the field on arrival and changed the
+        // default branch to `return false` so letters could "reach SwiftUI" —
+        // which had it backwards. A focused field already takes every key before
+        // this function runs, so nothing needed releasing; all that changed was
+        // that Esc, ↑↓ and ⏎ stopped working while the footer went on
+        // advertising them.
+        //
+        // Reload keeps ⌘R and configure takes ⌘⏎, since a plain letter is a
+        // search term.
         if nav.mode == .extensions {
-            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             let rows = ExtensionCatalog.matching(
                 ExtensionCatalog.rows(catalogue: extensionCatalog.entries,
                                       installed: extensions.manifests,
@@ -3795,19 +3805,25 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                         configureExtension(row)
                     }
                     return true
+                // Leave every other ⌘ combination to the app — ⌘Q and friends.
                 default: return false
                 }
             }
-            guard plain else { return false }
-            switch event.keyCode {
-            case KeyCode.escape: nav.mode = .settings
-            case KeyCode.upArrow:   extensionCatalog.moveSelection(among: rows, by: -1)
-            case KeyCode.downArrow: extensionCatalog.moveSelection(among: rows, by: 1)
-            case KeyCode.returnKey, KeyCode.numpadEnter:
-                extensionCatalog.activateSelection(among: rows)
-            // Space is no longer an activation key — it is a space, and the
-            // search field is what wants it.
-            default: return false
+            guard mods.intersection([.command, .control, .option]).isEmpty else { return false }
+
+            switch Self.extensionsKeyAction(keyCode: event.keyCode,
+                                            characters: event.charactersIgnoringModifiers,
+                                            queryIsEmpty: extensionCatalog.query.isEmpty) {
+            case .back:         nav.mode = .settings
+            case .clearQuery:   extensionCatalog.query = ""
+            case .focusSearch:  extensionCatalog.focusSearch()
+            case .appendToQuery(let typed):
+                extensionCatalog.query += typed
+                extensionCatalog.focusSearch()
+            case .moveSelection(let delta):
+                extensionCatalog.moveSelection(among: rows, by: delta)
+            case .activate:     extensionCatalog.activateSelection(among: rows)
+            case .swallow:      break
             }
             return true
         }
@@ -4115,6 +4131,48 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // to a read-only log, and a → key repeat landing in the filter is
         // exactly what this stops.
         case swallow
+    }
+
+    // What a key does on the extensions browser. Pure and beside
+    // historyKeyAction for the same reason that one is: this is a table, and a
+    // table is worth asserting rather than reasoning about — the first version
+    // of this page's key handling was wrong in a way no test could see because
+    // there was nothing to test.
+    enum ExtensionsKeyAction: Equatable {
+        case back
+        case clearQuery
+        case focusSearch
+        case appendToQuery(String)
+        case moveSelection(Int)
+        case activate
+        // Never falls through to the tab shortcuts below — they act on a list
+        // this page isn't showing.
+        case swallow
+    }
+
+    static func extensionsKeyAction(keyCode: UInt16,
+                                    characters: String?,
+                                    queryIsEmpty: Bool) -> ExtensionsKeyAction {
+        switch keyCode {
+        case KeyCode.escape:
+            return queryIsEmpty ? .back : .clearQuery
+        case KeyCode.slash:
+            return .focusSearch
+        case KeyCode.upArrow:
+            return .moveSelection(-1)
+        case KeyCode.downArrow:
+            return .moveSelection(1)
+        case KeyCode.returnKey, KeyCode.numpadEnter:
+            return .activate
+        default:
+            // Same input test the history filter uses, and for the same reason:
+            // AppKit reports arrows and function keys as private-use scalars,
+            // which are neither control characters nor illegal ones, so "not a
+            // control character" would seed the query with invisible junk and
+            // hand the field focus off the back of it.
+            guard let characters, isFilterInput(characters) else { return .swallow }
+            return .appendToQuery(characters)
+        }
     }
 
     static func historyKeyAction(keyCode: UInt16,

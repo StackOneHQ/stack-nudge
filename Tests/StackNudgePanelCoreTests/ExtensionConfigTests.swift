@@ -146,6 +146,27 @@ final class ExtensionConfigTests: XCTestCase {
         XCTAssertNotNil(ExtensionConfigModel.problem(with: "a\rb"))
     }
 
+    // CharacterSet.controlCharacters is Cc+Cf and does not contain U+2028 /
+    // U+2029, which are Zl/Zp — and both are line terminators to plenty of
+    // readers. CharacterSet.newlines does contain them, along with U+0085.
+    func testAUnicodeLineSeparatorIsRefusedToo() {
+        for separator in ["\u{2028}", "\u{2029}", "\u{0085}", "\u{000B}", "\u{000C}"] {
+            XCTAssertNotNil(ExtensionConfigModel.problem(with: "stackone\(separator)more"),
+                            separator.debugDescription)
+        }
+    }
+
+    // A tab pasted out of a spreadsheet is a control character and not a line
+    // break. Being told about line breaks you didn't type is worse than being
+    // told nothing.
+    func testAnInvisibleCharacterIsNamedForWhatItIs() {
+        XCTAssertEqual(ExtensionConfigModel.problem(with: "a\nb"),
+                       "Line breaks aren't allowed here.")
+        XCTAssertNotEqual(ExtensionConfigModel.problem(with: "a\tb"),
+                          "Line breaks aren't allowed here.")
+        XCTAssertNotNil(ExtensionConfigModel.problem(with: "a\tb"))
+    }
+
     func testAnInvalidFormRefusesToSaveAnyOfIt() {
         var written: [String: String?] = [:]
         let m = model(keys: [key("STACKNUDGE_EXT_DERBY_ORG"), key("STACKNUDGE_EXT_DERBY_BASE")],

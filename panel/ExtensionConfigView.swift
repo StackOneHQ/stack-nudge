@@ -84,8 +84,19 @@ final class ExtensionConfigModel: ObservableObject {
     // whatever followed as its own directive.
     static func problem(with value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) {
+        if trimmed.unicodeScalars.contains(where: { $0 == "\n" || $0 == "\r" }) {
             return "Line breaks aren't allowed here."
+        }
+        // Everything else invisible, named for what it is. A tab pasted out of
+        // a spreadsheet is a control character and not a line break, and being
+        // told about line breaks you didn't type is worse than being told
+        // nothing.
+        if trimmed.unicodeScalars.contains(where: {
+            CharacterSet.controlCharacters.contains($0)
+                || CharacterSet.newlines.contains($0)
+                || CharacterSet.illegalCharacters.contains($0)
+        }) {
+            return "That contains a character that can't be stored here."
         }
         guard trimmed.contains("://") else { return nil }
         guard trimmed.lowercased().hasPrefix("https://") else {
@@ -175,6 +186,11 @@ struct ExtensionConfigView: View {
                 .textFieldStyle(.roundedBorder)
                 .font(.caption)
                 .onSubmit { model.save() }
+                // A focused field is first responder, and FloatingPanel.keyDown
+                // only fires for what the first responder declines — so without
+                // this, Esc stopped going back the moment anyone clicked into a
+                // field, while the footer went on advertising it.
+                .onExitCommand { onBack() }
             if let problem = model.problem(for: key) {
                 Text(problem).font(.caption2).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
