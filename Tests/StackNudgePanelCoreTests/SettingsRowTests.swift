@@ -118,9 +118,16 @@ final class SettingsRowTests: XCTestCase {
             nav.selectedSettingIndex = nav.index(of: row)
         }
 
+        nav.installedExtensions = [
+            ExtensionRow(id: "derby", name: "Derby", description: "",
+                         installedVersion: "1.0.0", availableVersion: nil,
+                         refusedReason: nil, requires: [], config: []),
+        ]
+
         for row in [SettingsRow.wireAgents, .dismissAgents, .quit, .editPhrases,
                     .openConfig, .releaseNotes, .checkUpdates, .checkPermissions,
-                    .uninstall, .disconnectGithub] {
+                    .uninstall, .disconnectGithub, .browseExtensions,
+                    .installedExtension("derby")] {
             select(row)
             XCTAssertEqual(nav.selectedRow, row)
             XCTAssertFalse(nav.selectedRowRespondsToArrows, "\(row) should ignore arrows")

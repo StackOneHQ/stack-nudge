@@ -51,6 +51,19 @@ final class SettingsCategoryTests: XCTestCase {
         }
         let orphaned = Set(SettingsRow.allCases).subtracting(covered)
         XCTAssertTrue(orphaned.isEmpty, "rows with no category: \(orphaned)")
+
+        // The other direction, which is the half that was missing and the half
+        // that now matters most. allCases used to be synthesised; it is
+        // hand-written since SettingsRow gained an associated value, so a case
+        // can silently fall out of the list — and subtracting a smaller
+        // allCases from `covered` only ever makes the assertion above *greener*.
+        // A row that the UI renders and allCases has forgotten is invisible to
+        // every test that iterates allCases, which is the point of having one.
+        //
+        // Together the two make allCases exactly the set of rows reachable in
+        // the UI, in both directions.
+        let unlisted = covered.subtracting(SettingsRow.allCases)
+        XCTAssertTrue(unlisted.isEmpty, "rows missing from allCases: \(unlisted)")
     }
 
     // The category grows and shrinks with what is installed, and the browse row
@@ -89,43 +102,55 @@ final class SettingsCategoryTests: XCTestCase {
     // Enter on an extension card opens it. activate()'s switch ends in
     // `default: applyCycle`, so omitting the case is not a build error — it is
     // Enter quietly doing nothing on the one row whose purpose is being opened.
-    func testEnterOnAnExtensionCardOpensIt() {
+    // Two extensions, and the *second* is selected: with only one seeded — and
+    // named the same as the representative allCases carries — the test could
+    // not tell "opens the selected row" from "opens a constant".
+    func testEnterOnAnExtensionCardOpensTheSelectedOne() {
         let nav = PanelNav()
         var opened: [String] = []
         nav.actions = Self.actions(openExtension: { opened.append($0) })
-        nav.installedExtensions = [
-            ExtensionRow(id: "derby", name: "Derby", description: "",
-                         installedVersion: "1.0.0", availableVersion: nil,
-                         refusedReason: nil, requires: [], config: []),
-        ]
+        nav.installedExtensions = [row("derby"), row("system")]
         nav.settingsCategory = .extensions
-        nav.selectedSettingIndex = nav.index(of: .installedExtension("derby")) ?? 0
+        nav.selectedSettingIndex = nav.index(of: .installedExtension("system")) ?? 0
         nav.activate()
-        XCTAssertEqual(opened, ["derby"])
+        XCTAssertEqual(opened, ["system"])
     }
 
     // Arrows must not act on it — the card is an action row, and ←/→ grazing it
     // should do nothing rather than half-open something.
+    //
+    // Drives cycleForward/cycleBackward rather than only reading the predicate.
+    // The predicate and applyCycle are two switches 200 lines apart, and a test
+    // that reads one of them compares it to itself: moving .installedExtension
+    // into applyCycle's *acting* group made ←/→ fire checkPermissions() and no
+    // test noticed.
     func testArrowsDoNothingOnAnExtensionCard() {
         let nav = PanelNav()
-        nav.installedExtensions = [
-            ExtensionRow(id: "derby", name: "Derby", description: "",
-                         installedVersion: "1.0.0", availableVersion: nil,
-                         refusedReason: nil, requires: [], config: []),
-        ]
+        var opened: [String] = []
+        var permissionChecks = 0
+        nav.actions = Self.actions(openExtension: { opened.append($0) },
+                                   checkPermissions: { permissionChecks += 1 })
+        nav.installedExtensions = [row("derby")]
         nav.settingsCategory = .extensions
         nav.selectedSettingIndex = nav.index(of: .installedExtension("derby")) ?? 0
+
         XCTAssertFalse(nav.selectedRowRespondsToArrows)
+        nav.cycleForward()
+        nav.cycleBackward()
+        XCTAssertTrue(opened.isEmpty, "arrows must not open an extension")
+        XCTAssertEqual(permissionChecks, 0, "arrows must not fire another row's action")
+        XCTAssertEqual(nav.selectedRow, .installedExtension("derby"))
     }
 
     // SettingsActions has one closure per wired effect and a memberwise init,
     // so a stub has to name all of them — which is the point: adding an action
     // fails to compile here rather than silently going unexercised.
     private static func actions(
-        openExtension: @escaping (String) -> Void = { _ in }
+        openExtension: @escaping (String) -> Void = { _ in },
+        checkPermissions: @escaping () -> Void = {}
     ) -> SettingsActions {
         SettingsActions(
-            checkPermissions: {}, openConfig: {}, editPhrases: {},
+            checkPermissions: checkPermissions, openConfig: {}, editPhrases: {},
             browseExtensions: {}, openExtension: openExtension,
             openReleaseNotes: {}, checkForUpdates: {}, beginUpdate: {}, runUpdate: {},
             beginUninstall: {}, runUninstall: {}, runBootstrap: {}, quit: {},
