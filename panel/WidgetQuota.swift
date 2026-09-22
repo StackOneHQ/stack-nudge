@@ -45,6 +45,8 @@ struct WidgetQuota: Equatable {
         switch client {
         case .antigravity:
             return "Inner ring: model closest to its limit · Outer ring: monthly prompt credits"
+        case .pi:
+            return "Inner ring: today's budget · Outer ring: this week's budget"
         default:
             let inner = "Inner ring: \(Self.ringPhrase(shortLabel, short))"
             guard long != nil else { return inner }
@@ -74,7 +76,8 @@ struct WidgetQuota: Equatable {
     static func make(client: UsageClient?,
                      claude: QuotaSnapshot?,
                      codex: CodexQuotaSnapshot?,
-                     antigravity: AntigravityQuotaSnapshot?) -> WidgetQuota {
+                     antigravity: AntigravityQuotaSnapshot?,
+                     pi: PiQuotaSnapshot?) -> WidgetQuota {
         switch client {
         case .claude:
             return WidgetQuota(client: .claude,
@@ -102,6 +105,16 @@ struct WidgetQuota: Equatable {
                                short: worst?.tier,
                                long: creditsTier(antigravity?.promptCredits),
                                shortLabel: "now", longLabel: "mo")
+        case .pi:
+            // Both rings read against the user's own budget. API takes the ring
+            // whenever it has usage: local tokens are free, so an API overrun is
+            // the one worth a glance. Labels are named rather than measured from
+            // the window — a DST day is 23 hours long and "23h" in a 35pt legend
+            // slot would be noise.
+            return WidgetQuota(client: .pi,
+                               short: pi?.apiToday ?? pi?.localToday,
+                               long: pi?.apiThisWeek ?? pi?.localThisWeek,
+                               shortLabel: "1d", longLabel: "7d")
         case nil:
             return .empty
         }
@@ -126,6 +139,7 @@ extension UsageClient {
         case .claude:      return "Claude"
         case .codex:       return "Codex"
         case .antigravity: return "Agy"
+        case .pi:          return "Pi"
         }
     }
 }

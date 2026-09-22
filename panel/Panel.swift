@@ -1111,6 +1111,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private let claudeCliQuotaProbe = ClaudeCliQuotaProbe()
     private let codexQuotaProbe = CodexQuotaProbe()
     private let antigravityUsageProbe = AntigravityUsageProbe()
+    // Lazy because it shares the nav's history store rather than opening its
+    // own, so pi's transcripts are parsed once for the graph and the budget.
+    private lazy var piUsageProbe = PiUsageProbe(store: nav.usageStore)
     private var quotaTimer: Timer?
     // Last outcome derived per repo+branch, alongside the git values it was
     // derived from, so refreshOutcomes can skip re-deriving what hasn't moved.
@@ -2099,6 +2102,16 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 // "a dropped tick shouldn't flip the UI".
                 self.nav.quotaErrors[.antigravity] = nil
             }
+        }
+        // Pi budget — read from pi's own transcripts, no network and no CLI.
+        // Unlike the three above this is not a provider quota: the denominators
+        // are the user's own (see PiBudget), so there is no failure to surface
+        // either. nil means no pi usage in either window.
+        piUsageProbe.fetch(budget: nav.piBudget) { [weak self] snapshot in
+            guard let self, let snapshot else { return }
+            self.nav.piQuota = snapshot
+            self.nav.quotaLastUpdated = Date()
+            self.nav.quotaUpdatedAt[.pi] = Date()
         }
     }
 

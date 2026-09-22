@@ -51,17 +51,19 @@ enum UsageClient: String, CaseIterable, Hashable {
     case claude
     case codex
     case antigravity
+    case pi
 
     var displayName: String {
         switch self {
         case .claude:      return "Claude"
         case .codex:       return "Codex"
         case .antigravity: return "Antigravity"
+        case .pi:          return "Pi"
         }
     }
 
     // Where this client's replayable token history lives, or nil when it has
-    // none. Claude and Codex both write per-turn token usage with a timestamp
+    // none. Claude, Codex and pi all write per-turn token usage with a timestamp
     // into their transcripts. Antigravity's history.jsonl carries only prompt
     // text, timestamp and workspace — no token data at all — and its quota comes
     // from a live API call, so there's nothing to plot retrospectively.
@@ -73,6 +75,7 @@ enum UsageClient: String, CaseIterable, Hashable {
         case .claude:      return .claude
         case .codex:       return .codex
         case .antigravity: return nil
+        case .pi:          return .pi
         }
     }
 
@@ -272,6 +275,7 @@ struct UsageView: View {
         case .claude:      return nav.quota?.hasTier ?? false
         case .codex:       return nav.codexQuota?.hasTier ?? false
         case .antigravity: return nav.antigravityQuota?.hasTier ?? false
+        case .pi:          return nav.piQuota?.hasTier ?? false
         }
     }
 
@@ -386,6 +390,24 @@ struct UsageView: View {
                 }
                 if agy.promptCredits != nil || agy.flowCredits != nil {
                     section("Credits") { creditsRow(agy) }
+                }
+            }
+        case .pi:
+            if let pi = nav.piQuota {
+                // Every row names its denominator: these are the user's own
+                // budgets, not a limit pi will enforce, and a bare percentage
+                // here would read like Claude's above it.
+                if let tier = pi.apiToday {
+                    section("API models today") { tierRow(tier, budget: pi.budget.apiDaily) }
+                }
+                if let tier = pi.apiThisWeek {
+                    section("API models this week") { tierRow(tier, budget: pi.budget.apiWeekly) }
+                }
+                if let tier = pi.localToday {
+                    section("Local models today") { tierRow(tier, budget: pi.budget.localDaily) }
+                }
+                if let tier = pi.localThisWeek {
+                    section("Local models this week") { tierRow(tier, budget: pi.budget.localWeekly) }
                 }
             }
         }
@@ -534,6 +556,7 @@ struct UsageView: View {
         case .claude:      return nav.quota?.planType?.capitalized
         case .codex:       return nav.codexQuota?.planType?.capitalized
         case .antigravity: return nav.antigravityQuota?.planType?.capitalized
+        case .pi:          return nav.piQuota?.planType?.capitalized
         }
     }
 
@@ -548,7 +571,7 @@ struct UsageView: View {
         }
     }
 
-    private func tierRow(_ tier: QuotaTier) -> some View {
+    private func tierRow(_ tier: QuotaTier, budget: Int? = nil) -> some View {
         // Show "30% used" or "70% remaining" depending on the toggle. Bar
         // still represents utilization so the color ramp keeps its meaning.
         let display = nav.quotaShowRemaining
@@ -558,6 +581,11 @@ struct UsageView: View {
         return VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Spacer()
+                if let budget {
+                    Text("of \(TokenFormat.short(budget)) budget")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
                 Text("\(Int(display.rounded()))\(suffix)")
                     .font(.caption.monospacedDigit().weight(.semibold))
                     .foregroundStyle(barColor(tier.utilization))

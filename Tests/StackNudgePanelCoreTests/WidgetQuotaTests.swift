@@ -36,11 +36,47 @@ final class WidgetQuotaTests: XCTestCase {
     private func make(_ client: UsageClient?,
                       claude: QuotaSnapshot? = nil,
                       codex: CodexQuotaSnapshot? = nil,
-                      agy: AntigravityQuotaSnapshot? = nil) -> WidgetQuota {
-        WidgetQuota.make(client: client, claude: claude, codex: codex, antigravity: agy)
+                      agy: AntigravityQuotaSnapshot? = nil,
+                      pi: PiQuotaSnapshot? = nil) -> WidgetQuota {
+        WidgetQuota.make(client: client, claude: claude, codex: codex, antigravity: agy, pi: pi)
+    }
+
+    private func piSnapshot(apiToday: Double?, apiWeek: Double?,
+                            localToday: Double?, localWeek: Double?) -> PiQuotaSnapshot {
+        let day = DateInterval(start: Date(), duration: 86400)
+        let week = DateInterval(start: Date(), duration: 7 * 86400)
+        func tier(_ used: Double?, _ window: DateInterval) -> QuotaTier? {
+            used.map { QuotaTier(utilization: $0, resetsAt: window.end, windowLength: window.duration) }
+        }
+        return PiQuotaSnapshot(apiToday: tier(apiToday, day),
+                               apiThisWeek: tier(apiWeek, week),
+                               localToday: tier(localToday, day),
+                               localThisWeek: tier(localWeek, week),
+                               budget: .fallback)
     }
 
     // MARK: - Per-client ring mapping
+
+    func test_pi_mapsTodayAndThisWeek() {
+        let q = make(.pi, pi: piSnapshot(apiToday: 62, apiWeek: 18, localToday: 4, localWeek: 2))
+        XCTAssertEqual(q.short?.utilization, 62)
+        XCTAssertEqual(q.long?.utilization, 18)
+        XCTAssertEqual(q.shortLabel, "1d")
+        XCTAssertEqual(q.longLabel, "7d")
+    }
+
+    // Local-only usage still gets both rings rather than falling back to empty.
+    func test_pi_fallsBackToLocalWhenNoApiUsage() {
+        let q = make(.pi, pi: piSnapshot(apiToday: nil, apiWeek: nil, localToday: 30, localWeek: 9))
+        XCTAssertEqual(q.short?.utilization, 30)
+        XCTAssertEqual(q.long?.utilization, 9)
+    }
+
+    // A budget is the user's own, so passing it is the point of the row.
+    func test_pi_overBudgetIsNotClamped() {
+        let q = make(.pi, pi: piSnapshot(apiToday: 140, apiWeek: 30, localToday: nil, localWeek: nil))
+        XCTAssertEqual(q.short?.utilization, 140)
+    }
 
     func test_claude_mapsFiveHourAndSevenDay() {
         let q = make(.claude, claude: claudeSnapshot(five: 40, seven: 12))

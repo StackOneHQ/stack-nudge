@@ -172,6 +172,7 @@ enum SettingsRow: Hashable {
     case soundEnabled, agentDoneSound, permissionSound
     case voiceEnabled, voice, voiceSpeed, speakHotkey, downloadVoiceModel
     case quotaTracking, quotaAlerts, alertThreshold, pollFrequency, contextAlert, showRemaining
+    case piApiBudget, piLocalBudget
     case githubLinks, hideShipped, disconnectGithub
     case historyPerSession
     case editPhrases, checkPermissions, openConfig, releaseNotes, checkUpdates, uninstall, quit
@@ -211,7 +212,7 @@ extension SettingsRow: CaseIterable {
         .soundEnabled, .agentDoneSound, .permissionSound,
         .voiceEnabled, .voice, .voiceSpeed, .speakHotkey, .downloadVoiceModel,
         .quotaTracking, .quotaAlerts, .alertThreshold, .pollFrequency,
-        .contextAlert, .showRemaining,
+        .contextAlert, .showRemaining, .piApiBudget, .piLocalBudget,
         .githubLinks, .hideShipped, .disconnectGithub,
         .historyPerSession,
         .editPhrases, .checkPermissions, .openConfig, .releaseNotes,
@@ -424,6 +425,21 @@ final class PanelNav: ObservableObject {
     // Antigravity (agy) usage from the running CLI's loopback RPC, populated by
     // AntigravityUsageProbe — the agy analogue of `quota`/`codexQuota`.
     @Published var antigravityQuota: AntigravityQuotaSnapshot? { didSet { widgetQuotaCache = nil } }
+    // Pi's self-imposed budget, populated by PiUsageProbe from pi's own
+    // transcripts. Not a provider quota — see PiBudget.
+    @Published var piQuota: PiQuotaSnapshot? { didSet { widgetQuotaCache = nil } }
+    @Published var piApiBudgetDaily: Int = PiBudget.apiDailyDefault
+    @Published var piLocalBudgetDaily: Int = PiBudget.localDailyDefault
+
+    var piBudget: PiBudget {
+        PiBudget(apiDaily: piApiBudgetDaily, localDaily: piLocalBudgetDaily)
+    }
+
+    static func stepBudget(_ current: Int, forward: Bool) -> Int {
+        let list = PiBudget.dailyOptions
+        let index = list.firstIndex(of: current) ?? 0
+        return list[forward ? (index + 1) % list.count : (index - 1 + list.count) % list.count]
+    }
     // Bumped by PanelController after a handoff is upserted into the ledger so
     // the Tickets tab (OutcomesView) and its tab-strip count re-read the
     // in-memory HandoffLedger and reflect the new session live. The ledger
@@ -673,7 +689,10 @@ final class PanelNav: ObservableObject {
     @Published var usageWindow: UsageWindow = .widest
     // Long-lived parse cache. Owned per-nav rather than global so nothing leaks
     // between instances, and so tests can drive a clean one.
-    private let usageStore = UsageHistoryStore()
+    // Shared with PiUsageProbe so pi's transcripts are parsed once for both the
+    // graph and the budget. The store retains the widest span any caller asks
+    // for, so the graph's 24h refresh can't evict the budget's week.
+    let usageStore = UsageHistoryStore()
     // Replayed transcript history for the selected client, keyed so switching
     // client doesn't show another client's numbers while a scan is in flight.
     @Published var usageSeries: UsageSeries?
@@ -699,6 +718,7 @@ final class PanelNav: ObservableObject {
         case .claude:      return quota?.hasTier == true
         case .codex:       return codexQuota?.hasTier == true
         case .antigravity: return antigravityQuota?.hasTier == true
+        case .pi:          return piQuota?.hasTier == true
         }
     }
 
@@ -747,7 +767,8 @@ final class PanelNav: ObservableObject {
         let value = WidgetQuota.make(client: selectedUsageClient,
                                      claude: quota,
                                      codex: codexQuota,
-                                     antigravity: antigravityQuota)
+                                     antigravity: antigravityQuota,
+                                     pi: piQuota)
         widgetQuotaCache = value
         return value
     }
@@ -834,7 +855,7 @@ final class PanelNav: ObservableObject {
             // pressing W during an in-flight scan would otherwise have its
             // re-bucket silently reverted by this completion, leaving the header
             // claiming one window while the chart showed another.
-            store.refresh(source: source, retaining: .widest)
+            store.refresh(source: source, retaining: UsageWindow.widest.seconds)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 // Pure computation over entries already in memory (~1 ms), so
@@ -1221,7 +1242,8 @@ final class PanelNav: ObservableObject {
                     .widgetContent, .mascot, .theme]
         case .usage:
             return [.quotaTracking, .quotaAlerts, .alertThreshold,
-                    .pollFrequency, .contextAlert, .showRemaining]
+                    .pollFrequency, .contextAlert, .showRemaining,
+                    .piApiBudget, .piLocalBudget]
         case .integrations:
             return [.slackPaste, .slackIdentity, .slackTest,
                     .slackEnabled, .slackIdle, .slackDetail, .slackStop,
@@ -1385,6 +1407,12 @@ final class PanelNav: ObservableObject {
         // Same coercion for poll interval — snap to nearest valid option.
         let rawPoll = Int(config["STACKNUDGE_USAGE_POLL_MIN"] ?? "") ?? 5
         quotaPollMinutes = Self.quotaPollMinuteOptions.min(by: { abs($0 - rawPoll) < abs($1 - rawPoll) }) ?? 5
+        let rawPiApi = Int(config["STACKNUDGE_PI_API_BUDGET"] ?? "") ?? PiBudget.apiDailyDefault
+        piApiBudgetDaily = PiBudget.dailyOptions.min(by: { abs($0 - rawPiApi) < abs($1 - rawPiApi) })
+            ?? PiBudget.apiDailyDefault
+        let rawPiLocal = Int(config["STACKNUDGE_PI_LOCAL_BUDGET"] ?? "") ?? PiBudget.localDailyDefault
+        piLocalBudgetDaily = PiBudget.dailyOptions.min(by: { abs($0 - rawPiLocal) < abs($1 - rawPiLocal) })
+            ?? PiBudget.localDailyDefault
         let rawCtx = Int(config["STACKNUDGE_CONTEXT_ALERT_THRESHOLD"] ?? "") ?? 0
         contextAlertThresholdK = Self.contextAlertThresholdOptions.min(by: { abs($0 - rawCtx) < abs($1 - rawCtx) }) ?? 0
         eventHistoryEnabled = ConfigFile.bool(config, "STACKNUDGE_EVENT_HISTORY", default: true)
@@ -1699,7 +1727,7 @@ final class PanelNav: ObservableObject {
              .soundEnabled, .agentDoneSound, .permissionSound,
              .voiceEnabled, .voice, .voiceSpeed, .downloadVoiceModel,
              .quotaTracking, .quotaAlerts, .alertThreshold, .pollFrequency,
-             .contextAlert, .showRemaining,
+             .contextAlert, .showRemaining, .piApiBudget, .piLocalBudget,
              .githubLinks, .hideShipped,
              .historyPerSession, .eventHistory,
              .slackEnabled, .slackIdle, .slackDetail, .slackStop:
@@ -1904,6 +1932,12 @@ final class PanelNav: ObservableObject {
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
             quotaAlertThreshold = list[next]
             ConfigFile.write(key: "STACKNUDGE_QUOTA_THRESHOLD", value: String(quotaAlertThreshold))
+        case .piApiBudget:
+            piApiBudgetDaily = Self.stepBudget(piApiBudgetDaily, forward: forward)
+            ConfigFile.write(key: "STACKNUDGE_PI_API_BUDGET", value: String(piApiBudgetDaily))
+        case .piLocalBudget:
+            piLocalBudgetDaily = Self.stepBudget(piLocalBudgetDaily, forward: forward)
+            ConfigFile.write(key: "STACKNUDGE_PI_LOCAL_BUDGET", value: String(piLocalBudgetDaily))
         case .pollFrequency:
             let list = Self.quotaPollMinuteOptions
             let idx = list.firstIndex(of: quotaPollMinutes) ?? 2
