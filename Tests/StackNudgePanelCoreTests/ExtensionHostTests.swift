@@ -396,6 +396,26 @@ final class ExtensionHostTests: XCTestCase {
                                               visible: true, now: now))
     }
 
+    // A click on a footer hint has to send what the keypress would. resolve()
+    // reads a row action as belonging to the selected row and a document action
+    // as belonging to none, so the pairing the footer renders must agree — a
+    // document action sent with a row id would spawn `--action refresh --row x`
+    // for a row the action was never about.
+    func testADocumentActionCarriesNoRowAndARowActionCarriesItsOwn() {
+        let json = """
+            {"schema":1,
+             "rows":[{"id":"h1","title":"A","actions":[{"id":"open","label":"Open","key":"o"}]}],
+             "actions":[{"id":"refresh","label":"Sync now","key":"r"}]}
+            """
+        guard case .success(let document) = ExtensionDocument.parse(Data(json.utf8)) else {
+            return XCTFail("fixture didn't parse")
+        }
+        XCTAssertEqual(ExtensionHost.resolve(key: "r", in: document, selectedRow: "h1")?.row, nil)
+        XCTAssertEqual(ExtensionHost.resolve(key: "o", in: document, selectedRow: "h1")?.row, "h1")
+        // With nothing selected a row action isn't reachable at all.
+        XCTAssertNil(ExtensionHost.resolve(key: "o", in: document, selectedRow: nil))
+    }
+
     // MARK: - Opening a tab
 
     func testOpeningATabRefreshesItUnlessTheManifestOptedOut() {
@@ -406,5 +426,81 @@ final class ExtensionHostTests: XCTestCase {
         host.tabAppeared("derby")
         host.tabAppeared("radar")
         XCTAssertEqual(recorder.calls.map(\.id), ["derby"])
+    }
+
+    // The panel is an NSPanel that is ordered out, not torn down, so its SwiftUI
+    // tree survives being hidden and `onAppear` — the only thing that calls
+    // tabAppeared — does not fire again when it comes back. Reopening onto a tab
+    // you were already on is therefore not an "open" as far as the host is
+    // concerned, and the pane shows whatever it last fetched.
+    //
+    // This asks whether the scheduled refresh covers that gap on its own.
+    // The floor is what makes tabAppeared safe to call from both onAppear and
+    // the panel becoming visible: toggling the panel must not spawn a script
+    // faster than polling is allowed to.
+    func testOpeningATabAgainImmediatelyDoesNotRespawn() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby")], recorder: recorder)
+        let now = Date()
+        host.tabAppeared("derby", now: now)
+        XCTAssertEqual(recorder.calls.count, 1)
+
+        // Within the floor: a second open is the same open.
+        host.tabAppeared("derby", now: now.addingTimeInterval(1))
+        XCTAssertEqual(recorder.calls.count, 1)
+
+        // Past it: a real reopen, and the pane is refetched.
+        host.tabAppeared("derby",
+                         now: now.addingTimeInterval(
+                            TimeInterval(ExtensionManifest.minimumIntervalSeconds) + 1))
+        XCTAssertEqual(recorder.calls.count, 2)
+    }
+
+    // An extension that asks only for onOpen has no schedule to fall back on,
+    // so showing the panel onto its tab is the only thing that can refresh it.
+    func testATabWithNoScheduleStillRefreshesWhenThePanelComesBack() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby", refresh: "{\"onOpen\":true}")],
+                                recorder: recorder)
+        let now = Date()
+        host.tabAppeared("derby", now: now)
+        XCTAssertEqual(recorder.calls.count, 1)
+
+        // Hidden for ten minutes. No interval, so no tick will ever help.
+        var later = now
+        for _ in 0..<120 {
+            later = later.addingTimeInterval(5)
+            host.tick(visibleTab: nil, now: later)
+        }
+        XCTAssertEqual(recorder.calls.count, 1)
+
+        host.tabAppeared("derby", now: later)
+        XCTAssertEqual(recorder.calls.count, 2,
+                       "showing the panel is the only refresh this extension gets")
+    }
+
+    func testReopeningOntoATabYouWereAlreadyOnGetsFreshData() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":30}")],
+                                recorder: recorder,
+                                result: { .transient("stub") })
+        // Opened once, fetched once.
+        host.tabAppeared("derby")
+        XCTAssertEqual(recorder.calls.count, 1)
+
+        // Hidden for five minutes: whileFocusedOnly means no polling, by design.
+        var now = Date()
+        for _ in 0..<60 {
+            now = now.addingTimeInterval(5)
+            host.tick(visibleTab: nil, now: now)
+        }
+        XCTAssertEqual(recorder.calls.count, 1, "a hidden pane must not poll")
+
+        // Reopened onto the same tab. onAppear does not fire, so the first tick
+        // after it becomes visible is the only thing that can catch it up.
+        now = now.addingTimeInterval(5)
+        host.tick(visibleTab: "derby", now: now)
+        XCTAssertEqual(recorder.calls.count, 2,
+                       "reopening onto a stale tab must refetch without a keypress")
     }
 }
