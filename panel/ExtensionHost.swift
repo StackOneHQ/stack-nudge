@@ -114,8 +114,24 @@ final class ExtensionHost: ObservableObject {
 
     // Opening a tab refreshes it unless the manifest opted out, and unless
     // something is already in flight.
-    func tabAppeared(_ id: String) {
+    //
+    // "Opening" includes showing the panel onto a tab you were already on,
+    // which SwiftUI cannot tell us: the panel is ordered out rather than torn
+    // down, so its view tree survives being hidden and `onAppear` never fires
+    // again. Without that call the pane shows whatever it last fetched, and an
+    // extension declaring `onOpen` with no `intervalSeconds` would stay that
+    // way until the tab was switched away from and back.
+    //
+    // The floor is what makes it safe to call from both places. It is the
+    // manifest's own minimum poll interval, so toggling the panel cannot spawn
+    // a script faster than polling is allowed to.
+    func tabAppeared(_ id: String, now: Date = Date()) {
         guard let manifest = manifest(id), manifest.refresh.onOpen else { return }
+        if let attemptedAt = pane(id).attemptedAt,
+           now.timeIntervalSince(attemptedAt)
+               < TimeInterval(ExtensionManifest.minimumIntervalSeconds) {
+            return
+        }
         refresh(id)
     }
 

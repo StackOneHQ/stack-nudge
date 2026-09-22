@@ -4792,12 +4792,23 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 NSApp.activate(ignoringOtherApps: true)
                 panel.makeKeyAndOrderFront(nil)
             }
+            refreshVisibleExtensionTab()
             return
         }
         positionPanel()  // re-resolve in case the user moved to a different display
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         usageSurfaceDidChange()
+        refreshVisibleExtensionTab()
+    }
+
+    // Showing the panel onto an extension tab is opening that tab, to anyone
+    // using it. ExtensionTabView.onAppear cannot say so: the panel is ordered
+    // out rather than torn down, so the view survives being hidden and never
+    // appears again — leaving the pane on whatever it fetched before.
+    private func refreshVisibleExtensionTab() {
+        guard case .extensionTab(let id) = nav.mode else { return }
+        extensions.tabAppeared(id)
     }
 
     // NSApp.hide hides all our windows AND deactivates the app, so the system

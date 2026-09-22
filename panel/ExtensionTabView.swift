@@ -326,16 +326,32 @@ struct ExtensionTabView: View {
             // Only bound actions get a hint. An action whose key request was
             // refused has no shortcut and no button, so advertising it would be
             // a lie — see the note on ExtensionKey.
-            ForEach(hintedActions, id: \.id) { action in
-                FooterHint(label: action.label, keys: [Self.keyCap(action.key ?? "")])
+            // Clickable, because it looks clickable. The pane was
+            // keyboard-only by design and the footer still advertised each
+            // action with its key cap — which reads as a button, so it gets
+            // pressed, and nothing happens. A refresh arriving on the poll
+            // thirty seconds later then looks like the click working.
+            ForEach(hintedActions, id: \.action.id) { hint in
+                Button {
+                    host.perform(action: hint.action.id, row: hint.row, on: id)
+                } label: {
+                    FooterHint(label: hint.action.label,
+                               keys: [Self.keyCap(hint.action.key ?? "")])
+                }
+                .buttonStyle(.plain)
+                .disabled(pane.busy)
             }
         }
     }
 
-    private var hintedActions: [ExtensionDocument.Action] {
+    // Paired with the row each one acts on, so a click sends what the keypress
+    // would: ExtensionHost.resolve reads a row action as belonging to the
+    // selected row and a document action as belonging to none.
+    private var hintedActions: [(action: ExtensionDocument.Action, row: String?)] {
         guard let document = pane.document else { return [] }
         let rowActions = document.rows.first { $0.id == pane.selectedRow }?.actions ?? []
-        return (rowActions + document.actions).filter { $0.key != nil }
+        return rowActions.filter { $0.key != nil }.map { ($0, pane.selectedRow) }
+            + document.actions.filter { $0.key != nil }.map { ($0, nil) }
     }
 
     static func keyCap(_ key: String) -> String {
