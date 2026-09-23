@@ -434,6 +434,25 @@ final class PanelNav: ObservableObject {
     var piBudget: PiBudget {
         PiBudget(apiDaily: piApiBudgetDaily, localDaily: piLocalBudgetDaily)
     }
+    // Wired by PanelController to re-read pi's usage. Fired on a budget change
+    // so the Usage tab isn't left on the old denominator until the next poll.
+    var refreshPiBudget: (() -> Void)?
+
+    func setPiBudget(apiDaily: Int, localDaily: Int) {
+        piApiBudgetDaily = apiDaily
+        piLocalBudgetDaily = localDaily
+        refreshPiBudget?()
+    }
+
+    // nil clears the row rather than holding the last snapshot. pi is read from
+    // local disk, so there's no dropped tick to ride out: nil means no usage in
+    // either window, or both lanes budgeted off.
+    func applyPiSnapshot(_ snapshot: PiQuotaSnapshot?) {
+        piQuota = snapshot
+        guard snapshot != nil else { return }
+        quotaLastUpdated = Date()
+        quotaUpdatedAt[.pi] = Date()
+    }
 
     static func stepBudget(_ current: Int, forward: Bool) -> Int {
         let list = PiBudget.dailyOptions
@@ -1933,10 +1952,12 @@ final class PanelNav: ObservableObject {
             quotaAlertThreshold = list[next]
             ConfigFile.write(key: "STACKNUDGE_QUOTA_THRESHOLD", value: String(quotaAlertThreshold))
         case .piApiBudget:
-            piApiBudgetDaily = Self.stepBudget(piApiBudgetDaily, forward: forward)
+            setPiBudget(apiDaily: Self.stepBudget(piApiBudgetDaily, forward: forward),
+                        localDaily: piLocalBudgetDaily)
             ConfigFile.write(key: "STACKNUDGE_PI_API_BUDGET", value: String(piApiBudgetDaily))
         case .piLocalBudget:
-            piLocalBudgetDaily = Self.stepBudget(piLocalBudgetDaily, forward: forward)
+            setPiBudget(apiDaily: piApiBudgetDaily,
+                        localDaily: Self.stepBudget(piLocalBudgetDaily, forward: forward))
             ConfigFile.write(key: "STACKNUDGE_PI_LOCAL_BUDGET", value: String(piLocalBudgetDaily))
         case .pollFrequency:
             let list = Self.quotaPollMinuteOptions

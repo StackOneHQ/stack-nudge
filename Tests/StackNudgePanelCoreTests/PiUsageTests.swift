@@ -285,3 +285,46 @@ final class PiUsageTests: XCTestCase {
         XCTAssertEqual(windows?.week.duration, 7 * 86400)
     }
 }
+
+// A budget change in Settings has to repaint the Usage tab straight away, not
+// on the next poll, and a lane switched off has to take its row with it.
+@MainActor
+final class PiBudgetSettingsTests: XCTestCase {
+
+    private func snapshot() -> PiQuotaSnapshot {
+        let day = DateInterval(start: Date(), duration: 86400)
+        return PiQuotaSnapshot(apiToday: QuotaTier(utilization: 40, resetsAt: day.end, windowLength: day.duration),
+                               apiThisWeek: nil, localToday: nil, localThisWeek: nil,
+                               budget: .fallback)
+    }
+
+    func test_budgetChangeRefreshesStraightAway() {
+        let nav = PanelNav()
+        var refreshes = 0
+        nav.refreshPiBudget = { refreshes += 1 }
+
+        nav.setPiBudget(apiDaily: 2_000_000, localDaily: 0)
+
+        XCTAssertEqual(refreshes, 1)
+        XCTAssertEqual(nav.piBudget, PiBudget(apiDaily: 2_000_000, localDaily: 0))
+    }
+
+    func test_nilSnapshotClearsTheRow() {
+        let nav = PanelNav()
+        nav.applyPiSnapshot(snapshot())
+
+        nav.applyPiSnapshot(nil)
+
+        XCTAssertNil(nav.piQuota)
+        XCTAssertFalse(nav.availableUsageClients.contains(.pi))
+    }
+
+    func test_snapshotStampsPiAsUpdated() {
+        let nav = PanelNav()
+
+        nav.applyPiSnapshot(snapshot())
+
+        XCTAssertNotNil(nav.quotaUpdatedAt[.pi])
+        XCTAssertTrue(nav.availableUsageClients.contains(.pi))
+    }
+}

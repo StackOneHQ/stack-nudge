@@ -1311,6 +1311,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         nav.refreshOutcomes = { [weak self] in self?.refreshOutcomes() }
         nav.refreshPullRequests = { [weak self] in self?.refreshPullRequests() }
         nav.refreshPullRequestsNow = { [weak self] in self?.refreshPullRequestsNow() }
+        nav.refreshPiBudget = { [weak self] in self?.refreshPiUsage() }
         nav.startGithubSignIn = { [weak self] in self?.startGithubSignIn() }
         nav.cancelGithubSignIn = { [weak self] in self?.cancelGithubSignIn() }
 
@@ -2103,15 +2104,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self.nav.quotaErrors[.antigravity] = nil
             }
         }
-        // Pi budget — read from pi's own transcripts, no network and no CLI.
-        // Unlike the three above this is not a provider quota: the denominators
-        // are the user's own (see PiBudget), so there is no failure to surface
-        // either. nil means no pi usage in either window.
+        refreshPiUsage()
+    }
+
+    // Pi budget, read from pi's own transcripts with no network and no CLI.
+    // Unlike the probes above there's no failure to surface: the denominators
+    // are the user's own (see PiBudget). Also run on a budget change in
+    // Settings, which is why it sits outside runQuotaProbe.
+    private func refreshPiUsage() {
+        guard quotaTrackingEnabled else { return }
         piUsageProbe.fetch(budget: nav.piBudget) { [weak self] snapshot in
-            guard let self, let snapshot else { return }
-            self.nav.piQuota = snapshot
-            self.nav.quotaLastUpdated = Date()
-            self.nav.quotaUpdatedAt[.pi] = Date()
+            self?.nav.applyPiSnapshot(snapshot)
         }
     }
 
