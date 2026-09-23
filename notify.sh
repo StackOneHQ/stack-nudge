@@ -6,7 +6,7 @@
 # updates swap the .app bundle alone. The stamp below is how the app spots a copy
 # older than itself and replaces it (Bootstrap.refreshNotifyScriptIfNeeded);
 # release-please rewrites it in step with panel/Info.plist. Don't hand-edit it.
-# stack-nudge-version: 2.0.1 # x-release-please-version
+# stack-nudge-version: 2.1.0 # x-release-please-version
 #
 # Usage: notify.sh <agent> <event>
 #   agent: claude-code | cursor | gemini | codex | <any name>

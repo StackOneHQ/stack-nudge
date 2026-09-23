@@ -4,6 +4,13 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [2.1.0](https://github.com/StackOneHQ/stack-nudge/compare/v2.0.1...v2.1.0) (2026-09-23)
+
+
+### Features
+
+* **usage:** track a fair-usage budget for pi on the Usage tab ([#199](https://github.com/StackOneHQ/stack-nudge/issues/199)) ([ed28f26](https://github.com/StackOneHQ/stack-nudge/commit/ed28f2690f1762008c93f84443d573171563fff7))
+
 ## [2.0.1](https://github.com/StackOneHQ/stack-nudge/compare/v2.0.0...v2.0.1) (2026-09-18)
 
 
