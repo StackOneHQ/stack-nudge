@@ -46,7 +46,7 @@ struct WidgetQuota: Equatable {
         case .antigravity:
             return "Inner ring: model closest to its limit · Outer ring: monthly prompt credits"
         case .pi:
-            return "Inner ring: today's budget · Outer ring: this week's budget"
+            return "Inner ring: model closest to today's budget · Outer ring: model closest to this week's"
         default:
             let inner = "Inner ring: \(Self.ringPhrase(shortLabel, short))"
             guard long != nil else { return inner }
@@ -106,14 +106,16 @@ struct WidgetQuota: Equatable {
                                long: creditsTier(antigravity?.promptCredits),
                                shortLabel: "now", longLabel: "mo")
         case .pi:
-            // Both rings read against the user's own budget. API takes the ring
-            // whenever it has usage: local tokens are free, so an API overrun is
-            // the one worth a glance. Labels are named rather than measured from
-            // the window — a DST day is 23 hours long and "23h" in a 35pt legend
-            // slot would be noise.
+            // As with Antigravity, the model closest to its budget takes each
+            // ring, since it's the one about to run out. Labels are named rather
+            // than measured from the window: a DST day is 23 hours long, and
+            // "23h" in a 35pt legend slot would be noise.
+            let closest: ([PiModelUsage]?) -> QuotaTier? = { models in
+                models?.max { $0.tier.utilization < $1.tier.utilization }?.tier
+            }
             return WidgetQuota(client: .pi,
-                               short: pi?.apiToday ?? pi?.localToday,
-                               long: pi?.apiThisWeek ?? pi?.localThisWeek,
+                               short: closest(pi?.today),
+                               long: closest(pi?.thisWeek),
                                shortLabel: "1d", longLabel: "7d")
         case nil:
             return .empty

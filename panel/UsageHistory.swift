@@ -117,13 +117,13 @@ struct UsageSeries: Equatable {
     }
 }
 
-// Local/API token split over an arbitrary span. The budget's windows are
-// calendar days and weeks, which no bucket grid lines up with and which run
-// wider than any UsageWindow, so it sums entries rather than buckets.
-struct UsageTotals: Equatable {
-    var localTokens = 0
-    var apiTokens   = 0
-    var turns       = 0
+// Keyed on provider and lane as well as the name: pi can reach one model name
+// through two providers, and the same model can be free locally and billed
+// through an API.
+struct UsageModelKey: Hashable {
+    let provider: String?
+    let model: String
+    let isLocal: Bool
 }
 
 // MARK: - Parsed entry
@@ -143,6 +143,10 @@ struct UsageEntry: Equatable {
     // Whether the turn ran on a model that costs nothing. Only pi has one, so
     // Claude and Codex entries are always billed.
     let isLocal:           Bool
+    // Only pi's entries carry these; the Usage tab breaks its budget down by
+    // model. nil for Claude and Codex.
+    let model:             String?
+    let provider:          String?
 }
 
 extension UsageEntry {
@@ -320,26 +324,26 @@ final class UsageHistoryStore {
         return accumulator.series()
     }
 
-    // Sum one source's cached entries over [from, to), split by local and API.
-    // Deduplicated by identity the same way bucketing is, and pure computation
-    // over what refresh already cached — the caller is responsible for having
-    // retained a span this wide.
-    func totals(source: Source, from: Date, to: Date) -> UsageTotals {
+    // Tokens per model over [from, to). Sums entries rather than buckets: the pi
+    // budget's windows are calendar days and weeks, which no bucket grid lines up
+    // with and which run wider than any UsageWindow. Deduplicated by identity the
+    // same way bucketing is, and pure computation over what refresh already
+    // cached, so the caller must have retained a span this wide. Entries with no
+    // model (Claude, Codex) are skipped.
+    func totals(source: Source, from: Date, to: Date) -> [UsageModelKey: Int] {
         lock.lock()
         let all = (cache[source] ?? [:]).values.flatMap { $0.entries }
         lock.unlock()
 
         var seen: Set<String> = []
-        var result = UsageTotals()
+        var result: [UsageModelKey: Int] = [:]
         for entry in all {
             if let identity = entry.identity, !seen.insert(identity).inserted { continue }
-            guard entry.when >= from, entry.when < to else { continue }
-            result.turns += 1
-            if entry.isLocal {
-                result.localTokens += entry.tokensExcludingCacheReads
-            } else {
-                result.apiTokens += entry.tokensExcludingCacheReads
-            }
+            guard entry.when >= from, entry.when < to,
+                  let model = entry.model, entry.tokensExcludingCacheReads > 0
+            else { continue }
+            let key = UsageModelKey(provider: entry.provider, model: model, isLocal: entry.isLocal)
+            result[key, default: 0] += entry.tokensExcludingCacheReads
         }
         return result
     }
@@ -453,7 +457,9 @@ final class UsageHistoryStore {
             outputTokens: output + reasoning,
             cacheReadTokens: cacheRead,
             cacheCreateTokens: cacheWrite,
-            isLocal: cost <= 0
+            isLocal: cost <= 0,
+            model: message["model"] as? String ?? "unknown",
+            provider: message["provider"] as? String
         )
     }
 
@@ -472,7 +478,9 @@ final class UsageHistoryStore {
             outputTokens:      usage["output_tokens"]              as? Int ?? 0,
             cacheReadTokens:   usage["cache_read_input_tokens"]     as? Int ?? 0,
             cacheCreateTokens: usage["cache_creation_input_tokens"] as? Int ?? 0,
-            isLocal:           false
+            isLocal:           false,
+            model:             nil,
+            provider:          nil
         )
     }
 
@@ -502,7 +510,9 @@ final class UsageHistoryStore {
             outputTokens:      output + reasoning,
             cacheReadTokens:   cached,
             cacheCreateTokens: 0,
-            isLocal:           false
+            isLocal:           false,
+            model:             nil,
+            provider:          nil
         )
     }
 

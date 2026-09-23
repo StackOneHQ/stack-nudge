@@ -41,40 +41,38 @@ final class WidgetQuotaTests: XCTestCase {
         WidgetQuota.make(client: client, claude: claude, codex: codex, antigravity: agy, pi: pi)
     }
 
-    private func piSnapshot(apiToday: Double?, apiWeek: Double?,
-                            localToday: Double?, localWeek: Double?) -> PiQuotaSnapshot {
-        let day = DateInterval(start: Date(), duration: 86400)
-        let week = DateInterval(start: Date(), duration: 7 * 86400)
-        func tier(_ used: Double?, _ window: DateInterval) -> QuotaTier? {
-            used.map { QuotaTier(utilization: $0, resetsAt: window.end, windowLength: window.duration) }
+    private func piSnapshot(today: [Double], week: [Double]) -> PiQuotaSnapshot {
+        func models(_ used: [Double], _ duration: TimeInterval) -> [PiModelUsage] {
+            used.enumerated().map { index, value in
+                PiModelUsage(key: UsageModelKey(provider: "p", model: "m\(index)", isLocal: false),
+                             name: "m\(index)", tokens: 1,
+                             tier: QuotaTier(utilization: value, resetsAt: Date().addingTimeInterval(duration),
+                                             windowLength: duration))
+            }
         }
-        return PiQuotaSnapshot(apiToday: tier(apiToday, day),
-                               apiThisWeek: tier(apiWeek, week),
-                               localToday: tier(localToday, day),
-                               localThisWeek: tier(localWeek, week),
-                               budget: .fallback)
+        return PiQuotaSnapshot(today: models(today, 86400), thisWeek: models(week, 7 * 86400), budget: .fallback)
     }
 
     // MARK: - Per-client ring mapping
 
-    func test_pi_mapsTodayAndThisWeek() {
-        let q = make(.pi, pi: piSnapshot(apiToday: 62, apiWeek: 18, localToday: 4, localWeek: 2))
+    // Like Antigravity: whichever model is closest to its budget takes the ring.
+    func test_pi_closestModelTakesEachRing() {
+        let q = make(.pi, pi: piSnapshot(today: [12, 62, 4], week: [18, 2]))
         XCTAssertEqual(q.short?.utilization, 62)
         XCTAssertEqual(q.long?.utilization, 18)
         XCTAssertEqual(q.shortLabel, "1d")
         XCTAssertEqual(q.longLabel, "7d")
     }
 
-    // Local-only usage still gets both rings rather than falling back to empty.
-    func test_pi_fallsBackToLocalWhenNoApiUsage() {
-        let q = make(.pi, pi: piSnapshot(apiToday: nil, apiWeek: nil, localToday: 30, localWeek: 9))
-        XCTAssertEqual(q.short?.utilization, 30)
+    func test_pi_weekOnlyUsageLeavesTheInnerRingEmpty() {
+        let q = make(.pi, pi: piSnapshot(today: [], week: [9]))
+        XCTAssertNil(q.short)
         XCTAssertEqual(q.long?.utilization, 9)
     }
 
     // A budget is the user's own, so passing it is the point of the row.
     func test_pi_overBudgetIsNotClamped() {
-        let q = make(.pi, pi: piSnapshot(apiToday: 140, apiWeek: 30, localToday: nil, localWeek: nil))
+        let q = make(.pi, pi: piSnapshot(today: [140], week: [30]))
         XCTAssertEqual(q.short?.utilization, 140)
     }
 

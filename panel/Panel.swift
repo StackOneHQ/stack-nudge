@@ -4227,6 +4227,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 case KeyCode.wKey where nav.usagePane == .history:
                     // Re-buckets cached entries; no rescan, so it lands instantly.
                     nav.cycleUsageWindow()
+                case KeyCode.wKey where nav.selectedUsageClient == .pi:
+                    // Both windows are already in the snapshot, so this is a repaint.
+                    nav.cyclePiWindow()
                 case KeyCode.rKey:
                     syncQuotaNow()
                 case KeyCode.pKey:

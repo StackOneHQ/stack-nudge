@@ -2,6 +2,12 @@ import XCTest
 
 @testable import StackNudgePanelCore
 
+// Lane sums for asserting which kind a turn was filed under.
+private extension Dictionary where Key == UsageModelKey, Value == Int {
+    var localTokens: Int { filter { $0.key.isLocal }.values.reduce(0, +) }
+    var apiTokens: Int { filter { !$0.key.isLocal }.values.reduce(0, +) }
+}
+
 // Pi's row on the Usage tab is a budget the user sets, not a quota a provider
 // enforces, so what these pin is that every number under it is derived rather
 // than assumed: which turns count as local, how wide the windows really are,
@@ -40,16 +46,18 @@ final class PiUsageTests: XCTestCase {
                         cacheWrite: Int = 0,
                         reasoning: Int = 0,
                         cost: Double = 0,
+                        model: String = "m",
+                        provider: String = "p",
                         id: String = UUID().uuidString) -> String {
         """
         {"type":"message","id":"\(id)","timestamp":"\(Self.stamp.string(from: when))",\
-        "message":{"role":"assistant","model":"m","usage":{"input":\(input),\
+        "message":{"role":"assistant","model":"\(model)","provider":"\(provider)","usage":{"input":\(input),\
         "output":\(output),"cacheRead":\(cacheRead),"cacheWrite":\(cacheWrite),\
         "reasoning":\(reasoning),"totalTokens":0,"cost":{"total":\(cost)}}}}
         """
     }
 
-    private func totals(_ lines: [String], now: Date, span: TimeInterval = 8 * 86400) -> UsageTotals {
+    private func totals(_ lines: [String], now: Date, span: TimeInterval = 8 * 86400) -> [UsageModelKey: Int] {
         let dir = fixtureDirectory()
         write(lines, to: dir, name: "session.jsonl", modified: now)
         let store = UsageHistoryStore()
@@ -111,7 +119,6 @@ final class PiUsageTests: XCTestCase {
                             now: now)
         XCTAssertEqual(actual.apiTokens, 1_100)
         XCTAssertEqual(actual.localTokens, 1_100)
-        XCTAssertEqual(actual.turns, 2)
     }
 
     // A resumed session replays earlier turns into a second transcript.
@@ -119,7 +126,6 @@ final class PiUsageTests: XCTestCase {
         let now = Date(timeIntervalSince1970: 1_785_150_000)
         let line = piLine(at: now.addingTimeInterval(-60), cost: 1, id: "repeated")
         let actual = totals([line, line], now: now)
-        XCTAssertEqual(actual.turns, 1)
         XCTAssertEqual(actual.apiTokens, 1_100)
     }
 
@@ -131,7 +137,29 @@ final class PiUsageTests: XCTestCase {
         "message":{"role":"user","content":[{"type":"text","text":"ask the assistant"}]}}
         """
         let actual = totals([session, user, piLine(at: now.addingTimeInterval(-60), cost: 1)], now: now)
-        XCTAssertEqual(actual.turns, 1)
+        XCTAssertEqual(actual.apiTokens, 1_100)
+    }
+
+    // MARK: Per model
+
+    func test_totalsSplitByModel() {
+        let now = Date(timeIntervalSince1970: 1_785_150_000)
+        let actual = totals([piLine(at: now.addingTimeInterval(-60), cost: 1, model: "gemini-pro", provider: "gemini"),
+                             piLine(at: now.addingTimeInterval(-90), cost: 1, model: "gemini-pro", provider: "gemini"),
+                             piLine(at: now.addingTimeInterval(-120), cost: 0, model: "qwen", provider: "ollama")],
+                            now: now)
+        XCTAssertEqual(actual[UsageModelKey(provider: "gemini", model: "gemini-pro", isLocal: false)], 2_200)
+        XCTAssertEqual(actual[UsageModelKey(provider: "ollama", model: "qwen", isLocal: true)], 1_100)
+    }
+
+    // A failed call is priced at zero and carries no tokens. It must not turn up
+    // as an empty local model row.
+    func test_zeroTokenTurnAddsNoModel() {
+        let now = Date(timeIntervalSince1970: 1_785_150_000)
+        let actual = totals([piLine(at: now.addingTimeInterval(-60), input: 0, output: 0,
+                                    model: "claude-3-5-haiku-latest", provider: "anthropic")],
+                            now: now)
+        XCTAssertTrue(actual.isEmpty)
     }
 
     // MARK: Window arithmetic
@@ -143,7 +171,6 @@ final class PiUsageTests: XCTestCase {
         let actual = totals([piLine(at: now.addingTimeInterval(-6 * 86400), cost: 1),
                              piLine(at: now.addingTimeInterval(-60), cost: 1)],
                             now: now)
-        XCTAssertEqual(actual.turns, 2)
         XCTAssertEqual(actual.apiTokens, 2_200)
     }
 
@@ -157,7 +184,7 @@ final class PiUsageTests: XCTestCase {
         store.refresh(source: .pi, root: dir, now: now, retaining: 8 * 86400)
 
         let actual = store.totals(source: .pi, from: now.addingTimeInterval(-86400), to: now)
-        XCTAssertEqual(actual.turns, 1)
+        XCTAssertEqual(actual.apiTokens, 1_100)
     }
 
     // The graph refreshes the same source over 24h. Without a retention
@@ -181,50 +208,81 @@ final class PiUsageTests: XCTestCase {
         DateInterval(start: Date(timeIntervalSince1970: start), duration: duration)
     }
 
-    func test_utilizationIsTokensOverBudget() {
+    private func modelTotals(_ rows: [(model: String, provider: String, isLocal: Bool, tokens: Int)]) -> [UsageModelKey: Int] {
+        var totals: [UsageModelKey: Int] = [:]
+        for row in rows {
+            totals[UsageModelKey(provider: row.provider, model: row.model, isLocal: row.isLocal)] = row.tokens
+        }
+        return totals
+    }
+
+    private func today(_ totals: [UsageModelKey: Int], budget: PiBudget) -> [PiModelUsage] {
         let day = window(1_785_110_400, 86400)
-        let snapshot = PiUsageBudget.snapshot(day: day,
-                                              dayTotals: UsageTotals(localTokens: 0, apiTokens: 750_000, turns: 1),
-                                              week: day,
-                                              weekTotals: UsageTotals(localTokens: 0, apiTokens: 750_000, turns: 1),
-                                              budget: PiBudget(apiDaily: 1_500_000, localDaily: 500_000))
-        XCTAssertEqual(snapshot?.apiToday?.utilization, 50)
-        XCTAssertEqual(snapshot?.apiToday?.resetsAt, day.end)
-        XCTAssertEqual(snapshot?.apiToday?.windowLength, 86400)
-        XCTAssertNil(snapshot?.localToday)
+        return PiUsageBudget.snapshot(day: day, dayTotals: totals, week: day, weekTotals: totals,
+                                      budget: budget)?.today ?? []
+    }
+
+    // The pane lists models by name only, but the kind still picks the budget:
+    // a local model against the local allowance, a priced one against the API's.
+    func test_eachModelMeasuresAgainstItsKindsBudget() {
+        let day = window(1_785_110_400, 86400)
+        let totals = modelTotals([("gemini-pro", "gemini", false, 750_000),
+                                  ("qwen3.8:27b", "ollama", true, 60_000)])
+        let actual = today(totals, budget: PiBudget(apiDaily: 1_500_000, localDaily: 500_000))
+        XCTAssertEqual(actual.map(\.name), ["gemini-pro", "qwen3.8:27b"])
+        XCTAssertEqual(actual.map(\.tier.utilization), [50, 12])
+        XCTAssertEqual(actual.first?.tier.resetsAt, day.end)
+        XCTAssertEqual(actual.first?.tier.windowLength, 86400)
+    }
+
+    // Closest to its budget first, not most tokens: 400K local is nearer its
+    // limit than 750K of API.
+    func test_modelsSortClosestToBudgetFirst() {
+        let totals = modelTotals([("gemini-pro", "gemini", false, 750_000),
+                                  ("qwen3.8:27b", "ollama", true, 400_000)])
+        let actual = today(totals, budget: PiBudget(apiDaily: 1_500_000, localDaily: 500_000))
+        XCTAssertEqual(actual.map(\.name), ["qwen3.8:27b", "gemini-pro"])
+    }
+
+    func test_weekMeasuresAgainstSevenDaysOfAllowance() {
+        let day = window(1_785_110_400, 86400)
+        let week = window(1_785_110_400, 7 * 86400)
+        let totals = modelTotals([("gemini-pro", "gemini", false, 700_000)])
+        let snapshot = PiUsageBudget.snapshot(day: day, dayTotals: [:], week: week, weekTotals: totals,
+                                              budget: PiBudget(apiDaily: 1_000_000, localDaily: 500_000))
+        XCTAssertTrue(snapshot?.today.isEmpty ?? false)
+        XCTAssertEqual(snapshot?.thisWeek.first?.tier.utilization, 10)
+        XCTAssertEqual(snapshot?.thisWeek.first?.tier.resetsAt, week.end)
+    }
+
+    func test_sameModelNameFromTwoProvidersNamesTheProvider() {
+        let totals = modelTotals([("qwen3", "qwen", false, 2_000), ("qwen3", "openrouter", false, 1_000)])
+        XCTAssertEqual(today(totals, budget: .fallback).map(\.name), ["qwen3 (qwen)", "qwen3 (openrouter)"])
+    }
+
+    // A kind budgeted off in Settings takes its models off the page.
+    func test_kindBudgetedOffDropsItsModels() {
+        let totals = modelTotals([("gemini-pro", "gemini", false, 100_000), ("qwen", "ollama", true, 50_000)])
+        XCTAssertEqual(today(totals, budget: PiBudget(apiDaily: 0, localDaily: 500_000)).map(\.name), ["qwen"])
     }
 
     // Going over is the thing a self-imposed budget exists to report.
     func test_overBudgetIsNotClamped() {
-        let day = window(1_785_110_400, 86400)
-        let snapshot = PiUsageBudget.snapshot(day: day,
-                                              dayTotals: UsageTotals(localTokens: 3_000_000, apiTokens: 0, turns: 1),
-                                              week: day,
-                                              weekTotals: UsageTotals(localTokens: 3_000_000, apiTokens: 0, turns: 1),
-                                              budget: PiBudget(apiDaily: 1_500_000, localDaily: 500_000))
-        XCTAssertEqual(snapshot?.localToday?.utilization, 600)
+        let totals = modelTotals([("qwen", "ollama", true, 3_000_000)])
+        XCTAssertEqual(today(totals, budget: PiBudget(apiDaily: 1_500_000, localDaily: 500_000)).first?.tier.utilization, 600)
     }
 
     func test_weeklyBudgetIsSevenDays() {
-        XCTAssertEqual(PiBudget(apiDaily: 1_000_000, localDaily: 100_000).apiWeekly, 7_000_000)
-        XCTAssertEqual(PiBudget(apiDaily: 1_000_000, localDaily: 100_000).localWeekly, 700_000)
-    }
-
-    // A lane switched off in Settings draws no row, however much it was used.
-    func test_zeroBudgetDrawsNoTier() {
-        let day = window(1_785_110_400, 86400)
-        let snapshot = PiUsageBudget.snapshot(day: day,
-                                              dayTotals: UsageTotals(localTokens: 400_000, apiTokens: 0, turns: 1),
-                                              week: day,
-                                              weekTotals: UsageTotals(localTokens: 400_000, apiTokens: 0, turns: 1),
-                                              budget: PiBudget(apiDaily: 1_500_000, localDaily: 0))
-        XCTAssertNil(snapshot)
+        let budget = PiBudget(apiDaily: 1_000_000, localDaily: 100_000)
+        XCTAssertEqual(budget.allowance(isLocal: false, in: .thisWeek), 7_000_000)
+        XCTAssertEqual(budget.allowance(isLocal: true, in: .thisWeek), 700_000)
+        XCTAssertEqual(budget.allowance(isLocal: true, in: .today), 100_000)
     }
 
     func test_noUsageProducesNoSnapshot() {
         let day = window(1_785_110_400, 86400)
-        XCTAssertNil(PiUsageBudget.snapshot(day: day, dayTotals: UsageTotals(),
-                                            week: day, weekTotals: UsageTotals(),
+        XCTAssertNil(PiUsageBudget.snapshot(day: day, dayTotals: [:],
+                                            week: day, weekTotals: [:],
                                             budget: .fallback))
     }
 
@@ -247,10 +305,10 @@ final class PiUsageTests: XCTestCase {
                                        now: now,
                                        calendar: calendar)
 
-        XCTAssertEqual(actual?.apiToday?.utilization, 0.1)
-        let week = try XCTUnwrap(actual?.apiThisWeek?.utilization)
+        XCTAssertEqual(actual?.today.map(\.name), ["m"])
+        XCTAssertEqual(actual?.today.first?.tier.utilization, 0.1)
+        let week = try XCTUnwrap(actual?.thisWeek.first?.tier.utilization)
         XCTAssertEqual(week, 1_500.0 / 7_000_000 * 100, accuracy: 0.000_001)
-        XCTAssertNil(actual?.localToday)
     }
 
     // MARK: Calendar windows
@@ -293,9 +351,10 @@ final class PiBudgetSettingsTests: XCTestCase {
 
     private func snapshot() -> PiQuotaSnapshot {
         let day = DateInterval(start: Date(), duration: 86400)
-        return PiQuotaSnapshot(apiToday: QuotaTier(utilization: 40, resetsAt: day.end, windowLength: day.duration),
-                               apiThisWeek: nil, localToday: nil, localThisWeek: nil,
-                               budget: .fallback)
+        let tier = QuotaTier(utilization: 40, resetsAt: day.end, windowLength: day.duration)
+        let model = PiModelUsage(key: UsageModelKey(provider: "gemini", model: "gemini-pro", isLocal: false),
+                                 name: "gemini-pro", tokens: 600_000, tier: tier)
+        return PiQuotaSnapshot(today: [model], thisWeek: [], budget: .fallback)
     }
 
     func test_budgetChangeRefreshesStraightAway() {
@@ -307,6 +366,15 @@ final class PiBudgetSettingsTests: XCTestCase {
 
         XCTAssertEqual(refreshes, 1)
         XCTAssertEqual(nav.piBudget, PiBudget(apiDaily: 2_000_000, localDaily: 0))
+    }
+
+    func test_windowTogglesBetweenTodayAndThisWeek() {
+        let nav = PanelNav()
+        XCTAssertEqual(nav.piWindow, .today)
+        nav.cyclePiWindow()
+        XCTAssertEqual(nav.piWindow, .thisWeek)
+        nav.cyclePiWindow()
+        XCTAssertEqual(nav.piWindow, .today)
     }
 
     func test_nilSnapshotClearsTheRow() {

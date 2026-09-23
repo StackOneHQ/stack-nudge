@@ -29,20 +29,53 @@ struct PiBudget: Equatable {
     static func label(_ tokens: Int) -> String {
         tokens == 0 ? "Off" : TokenFormat.short(tokens)
     }
+
+    func allowance(isLocal: Bool, in window: PiWindow) -> Int {
+        switch window {
+        case .today:    return isLocal ? localDaily : apiDaily
+        case .thisWeek: return isLocal ? localWeekly : apiWeekly
+        }
+    }
 }
 
-// Pi's budget as the Usage tab's shared tier shape. Tiers are nil where the lane
-// has no usage in the window, so a local-only user never sees an empty API row.
+// One model over one window, measured against the budget for its kind: a local
+// model against the local allowance, anything pi priced against the API one.
+// The pane lists models by name only; the kind decides the denominator.
+struct PiModelUsage: Equatable {
+    let key: UsageModelKey
+    let name: String
+    let tokens: Int
+    let tier: QuotaTier
+}
+
+// Which window the pi page shows. W toggles it, like the History pane's window.
+enum PiWindow: CaseIterable {
+    case today
+    case thisWeek
+
+    var label: String {
+        switch self {
+        case .today:    return "Today"
+        case .thisWeek: return "This week"
+        }
+    }
+}
+
+// Pi's budget as the Usage tab reads it. A model appears in a window only if it
+// ran there and its kind has a budget, so a local-only user never sees an API row.
 struct PiQuotaSnapshot: Equatable {
-    let apiToday: QuotaTier?
-    let apiThisWeek: QuotaTier?
-    let localToday: QuotaTier?
-    let localThisWeek: QuotaTier?
+    let today: [PiModelUsage]
+    let thisWeek: [PiModelUsage]
     let budget: PiBudget
 
-    var hasTier: Bool {
-        apiToday != nil || apiThisWeek != nil || localToday != nil || localThisWeek != nil
+    func models(in window: PiWindow) -> [PiModelUsage] {
+        switch window {
+        case .today:    return today
+        case .thisWeek: return thisWeek
+        }
     }
+
+    var hasTier: Bool { !today.isEmpty || !thisWeek.isEmpty }
 
     // Sits where the other clients show their subscription tier. Naming a plan
     // Pi doesn't have would be the one claim this pane must not make.
@@ -66,17 +99,36 @@ enum PiUsageBudget {
     static let retention: TimeInterval = 8 * 86400
 
     static func snapshot(day: DateInterval,
-                         dayTotals: UsageTotals,
+                         dayTotals: [UsageModelKey: Int],
                          week: DateInterval,
-                         weekTotals: UsageTotals,
+                         weekTotals: [UsageModelKey: Int],
                          budget: PiBudget) -> PiQuotaSnapshot? {
         let snapshot = PiQuotaSnapshot(
-            apiToday:      tier(tokens: dayTotals.apiTokens,    budget: budget.apiDaily,    window: day),
-            apiThisWeek:   tier(tokens: weekTotals.apiTokens,   budget: budget.apiWeekly,   window: week),
-            localToday:    tier(tokens: dayTotals.localTokens,  budget: budget.localDaily,  window: day),
-            localThisWeek: tier(tokens: weekTotals.localTokens, budget: budget.localWeekly, window: week),
+            today: models(dayTotals, interval: day, window: .today, budget: budget),
+            thisWeek: models(weekTotals, interval: week, window: .thisWeek, budget: budget),
             budget: budget)
         return snapshot.hasTier ? snapshot : nil
+    }
+
+    // Closest to its budget first, which is the order the widget and a glance
+    // at the page both care about.
+    private static func models(_ totals: [UsageModelKey: Int], interval: DateInterval,
+                               window: PiWindow, budget: PiBudget) -> [PiModelUsage] {
+        // The provider only earns a place in the name when two providers serve
+        // the same model name; otherwise it's noise in a narrow pane.
+        let shared = Set(Dictionary(grouping: totals.keys, by: \.model).filter { $0.value.count > 1 }.keys)
+        return totals.compactMap { key, used -> PiModelUsage? in
+            guard let tier = tier(tokens: used, budget: budget.allowance(isLocal: key.isLocal, in: window),
+                                  window: interval)
+            else { return nil }
+            let name = shared.contains(key.model) ? "\(key.model) (\(key.provider ?? "unknown"))" : key.model
+            return PiModelUsage(key: key, name: name, tokens: used, tier: tier)
+        }
+        .sorted {
+            $0.tier.utilization != $1.tier.utilization
+                ? $0.tier.utilization > $1.tier.utilization
+                : $0.name < $1.name
+        }
     }
 
     // Left unclamped deliberately: going over a self-imposed budget is the one

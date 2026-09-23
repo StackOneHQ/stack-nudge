@@ -131,6 +131,9 @@ struct UsageView: View {
                     } else {
                         FooterHint(label: "Scroll", keys: ["↑↓"])
                         FooterHint(label: "Top/Bottom", keys: ["⌘↑↓"])
+                        if nav.selectedUsageClient == .pi {
+                            FooterHint(label: "Window", keys: ["W"])
+                        }
                     }
                     if nav.usagePane != UsagePane.allCases.last {
                         FooterHint(label: UsagePane.allCases.last?.label ?? "Next", keys: ["→"])
@@ -393,23 +396,7 @@ struct UsageView: View {
                 }
             }
         case .pi:
-            if let pi = nav.piQuota {
-                // Every row names its denominator: these are the user's own
-                // budgets, not a limit pi will enforce, and a bare percentage
-                // here would read like Claude's above it.
-                if let tier = pi.apiToday {
-                    section("API models today") { tierRow(tier, budget: pi.budget.apiDaily) }
-                }
-                if let tier = pi.apiThisWeek {
-                    section("API models this week") { tierRow(tier, budget: pi.budget.apiWeekly) }
-                }
-                if let tier = pi.localToday {
-                    section("Local models today") { tierRow(tier, budget: pi.budget.localDaily) }
-                }
-                if let tier = pi.localThisWeek {
-                    section("Local models this week") { tierRow(tier, budget: pi.budget.localWeekly) }
-                }
-            }
+            if let pi = nav.piQuota { piPage(pi) }
         }
     }
 
@@ -437,15 +424,7 @@ struct UsageView: View {
                         .textCase(.uppercase)
                     // The window lives here rather than in the pane label, since
                     // W cycles it.
-                    Text(nav.usageWindow.label)
-                        .font(.caption2.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(Color.green)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .fill(Color.green.opacity(0.14))
-                        )
+                    windowPill(nav.usageWindow.label)
                     Spacer()
                     Text(metricValue(series.total(for: metric), metric))
                         .font(.caption.monospacedDigit().weight(.semibold))
@@ -571,7 +550,48 @@ struct UsageView: View {
         }
     }
 
-    private func tierRow(_ tier: QuotaTier, budget: Int? = nil) -> some View {
+    // One model per row, one window at a time. Its own page rather than another
+    // branch of the shared tiers: pi's limits are the user's, so each row names
+    // the budget it's measured against, and W swaps the window in place.
+    @ViewBuilder private func piPage(_ pi: PiQuotaSnapshot) -> some View {
+        let window = nav.piWindow
+        let models = pi.models(in: window)
+        HStack {
+            windowPill(window.label)
+                .contentShape(Rectangle())
+                .onTapGesture { nav.cyclePiWindow() }
+            Spacer()
+        }
+        .padding(.horizontal, 6)
+        if models.isEmpty {
+            Text("No pi usage \(window == .today ? "today" : "this week") yet.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 6)
+        }
+        ForEach(models, id: \.key) { model in
+            let allowance = pi.budget.allowance(isLocal: model.key.isLocal, in: window)
+            section(model.name) {
+                tierRow(model.tier,
+                        caption: "of \(TokenFormat.short(allowance)) \(model.key.isLocal ? "local" : "API") budget")
+            }
+        }
+    }
+
+    // The green chip naming the active window, wherever W cycles it.
+    private func windowPill(_ label: String) -> some View {
+        Text(label)
+            .font(.caption2.monospacedDigit().weight(.semibold))
+            .foregroundStyle(Color.green)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Color.green.opacity(0.14))
+            )
+    }
+
+    private func tierRow(_ tier: QuotaTier, caption: String? = nil) -> some View {
         // Show "30% used" or "70% remaining" depending on the toggle. Bar
         // still represents utilization so the color ramp keeps its meaning.
         let display = nav.quotaShowRemaining
@@ -581,8 +601,8 @@ struct UsageView: View {
         return VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Spacer()
-                if let budget {
-                    Text("of \(TokenFormat.short(budget)) budget")
+                if let caption {
+                    Text(caption)
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }

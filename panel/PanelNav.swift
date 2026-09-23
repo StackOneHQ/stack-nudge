@@ -434,6 +434,15 @@ final class PanelNav: ObservableObject {
     var piBudget: PiBudget {
         PiBudget(apiDaily: piApiBudgetDaily, localDaily: piLocalBudgetDaily)
     }
+    // Which window the pi page shows; W toggles it. In-memory, like usageWindow.
+    @Published var piWindow: PiWindow = .today
+
+    func cyclePiWindow() {
+        let windows = PiWindow.allCases
+        let index = windows.firstIndex(of: piWindow) ?? 0
+        piWindow = windows[(index + 1) % windows.count]
+    }
+
     // Wired by PanelController to re-read pi's usage. Fired on a budget change
     // so the Usage tab isn't left on the old denominator until the next poll.
     var refreshPiBudget: (() -> Void)?
