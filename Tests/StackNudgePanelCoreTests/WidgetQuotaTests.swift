@@ -36,11 +36,45 @@ final class WidgetQuotaTests: XCTestCase {
     private func make(_ client: UsageClient?,
                       claude: QuotaSnapshot? = nil,
                       codex: CodexQuotaSnapshot? = nil,
-                      agy: AntigravityQuotaSnapshot? = nil) -> WidgetQuota {
-        WidgetQuota.make(client: client, claude: claude, codex: codex, antigravity: agy)
+                      agy: AntigravityQuotaSnapshot? = nil,
+                      pi: PiQuotaSnapshot? = nil) -> WidgetQuota {
+        WidgetQuota.make(client: client, claude: claude, codex: codex, antigravity: agy, pi: pi)
+    }
+
+    private func piSnapshot(today: [Double], week: [Double]) -> PiQuotaSnapshot {
+        func models(_ used: [Double], _ duration: TimeInterval) -> [PiModelUsage] {
+            used.enumerated().map { index, value in
+                PiModelUsage(key: UsageModelKey(provider: "p", model: "m\(index)", isLocal: false),
+                             name: "m\(index)", tokens: 1,
+                             tier: QuotaTier(utilization: value, resetsAt: Date().addingTimeInterval(duration),
+                                             windowLength: duration))
+            }
+        }
+        return PiQuotaSnapshot(today: models(today, 86400), thisWeek: models(week, 7 * 86400), budget: .fallback)
     }
 
     // MARK: - Per-client ring mapping
+
+    // Like Antigravity: whichever model is closest to its budget takes the ring.
+    func test_pi_closestModelTakesEachRing() {
+        let q = make(.pi, pi: piSnapshot(today: [12, 62, 4], week: [18, 2]))
+        XCTAssertEqual(q.short?.utilization, 62)
+        XCTAssertEqual(q.long?.utilization, 18)
+        XCTAssertEqual(q.shortLabel, "1d")
+        XCTAssertEqual(q.longLabel, "7d")
+    }
+
+    func test_pi_weekOnlyUsageLeavesTheInnerRingEmpty() {
+        let q = make(.pi, pi: piSnapshot(today: [], week: [9]))
+        XCTAssertNil(q.short)
+        XCTAssertEqual(q.long?.utilization, 9)
+    }
+
+    // A budget is the user's own, so passing it is the point of the row.
+    func test_pi_overBudgetIsNotClamped() {
+        let q = make(.pi, pi: piSnapshot(today: [140], week: [30]))
+        XCTAssertEqual(q.short?.utilization, 140)
+    }
 
     func test_claude_mapsFiveHourAndSevenDay() {
         let q = make(.claude, claude: claudeSnapshot(five: 40, seven: 12))

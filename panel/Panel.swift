@@ -1111,6 +1111,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private let claudeCliQuotaProbe = ClaudeCliQuotaProbe()
     private let codexQuotaProbe = CodexQuotaProbe()
     private let antigravityUsageProbe = AntigravityUsageProbe()
+    // Lazy because it shares the nav's history store rather than opening its
+    // own, so pi's transcripts are parsed once for the graph and the budget.
+    private lazy var piUsageProbe = PiUsageProbe(store: nav.usageStore)
     private var quotaTimer: Timer?
     // Last outcome derived per repo+branch, alongside the git values it was
     // derived from, so refreshOutcomes can skip re-deriving what hasn't moved.
@@ -1308,6 +1311,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         nav.refreshOutcomes = { [weak self] in self?.refreshOutcomes() }
         nav.refreshPullRequests = { [weak self] in self?.refreshPullRequests() }
         nav.refreshPullRequestsNow = { [weak self] in self?.refreshPullRequestsNow() }
+        nav.refreshPiBudget = { [weak self] in self?.refreshPiUsage() }
         nav.startGithubSignIn = { [weak self] in self?.startGithubSignIn() }
         nav.cancelGithubSignIn = { [weak self] in self?.cancelGithubSignIn() }
 
@@ -2099,6 +2103,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 // "a dropped tick shouldn't flip the UI".
                 self.nav.quotaErrors[.antigravity] = nil
             }
+        }
+        refreshPiUsage()
+    }
+
+    // Pi budget, read from pi's own transcripts with no network and no CLI.
+    // Unlike the probes above there's no failure to surface: the denominators
+    // are the user's own (see PiBudget). Also run on a budget change in
+    // Settings, which is why it sits outside runQuotaProbe.
+    private func refreshPiUsage() {
+        guard quotaTrackingEnabled else { return }
+        piUsageProbe.fetch(budget: nav.piBudget) { [weak self] snapshot in
+            self?.nav.applyPiSnapshot(snapshot)
         }
     }
 
@@ -4211,6 +4227,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 case KeyCode.wKey where nav.usagePane == .history:
                     // Re-buckets cached entries; no rescan, so it lands instantly.
                     nav.cycleUsageWindow()
+                case KeyCode.wKey where nav.selectedUsageClient == .pi:
+                    // Both windows are already in the snapshot, so this is a repaint.
+                    nav.cyclePiWindow()
                 case KeyCode.rKey:
                     syncQuotaNow()
                 case KeyCode.pKey:

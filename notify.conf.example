@@ -74,6 +74,16 @@
 # Default: tag
 #STACKNUDGE_SUBAGENT_NUDGES=off
 
+# Fair-usage budget for pi, in tokens per day, per lane. pi enforces no quota
+# of its own — API models bill per token against your keys, local models are
+# free — so these are your own allowances and nothing cuts you off at them. The
+# Usage tab bars today and this week (seven days' worth) against them and names
+# the number on every row. 0 drops that lane's rows. Also settable in
+# Settings → Usage, which writes back here.
+# Defaults: 1500000 API, 500000 local
+#STACKNUDGE_PI_API_BUDGET=1500000
+#STACKNUDGE_PI_LOCAL_BUDGET=500000
+
 # Log a debug line (to the launchd log) explaining voice decisions — useful
 # when a notification played silently and you want to know why.
 # Default: false
