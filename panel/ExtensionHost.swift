@@ -112,27 +112,49 @@ final class ExtensionHost: ObservableObject {
 
     // MARK: - Invocation
 
-    // Opening a tab refreshes it unless the manifest opted out, and unless
-    // something is already in flight.
+    // The user switched to this tab. An explicit gesture, so it refetches; the
+    // only gate is a spawn already being in flight.
+    func tabAppeared(_ id: String) {
+        guard let manifest = manifest(id), manifest.refresh.onOpen else { return }
+        refresh(id)
+    }
+
+    // The panel came back and this tab happened to be the one showing.
     //
-    // "Opening" includes showing the panel onto a tab you were already on,
-    // which SwiftUI cannot tell us: the panel is ordered out rather than torn
-    // down, so its view tree survives being hidden and `onAppear` never fires
-    // again. Without that call the pane shows whatever it last fetched, and an
-    // extension declaring `onOpen` with no `intervalSeconds` would stay that
-    // way until the tab was switched away from and back.
+    // SwiftUI cannot tell us this happened: the panel is ordered out rather
+    // than torn down, so its view tree survives being hidden and `onAppear`
+    // never fires again. Without this the pane keeps whatever it last fetched,
+    // and an extension declaring `onOpen` with no `intervalSeconds` would stay
+    // that way indefinitely.
     //
-    // The floor is what makes it safe to call from both places. It is the
-    // manifest's own minimum poll interval, so toggling the panel cannot spawn
-    // a script faster than polling is allowed to.
-    func tabAppeared(_ id: String, now: Date = Date()) {
+    // Unlike a tab switch this is incidental — nobody asked for this
+    // extension, the panel just reappeared over it — so it respects the cadence
+    // the manifest asked for rather than refetching on every toggle.
+    func panelBecameVisible(_ id: String, now: Date = Date()) {
         guard let manifest = manifest(id), manifest.refresh.onOpen else { return }
         if let attemptedAt = pane(id).attemptedAt,
-           now.timeIntervalSince(attemptedAt)
-               < TimeInterval(ExtensionManifest.minimumIntervalSeconds) {
+           now.timeIntervalSince(attemptedAt) < TimeInterval(Self.reopenFloor(manifest)) {
             return
         }
         refresh(id)
+    }
+
+    // How stale a pane must be before merely showing the panel refetches it.
+    //
+    // The manifest's own interval, not the schema's minimum. Those are
+    // different numbers and using the minimum was wrong: it is the fastest any
+    // extension is *permitted* to poll (ExtensionManifest clamps declared
+    // intervals up to it), not the cadence this one chose. An extension asking
+    // for 600s against a rate-limited API would have been spawned every 5
+    // seconds by someone toggling the panel — 120x what it declared.
+    //
+    // Reopening sooner than the interval leaves the pane showing data younger
+    // than the extension itself called acceptable, which is what it asked for.
+    // An onOpen-only extension has no interval to read, so it keeps the
+    // minimum.
+    static func reopenFloor(_ manifest: ExtensionManifest) -> Int {
+        max(ExtensionManifest.minimumIntervalSeconds,
+            manifest.refresh.intervalSeconds ?? ExtensionManifest.minimumIntervalSeconds)
     }
 
     func refresh(_ id: String) { invoke(id, action: nil, row: nil) }

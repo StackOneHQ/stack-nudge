@@ -435,25 +435,56 @@ final class ExtensionHostTests: XCTestCase {
     // concerned, and the pane shows whatever it last fetched.
     //
     // This asks whether the scheduled refresh covers that gap on its own.
-    // The floor is what makes tabAppeared safe to call from both onAppear and
-    // the panel becoming visible: toggling the panel must not spawn a script
-    // faster than polling is allowed to.
-    func testOpeningATabAgainImmediatelyDoesNotRespawn() {
+    // Switching to a tab is someone asking for that extension, so it refetches
+    // every time. It had no floor before the panel-visible path existed and
+    // must not acquire one now: the tab-switch-away-and-back escape hatch is
+    // the only manual refresh an extension that declares no action has.
+    func testSwitchingToATabAlwaysRefetches() {
         let recorder = Recorder()
-        let (host, _, _) = host([manifest("derby")], recorder: recorder)
+        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":600}")],
+                                recorder: recorder)
+        host.tabAppeared("derby")
+        host.finish("derby", .transient("stub"))
+        host.tabAppeared("derby")
+        XCTAssertEqual(recorder.calls.count, 2, "an explicit switch is never suppressed")
+    }
+
+    // The panel reappearing over the tab someone happened to leave it on is not
+    // a request for that extension, so it respects the cadence the manifest
+    // asked for.
+    //
+    // The floor used to be ExtensionManifest.minimumIntervalSeconds, which is a
+    // different number: that is the fastest any extension is *permitted* to
+    // poll, not what this one chose. An extension asking for 600s against a
+    // rate-limited API was spawned every 5s by someone toggling the panel.
+    func testShowingThePanelRespectsTheManifestsOwnInterval() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":600}")],
+                                recorder: recorder)
         let now = Date()
-        host.tabAppeared("derby", now: now)
+        host.tabAppeared("derby")
+        host.finish("derby", .transient("stub"))
         XCTAssertEqual(recorder.calls.count, 1)
 
-        // Within the floor: a second open is the same open.
-        host.tabAppeared("derby", now: now.addingTimeInterval(1))
+        // Well past the schema minimum, nowhere near what the extension asked
+        // for: the old floor would have spawned here.
+        host.panelBecameVisible("derby", now: now.addingTimeInterval(30))
         XCTAssertEqual(recorder.calls.count, 1)
 
-        // Past it: a real reopen, and the pane is refetched.
-        host.tabAppeared("derby",
-                         now: now.addingTimeInterval(
-                            TimeInterval(ExtensionManifest.minimumIntervalSeconds) + 1))
+        host.panelBecameVisible("derby", now: now.addingTimeInterval(601))
         XCTAssertEqual(recorder.calls.count, 2)
+    }
+
+    func testTheReopenFloorIsTheManifestsInterval() {
+        XCTAssertEqual(ExtensionHost.reopenFloor(manifest("a", refresh: "{\"intervalSeconds\":600}")),
+                       600)
+        // No interval to read, so the schema minimum is the only sensible value.
+        XCTAssertEqual(ExtensionHost.reopenFloor(manifest("b", refresh: "{\"onOpen\":true}")),
+                       ExtensionManifest.minimumIntervalSeconds)
+        // A declared interval below the minimum is clamped at parse time, so it
+        // can never produce a floor under it.
+        XCTAssertEqual(ExtensionHost.reopenFloor(manifest("c", refresh: "{\"intervalSeconds\":1}")),
+                       ExtensionManifest.minimumIntervalSeconds)
     }
 
     // An extension that asks only for onOpen has no schedule to fall back on,
@@ -463,7 +494,8 @@ final class ExtensionHostTests: XCTestCase {
         let (host, _, _) = host([manifest("derby", refresh: "{\"onOpen\":true}")],
                                 recorder: recorder)
         let now = Date()
-        host.tabAppeared("derby", now: now)
+        host.tabAppeared("derby")
+        host.finish("derby", .transient("stub"))
         XCTAssertEqual(recorder.calls.count, 1)
 
         // Hidden for ten minutes. No interval, so no tick will ever help.
@@ -474,18 +506,20 @@ final class ExtensionHostTests: XCTestCase {
         }
         XCTAssertEqual(recorder.calls.count, 1)
 
-        host.tabAppeared("derby", now: later)
+        host.panelBecameVisible("derby", now: later)
         XCTAssertEqual(recorder.calls.count, 2,
                        "showing the panel is the only refresh this extension gets")
     }
 
-    func testReopeningOntoATabYouWereAlreadyOnGetsFreshData() {
+    // The reported bug, end to end. An earlier version of this test drove only
+    // `tick` and so passed identically without the fix — it was exercising the
+    // pre-existing schedule, not the new path.
+    func testReopeningOntoATabYouWereAlreadyOnRefetchesWithoutAKeypress() {
         let recorder = Recorder()
         let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":30}")],
-                                recorder: recorder,
-                                result: { .transient("stub") })
-        // Opened once, fetched once.
+                                recorder: recorder)
         host.tabAppeared("derby")
+        host.finish("derby", .transient("stub"))
         XCTAssertEqual(recorder.calls.count, 1)
 
         // Hidden for five minutes: whileFocusedOnly means no polling, by design.
@@ -496,11 +530,10 @@ final class ExtensionHostTests: XCTestCase {
         }
         XCTAssertEqual(recorder.calls.count, 1, "a hidden pane must not poll")
 
-        // Reopened onto the same tab. onAppear does not fire, so the first tick
-        // after it becomes visible is the only thing that can catch it up.
-        now = now.addingTimeInterval(5)
-        host.tick(visibleTab: "derby", now: now)
-        XCTAssertEqual(recorder.calls.count, 2,
-                       "reopening onto a stale tab must refetch without a keypress")
+        // The panel comes back. onAppear does not fire — the view never left
+        // the tree — so this call is the only thing standing between the user
+        // and stale numbers.
+        host.panelBecameVisible("derby", now: now.addingTimeInterval(5))
+        XCTAssertEqual(recorder.calls.count, 2)
     }
 }

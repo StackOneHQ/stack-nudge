@@ -4802,13 +4802,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         refreshVisibleExtensionTab()
     }
 
-    // Showing the panel onto an extension tab is opening that tab, to anyone
-    // using it. ExtensionTabView.onAppear cannot say so: the panel is ordered
+    // ExtensionTabView.onAppear cannot see the panel coming back: it is ordered
     // out rather than torn down, so the view survives being hidden and never
-    // appears again — leaving the pane on whatever it fetched before.
+    // appears again, leaving the pane on whatever it fetched before.
+    //
+    // Deliberately not tabAppeared. Switching to a tab is someone asking for
+    // that extension; the panel reappearing over the tab they happened to leave
+    // it on is not, so this respects the manifest's declared interval and that
+    // one does not.
     private func refreshVisibleExtensionTab() {
         guard case .extensionTab(let id) = nav.mode else { return }
-        extensions.tabAppeared(id)
+        extensions.panelBecameVisible(id)
     }
 
     // NSApp.hide hides all our windows AND deactivates the app, so the system
