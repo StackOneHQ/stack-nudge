@@ -18,8 +18,8 @@ enum Permissions {
         AXIsProcessTrusted() ? .granted : .denied
     }
 
-    static func automation() -> PermissionStatus {
-        let target = NSAppleEventDescriptor(bundleIdentifier: "com.apple.systemevents")
+    static func automation(target bundleID: String = "com.apple.systemevents") -> PermissionStatus {
+        let target = NSAppleEventDescriptor(bundleIdentifier: bundleID)
         let status = AEDeterminePermissionToAutomateTarget(
             target.aeDesc, typeWildCard, typeWildCard, false)
         switch status {
@@ -27,6 +27,16 @@ enum Permissions {
         case OSStatus(errAEEventNotPermitted):   return .denied
         default:                                 return .unknown
         }
+    }
+
+    // tmux focus selects the iTerm2 tab over AppleScript, a grant separate from
+    // System Events. nil while iTerm2 isn't running: the grant can only be
+    // probed against a live target.
+    static func iTermAutomation() -> PermissionStatus? {
+        guard !NSRunningApplication
+            .runningApplications(withBundleIdentifier: AppActivator.iTermBundleID).isEmpty
+        else { return nil }
+        return automation(target: AppActivator.iTermBundleID)
     }
 
     static func openSettings(_ target: SettingsPane) {
@@ -68,6 +78,8 @@ enum Permissions {
             _ = AXIsProcessTrustedWithOptions(options)
         case .automation:
             triggerAutomationPrompt()
+        case .automationITerm2:
+            triggerITermAutomationPrompt()
         case .notifications:
             promptNotifications()
         }
@@ -102,6 +114,10 @@ enum Permissions {
             _ = AXIsProcessTrustedWithOptions(options)
         case .automation:
             triggerAutomationPrompt()
+        case .automationITerm2:
+            // The reset clears every AppleEvents target, System Events included.
+            triggerAutomationPrompt()
+            triggerITermAutomationPrompt()
         case .notifications:
             promptNotifications()
         }
@@ -121,18 +137,30 @@ enum Permissions {
             _ = script.executeAndReturnError(&error)
         }
     }
+
+    // Only while iTerm2 runs, so asking never launches it.
+    private static func triggerITermAutomationPrompt() {
+        guard iTermAutomation() != nil,
+              let script = NSAppleScript(source: "tell application id \"\(AppActivator.iTermBundleID)\" to get name")
+        else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            var error: NSDictionary?
+            _ = script.executeAndReturnError(&error)
+        }
+    }
 }
 
 enum SettingsPane {
     case accessibility
     case automation
+    case automationITerm2
     case notifications
 
     var url: URL {
         switch self {
         case .accessibility:
             return URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
-        case .automation:
+        case .automation, .automationITerm2:
             return URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!
         case .notifications:
             return URL(string: "x-apple.systempreferences:com.apple.preference.notifications")!
@@ -142,7 +170,7 @@ enum SettingsPane {
     var tccService: String? {
         switch self {
         case .accessibility: return "Accessibility"
-        case .automation:    return "AppleEvents"
+        case .automation, .automationITerm2: return "AppleEvents"
         case .notifications: return nil  // notifications aren't a TCC service
         }
     }
@@ -152,6 +180,7 @@ enum SettingsPane {
         switch self {
         case .accessibility: return "Accessibility"
         case .automation:    return "Automation"
+        case .automationITerm2: return "Automation (iTerm2)"
         case .notifications: return "Notifications"
         }
     }
@@ -162,6 +191,7 @@ struct PermissionsView: View {
     @State private var accessibility: PermissionStatus = .unknown
     @State private var automation:    PermissionStatus = .unknown
     @State private var notifications: PermissionStatus = .unknown
+    @State private var iTerm:         PermissionStatus?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -189,6 +219,13 @@ struct PermissionsView: View {
                 status: automation,
                 pane: .automation)
 
+            if let iTerm {
+                row(title: "Automation → iTerm2",
+                    description: "Required to bring the exact iTerm2 tab forward for a tmux-hosted agent.",
+                    status: iTerm,
+                    pane: .automationITerm2)
+            }
+
             Spacer(minLength: 0)
 
             HStack {
@@ -198,7 +235,7 @@ struct PermissionsView: View {
             }
         }
         .padding(20)
-        .frame(width: 480, height: 440)
+        .frame(width: 480, height: 540)
         .onAppear { refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
             refresh()
@@ -247,6 +284,7 @@ struct PermissionsView: View {
     private func refresh() {
         accessibility = Permissions.accessibility()
         automation    = Permissions.automation()
+        iTerm         = Permissions.iTermAutomation()
         Permissions.notifications { notifications = $0 }
     }
 
@@ -282,7 +320,7 @@ final class PermissionsWindowController: NSWindowController {
 
     convenience init() {
         let window = EscClosesWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 440),
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 540),
             styleMask: [.titled, .closable],
             backing: .buffered, defer: false)
         window.title = "StackNudge — Permissions"

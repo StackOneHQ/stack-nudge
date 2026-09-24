@@ -1584,20 +1584,23 @@ final class PanelNav: ObservableObject {
 
     // MARK: - Permissions
 
-    // Probe the three runtime grants and record which aren't set yet.
+    // Probe the runtime grants and record which aren't set yet.
     // Notifications is async, so the ordered list is assembled in its callback
     // (same order the Permissions window renders them). denied and
     // not-yet-determined both count as missing — the panel can't fully
-    // function without the grant either way.
+    // function without the grant either way. iTerm2 is the exception: only a
+    // denial counts, because an undecided grant is asked for on first focus.
     func refreshPermissions() {
         let accessibility = Permissions.accessibility()
         let automation    = Permissions.automation()
+        let iTerm         = Permissions.iTermAutomation()
         Permissions.notifications { [weak self] notifications in
             guard let self else { return }
             var missing: [SettingsPane] = []
             if notifications != .granted { missing.append(.notifications) }
             if accessibility != .granted { missing.append(.accessibility) }
             if automation    != .granted { missing.append(.automation) }
+            if iTerm == .denied { missing.append(.automationITerm2) }
             if missing != self.missingPermissions { self.missingPermissions = missing }
         }
     }
