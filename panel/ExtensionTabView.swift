@@ -331,12 +331,20 @@ struct ExtensionTabView: View {
             // action with its key cap — which reads as a button, so it gets
             // pressed, and nothing happens. A refresh arriving on the poll
             // thirty seconds later then looks like the click working.
-            ForEach(hintedActions, id: \.action.id) { hint in
+            ForEach(hintedActions, id: \.key) { action in
                 Button {
-                    host.perform(action: hint.action.id, row: hint.row, on: id)
+                    // By key, through the same resolver the keyboard uses,
+                    // rather than a pre-baked (action id, row) pair frozen into
+                    // this closure at render time. The document can swap between
+                    // the render and the mouse-up — `finish` clears
+                    // `selectedRow` when a new document drops that row — and a
+                    // frozen pair would then spawn an action or a row the
+                    // extension no longer declares. Re-resolving makes a click
+                    // and a keypress the same call, not two calls that agree.
+                    host.handle(key: action.key ?? "", on: id)
                 } label: {
-                    FooterHint(label: hint.action.label,
-                               keys: [Self.keyCap(hint.action.key ?? "")])
+                    FooterHint(label: action.label,
+                               keys: [Self.keyCap(action.key ?? "")])
                 }
                 .buttonStyle(.plain)
                 .disabled(pane.busy)
@@ -344,14 +352,30 @@ struct ExtensionTabView: View {
         }
     }
 
-    // Paired with the row each one acts on, so a click sends what the keypress
-    // would: ExtensionHost.resolve reads a row action as belonging to the
-    // selected row and a document action as belonging to none.
-    private var hintedActions: [(action: ExtensionDocument.Action, row: String?)] {
+    private var hintedActions: [ExtensionDocument.Action] {
         guard let document = pane.document else { return [] }
-        let rowActions = document.rows.first { $0.id == pane.selectedRow }?.actions ?? []
-        return rowActions.filter { $0.key != nil }.map { ($0, pane.selectedRow) }
-            + document.actions.filter { $0.key != nil }.map { ($0, nil) }
+        return Self.hintedActions(in: document, selectedRow: pane.selectedRow)
+    }
+
+    // Exactly the actions the keyboard can reach, in the order it reaches them.
+    //
+    // One per key, because ExtensionHost.resolve checks the selected row's
+    // actions before the document's: a row action shadows a document action
+    // sharing its key, leaving that one unreachable by keypress. Rendering both
+    // drew two identical key caps, one of which was a lie — and now that they
+    // are buttons it would also offer a click for something no key can do.
+    //
+    // Keyless actions are absent for the same reason they always were: there is
+    // no binding to advertise, and docs/extensions.md tells extensions to give
+    // every action a valid key until that changes.
+    static func hintedActions(in document: ExtensionDocument,
+                              selectedRow: String?) -> [ExtensionDocument.Action] {
+        let rowActions = document.rows.first { $0.id == selectedRow }?.actions ?? []
+        var seenKeys = Set<String>()
+        return (rowActions + document.actions).filter { action in
+            guard let key = action.key else { return false }
+            return seenKeys.insert(key).inserted
+        }
     }
 
     static func keyCap(_ key: String) -> String {

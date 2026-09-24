@@ -123,4 +123,71 @@ final class ExtensionTabTests: XCTestCase {
         n.extensionTabs = [ExtensionTab(id: "derby", label: "Derby renamed")]
         XCTAssertEqual(n.mode, .extensionTab("derby"))
     }
+
+    // MARK: - Footer hints
+
+    private func document(_ json: String) -> ExtensionDocument {
+        guard case .success(let d) = ExtensionDocument.parse(Data(json.utf8)) else {
+            fatalError("fixture didn't parse")
+        }
+        return d
+    }
+
+    // The footer's hints are now buttons, so what it renders has to be exactly
+    // what the keyboard can reach — otherwise a click does something no key
+    // can, and a key cap beside it is a lie.
+    func testAShadowedDocumentActionIsNotOffered() {
+        let d = document("""
+            {"schema":1,
+             "rows":[{"id":"h1","title":"A","actions":[{"id":"open","label":"Open","key":"o"}]}],
+             "actions":[{"id":"help","label":"Help","key":"o"},
+                        {"id":"refresh","label":"Sync","key":"r"}]}
+            """)
+        let hints = ExtensionTabView.hintedActions(in: d, selectedRow: "h1")
+        // "o" belongs to the row action while that row is selected, exactly as
+        // ExtensionHost.resolve decides it.
+        XCTAssertEqual(hints.map(\.id), ["open", "refresh"])
+        XCTAssertEqual(ExtensionHost.resolve(key: "o", in: d, selectedRow: "h1")?.action, "open")
+    }
+
+    // With nothing selected the row action is unreachable, so the document
+    // action stops being shadowed and comes back.
+    func testTheDocumentActionReturnsWhenNoRowIsSelected() {
+        let d = document("""
+            {"schema":1,
+             "rows":[{"id":"h1","title":"A","actions":[{"id":"open","label":"Open","key":"o"}]}],
+             "actions":[{"id":"help","label":"Help","key":"o"}]}
+            """)
+        XCTAssertEqual(ExtensionTabView.hintedActions(in: d, selectedRow: nil).map(\.id), ["help"])
+        XCTAssertEqual(ExtensionHost.resolve(key: "o", in: d, selectedRow: nil)?.action, "help")
+    }
+
+    // Every hint the footer draws must resolve to something, or the button is
+    // an affordance for nothing.
+    func testEveryHintResolvesToAnAction() {
+        let d = document("""
+            {"schema":1,
+             "rows":[{"id":"h1","title":"A","actions":[{"id":"open","label":"Open","key":"o"}]}],
+             "actions":[{"id":"refresh","label":"Sync","key":"r"},
+                        {"id":"quiet","label":"No key","key":"!"}]}
+            """)
+        for selected in [nil, "h1"] {
+            for hint in ExtensionTabView.hintedActions(in: d, selectedRow: selected) {
+                XCTAssertNotNil(hint.key, "a keyless action must not be offered")
+                XCTAssertNotNil(ExtensionHost.resolve(key: hint.key ?? "", in: d,
+                                                      selectedRow: selected),
+                                "\(hint.id) is drawn but unreachable")
+            }
+        }
+    }
+
+    // A refused key means no binding, so there is nothing to advertise.
+    func testAnActionWhoseKeyWasRefusedIsNotOffered() {
+        let d = document("""
+            {"schema":1,"rows":[],
+             "actions":[{"id":"nope","label":"Nope","key":"cmd+r"},
+                        {"id":"fine","label":"Fine","key":"r"}]}
+            """)
+        XCTAssertEqual(ExtensionTabView.hintedActions(in: d, selectedRow: nil).map(\.id), ["fine"])
+    }
 }
