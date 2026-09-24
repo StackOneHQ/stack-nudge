@@ -435,44 +435,66 @@ final class ExtensionHostTests: XCTestCase {
     // concerned, and the pane shows whatever it last fetched.
     //
     // This asks whether the scheduled refresh covers that gap on its own.
-    // Switching to a tab is someone asking for that extension, so it refetches
-    // every time. It had no floor before the panel-visible path existed and
-    // must not acquire one now: the tab-switch-away-and-back escape hatch is
-    // the only manual refresh an extension that declares no action has.
-    func testSwitchingToATabAlwaysRefetches() {
-        let recorder = Recorder()
-        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":600}")],
-                                recorder: recorder)
-        host.tabAppeared("derby")
-        host.finish("derby", .transient("stub"))
-        host.tabAppeared("derby")
-        XCTAssertEqual(recorder.calls.count, 2, "an explicit switch is never suppressed")
-    }
-
-    // The panel reappearing over the tab someone happened to leave it on is not
-    // a request for that extension, so it respects the cadence the manifest
-    // asked for.
+    // Coming on screen respects the cadence the manifest asked for, whether it
+    // was a tab switch, the panel returning, or the pill expanding. The view
+    // cannot tell those apart — in compact mode the pane leaves the tree
+    // entirely when the pill collapses, so expanding fires onAppear exactly as
+    // switching tabs does — and an earlier version exempting "switches" put the
+    // exemption on the path everyone uses.
     //
-    // The floor used to be ExtensionManifest.minimumIntervalSeconds, which is a
-    // different number: that is the fastest any extension is *permitted* to
-    // poll, not what this one chose. An extension asking for 600s against a
-    // rate-limited API was spawned every 5s by someone toggling the panel.
-    func testShowingThePanelRespectsTheManifestsOwnInterval() {
+    // The floor is the manifest's own interval, not
+    // ExtensionManifest.minimumIntervalSeconds. Those are different numbers:
+    // the minimum is the fastest any extension is *permitted* to poll, not what
+    // this one chose. An extension asking for 600s against a rate-limited API
+    // was spawned every 5s by someone pressing the hotkey.
+    func testComingOnScreenRespectsTheManifestsOwnInterval() {
         let recorder = Recorder()
         let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":600}")],
                                 recorder: recorder)
         let now = Date()
-        host.tabAppeared("derby")
+        host.tabAppeared("derby", now: now)
         host.finish("derby", .transient("stub"))
         XCTAssertEqual(recorder.calls.count, 1)
 
         // Well past the schema minimum, nowhere near what the extension asked
-        // for: the old floor would have spawned here.
-        host.panelBecameVisible("derby", now: now.addingTimeInterval(30))
+        // for: the old floor spawned here, 120x the declared cadence.
+        host.tabAppeared("derby", now: now.addingTimeInterval(30))
         XCTAssertEqual(recorder.calls.count, 1)
 
-        host.panelBecameVisible("derby", now: now.addingTimeInterval(601))
+        host.tabAppeared("derby", now: now.addingTimeInterval(601))
         XCTAssertEqual(recorder.calls.count, 2)
+    }
+
+    // ⌘R is the deliberate override, and the only refresh an extension that
+    // declares no actions of its own has once the floor is in place.
+    func testForceRefreshIgnoresTheFloor() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":600}")],
+                                recorder: recorder)
+        host.tabAppeared("derby")
+        host.finish("derby", .transient("stub"))
+        XCTAssertEqual(recorder.calls.count, 1)
+
+        host.forceRefresh("derby")
+        XCTAssertEqual(recorder.calls.count, 2, "⌘R must not be floored")
+    }
+
+    // It is an override of the floor, not of everything: a spawn already in
+    // flight still wins, because two at once is what busy exists to prevent.
+    //
+    // The pane is made busy directly because this harness runs the runner
+    // synchronously — `tabAppeared` would complete the fetch inline and clear
+    // busy before the second call, which is the one case the real async path
+    // has and this one does not.
+    func testForceRefreshStillYieldsToAFetchInFlight() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby")], recorder: recorder)
+        var busy = ExtensionHost.Pane()
+        busy.busy = true
+        host.replacePaneForTesting(busy, on: "derby")
+
+        host.forceRefresh("derby")
+        XCTAssertTrue(recorder.calls.isEmpty, "a spawn in flight still wins")
     }
 
     func testTheReopenFloorIsTheManifestsInterval() {
@@ -506,7 +528,7 @@ final class ExtensionHostTests: XCTestCase {
         }
         XCTAssertEqual(recorder.calls.count, 1)
 
-        host.panelBecameVisible("derby", now: later)
+        host.tabAppeared("derby", now: later)
         XCTAssertEqual(recorder.calls.count, 2,
                        "showing the panel is the only refresh this extension gets")
     }
@@ -533,7 +555,7 @@ final class ExtensionHostTests: XCTestCase {
         // The panel comes back. onAppear does not fire — the view never left
         // the tree — so this call is the only thing standing between the user
         // and stale numbers.
-        host.panelBecameVisible("derby", now: now.addingTimeInterval(5))
+        host.tabAppeared("derby", now: now.addingTimeInterval(5))
         XCTAssertEqual(recorder.calls.count, 2)
     }
 }

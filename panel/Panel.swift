@@ -4164,6 +4164,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         if case .extensionTab(let id) = nav.mode {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain else { return false }
+            // ⌘R before the plain guard. Coming on screen is floored to the
+            // manifest's own interval, so this is the only way to say "now" —
+            // and it matters most for an extension that declares no actions,
+            // which would otherwise have no refresh of its own at all. Every ⌘
+            // combination was unhandled here, so it costs no extension a key,
+            // and it already means reload on the extensions browser.
+            if mods.intersection([.command, .control, .option, .shift]) == [.command],
+               event.keyCode == KeyCode.rKey, !event.isARepeat {
+                extensions.forceRefresh(id)
+                return true
+            }
             switch event.keyCode {
             case KeyCode.escape:
                 hidePanel()
@@ -4806,13 +4817,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // out rather than torn down, so the view survives being hidden and never
     // appears again, leaving the pane on whatever it fetched before.
     //
-    // Deliberately not tabAppeared. Switching to a tab is someone asking for
-    // that extension; the panel reappearing over the tab they happened to leave
-    // it on is not, so this respects the manifest's declared interval and that
-    // one does not.
     private func refreshVisibleExtensionTab() {
         guard case .extensionTab(let id) = nav.mode else { return }
-        extensions.panelBecameVisible(id)
+        extensions.tabAppeared(id)
     }
 
     // NSApp.hide hides all our windows AND deactivates the app, so the system

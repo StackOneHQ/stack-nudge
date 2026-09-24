@@ -112,25 +112,19 @@ final class ExtensionHost: ObservableObject {
 
     // MARK: - Invocation
 
-    // The user switched to this tab. An explicit gesture, so it refetches; the
-    // only gate is a spawn already being in flight.
-    func tabAppeared(_ id: String) {
-        guard let manifest = manifest(id), manifest.refresh.onOpen else { return }
-        refresh(id)
-    }
-
-    // The panel came back and this tab happened to be the one showing.
+    // The pane came on screen: a tab switch, the panel returning, or the pill
+    // expanding onto the tab someone left it on.
     //
-    // SwiftUI cannot tell us this happened: the panel is ordered out rather
-    // than torn down, so its view tree survives being hidden and `onAppear`
-    // never fires again. Without this the pane keeps whatever it last fetched,
-    // and an extension declaring `onOpen` with no `intervalSeconds` would stay
-    // that way indefinitely.
+    // One floor for all of them, because the view cannot tell them apart. In
+    // compact mode — the default, and effectively the only mode — collapsing to
+    // the pill removes this pane from the view tree entirely, so expanding it
+    // again fires `onAppear` exactly as switching tabs does. An earlier version
+    // of this tried to treat a switch as explicit and exempt it from the floor;
+    // that put the exemption on the path everyone actually uses and the floor
+    // on one almost nobody does, so every press of the hotkey spawned a script.
     //
-    // Unlike a tab switch this is incidental — nobody asked for this
-    // extension, the panel just reappeared over it — so it respects the cadence
-    // the manifest asked for rather than refetching on every toggle.
-    func panelBecameVisible(_ id: String, now: Date = Date()) {
+    // ⌘R is the deliberate override. See `forceRefresh`.
+    func tabAppeared(_ id: String, now: Date = Date()) {
         guard let manifest = manifest(id), manifest.refresh.onOpen else { return }
         if let attemptedAt = pane(id).attemptedAt,
            now.timeIntervalSince(attemptedAt) < TimeInterval(Self.reopenFloor(manifest)) {
@@ -139,7 +133,16 @@ final class ExtensionHost: ObservableObject {
         refresh(id)
     }
 
-    // How stale a pane must be before merely showing the panel refetches it.
+    // What ⌘R does: refetch now, whatever the floor says.
+    //
+    // The floor exists so that showing a window cannot spawn a script, which is
+    // a thing that happens to a user rather than something they ask for. This
+    // is the opposite, and without it an extension declaring no actions of its
+    // own has no way to refresh at all — the floor would otherwise have taken
+    // away the switch-away-and-back that used to serve as one.
+    func forceRefresh(_ id: String) { refresh(id) }
+
+    // How stale a pane must be before coming on screen refetches it.
     //
     // The manifest's own interval, not the schema's minimum. Those are
     // different numbers and using the minimum was wrong: it is the fastest any
