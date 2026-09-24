@@ -1072,13 +1072,20 @@ final class PanelNav: ObservableObject {
     static let eventsPerSessionOptions: [Int] = [3, 5, 10, 20, 50]
     // Compact widget mode. Shrinks the panel to a glance-only widget pinned
     // to a screen corner; clicking it expands back to the full panel.
-    // Defaults to on, and there is no UI toggle — but it is not forced. This
-    // comment used to say it was, and loadFromConfig reads
-    // STACKNUDGE_COMPACT_MODE with a default of true (see :1405), so setting
-    // that to false really does give you the full panel. The difference
-    // matters: the non-compact panel is ordered out rather than torn down,
-    // which is a whole code path — and a bug in it — that "always-on" reads
-    // as unreachable.
+    // On by default, and switched off by Settings → Appearance → Widget, which
+    // persists STACKNUDGE_COMPACT_MODE (see the .widget case in applyCycle).
+    // loadFromConfig reads it back with a default of true.
+    //
+    // Spelled out because two previous versions of this comment were wrong in
+    // the same direction, and both cost review time on the PR that added the
+    // extension refresh. It said compact mode was "always-on" and "forced to
+    // true in loadFromConfig", then that there was no toggle. Neither holds:
+    // anyone who has turned the Widget off carries false durably.
+    //
+    // The distinction is load-bearing rather than pedantic. The non-compact
+    // panel is ordered out rather than torn down, so its view tree survives
+    // hiding and onAppear never fires again — a real code path with real users
+    // that "always-on" invites you to treat as dead.
     @Published var compactMode:   Bool = true
     @Published var compactCorner: CompactCorner = .topRight
     // When true (default), releasing a drag snaps the pill to the nearest
