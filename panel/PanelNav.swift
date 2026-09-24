@@ -1072,9 +1072,13 @@ final class PanelNav: ObservableObject {
     static let eventsPerSessionOptions: [Int] = [3, 5, 10, 20, 50]
     // Compact widget mode. Shrinks the panel to a glance-only widget pinned
     // to a screen corner; clicking it expands back to the full panel.
-    // Compact mode is always-on now. The compactMode field is kept (and
-    // forced to true in loadFromConfig) to avoid threading the rest of
-    // the controller's compact-aware code; just don't expose a toggle.
+    // Defaults to on, and there is no UI toggle — but it is not forced. This
+    // comment used to say it was, and loadFromConfig reads
+    // STACKNUDGE_COMPACT_MODE with a default of true (see :1405), so setting
+    // that to false really does give you the full panel. The difference
+    // matters: the non-compact panel is ordered out rather than torn down,
+    // which is a whole code path — and a bug in it — that "always-on" reads
+    // as unreachable.
     @Published var compactMode:   Bool = true
     @Published var compactCorner: CompactCorner = .topRight
     // When true (default), releasing a drag snaps the pill to the nearest
