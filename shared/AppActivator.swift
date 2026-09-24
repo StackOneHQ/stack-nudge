@@ -486,12 +486,11 @@ struct AppActivator {
     // MARK: - tmux
 
     // Focus a tmux pane by talking to the tmux server (select-window resolves
-    // the pane's window; select-pane focuses the pane), then raise the host
-    // terminal. Under iTerm2 `-CC` control mode the window select surfaces the
-    // mapped native tab; under plain tmux it switches the active pane inside
-    // the host's single window. socket nil → tmux default socket. hostBundleID
-    // nil → skip the raise (rely on -CC surfacing the tab). Callers resolve the
-    // pane/socket/host via TmuxFocus and dispatch this on a background queue.
+    // the pane's window; select-pane focuses the pane), then bring the host
+    // terminal's tab forward. socket nil → tmux default socket. hostBundleID is
+    // the agent-env guess, used only when no attached client names its host.
+    // Callers resolve the pane/socket/host via TmuxFocus and dispatch this on a
+    // background queue.
     static func focusTmux(pane: String, socket: String?, hostBundleID: String?) {
         guard let tmux = tmuxPath() else {
             tmuxDebug("focusTmux: no tmux binary on the probe paths")
@@ -502,53 +501,147 @@ struct AppActivator {
         runDetached(tmux, base + ["select-window", "-t", pane])
         runDetached(tmux, base + ["select-pane", "-t", pane])
 
-        // iTerm2 `-CC`: external tmux selection doesn't surface the native tab,
-        // and the tab has no tty to match on. The one handle iTerm2 exposes is
-        // that its `-CC` session name mirrors the tmux pane_title — so select
-        // the iTerm2 session whose name equals the target pane's live title,
-        // which brings that exact tab + split to the front. Read the title live
-        // (both sides track it, so they agree at focus time). Ambiguous only
-        // when two panes share a title; other hosts just get an app raise.
-        if hostBundleID == "com.googlecode.iterm2" {
+        let clients = runCapture(tmux, base + ["list-clients", "-t", pane, "-F", tmuxClientFormat])
+            .map { withClientEnvironment(parseTmuxClients($0)) }
+        let host = clients?.lazy.compactMap(\.hostBundleID).first ?? hostBundleID
+
+        // External tmux selection doesn't surface the iTerm2 tab, so select the
+        // iTerm2 session showing the pane. Skipped when iTerm2 isn't running:
+        // `tell application` would launch it.
+        if host == iTermBundleID,
+           !NSRunningApplication.runningApplications(withBundleIdentifier: iTermBundleID).isEmpty {
             let title = runCapture(
                 tmux, base + ["display-message", "-p", "-t", pane, "#{pane_title}"])?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            let matched = title.map { !$0.isEmpty && selectITermSessionByName($0) } ?? false
-            tmuxDebug("focusTmux pane=\(pane) title=«\(title ?? "")» iterm-select=\(matched)")
+            let rows = listITermSessions()
+            let guid = rows.flatMap {
+                matchITermSession(pane: pane, title: title, clients: clients, in: $0)
+            }
+            let matched = guid.map { focusIterm2Session(sessionID: $0) } ?? false
+            tmuxDebug("focusTmux pane=\(pane) title=«\(title ?? "")» clients=\(clients?.count ?? -1) "
+                + "sessions=\(rows?.count ?? -1) iterm-select=\(matched)")
             if matched { return }
         }
 
-        if let hostBundleID, !hostBundleID.isEmpty {
-            tmuxDebug("focusTmux pane=\(pane) → app-raise \(hostBundleID)")
+        if let host, !host.isEmpty {
+            tmuxDebug("focusTmux pane=\(pane) → app-raise \(host)")
             NSRunningApplication
-                .runningApplications(withBundleIdentifier: hostBundleID)
+                .runningApplications(withBundleIdentifier: host)
                 .first?
                 .activate(options: [.activateIgnoringOtherApps])
         }
     }
 
-    // Select the iTerm2 session whose name matches `name` and bring it forward.
-    // Under `-CC` the session name mirrors the tmux pane_title, so this focuses
-    // the exact tab + split. Returns false when no session matches (title
-    // changed, or not iTerm2) so the caller falls back to a plain app raise.
-    @discardableResult
-    private static func selectITermSessionByName(_ title: String) -> Bool {
-        // Match in Swift, not AppleScript. NSAppleScript mangles non-ASCII
-        // string literals (Claude's "✳ …" titles decode as MacRoman), and
-        // `system attribute` mangles them the same way — so ASCII titles
-        // (codex/agy) matched but Claude titles never did. Reading (id, name)
-        // OUT is UTF-8-faithful, so enumerate here, match the title in Swift,
-        // and select by the ASCII GUID via the proven session-id path. Returns
-        // false when nothing matches (title changed, or not iTerm2) so the
-        // caller falls back to a plain app raise.
+    static let iTermBundleID = "com.googlecode.iterm2"
+
+    // A tmux client attached to the pane's session. Host and iTerm2 session come
+    // from the client's own environment, which the terminal drawing it set at
+    // attach time. The agent's env is staler: it dates from when the pane's
+    // shell started, possibly under another terminal or none.
+    struct TmuxClient: Equatable {
+        let controlMode: Bool
+        let activity: Int
+        let pid: Int
+        let tty: String
+        var hostBundleID: String? = nil
+        var iTermSessionGUID: String? = nil
+    }
+
+    static let tmuxClientFormat = "#{client_control_mode} #{client_activity} #{client_pid} #{client_tty}"
+
+    // Most recently active first, so the terminal last used to attach wins.
+    static func parseTmuxClients(_ raw: String) -> [TmuxClient] {
+        raw.split(separator: "\n").compactMap { line -> TmuxClient? in
+            let parts = line.split(separator: " ", maxSplits: 3)
+            guard parts.count == 4, let pid = Int(parts[2]) else { return nil }
+            return TmuxClient(controlMode: parts[0] == "1", activity: Int(parts[1]) ?? 0,
+                              pid: pid, tty: String(parts[3]))
+        }
+        .sorted { $0.activity > $1.activity }
+    }
+
+    private static func withClientEnvironment(_ clients: [TmuxClient]) -> [TmuxClient] {
+        guard !clients.isEmpty,
+              let raw = runCapture("/bin/ps", ["eww", "-o", "pid=,command=",
+                                                "-p", clients.map { String($0.pid) }.joined(separator: ",")])
+        else { return clients }
+        return applyClientEnvironment(raw, to: clients)
+    }
+
+    // `ps eww -o pid=,command=` output → host and iTerm2 session per client.
+    // __CFBundleIdentifier is set for anything a GUI terminal spawns;
+    // TERM_PROGRAM covers terminals reached some other way.
+    static func applyClientEnvironment(_ psOutput: String, to clients: [TmuxClient]) -> [TmuxClient] {
+        let termPrograms = [
+            "iTerm.app": iTermBundleID,
+            "Apple_Terminal": "com.apple.Terminal",
+            "ghostty": "com.mitchellh.ghostty",
+            "WarpTerminal": "dev.warp.Warp-Stable",
+        ]
+        var envByPID: [Int: [String: String]] = [:]
+        for line in psOutput.split(separator: "\n") {
+            let tokens = line.split(separator: " ")
+            guard let pid = tokens.first.flatMap({ Int($0) }) else { continue }
+            var env: [String: String] = [:]
+            for token in tokens.dropFirst() {
+                guard let eq = token.firstIndex(of: "=") else { continue }
+                env[String(token[..<eq])] = String(token[token.index(after: eq)...])
+            }
+            envByPID[pid] = env
+        }
+        return clients.map { client in
+            guard let env = envByPID[client.pid] else { return client }
+            var copy = client
+            copy.hostBundleID = env["__CFBundleIdentifier"] ?? env["TERM_PROGRAM"].flatMap { termPrograms[$0] }
+            // ITERM_SESSION_ID is "w0t0p0:GUID"; AppleScript knows the GUID half.
+            copy.iTermSessionGUID = env["ITERM_SESSION_ID"]
+                .flatMap { $0.split(separator: ":").last.map(String.init) }
+            return copy
+        }
+    }
+
+    // One iTerm2 session as the matcher sees it. Every field but the GUID can
+    // be empty: `-CC` sessions have no tty, and iTerm2 builds before 3.3 have
+    // neither the tmux variables nor autoName.
+    struct ITermSessionRow: Equatable {
+        let guid: String
+        let tty: String
+        let tmuxPane: String   // tmuxWindowPane: "6" for pane %6
+        let tmuxRole: String   // "gateway" (the hidden `tmux -CC` session), "client" or ""
+        let tmuxPaneTitle: String
+        let autoName: String
+        let name: String       // tab-bar title; may carry the job, "✳ task (claude)"
+    }
+
+    // Reads the rows OUT of AppleScript rather than matching inside it:
+    // NSAppleScript decodes non-ASCII source literals as MacRoman, so Claude's
+    // "✳ …" titles never compared equal there. nil when iTerm2 can't be asked.
+    private static func listITermSessions() -> [ITermSessionRow]? {
         let listScript = """
         tell application "iTerm2"
+          set sep to character id 31
           set out to ""
           repeat with w in windows
             repeat with t in tabs of w
               repeat with s in sessions of t
                 try
-                  set out to out & (unique id of s) & "|" & (name of s) & linefeed
+                  set fields to {(unique id of s) as text}
+                  try
+                    set end of fields to (tty of s) as text
+                  on error
+                    set end of fields to ""
+                  end try
+                  repeat with v in {"tmuxWindowPane", "tmuxRole", "tmuxPaneTitle", "autoName"}
+                    try
+                      tell s to set end of fields to (get variable named (v as text)) as text
+                    on error
+                      set end of fields to ""
+                    end try
+                  end repeat
+                  set end of fields to (name of s) as text
+                  set AppleScript's text item delimiters to sep
+                  set out to out & (fields as text) & linefeed
+                  set AppleScript's text item delimiters to ""
                 end try
               end repeat
             end repeat
@@ -560,26 +653,66 @@ struct AppActivator {
         let listed = NSAppleScript(source: listScript)?.executeAndReturnError(&err)
         guard err == nil, let out = listed?.stringValue else {
             logScriptError(err, "tmux-iterm2-list")
-            return false
+            return nil
         }
-        // Match on the title with any leading animated-spinner run stripped:
-        // codex renders a braille spinner ("⠦ stackone") whose frame differs
-        // between the tmux read and the iTerm2 name a moment later, so an exact
-        // compare misses whenever it's busy. Stable prefixes (Claude's "✳ …")
-        // aren't braille, so they're untouched. GUIDs never contain "|", so
-        // split on the first one; the name (which may) is everything after it.
-        let wanted = normalizedTitle(title)
-        guard !wanted.isEmpty else { return false }
-        var guid: String?
-        for line in out.split(separator: "\n") {
-            guard let bar = line.firstIndex(of: "|") else { continue }
-            if normalizedTitle(String(line[line.index(after: bar)...])) == wanted {
-                guid = String(line[..<bar])
-                break
+        return parseITermSessions(out)
+    }
+
+    // Fields are split on U+001F because titles are free text and can hold "|".
+    static func parseITermSessions(_ raw: String) -> [ITermSessionRow] {
+        raw.split(separator: "\n").compactMap { line in
+            let fields = line.split(separator: "\u{1F}", omittingEmptySubsequences: false)
+                .map { $0 == "missing value" ? "" : String($0) }
+            guard fields.count == 7, !fields[0].isEmpty else { return nil }
+            return ITermSessionRow(guid: fields[0], tty: fields[1], tmuxPane: fields[2],
+                                   tmuxRole: fields[3], tmuxPaneTitle: fields[4],
+                                   autoName: fields[5], name: fields[6])
+        }
+    }
+
+    // Most exact key first, so each iTerm2 build and tmux layout uses the
+    // strongest key it supports:
+    //   1. `-CC` tab by pane number (iTerm2 3.3+). Only when a control-mode
+    //      client is attached to this server, since pane numbers repeat across
+    //      servers; a tie between servers falls back to the title.
+    //   2. tmux drawn in an ordinary tab: the session each attached client
+    //      runs in, by ITERM_SESSION_ID, then by tty.
+    //   3. Title, for `-CC` on builds without the variables. `name` is the
+    //      tab-bar title and may carry the job, so a " (job)" suffix is
+    //      accepted. Only a unique match counts; identical titles mean guessing.
+    // `clients` nil means tmux couldn't be asked, so neither `-CC` step is ruled out.
+    static func matchITermSession(pane: String, title: String?, clients: [TmuxClient]?,
+                                  in rows: [ITermSessionRow]) -> String? {
+        let candidates = rows.filter { $0.tmuxRole != "gateway" }
+        let wanted = normalizedTitle(title ?? "")
+        let titleMatches = { (row: ITermSessionRow) -> Bool in
+            guard !wanted.isEmpty else { return false }
+            let name = normalizedTitle(row.name)
+            return normalizedTitle(row.tmuxPaneTitle) == wanted
+                || normalizedTitle(row.autoName) == wanted
+                || name == wanted
+                || (name.hasPrefix(wanted + " (") && name.hasSuffix(")"))
+        }
+        let controlModeAttached = clients.map { $0.contains(where: \.controlMode) } ?? true
+
+        if controlModeAttached {
+            let paneNumber = pane.hasPrefix("%") ? String(pane.dropFirst()) : pane
+            let byPane = candidates.filter { !$0.tmuxPane.isEmpty && $0.tmuxPane == paneNumber }
+            if byPane.count == 1 { return byPane[0].guid }
+            let tied = byPane.filter(titleMatches)
+            if tied.count == 1 { return tied[0].guid }
+        }
+        for client in clients ?? [] where !client.controlMode {
+            if let guid = client.iTermSessionGUID, candidates.contains(where: { $0.guid == guid }) {
+                return guid
+            }
+            if let row = candidates.first(where: { !$0.tty.isEmpty && $0.tty == client.tty }) {
+                return row.guid
             }
         }
-        guard let guid else { return false }
-        return focusIterm2Session(sessionID: guid)
+        guard controlModeAttached else { return nil }
+        let titled = candidates.filter(titleMatches)
+        return titled.count == 1 ? titled[0].guid : nil
     }
 
     // Drop a leading run of whitespace and braille-pattern glyphs (U+2800–U+28FF,
