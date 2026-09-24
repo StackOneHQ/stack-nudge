@@ -4,6 +4,13 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [2.1.1](https://github.com/StackOneHQ/stack-nudge/compare/v2.1.0...v2.1.1) (2026-09-24)
+
+
+### Bug Fixes
+
+* **panel:** find the right iTerm2 tab for tmux panes on any title setup ([#201](https://github.com/StackOneHQ/stack-nudge/issues/201)) ([dc74f32](https://github.com/StackOneHQ/stack-nudge/commit/dc74f32dca76cca7882517c5b3c064c35c42b634))
+
 ## [2.1.0](https://github.com/StackOneHQ/stack-nudge/compare/v2.0.1...v2.1.0) (2026-09-23)
 
 
