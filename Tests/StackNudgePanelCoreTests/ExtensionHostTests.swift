@@ -396,6 +396,26 @@ final class ExtensionHostTests: XCTestCase {
                                               visible: true, now: now))
     }
 
+    // A click on a footer hint has to send what the keypress would. resolve()
+    // reads a row action as belonging to the selected row and a document action
+    // as belonging to none, so the pairing the footer renders must agree — a
+    // document action sent with a row id would spawn `--action refresh --row x`
+    // for a row the action was never about.
+    func testADocumentActionCarriesNoRowAndARowActionCarriesItsOwn() {
+        let json = """
+            {"schema":1,
+             "rows":[{"id":"h1","title":"A","actions":[{"id":"open","label":"Open","key":"o"}]}],
+             "actions":[{"id":"refresh","label":"Sync now","key":"r"}]}
+            """
+        guard case .success(let document) = ExtensionDocument.parse(Data(json.utf8)) else {
+            return XCTFail("fixture didn't parse")
+        }
+        XCTAssertEqual(ExtensionHost.resolve(key: "r", in: document, selectedRow: "h1")?.row, nil)
+        XCTAssertEqual(ExtensionHost.resolve(key: "o", in: document, selectedRow: "h1")?.row, "h1")
+        // With nothing selected a row action isn't reachable at all.
+        XCTAssertNil(ExtensionHost.resolve(key: "o", in: document, selectedRow: nil))
+    }
+
     // MARK: - Opening a tab
 
     func testOpeningATabRefreshesItUnlessTheManifestOptedOut() {
@@ -406,5 +426,136 @@ final class ExtensionHostTests: XCTestCase {
         host.tabAppeared("derby")
         host.tabAppeared("radar")
         XCTAssertEqual(recorder.calls.map(\.id), ["derby"])
+    }
+
+    // The panel is an NSPanel that is ordered out, not torn down, so its SwiftUI
+    // tree survives being hidden and `onAppear` — the only thing that calls
+    // tabAppeared — does not fire again when it comes back. Reopening onto a tab
+    // you were already on is therefore not an "open" as far as the host is
+    // concerned, and the pane shows whatever it last fetched.
+    //
+    // This asks whether the scheduled refresh covers that gap on its own.
+    // Coming on screen respects the cadence the manifest asked for, whether it
+    // was a tab switch, the panel returning, or the pill expanding. The view
+    // cannot tell those apart — in compact mode the pane leaves the tree
+    // entirely when the pill collapses, so expanding fires onAppear exactly as
+    // switching tabs does — and an earlier version exempting "switches" put the
+    // exemption on the path everyone uses.
+    //
+    // The floor is the manifest's own interval, not
+    // ExtensionManifest.minimumIntervalSeconds. Those are different numbers:
+    // the minimum is the fastest any extension is *permitted* to poll, not what
+    // this one chose. An extension asking for 600s against a rate-limited API
+    // was spawned every 5s by someone pressing the hotkey.
+    func testComingOnScreenRespectsTheManifestsOwnInterval() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":600}")],
+                                recorder: recorder)
+        let now = Date()
+        host.tabAppeared("derby", now: now)
+        host.finish("derby", .transient("stub"))
+        XCTAssertEqual(recorder.calls.count, 1)
+
+        // Well past the schema minimum, nowhere near what the extension asked
+        // for: the old floor spawned here, 120x the declared cadence.
+        host.tabAppeared("derby", now: now.addingTimeInterval(30))
+        XCTAssertEqual(recorder.calls.count, 1)
+
+        host.tabAppeared("derby", now: now.addingTimeInterval(601))
+        XCTAssertEqual(recorder.calls.count, 2)
+    }
+
+    // ⌘R is the deliberate override, and the only refresh an extension that
+    // declares no actions of its own has once the floor is in place.
+    func testForceRefreshIgnoresTheFloor() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":600}")],
+                                recorder: recorder)
+        host.tabAppeared("derby")
+        host.finish("derby", .transient("stub"))
+        XCTAssertEqual(recorder.calls.count, 1)
+
+        host.forceRefresh("derby")
+        XCTAssertEqual(recorder.calls.count, 2, "⌘R must not be floored")
+    }
+
+    // It is an override of the floor, not of everything: a spawn already in
+    // flight still wins, because two at once is what busy exists to prevent.
+    //
+    // The pane is made busy directly because this harness runs the runner
+    // synchronously — `tabAppeared` would complete the fetch inline and clear
+    // busy before the second call, which is the one case the real async path
+    // has and this one does not.
+    func testForceRefreshStillYieldsToAFetchInFlight() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby")], recorder: recorder)
+        var busy = ExtensionHost.Pane()
+        busy.busy = true
+        host.replacePaneForTesting(busy, on: "derby")
+
+        host.forceRefresh("derby")
+        XCTAssertTrue(recorder.calls.isEmpty, "a spawn in flight still wins")
+    }
+
+    func testTheReopenFloorIsTheManifestsInterval() {
+        XCTAssertEqual(ExtensionHost.reopenFloor(manifest("a", refresh: "{\"intervalSeconds\":600}")),
+                       600)
+        // No interval to read, so the schema minimum is the only sensible value.
+        XCTAssertEqual(ExtensionHost.reopenFloor(manifest("b", refresh: "{\"onOpen\":true}")),
+                       ExtensionManifest.minimumIntervalSeconds)
+        // A declared interval below the minimum is clamped at parse time, so it
+        // can never produce a floor under it.
+        XCTAssertEqual(ExtensionHost.reopenFloor(manifest("c", refresh: "{\"intervalSeconds\":1}")),
+                       ExtensionManifest.minimumIntervalSeconds)
+    }
+
+    // An extension that asks only for onOpen has no schedule to fall back on,
+    // so showing the panel onto its tab is the only thing that can refresh it.
+    func testATabWithNoScheduleStillRefreshesWhenThePanelComesBack() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby", refresh: "{\"onOpen\":true}")],
+                                recorder: recorder)
+        let now = Date()
+        host.tabAppeared("derby")
+        host.finish("derby", .transient("stub"))
+        XCTAssertEqual(recorder.calls.count, 1)
+
+        // Hidden for ten minutes. No interval, so no tick will ever help.
+        var later = now
+        for _ in 0..<120 {
+            later = later.addingTimeInterval(5)
+            host.tick(visibleTab: nil, now: later)
+        }
+        XCTAssertEqual(recorder.calls.count, 1)
+
+        host.tabAppeared("derby", now: later)
+        XCTAssertEqual(recorder.calls.count, 2,
+                       "showing the panel is the only refresh this extension gets")
+    }
+
+    // The reported bug, end to end. An earlier version of this test drove only
+    // `tick` and so passed identically without the fix — it was exercising the
+    // pre-existing schedule, not the new path.
+    func testReopeningOntoATabYouWereAlreadyOnRefetchesWithoutAKeypress() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":30}")],
+                                recorder: recorder)
+        host.tabAppeared("derby")
+        host.finish("derby", .transient("stub"))
+        XCTAssertEqual(recorder.calls.count, 1)
+
+        // Hidden for five minutes: whileFocusedOnly means no polling, by design.
+        var now = Date()
+        for _ in 0..<60 {
+            now = now.addingTimeInterval(5)
+            host.tick(visibleTab: nil, now: now)
+        }
+        XCTAssertEqual(recorder.calls.count, 1, "a hidden pane must not poll")
+
+        // The panel comes back. onAppear does not fire — the view never left
+        // the tree — so this call is the only thing standing between the user
+        // and stale numbers.
+        host.tabAppeared("derby", now: now.addingTimeInterval(5))
+        XCTAssertEqual(recorder.calls.count, 2)
     }
 }

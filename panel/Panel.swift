@@ -4180,6 +4180,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         if case .extensionTab(let id) = nav.mode {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain else { return false }
+            // ⌘R before the plain guard. Coming on screen is floored to the
+            // manifest's own interval, so this is the only way to say "now" —
+            // and it matters most for an extension that declares no actions,
+            // which would otherwise have no refresh of its own at all. Every ⌘
+            // combination was unhandled here, so it costs no extension a key,
+            // and it already means reload on the extensions browser.
+            if mods.intersection([.command, .control, .option, .shift]) == [.command],
+               event.keyCode == KeyCode.rKey, !event.isARepeat {
+                extensions.forceRefresh(id)
+                return true
+            }
             switch event.keyCode {
             case KeyCode.escape:
                 hidePanel()
@@ -4811,12 +4822,23 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 NSApp.activate(ignoringOtherApps: true)
                 panel.makeKeyAndOrderFront(nil)
             }
+            refreshVisibleExtensionTab()
             return
         }
         positionPanel()  // re-resolve in case the user moved to a different display
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         usageSurfaceDidChange()
+        refreshVisibleExtensionTab()
+    }
+
+    // ExtensionTabView.onAppear cannot see the panel coming back: it is ordered
+    // out rather than torn down, so the view survives being hidden and never
+    // appears again, leaving the pane on whatever it fetched before.
+    //
+    private func refreshVisibleExtensionTab() {
+        guard case .extensionTab(let id) = nav.mode else { return }
+        extensions.tabAppeared(id)
     }
 
     // NSApp.hide hides all our windows AND deactivates the app, so the system
