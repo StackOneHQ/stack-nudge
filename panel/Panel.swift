@@ -2131,11 +2131,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     // SwiftUI's ScrollView has no programmatic delta-scroll API, so walk the
     // AppKit hierarchy to the underlying NSScrollView and nudge its clip view.
-    // Only one ScrollView is rendered at a time (mode-gated), so the first
-    // match is whichever detail pane is showing — the Usage tiers or the
-    // Tickets rollup.
+    // The pane is whichever of the Usage detail or the Outcomes overview is
+    // showing; see VerticalScrollPane for why it isn't simply the first match.
     private func scrollDetailBy(_ dy: CGFloat) {
-        guard let scrollView = findScrollView(in: panel.contentView),
+        guard let scrollView = VerticalScrollPane.find(in: panel.contentView),
               let doc = scrollView.documentView else { return }
         let clip = scrollView.contentView
         let maxY = max(0, doc.frame.height - clip.bounds.height)
@@ -2148,7 +2147,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // ⌘↑/↓ in a pure-scroll detail pane (no selection to move): jump the clip
     // view to the very top or bottom.
     private func scrollDetailToEdge(top: Bool) {
-        guard let scrollView = findScrollView(in: panel.contentView),
+        guard let scrollView = VerticalScrollPane.find(in: panel.contentView),
               let doc = scrollView.documentView else { return }
         let clip = scrollView.contentView
         let maxY = max(0, doc.frame.height - clip.bounds.height)
@@ -2156,15 +2155,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         origin.y = top ? 0 : maxY
         clip.scroll(to: origin)
         scrollView.reflectScrolledClipView(clip)
-    }
-
-    private func findScrollView(in view: NSView?) -> NSScrollView? {
-        guard let view else { return nil }
-        if let sv = view as? NSScrollView { return sv }
-        for sub in view.subviews {
-            if let found = findScrollView(in: sub) { return found }
-        }
-        return nil
     }
 
     // User-triggered update check with transient row feedback. Sets
