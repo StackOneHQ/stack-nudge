@@ -4,6 +4,13 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [2.1.2](https://github.com/StackOneHQ/stack-nudge/compare/v2.1.1...v2.1.2) (2026-09-25)
+
+
+### Bug Fixes
+
+* **panel:** scroll the outcomes overview with the arrow keys ([#203](https://github.com/StackOneHQ/stack-nudge/issues/203)) ([49d05b8](https://github.com/StackOneHQ/stack-nudge/commit/49d05b82d871637ae64c960a799edd4c92acb68a))
+
 ## [2.1.1](https://github.com/StackOneHQ/stack-nudge/compare/v2.1.0...v2.1.1) (2026-09-24)
 
 
