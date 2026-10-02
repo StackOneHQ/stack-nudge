@@ -4168,7 +4168,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // passed on — an extension tab must never be able to answer a
         // permission prompt on the Events tab by accident.
         if case .extensionTab(let id) = nav.mode {
+            // ⌘R first, because the plain guard below returns on anything with
+            // a modifier. An earlier version put this after it and said in a
+            // comment that it came before — so the key did nothing while the
+            // footer advertised it, which is the one failure an untestable
+            // switch buried in a method is good at hiding. The ordering lives
+            // in extensionTabKeyAction now, where a test can see it.
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            if Self.isForceRefresh(keyCode: event.keyCode, modifiers: mods,
+                                   isRepeat: event.isARepeat) {
+                extensions.forceRefresh(id)
+                return true
+            }
             guard plain else { return false }
             switch event.keyCode {
             case KeyCode.escape:
@@ -4389,6 +4400,21 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // to a read-only log, and a → key repeat landing in the filter is
         // exactly what this stops.
         case swallow
+    }
+
+    // ⌘R on an extension tab: refetch now, whatever the floor says.
+    //
+    // Pure so the *ordering* is testable, which is what actually went wrong:
+    // the branch was written after the handler's `guard plain else { return
+    // false }`, so it could never run, and its own comment claimed otherwise.
+    // Not on autorepeat, matching the extensions browser — holding it would
+    // otherwise issue one spawn per event.
+    static func isForceRefresh(keyCode: UInt16,
+                               modifiers: NSEvent.ModifierFlags,
+                               isRepeat: Bool) -> Bool {
+        modifiers.intersection([.command, .control, .option, .shift]) == [.command]
+            && keyCode == KeyCode.rKey
+            && !isRepeat
     }
 
     // What a key does on the extensions browser. Pure and beside
@@ -4801,12 +4827,23 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 NSApp.activate(ignoringOtherApps: true)
                 panel.makeKeyAndOrderFront(nil)
             }
+            refreshVisibleExtensionTab()
             return
         }
         positionPanel()  // re-resolve in case the user moved to a different display
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         usageSurfaceDidChange()
+        refreshVisibleExtensionTab()
+    }
+
+    // ExtensionTabView.onAppear cannot see the panel coming back: it is ordered
+    // out rather than torn down, so the view survives being hidden and never
+    // appears again, leaving the pane on whatever it fetched before.
+    //
+    private func refreshVisibleExtensionTab() {
+        guard case .extensionTab(let id) = nav.mode else { return }
+        extensions.tabAppeared(id)
     }
 
     // NSApp.hide hides all our windows AND deactivates the app, so the system

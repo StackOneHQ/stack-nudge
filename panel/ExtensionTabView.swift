@@ -320,22 +320,66 @@ struct ExtensionTabView: View {
     private var footer: some View {
         PageFooter {
             FooterHint(label: "Hide", keys: ["Esc"])
+            // Advertised because it is the only refresh an extension that
+            // declares no actions has, now that coming on screen is floored to
+            // the manifest's own interval.
+            FooterHint(label: "Refresh", keys: ["⌘R"])
             if let document = pane.document, !document.rows.isEmpty {
                 FooterHint(label: "Select", keys: ["↑", "↓"])
             }
             // Only bound actions get a hint. An action whose key request was
             // refused has no shortcut and no button, so advertising it would be
             // a lie — see the note on ExtensionKey.
-            ForEach(hintedActions, id: \.id) { action in
-                FooterHint(label: action.label, keys: [Self.keyCap(action.key ?? "")])
+            // Clickable, because it looks clickable. The pane was
+            // keyboard-only by design and the footer still advertised each
+            // action with its key cap — which reads as a button, so it gets
+            // pressed, and nothing happens. A refresh arriving on the poll
+            // thirty seconds later then looks like the click working.
+            ForEach(hintedActions, id: \.key) { action in
+                Button {
+                    // By key, through the same resolver the keyboard uses,
+                    // rather than a pre-baked (action id, row) pair frozen into
+                    // this closure at render time. The document can swap between
+                    // the render and the mouse-up — `finish` clears
+                    // `selectedRow` when a new document drops that row — and a
+                    // frozen pair would then spawn an action or a row the
+                    // extension no longer declares. Re-resolving makes a click
+                    // and a keypress the same call, not two calls that agree.
+                    host.handle(key: action.key ?? "", on: id)
+                } label: {
+                    FooterHint(label: action.label,
+                               keys: [Self.keyCap(action.key ?? "")])
+                }
+                .buttonStyle(.plain)
+                .disabled(pane.busy)
             }
         }
     }
 
     private var hintedActions: [ExtensionDocument.Action] {
         guard let document = pane.document else { return [] }
-        let rowActions = document.rows.first { $0.id == pane.selectedRow }?.actions ?? []
-        return (rowActions + document.actions).filter { $0.key != nil }
+        return Self.hintedActions(in: document, selectedRow: pane.selectedRow)
+    }
+
+    // Exactly the actions the keyboard can reach, in the order it reaches them.
+    //
+    // One per key, because ExtensionHost.resolve checks the selected row's
+    // actions before the document's: a row action shadows a document action
+    // sharing its key, leaving that one unreachable by keypress. Rendering both
+    // drew two identical key caps, one of which was a lie — and now that they
+    // are buttons it would also offer a click for something no key can do.
+    //
+    // Keyless actions are absent for the same reason they always were: there is
+    // no binding to advertise, and docs/extensions.md tells extensions to give
+    // every action a valid key until that changes.
+    static func hintedActions(in document: ExtensionDocument,
+                              selectedRow: String?) -> [ExtensionDocument.Action] {
+        let rowActions = document.rows.first { $0.id == selectedRow }?.actions ?? []
+        var seenKeys = Set<String>()
+        return (rowActions + document.actions).filter { action in
+            guard let key = action.key else { return false }
+            return seenKeys.insert(key).inserted
+        }
     }
 
     static func keyCap(_ key: String) -> String {

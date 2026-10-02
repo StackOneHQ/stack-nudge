@@ -387,6 +387,54 @@ final class HistoryFilterInputTests: XCTestCase {
     }
 }
 
+// ⌘R on an extension tab. Raw virtual key codes: 15 is "r".
+//
+// This exists because the branch was unreachable and nothing could see it. It
+// was written after the handler's `guard plain else { return false }`, so ⌘
+// returned before it, while its own comment said it came first and the footer
+// advertised the key. A pure predicate is the only part of that a test can
+// hold on to.
+final class ExtensionTabForceRefreshTests: XCTestCase {
+
+    private func isForceRefresh(_ keyCode: UInt16,
+                                _ modifiers: NSEvent.ModifierFlags,
+                                isRepeat: Bool = false) -> Bool {
+        PanelController.isForceRefresh(keyCode: keyCode, modifiers: modifiers,
+                                       isRepeat: isRepeat)
+    }
+
+    func test_commandRRefreshes() {
+        XCTAssertTrue(isForceRefresh(15, [.command]))
+    }
+
+    // The combination has to be exactly ⌘ — a stray ⌥ or ⇧ is a different
+    // shortcut and must not be swallowed as this one.
+    func test_otherModifierCombinationsAreNotIt() {
+        XCTAssertFalse(isForceRefresh(15, []))
+        XCTAssertFalse(isForceRefresh(15, [.command, .shift]))
+        XCTAssertFalse(isForceRefresh(15, [.command, .option]))
+        XCTAssertFalse(isForceRefresh(15, [.control]))
+    }
+
+    // A plain R belongs to the extension: documents bind single letters, and
+    // the Derby's own "Sync now" is one.
+    func test_plainRIsLeftToTheExtension() {
+        XCTAssertFalse(isForceRefresh(15, []))
+    }
+
+    func test_otherKeysWithCommandAreNotIt() {
+        for code in [UInt16(0), 8, 36, 53, 126] {
+            XCTAssertFalse(isForceRefresh(code, [.command]), "\(code)")
+        }
+    }
+
+    // Holding it would otherwise issue one spawn per event, which is the rate
+    // problem the floor exists to prevent, arriving by another door.
+    func test_autorepeatIsNotIt() {
+        XCTAssertFalse(isForceRefresh(15, [.command], isRepeat: true))
+    }
+}
+
 // Where each keystroke goes on the extensions browser. Raw virtual key codes,
 // since the panel's KeyCode table is private: 53 Esc, 44 /, 126/125 ↑↓,
 // 36 Return, 15 "r", 123/124 ←→, 49 Space.

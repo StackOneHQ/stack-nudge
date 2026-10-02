@@ -18,6 +18,7 @@ import json
 import math
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -26,10 +27,26 @@ from datetime import datetime, timezone
 DEFAULT_BASE = "https://token-derby.mauricode.co.uk/api"
 ORG_KEY = "STACKNUDGE_EXT_DERBY_ORG"
 BASE_KEY = "STACKNUDGE_EXT_DERBY_BASE"
-# Two sequential hops inside the host's 12s budget, so this cannot be half of
-# it: two slow-but-successful requests at 8s each took 16s and the host killed
-# the process before the script could print its own error document.
-TIMEOUT = 5
+# One budget across both hops rather than a timeout on each, because the two
+# are not the same size: the race list measures 2-4s and the race itself under
+# one, and a fixed per-request limit has to be big enough for the slow one
+# while leaving room for both inside the host's 12s. Splitting it evenly meant
+# the slow hop had a 5s ceiling it occasionally hit, and a hop that times out
+# fails the whole fetch.
+#
+# The deadline is enforced by this script, not by the socket. urlopen's
+# `timeout` is a per-operation *idle* limit, not a total one: a server that
+# dribbles a response keeps the socket busy and never trips it. Measured —
+# urlopen(timeout=1.5) against a server writing a byte a second returned after
+# 8s without raising. So the budget is checked before each hop and between
+# reads, and the socket timeout is left to do the one job it is good at, which
+# is noticing that nothing is arriving at all.
+TOTAL_BUDGET = 9
+MAX_PER_REQUEST = 6
+READ_CHUNK = 65536
+# The host stops reading at 8MB; there is no reason for this script to hold
+# more than a race document before it gives up.
+MAX_BODY_BYTES = 4 * 1024 * 1024
 
 # A horse, 16x11. "H" is the coat, "M" the mane and tail, "." transparent. At
 # 1.5pt a cell the silhouette carries it, so the legs gather and splay rather
@@ -469,12 +486,49 @@ class NoDowngrade(urllib.request.HTTPRedirectHandler):
 _opener = urllib.request.build_opener(NoDowngrade())
 
 
-def get_json(url):
+def remaining(deadline):
+    """Idle allowance for the next socket operation.
+
+    Raises rather than returning a floor when the budget is spent: granting a
+    last second to a hop that is already over the deadline is how two hops end
+    up past the host's limit, which is the thing the budget exists to stop.
+    """
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise TimeoutError("the derby ran out of time")
+    return min(float(MAX_PER_REQUEST), left)
+
+
+def read_within(response, deadline):
+    """The body, giving up if the budget runs out mid-read.
+
+    A slow-but-steady response never trips the socket timeout, so this is the
+    only thing bounding how long a single hop can take.
+    """
+    chunks, total = [], 0
+    while True:
+        if time.monotonic() > deadline:
+            raise TimeoutError("the derby ran out of time")
+        # read1, not read: read(n) blocks until it has n bytes or hits EOF, so
+        # a dribbling response never returns control and the check above never
+        # runs. Measured — it capped a 1-byte-a-second stream at 20s against a
+        # 4s deadline. read1 returns what one underlying read produced.
+        chunk = response.read1(READ_CHUNK)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_BODY_BYTES:
+            raise ValueError("the derby sent more than this reads")
+        chunks.append(chunk)
+    return b"".join(chunks).decode("utf-8", errors="replace")
+
+
+def get_json(url, deadline):
     request = urllib.request.Request(
         url, headers={"User-Agent": "stack-nudge", "Accept": "application/json"})
-    with _opener.open(request, timeout=TIMEOUT) as response:
+    with _opener.open(request, timeout=remaining(deadline)) as response:
         content_type = (response.headers.get("Content-Type") or "").lower()
-        body = response.read().decode("utf-8", errors="replace")
+        body = read_within(response, deadline)
     if "json" not in content_type:
         raise NotJSON(content_type or "no content type")
     return json.loads(body, parse_constant=_refuse_constant)
@@ -491,11 +545,11 @@ def api_error_code(error):
     return payload.get("code"), payload.get("message")
 
 
-def fetch(base, org):
+def fetch(base, org, deadline):
     """Two hops: the org's races, then the one worth showing."""
     try:
         listing = get_json(
-            "%s/organisations/%s/races" % (base, urllib.parse.quote(org, safe="")))
+            "%s/organisations/%s/races" % (base, urllib.parse.quote(org, safe="")), deadline)
     except NotJSON:
         # The web page came back instead of data. On this route that means the
         # organisation isn't one, rather than anything being broken.
@@ -513,7 +567,7 @@ def fetch(base, org):
     if not chosen:
         return None
     code = urllib.parse.quote(str(chosen["join_code"]), safe="")
-    race = get_json("%s/races/%s" % (base, code))
+    race = get_json("%s/races/%s" % (base, code), deadline)
     return race if isinstance(race, dict) else None
 
 
@@ -528,7 +582,7 @@ def build():
         return message("error", "The API base must be an https:// URL.")
 
     try:
-        race = fetch(base, org)
+        race = fetch(base, org, time.monotonic() + TOTAL_BUDGET)
     except UnknownOrg:
         # Worth spelling out: the name is case-sensitive, "StackOne" works and
         # "stackone" does not, and nothing about the failure would tell you.
@@ -555,8 +609,12 @@ def build():
         return message("error", detail or "The derby returned %d." % error.code)
     except urllib.error.URLError as error:
         return message("error", "Couldn't reach the derby — %s." % error.reason)
-    except (ValueError, TimeoutError, OSError):
+    except TimeoutError:
+        return message("error", "The derby took too long to answer.")
+    except ValueError:
         return message("error", "The derby's response wasn't readable.")
+    except OSError as error:
+        return message("error", "Couldn't reach the derby — %s." % error)
 
     if not race:
         return message("empty", 'No races found for "%s".' % org)
