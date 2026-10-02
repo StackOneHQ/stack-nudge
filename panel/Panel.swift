@@ -4168,19 +4168,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // passed on — an extension tab must never be able to answer a
         // permission prompt on the Events tab by accident.
         if case .extensionTab(let id) = nav.mode {
+            // ⌘R first, because the plain guard below returns on anything with
+            // a modifier. An earlier version put this after it and said in a
+            // comment that it came before — so the key did nothing while the
+            // footer advertised it, which is the one failure an untestable
+            // switch buried in a method is good at hiding. The ordering lives
+            // in extensionTabKeyAction now, where a test can see it.
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
-            guard plain else { return false }
-            // ⌘R before the plain guard. Coming on screen is floored to the
-            // manifest's own interval, so this is the only way to say "now" —
-            // and it matters most for an extension that declares no actions,
-            // which would otherwise have no refresh of its own at all. Every ⌘
-            // combination was unhandled here, so it costs no extension a key,
-            // and it already means reload on the extensions browser.
-            if mods.intersection([.command, .control, .option, .shift]) == [.command],
-               event.keyCode == KeyCode.rKey, !event.isARepeat {
+            if Self.isForceRefresh(keyCode: event.keyCode, modifiers: mods,
+                                   isRepeat: event.isARepeat) {
                 extensions.forceRefresh(id)
                 return true
             }
+            guard plain else { return false }
             switch event.keyCode {
             case KeyCode.escape:
                 hidePanel()
@@ -4400,6 +4400,21 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // to a read-only log, and a → key repeat landing in the filter is
         // exactly what this stops.
         case swallow
+    }
+
+    // ⌘R on an extension tab: refetch now, whatever the floor says.
+    //
+    // Pure so the *ordering* is testable, which is what actually went wrong:
+    // the branch was written after the handler's `guard plain else { return
+    // false }`, so it could never run, and its own comment claimed otherwise.
+    // Not on autorepeat, matching the extensions browser — holding it would
+    // otherwise issue one spawn per event.
+    static func isForceRefresh(keyCode: UInt16,
+                               modifiers: NSEvent.ModifierFlags,
+                               isRepeat: Bool) -> Bool {
+        modifiers.intersection([.command, .control, .option, .shift]) == [.command]
+            && keyCode == KeyCode.rKey
+            && !isRepeat
     }
 
     // What a key does on the extensions browser. Pure and beside
