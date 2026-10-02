@@ -1111,6 +1111,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private let claudeCliQuotaProbe = ClaudeCliQuotaProbe()
     private let codexQuotaProbe = CodexQuotaProbe()
     private let antigravityUsageProbe = AntigravityUsageProbe()
+    // Lazy because it shares the nav's history store rather than opening its
+    // own, so pi's transcripts are parsed once for the graph and the budget.
+    private lazy var piUsageProbe = PiUsageProbe(store: nav.usageStore)
     private var quotaTimer: Timer?
     // Last outcome derived per repo+branch, alongside the git values it was
     // derived from, so refreshOutcomes can skip re-deriving what hasn't moved.
@@ -1308,6 +1311,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         nav.refreshOutcomes = { [weak self] in self?.refreshOutcomes() }
         nav.refreshPullRequests = { [weak self] in self?.refreshPullRequests() }
         nav.refreshPullRequestsNow = { [weak self] in self?.refreshPullRequestsNow() }
+        nav.refreshPiBudget = { [weak self] in self?.refreshPiUsage() }
         nav.startGithubSignIn = { [weak self] in self?.startGithubSignIn() }
         nav.cancelGithubSignIn = { [weak self] in self?.cancelGithubSignIn() }
 
@@ -2100,6 +2104,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self.nav.quotaErrors[.antigravity] = nil
             }
         }
+        refreshPiUsage()
+    }
+
+    // Pi budget, read from pi's own transcripts with no network and no CLI.
+    // Unlike the probes above there's no failure to surface: the denominators
+    // are the user's own (see PiBudget). Also run on a budget change in
+    // Settings, which is why it sits outside runQuotaProbe.
+    private func refreshPiUsage() {
+        guard quotaTrackingEnabled else { return }
+        piUsageProbe.fetch(budget: nav.piBudget) { [weak self] snapshot in
+            self?.nav.applyPiSnapshot(snapshot)
+        }
     }
 
     // Public hook for the Usage tab's "Sync now" keystroke.
@@ -2115,11 +2131,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     // SwiftUI's ScrollView has no programmatic delta-scroll API, so walk the
     // AppKit hierarchy to the underlying NSScrollView and nudge its clip view.
-    // Only one ScrollView is rendered at a time (mode-gated), so the first
-    // match is whichever detail pane is showing — the Usage tiers or the
-    // Tickets rollup.
+    // The pane is whichever of the Usage detail or the Outcomes overview is
+    // showing; see VerticalScrollPane for why it isn't simply the first match.
     private func scrollDetailBy(_ dy: CGFloat) {
-        guard let scrollView = findScrollView(in: panel.contentView),
+        guard let scrollView = VerticalScrollPane.find(in: panel.contentView),
               let doc = scrollView.documentView else { return }
         let clip = scrollView.contentView
         let maxY = max(0, doc.frame.height - clip.bounds.height)
@@ -2132,7 +2147,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // ⌘↑/↓ in a pure-scroll detail pane (no selection to move): jump the clip
     // view to the very top or bottom.
     private func scrollDetailToEdge(top: Bool) {
-        guard let scrollView = findScrollView(in: panel.contentView),
+        guard let scrollView = VerticalScrollPane.find(in: panel.contentView),
               let doc = scrollView.documentView else { return }
         let clip = scrollView.contentView
         let maxY = max(0, doc.frame.height - clip.bounds.height)
@@ -2140,15 +2155,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         origin.y = top ? 0 : maxY
         clip.scroll(to: origin)
         scrollView.reflectScrolledClipView(clip)
-    }
-
-    private func findScrollView(in view: NSView?) -> NSScrollView? {
-        guard let view else { return nil }
-        if let sv = view as? NSScrollView { return sv }
-        for sub in view.subviews {
-            if let found = findScrollView(in: sub) { return found }
-        }
-        return nil
     }
 
     // User-triggered update check with transient row feedback. Sets
@@ -4222,6 +4228,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 case KeyCode.wKey where nav.usagePane == .history:
                     // Re-buckets cached entries; no rescan, so it lands instantly.
                     nav.cycleUsageWindow()
+                case KeyCode.wKey where nav.selectedUsageClient == .pi:
+                    // Both windows are already in the snapshot, so this is a repaint.
+                    nav.cyclePiWindow()
                 case KeyCode.rKey:
                     syncQuotaNow()
                 case KeyCode.pKey:

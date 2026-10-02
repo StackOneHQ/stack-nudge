@@ -292,6 +292,24 @@ struct ThinScrollers: NSViewRepresentable {
     }
 }
 
+// The scroll view ↑/↓ move on a page with no selection to follow. Not simply
+// the first NSScrollView: the sideways tab strip sits above every page and
+// would match first, so take the first whose content overflows vertically.
+enum VerticalScrollPane {
+    static func find(in view: NSView?) -> NSScrollView? {
+        guard let view else { return nil }
+        if let scrollView = view as? NSScrollView,
+           let document = scrollView.documentView,
+           document.frame.height > scrollView.contentView.bounds.height {
+            return scrollView
+        }
+        for subview in view.subviews {
+            if let found = find(in: subview) { return found }
+        }
+        return nil
+    }
+}
+
 // Take the horizontal scroller off a ScrollView entirely.
 //
 // `.scrollIndicators(.hidden)` is not enough: with "Show scroll bars: Always"

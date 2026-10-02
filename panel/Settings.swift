@@ -627,6 +627,10 @@ struct SettingsView: View {
         case .pollFrequency:  row(.pollFrequency, label: "Poll frequency", kind: .cycle, value: "\(nav.quotaPollMinutes) min", enabled: nav.quotaTrackingEnabled)
         case .contextAlert:   row(.contextAlert, label: "Context alert at", kind: .cycle, value: contextAlertLabel)
         case .showRemaining:  row(.showRemaining, label: "Show remaining", kind: .toggle, value: nav.quotaShowRemaining ? "On" : "Off", enabled: nav.quotaTrackingEnabled)
+        // Pi enforces no quota, so these are the user's own daily allowances and
+        // the Usage tab bars them against nothing else. The week is seven of them.
+        case .piApiBudget:    row(.piApiBudget, label: "Pi API budget / day", kind: .cycle, value: PiBudget.label(nav.piApiBudgetDaily), enabled: nav.quotaTrackingEnabled)
+        case .piLocalBudget:  row(.piLocalBudget, label: "Pi local budget / day", kind: .cycle, value: PiBudget.label(nav.piLocalBudgetDaily), enabled: nav.quotaTrackingEnabled)
 
         // Integrations
         case .slackPaste:      row(.slackPaste, label: "Paste Slack setup", kind: .action, value: slackPasteValue)

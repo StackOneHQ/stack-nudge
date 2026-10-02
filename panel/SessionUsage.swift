@@ -51,17 +51,19 @@ enum UsageClient: String, CaseIterable, Hashable {
     case claude
     case codex
     case antigravity
+    case pi
 
     var displayName: String {
         switch self {
         case .claude:      return "Claude"
         case .codex:       return "Codex"
         case .antigravity: return "Antigravity"
+        case .pi:          return "Pi"
         }
     }
 
     // Where this client's replayable token history lives, or nil when it has
-    // none. Claude and Codex both write per-turn token usage with a timestamp
+    // none. Claude, Codex and pi all write per-turn token usage with a timestamp
     // into their transcripts. Antigravity's history.jsonl carries only prompt
     // text, timestamp and workspace — no token data at all — and its quota comes
     // from a live API call, so there's nothing to plot retrospectively.
@@ -73,6 +75,7 @@ enum UsageClient: String, CaseIterable, Hashable {
         case .claude:      return .claude
         case .codex:       return .codex
         case .antigravity: return nil
+        case .pi:          return .pi
         }
     }
 
@@ -128,6 +131,9 @@ struct UsageView: View {
                     } else {
                         FooterHint(label: "Scroll", keys: ["↑↓"])
                         FooterHint(label: "Top/Bottom", keys: ["⌘↑↓"])
+                        if nav.selectedUsageClient == .pi {
+                            FooterHint(label: "Window", keys: ["W"])
+                        }
                     }
                     if nav.usagePane != UsagePane.allCases.last {
                         FooterHint(label: UsagePane.allCases.last?.label ?? "Next", keys: ["→"])
@@ -272,6 +278,7 @@ struct UsageView: View {
         case .claude:      return nav.quota?.hasTier ?? false
         case .codex:       return nav.codexQuota?.hasTier ?? false
         case .antigravity: return nav.antigravityQuota?.hasTier ?? false
+        case .pi:          return nav.piQuota?.hasTier ?? false
         }
     }
 
@@ -388,6 +395,8 @@ struct UsageView: View {
                     section("Credits") { creditsRow(agy) }
                 }
             }
+        case .pi:
+            if let pi = nav.piQuota { piPage(pi) }
         }
     }
 
@@ -415,15 +424,7 @@ struct UsageView: View {
                         .textCase(.uppercase)
                     // The window lives here rather than in the pane label, since
                     // W cycles it.
-                    Text(nav.usageWindow.label)
-                        .font(.caption2.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(Color.green)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .fill(Color.green.opacity(0.14))
-                        )
+                    windowPill(nav.usageWindow.label)
                     Spacer()
                     Text(metricValue(series.total(for: metric), metric))
                         .font(.caption.monospacedDigit().weight(.semibold))
@@ -534,6 +535,7 @@ struct UsageView: View {
         case .claude:      return nav.quota?.planType?.capitalized
         case .codex:       return nav.codexQuota?.planType?.capitalized
         case .antigravity: return nav.antigravityQuota?.planType?.capitalized
+        case .pi:          return nav.piQuota?.planType?.capitalized
         }
     }
 
@@ -548,7 +550,48 @@ struct UsageView: View {
         }
     }
 
-    private func tierRow(_ tier: QuotaTier) -> some View {
+    // One model per row, one window at a time. Its own page rather than another
+    // branch of the shared tiers: pi's limits are the user's, so each row names
+    // the budget it's measured against, and W swaps the window in place.
+    @ViewBuilder private func piPage(_ pi: PiQuotaSnapshot) -> some View {
+        let window = nav.piWindow
+        let models = pi.models(in: window)
+        HStack {
+            windowPill(window.label)
+                .contentShape(Rectangle())
+                .onTapGesture { nav.cyclePiWindow() }
+            Spacer()
+        }
+        .padding(.horizontal, 6)
+        if models.isEmpty {
+            Text("No pi usage \(window == .today ? "today" : "this week") yet.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 6)
+        }
+        ForEach(models, id: \.key) { model in
+            let allowance = pi.budget.allowance(isLocal: model.key.isLocal, in: window)
+            section(model.name) {
+                tierRow(model.tier,
+                        caption: "of \(TokenFormat.short(allowance)) \(model.key.isLocal ? "local" : "API") budget")
+            }
+        }
+    }
+
+    // The green chip naming the active window, wherever W cycles it.
+    private func windowPill(_ label: String) -> some View {
+        Text(label)
+            .font(.caption2.monospacedDigit().weight(.semibold))
+            .foregroundStyle(Color.green)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Color.green.opacity(0.14))
+            )
+    }
+
+    private func tierRow(_ tier: QuotaTier, caption: String? = nil) -> some View {
         // Show "30% used" or "70% remaining" depending on the toggle. Bar
         // still represents utilization so the color ramp keeps its meaning.
         let display = nav.quotaShowRemaining
@@ -558,6 +601,11 @@ struct UsageView: View {
         return VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Spacer()
+                if let caption {
+                    Text(caption)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
                 Text("\(Int(display.rounded()))\(suffix)")
                     .font(.caption.monospacedDigit().weight(.semibold))
                     .foregroundStyle(barColor(tier.utilization))

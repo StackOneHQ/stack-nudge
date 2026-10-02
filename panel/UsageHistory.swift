@@ -78,9 +78,12 @@ enum UsageWindow: CaseIterable {
 
     var label: String { "\(hours)h" }
 
-    // The widest window, and therefore how much history the store retains. Every
-    // shorter window is bucketed from the same cached entries, so switching
-    // scope costs no I/O at all.
+    var seconds: TimeInterval { TimeInterval(hours * 3600) }
+
+    // The widest window the graph plots. Every shorter one is bucketed from the
+    // same cached entries, so switching scope costs no I/O at all. It is not a
+    // ceiling on what the store keeps: retention is per source and per caller,
+    // and Pi's budget asks for a calendar week.
     static var widest: UsageWindow { .twentyFourHours }
 }
 
@@ -114,6 +117,15 @@ struct UsageSeries: Equatable {
     }
 }
 
+// Keyed on provider and lane as well as the name: pi can reach one model name
+// through two providers, and the same model can be free locally and billed
+// through an API.
+struct UsageModelKey: Hashable {
+    let provider: String?
+    let model: String
+    let isLocal: Bool
+}
+
 // MARK: - Parsed entry
 
 // One agent turn, kept in the store so re-bucketing for a different window — or
@@ -128,6 +140,20 @@ struct UsageEntry: Equatable {
     let outputTokens:      Int
     let cacheReadTokens:   Int
     let cacheCreateTokens: Int
+    // Whether the turn ran on a model that costs nothing. Only pi has one, so
+    // Claude and Codex entries are always billed.
+    let isLocal:           Bool
+    // Only pi's entries carry these; the Usage tab breaks its budget down by
+    // model. nil for Claude and Codex.
+    let model:             String?
+    let provider:          String?
+}
+
+extension UsageEntry {
+    // The measure the graph's `excludingCacheReads` metric plots. Cache reads
+    // are replays of content already paid for, so counting them would let a
+    // resumed session burn a budget without doing any new work.
+    var tokensExcludingCacheReads: Int { inputTokens + outputTokens + cacheCreateTokens }
 }
 
 // MARK: - Store
@@ -148,11 +174,13 @@ final class UsageHistoryStore {
     enum Source {
         case claude
         case codex
+        case pi
 
         var defaultRoot: String {
             switch self {
             case .claude: return "\(NSHomeDirectory())/.claude/projects"
             case .codex:  return "\(NSHomeDirectory())/.codex/sessions"
+            case .pi:     return "\(NSHomeDirectory())/.pi/agent/sessions"
             }
         }
 
@@ -162,6 +190,7 @@ final class UsageHistoryStore {
             switch self {
             case .claude: return "\"assistant\""
             case .codex:  return "token_count"
+            case .pi:     return "\"assistant\""
             }
         }
     }
@@ -189,6 +218,11 @@ final class UsageHistoryStore {
     // client, and a series must never merge another agent's entries. Flattening
     // one shared map here silently showed Claude's history under Codex.
     private var cache: [Source: [String: CachedFile]] = [:]
+    // Widest retention any caller has asked for, per source. Two callers read
+    // the same source over different spans — the graph plots 24h, the Pi budget
+    // sums a calendar week — and a narrow refresh must not evict the wide
+    // caller's entries out from under it, so the cutoff is the widest of them.
+    private var retention: [Source: TimeInterval] = [:]
     private var stats = RefreshStats()
     // Guards `cache` and `stats` only. File I/O and parsing happen outside it, so
     // a background refresh never blocks a main-thread re-bucket for a scope
@@ -202,15 +236,19 @@ final class UsageHistoryStore {
 
     // MARK: Refresh
 
-    // Bring the cache up to date for `source`, retaining `retaining` hours of
-    // history. Safe to call repeatedly; the cost of a call that finds nothing
-    // changed is the directory walk plus a stat per file.
+    // Bring the cache up to date for `source`, retaining at least `retaining`
+    // seconds of history. Safe to call repeatedly; the cost of a call that finds
+    // nothing changed is the directory walk plus a stat per file.
     func refresh(source: Source,
                  root: String? = nil,
                  now: Date = Date(),
-                 retaining: UsageWindow = .widest) {
+                 retaining: TimeInterval = UsageWindow.widest.seconds) {
         let directory = root ?? source.defaultRoot
-        let cutoff = now.addingTimeInterval(-Double(retaining.hours * 3600))
+        lock.lock()
+        let retained = max(retention[source] ?? 0, retaining)
+        retention[source] = retained
+        lock.unlock()
+        let cutoff = now.addingTimeInterval(-retained)
         var fresh = RefreshStats()
 
         for candidate in Self.transcriptFiles(under: directory, modifiedAfter: cutoff) {
@@ -286,6 +324,30 @@ final class UsageHistoryStore {
         return accumulator.series()
     }
 
+    // Tokens per model over [from, to). Sums entries rather than buckets: the pi
+    // budget's windows are calendar days and weeks, which no bucket grid lines up
+    // with and which run wider than any UsageWindow. Deduplicated by identity the
+    // same way bucketing is, and pure computation over what refresh already
+    // cached, so the caller must have retained a span this wide. Entries with no
+    // model (Claude, Codex) are skipped.
+    func totals(source: Source, from: Date, to: Date) -> [UsageModelKey: Int] {
+        lock.lock()
+        let all = (cache[source] ?? [:]).values.flatMap { $0.entries }
+        lock.unlock()
+
+        var seen: Set<String> = []
+        var result: [UsageModelKey: Int] = [:]
+        for entry in all {
+            if let identity = entry.identity, !seen.insert(identity).inserted { continue }
+            guard entry.when >= from, entry.when < to,
+                  let model = entry.model, entry.tokensExcludingCacheReads > 0
+            else { continue }
+            let key = UsageModelKey(provider: entry.provider, model: model, isLocal: entry.isLocal)
+            result[key, default: 0] += entry.tokensExcludingCacheReads
+        }
+        return result
+    }
+
     // Refresh then bucket, for callers that want both in one step.
     func refreshedSeries(source: Source,
                          root: String? = nil,
@@ -294,7 +356,7 @@ final class UsageHistoryStore {
                          bucketSeconds: Int = UsageHistoryStore.defaultBucketSeconds) -> UsageSeries {
         // Always retain the widest window so narrower ones are a re-bucket of the
         // same cached entries rather than another scan.
-        refresh(source: source, root: root, now: now, retaining: .widest)
+        refresh(source: source, root: root, now: now, retaining: UsageWindow.widest.seconds)
         return series(source: source, now: now, window: window, bucketSeconds: bucketSeconds)
     }
 
@@ -362,7 +424,43 @@ final class UsageHistoryStore {
         switch source {
         case .claude: return parseClaude(line: line)
         case .codex:  return parseCodex(line: line)
+        case .pi:     return parsePi(line: line)
         }
+    }
+
+    private static func parsePi(line: Data) -> UsageEntry? {
+        guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+              (object["type"] as? String) == "message",
+              let rawTimestamp = object["timestamp"] as? String,
+              let when = parseTimestamp(rawTimestamp),
+              let message = object["message"] as? [String: Any],
+              (message["role"] as? String) == "assistant",
+              let usage = message["usage"] as? [String: Any]
+        else { return nil }
+
+        let input      = usage["input"] as? Int ?? 0
+        let output     = usage["output"] as? Int ?? 0
+        let cacheRead  = usage["cacheRead"] as? Int ?? 0
+        let cacheWrite = usage["cacheWrite"] as? Int ?? 0
+        let reasoning  = usage["reasoning"] as? Int ?? 0
+
+        // pi writes the same usage block for a local model as for a billed one,
+        // so price is the only thing separating them. Read as NSNumber: a local
+        // turn's cost is the integer 0 and a billed one a fraction.
+        let cost = (usage["cost"] as? [String: Any])
+            .flatMap { ($0["total"] as? NSNumber)?.doubleValue } ?? 0
+
+        return UsageEntry(
+            when: when,
+            identity: object["id"] as? String,
+            inputTokens: input,
+            outputTokens: output + reasoning,
+            cacheReadTokens: cacheRead,
+            cacheCreateTokens: cacheWrite,
+            isLocal: cost <= 0,
+            model: message["model"] as? String ?? "unknown",
+            provider: message["provider"] as? String
+        )
     }
 
     private static func parseClaude(line: Data) -> UsageEntry? {
@@ -379,7 +477,10 @@ final class UsageHistoryStore {
             inputTokens:       usage["input_tokens"]               as? Int ?? 0,
             outputTokens:      usage["output_tokens"]              as? Int ?? 0,
             cacheReadTokens:   usage["cache_read_input_tokens"]     as? Int ?? 0,
-            cacheCreateTokens: usage["cache_creation_input_tokens"] as? Int ?? 0
+            cacheCreateTokens: usage["cache_creation_input_tokens"] as? Int ?? 0,
+            isLocal:           false,
+            model:             nil,
+            provider:          nil
         )
     }
 
@@ -408,7 +509,10 @@ final class UsageHistoryStore {
             inputTokens:       max(0, rawInput - cached),
             outputTokens:      output + reasoning,
             cacheReadTokens:   cached,
-            cacheCreateTokens: 0
+            cacheCreateTokens: 0,
+            isLocal:           false,
+            model:             nil,
+            provider:          nil
         )
     }
 
