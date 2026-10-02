@@ -103,8 +103,6 @@ class Budget(unittest.TestCase):
         self.assertAlmostEqual(derby.remaining(now + 4), 4, delta=0.1)
         # Capped, so one hop cannot take the lot.
         self.assertEqual(derby.remaining(now + 99), derby.MAX_PER_REQUEST)
-        # Floored, so a hop is never handed zero and told to connect.
-        self.assertEqual(derby.remaining(now - 10), 1.0)
 
 
 class Colour(unittest.TestCase):
@@ -586,14 +584,23 @@ class Base(unittest.TestCase):
 
 
 class FakeResponse:
-    """Just enough of http.client.HTTPResponse for get_json."""
+    """Just enough of http.client.HTTPResponse for get_json.
+
+    read1 rather than read, because that is what the script calls: read(n)
+    blocks until it has n bytes or hits EOF, so a dribbling response never
+    returns control and the deadline is never checked.
+    """
 
     def __init__(self, body, content_type):
         self._body = body.encode("utf-8")
         self.headers = {"Content-Type": content_type}
 
-    def read(self):
-        return self._body
+    def read1(self, size=-1):
+        chunk, self._body = self._body[:size], self._body[size:]
+        return chunk
+
+    def read(self, size=-1):
+        return self.read1(size)
 
     def __enter__(self):
         return self
@@ -623,10 +630,15 @@ class Fetching(unittest.TestCase):
         """
         remaining = list(responses)
         calls = []
+        timeouts = self.timeouts
 
         class FakeOpener:
             def open(self, request, timeout=None):
                 calls.append(request.full_url)
+                # Recorded so the seam between the budget and the socket is
+                # actually asserted. Ignoring it left `remaining()` tested as
+                # pure arithmetic and nothing checking it ever reached a socket.
+                timeouts.append(timeout)
                 return remaining.pop(0)
 
         self.calls = calls
@@ -649,6 +661,7 @@ class Fetching(unittest.TestCase):
         # "ResourceWarning: Implicitly cleaning up <HTTPError ...>" in the CI
         # log, which makes a green run look like it isn't one.
         self.raised = []
+        self.timeouts = []
 
     def tearDown(self):
         derby._opener = self._real
@@ -726,6 +739,29 @@ class Fetching(unittest.TestCase):
             FakeResponse("<!DOCTYPE html>", "text/html"))
         with self.assertRaises(derby.UnknownOrg):
             derby.fetch("https://example.test/api", "stackone", derby.time.monotonic() + 9)
+
+    # The budget has to reach the socket, not just be computed. Both hops get a
+    # timeout, neither exceeds the per-request cap, and the second gets less
+    # than the first because the first spent some of the budget.
+    def test_each_hop_is_given_what_is_left_of_the_budget(self):
+        derby._opener = self.stub(
+            FakeResponse('{"races": [{"join_code": "A", "status": "live"}]}',
+                         "application/json"),
+            FakeResponse('{"join_code": "A", "horses": []}', "application/json"))
+        derby.fetch("https://example.test/api", "StackOne",
+                    derby.time.monotonic() + derby.TOTAL_BUDGET)
+        self.assertEqual(len(self.timeouts), 2)
+        for t in self.timeouts:
+            self.assertIsNotNone(t, "a hop was given no timeout at all")
+            self.assertLessEqual(t, derby.MAX_PER_REQUEST)
+            self.assertGreater(t, 0)
+
+    # A hop that would start past the deadline raises instead of being handed a
+    # consolation second — granting one is how two hops end up past the host's
+    # limit, which is the thing the budget exists to stop.
+    def test_a_hop_past_the_deadline_is_refused(self):
+        with self.assertRaises(TimeoutError):
+            derby.remaining(derby.time.monotonic() - 1)
 
     def test_the_org_name_reaches_the_url_percent_encoded(self):
         derby._opener = self.stub(

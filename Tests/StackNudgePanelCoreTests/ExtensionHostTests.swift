@@ -486,6 +486,40 @@ final class ExtensionHostTests: XCTestCase {
         XCTAssertEqual(recorder.calls.count, 2, "a broken pane must keep retrying")
     }
 
+    // Not every documentless pane. A missing script or a document that does not
+    // parse will not come good by being run again on every panel appearance;
+    // those want the extension fixed, and retrying them is churn.
+    func testAPermanentlyBrokenPaneIsStillFloored() {
+        for result in [ExtensionRuntime.Fetch.missing("no run script"),
+                       .malformed("not valid JSON")] {
+            let recorder = Recorder()
+            let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":600}")],
+                                    recorder: recorder, result: { result })
+            let now = Date()
+            host.tabAppeared("derby", now: now)
+            XCTAssertEqual(recorder.calls.count, 1)
+            XCTAssertNil(host.pane("derby").document)
+
+            host.tabAppeared("derby", now: now.addingTimeInterval(2))
+            XCTAssertEqual(recorder.calls.count, 1, "\(result) must not retry on every appearance")
+        }
+    }
+
+    // And a pane that recovers stops being treated as retryable.
+    func testASuccessfulFetchClearsTheRetryFlag() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":600}")],
+                                recorder: recorder, result: { .transient("timed out") })
+        let now = Date()
+        host.tabAppeared("derby", now: now)
+        XCTAssertTrue(host.pane("derby").lastFailureWasTransient)
+
+        settle(host, "derby")
+        XCTAssertFalse(host.pane("derby").lastFailureWasTransient)
+        host.tabAppeared("derby", now: now.addingTimeInterval(2))
+        XCTAssertEqual(recorder.calls.count, 1, "a healthy pane is floored again")
+    }
+
     // Once there is something to show, the floor applies again — including to a
     // pane showing older data after a transient failure, which is data.
     func testAPaneWithSomethingToShowIsFlooredAgain() {

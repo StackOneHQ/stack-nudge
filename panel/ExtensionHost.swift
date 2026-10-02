@@ -35,6 +35,13 @@ final class ExtensionHost: ObservableObject {
         // 5s ticker cadence and stayed there — 18 spawns in 120s, forever.
         var updatedAt: Date?
         var attemptedAt: Date?
+        // Whether the last attempt failed in a way that is worth trying again.
+        // A timeout or a non-zero exit is; a missing script or a document that
+        // doesn't parse is not — those need the extension fixed, and retrying
+        // one on every panel appearance is churn nobody asked for. `.broken`
+        // alone cannot answer this: it covers both a transient failure with
+        // nothing yet to show and a permanently broken extension.
+        var lastFailureWasTransient = false
         // Survives a refresh by id rather than index, so a row that moves up
         // the list stays selected and a row that disappears deselects instead
         // of silently pointing at whatever took its place.
@@ -127,15 +134,19 @@ final class ExtensionHost: ObservableObject {
     func tabAppeared(_ id: String, now: Date = Date()) {
         guard let manifest = manifest(id), manifest.refresh.onOpen else { return }
         let pane = self.pane(id)
-        // A pane with nothing to show is not protected by the floor. The floor
-        // exists so that showing a window cannot spawn a script redundantly,
-        // and retrying a fetch that failed is not redundant — it is the whole
-        // reason somebody is looking at the tab again.
+        // A pane whose last attempt failed *transiently* and has nothing to
+        // show is not protected by the floor. The floor exists so that showing
+        // a window cannot spawn a script redundantly, and retrying a timeout is
+        // not redundant — it is the whole reason somebody is looking at the tab
+        // again. Without it a transient failure stuck for a full interval, and
+        // switching away and back did nothing, which is what a person tries
+        // first and what worked before the floor existed.
         //
-        // Without this, a transient failure stuck for a full interval:
-        // switching away and back did nothing, which is exactly what a person
-        // tries first, and it worked before the floor existed.
-        if pane.document != nil, let attemptedAt = pane.attemptedAt,
+        // Deliberately not every documentless pane. A missing script or a
+        // document that doesn't parse is not going to come good by being run
+        // again on every panel appearance; those want the extension fixed.
+        let worthRetrying = pane.document == nil && pane.lastFailureWasTransient
+        if !worthRetrying, let attemptedAt = pane.attemptedAt,
            now.timeIntervalSince(attemptedAt) < TimeInterval(Self.reopenFloor(manifest)) {
             return
         }
@@ -278,6 +289,7 @@ final class ExtensionHost: ObservableObject {
         pane.attemptedAt = Date()
         switch result {
         case .ok(let document):
+            pane.lastFailureWasTransient = false
             pane.document = document
             pane.updatedAt = Date()
             pane.status = .idle
@@ -290,8 +302,10 @@ final class ExtensionHost: ObservableObject {
         case .transient(let why):
             // Only a pane that has something to show can go stale; otherwise
             // "showing old data" would be a claim about an empty pane.
+            pane.lastFailureWasTransient = true
             pane.status = pane.document == nil ? .broken(why) : .stale(why)
         case .missing(let why), .malformed(let why):
+            pane.lastFailureWasTransient = false
             pane.status = .broken(why)
         }
         panes[id] = pane
