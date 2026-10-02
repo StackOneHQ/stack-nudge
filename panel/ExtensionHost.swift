@@ -126,7 +126,16 @@ final class ExtensionHost: ObservableObject {
     // ⌘R is the deliberate override. See `forceRefresh`.
     func tabAppeared(_ id: String, now: Date = Date()) {
         guard let manifest = manifest(id), manifest.refresh.onOpen else { return }
-        if let attemptedAt = pane(id).attemptedAt,
+        let pane = self.pane(id)
+        // A pane with nothing to show is not protected by the floor. The floor
+        // exists so that showing a window cannot spawn a script redundantly,
+        // and retrying a fetch that failed is not redundant — it is the whole
+        // reason somebody is looking at the tab again.
+        //
+        // Without this, a transient failure stuck for a full interval:
+        // switching away and back did nothing, which is exactly what a person
+        // tries first, and it worked before the floor existed.
+        if pane.document != nil, let attemptedAt = pane.attemptedAt,
            now.timeIntervalSince(attemptedAt) < TimeInterval(Self.reopenFloor(manifest)) {
             return
         }

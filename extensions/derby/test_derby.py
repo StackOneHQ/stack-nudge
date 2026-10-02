@@ -85,12 +85,26 @@ class Formatting(unittest.TestCase):
 
 class Budget(unittest.TestCase):
 
-    # Two sequential hops inside the host's 12s budget. At 8s each, two
-    # slow-but-successful requests took 16s and the host killed the process
-    # before the script could print its own error document — so a slow service
-    # looked like a crashed extension.
-    def test_two_sequential_requests_fit_the_hosts_budget(self):
-        self.assertLess(derby.TIMEOUT * 2, 12)
+    # The whole fetch has to finish inside the host's 12s or it is killed before
+    # it can print its own error document — a slow service then looks like a
+    # crashed extension.
+    def test_the_whole_fetch_fits_the_hosts_budget(self):
+        self.assertLess(derby.TOTAL_BUDGET, 12)
+
+    # One budget shared across both hops, not a ceiling on each. The two are
+    # different sizes — the race list measures 2-4s, the race itself under one —
+    # so an even split gave the slow hop a limit it occasionally hit while the
+    # fast one left most of its share unused.
+    def test_a_slow_first_hop_can_use_more_than_its_half(self):
+        self.assertGreater(derby.MAX_PER_REQUEST, derby.TOTAL_BUDGET / 2)
+
+    def test_what_is_left_of_the_budget_shrinks_as_it_is_spent(self):
+        now = derby.time.monotonic()
+        self.assertAlmostEqual(derby.remaining(now + 4), 4, delta=0.1)
+        # Capped, so one hop cannot take the lot.
+        self.assertEqual(derby.remaining(now + 99), derby.MAX_PER_REQUEST)
+        # Floored, so a hop is never handed zero and told to connect.
+        self.assertEqual(derby.remaining(now - 10), 1.0)
 
 
 class Colour(unittest.TestCase):
@@ -639,21 +653,39 @@ class Fetching(unittest.TestCase):
     def tearDown(self):
         derby._opener = self._real
         for error in self.raised:
-            error.close()
+            # Only HTTPError wraps a file object; a bare TimeoutError has
+            # nothing to close.
+            close = getattr(error, "close", None)
+            if callable(close):
+                close()
 
     def test_a_json_response_is_parsed(self):
         derby._opener = self.stub(
             FakeResponse('{"races": []}', "application/json"))
-        self.assertEqual(derby.get_json("https://example.test/api"), {"races": []})
+        self.assertEqual(derby.get_json("https://example.test/api", derby.time.monotonic() + 9), {"races": []})
 
     # The guard the whole error message rests on. Without it, index.html
     # reaches json.loads and the failure reads as "the response wasn't
     # readable" — which sends somebody looking for a fault that isn't there.
+    # A timeout is not an unreadable response. Saying "wasn't readable" sent
+    # someone looking for a fault in the data when the service was just slow.
+    def test_a_timeout_and_a_bad_body_say_different_things(self):
+        os_environ = derby.os.environ
+        derby.os.environ = {derby.ORG_KEY: "StackOne"}
+        try:
+            derby._opener = self.raising_stub(lambda url: TimeoutError("timed out"))
+            self.assertIn("too long", derby.build()["message"])
+
+            derby._opener = self.stub(FakeResponse("not json", "application/json"))
+            self.assertIn("readable", derby.build()["message"])
+        finally:
+            derby.os.environ = os_environ
+
     def test_a_web_page_is_refused_rather_than_parsed(self):
         derby._opener = self.stub(
             FakeResponse("<!DOCTYPE html>", "text/html; charset=utf-8"))
         with self.assertRaises(derby.NotJSON):
-            derby.get_json("https://example.test/api")
+            derby.get_json("https://example.test/api", derby.time.monotonic() + 9)
 
     # The literals are not valid JSON, and letting them in only moves the
     # failure somewhere less legible.
@@ -662,12 +694,12 @@ class Fetching(unittest.TestCase):
             derby._opener = self.stub(
                 FakeResponse('{"x": %s}' % literal, "application/json"))
             with self.assertRaises(ValueError, msg=literal):
-                derby.get_json("https://example.test/api")
+                derby.get_json("https://example.test/api", derby.time.monotonic() + 9)
 
     def test_a_response_with_no_content_type_is_refused(self):
         derby._opener = self.stub(FakeResponse('{"races": []}', ""))
         with self.assertRaises(derby.NotJSON):
-            derby.get_json("https://example.test/api")
+            derby.get_json("https://example.test/api", derby.time.monotonic() + 9)
 
     # The field is the service's, and a non-string there put a JSON object
     # where the host's decoder wants a string — which fails the *whole*
@@ -693,21 +725,21 @@ class Fetching(unittest.TestCase):
         derby._opener = self.stub(
             FakeResponse("<!DOCTYPE html>", "text/html"))
         with self.assertRaises(derby.UnknownOrg):
-            derby.fetch("https://example.test/api", "stackone")
+            derby.fetch("https://example.test/api", "stackone", derby.time.monotonic() + 9)
 
     def test_the_org_name_reaches_the_url_percent_encoded(self):
         derby._opener = self.stub(
             FakeResponse('{"races": [{"join_code": "A B", "status": "live"}]}',
                          "application/json"),
             FakeResponse('{"join_code": "A B", "horses": []}', "application/json"))
-        derby.fetch("https://example.test/api", "Stack One")
+        derby.fetch("https://example.test/api", "Stack One", derby.time.monotonic() + 9)
         self.assertEqual(self.calls[0], "https://example.test/api/organisations/Stack%20One/races")
         self.assertEqual(self.calls[1], "https://example.test/api/races/A%20B")
 
     def test_an_org_with_no_races_is_nothing_rather_than_an_error(self):
         derby._opener = self.stub(
             FakeResponse('{"races": []}', "application/json"))
-        self.assertIsNone(derby.fetch("https://example.test/api", "StackOne"))
+        self.assertIsNone(derby.fetch("https://example.test/api", "StackOne", derby.time.monotonic() + 9))
 
     # An unknown org is empty, not an error: nothing is broken and nothing
     # needs reporting — the name just isn't one.

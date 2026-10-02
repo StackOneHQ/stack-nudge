@@ -453,7 +453,7 @@ final class ExtensionHostTests: XCTestCase {
                                 recorder: recorder)
         let now = Date()
         host.tabAppeared("derby", now: now)
-        host.finish("derby", .transient("stub"))
+        settle(host, "derby")
         XCTAssertEqual(recorder.calls.count, 1)
 
         // Well past the schema minimum, nowhere near what the extension asked
@@ -465,6 +465,48 @@ final class ExtensionHostTests: XCTestCase {
         XCTAssertEqual(recorder.calls.count, 2)
     }
 
+    // A pane with nothing to show is not protected by the floor. The floor
+    // stops a window appearing from spawning a script redundantly, and
+    // retrying a failed fetch is not redundant — it is why someone is looking
+    // at the tab again. Switching away and back is what people try first, and
+    // it worked before the floor existed.
+    func testAFailedPaneRetriesOnEveryAppearance() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":600}")],
+                                recorder: recorder,
+                                result: { .transient("the derby took too long to answer") })
+        let now = Date()
+        host.tabAppeared("derby", now: now)
+        XCTAssertEqual(recorder.calls.count, 1)
+        XCTAssertNil(host.pane("derby").document, "nothing to show")
+
+        // Well inside the floor, which would otherwise suppress this for ten
+        // minutes.
+        host.tabAppeared("derby", now: now.addingTimeInterval(2))
+        XCTAssertEqual(recorder.calls.count, 2, "a broken pane must keep retrying")
+    }
+
+    // Once there is something to show, the floor applies again — including to a
+    // pane showing older data after a transient failure, which is data.
+    func testAPaneWithSomethingToShowIsFlooredAgain() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":600}")],
+                                recorder: recorder)
+        let now = Date()
+        host.tabAppeared("derby", now: now)
+        settle(host, "derby")
+        XCTAssertEqual(recorder.calls.count, 1)
+
+        host.tabAppeared("derby", now: now.addingTimeInterval(2))
+        XCTAssertEqual(recorder.calls.count, 1)
+    }
+
+    // A pane the floor can protect: it has something to show.
+    private func settle(_ host: ExtensionHost, _ id: String) {
+        host.finish(id, .ok(ExtensionDocument(schema: 1, state: .ok, message: nil,
+                                              header: nil, rows: [], actions: [])))
+    }
+
     // ⌘R is the deliberate override, and the only refresh an extension that
     // declares no actions of its own has once the floor is in place.
     func testForceRefreshIgnoresTheFloor() {
@@ -472,7 +514,7 @@ final class ExtensionHostTests: XCTestCase {
         let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":600}")],
                                 recorder: recorder)
         host.tabAppeared("derby")
-        host.finish("derby", .transient("stub"))
+        settle(host, "derby")
         XCTAssertEqual(recorder.calls.count, 1)
 
         host.forceRefresh("derby")
@@ -517,7 +559,7 @@ final class ExtensionHostTests: XCTestCase {
                                 recorder: recorder)
         let now = Date()
         host.tabAppeared("derby")
-        host.finish("derby", .transient("stub"))
+        settle(host, "derby")
         XCTAssertEqual(recorder.calls.count, 1)
 
         // Hidden for ten minutes. No interval, so no tick will ever help.
@@ -541,7 +583,7 @@ final class ExtensionHostTests: XCTestCase {
         let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":30}")],
                                 recorder: recorder)
         host.tabAppeared("derby")
-        host.finish("derby", .transient("stub"))
+        settle(host, "derby")
         XCTAssertEqual(recorder.calls.count, 1)
 
         // Hidden for five minutes: whileFocusedOnly means no polling, by design.

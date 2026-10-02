@@ -18,6 +18,7 @@ import json
 import math
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -26,10 +27,14 @@ from datetime import datetime, timezone
 DEFAULT_BASE = "https://token-derby.mauricode.co.uk/api"
 ORG_KEY = "STACKNUDGE_EXT_DERBY_ORG"
 BASE_KEY = "STACKNUDGE_EXT_DERBY_BASE"
-# Two sequential hops inside the host's 12s budget, so this cannot be half of
-# it: two slow-but-successful requests at 8s each took 16s and the host killed
-# the process before the script could print its own error document.
-TIMEOUT = 5
+# One budget across both hops rather than a timeout on each, because the two
+# are not the same size: the race list measures 2-4s and the race itself under
+# one, and a fixed per-request limit has to be big enough for the slow one
+# while leaving room for both inside the host's 12s. Splitting it evenly meant
+# the slow hop had a 5s ceiling it occasionally hit, and a hop that times out
+# fails the whole fetch.
+TOTAL_BUDGET = 9
+MAX_PER_REQUEST = 6
 
 # A horse, 16x11. "H" is the coat, "M" the mane and tail, "." transparent. At
 # 1.5pt a cell the silhouette carries it, so the legs gather and splay rather
@@ -469,10 +474,15 @@ class NoDowngrade(urllib.request.HTTPRedirectHandler):
 _opener = urllib.request.build_opener(NoDowngrade())
 
 
-def get_json(url):
+def remaining(deadline):
+    """What is left of the budget, floored so a request is never given zero."""
+    return max(1.0, min(float(MAX_PER_REQUEST), deadline - time.monotonic()))
+
+
+def get_json(url, deadline):
     request = urllib.request.Request(
         url, headers={"User-Agent": "stack-nudge", "Accept": "application/json"})
-    with _opener.open(request, timeout=TIMEOUT) as response:
+    with _opener.open(request, timeout=remaining(deadline)) as response:
         content_type = (response.headers.get("Content-Type") or "").lower()
         body = response.read().decode("utf-8", errors="replace")
     if "json" not in content_type:
@@ -491,11 +501,11 @@ def api_error_code(error):
     return payload.get("code"), payload.get("message")
 
 
-def fetch(base, org):
+def fetch(base, org, deadline):
     """Two hops: the org's races, then the one worth showing."""
     try:
         listing = get_json(
-            "%s/organisations/%s/races" % (base, urllib.parse.quote(org, safe="")))
+            "%s/organisations/%s/races" % (base, urllib.parse.quote(org, safe="")), deadline)
     except NotJSON:
         # The web page came back instead of data. On this route that means the
         # organisation isn't one, rather than anything being broken.
@@ -513,7 +523,7 @@ def fetch(base, org):
     if not chosen:
         return None
     code = urllib.parse.quote(str(chosen["join_code"]), safe="")
-    race = get_json("%s/races/%s" % (base, code))
+    race = get_json("%s/races/%s" % (base, code), deadline)
     return race if isinstance(race, dict) else None
 
 
@@ -528,7 +538,7 @@ def build():
         return message("error", "The API base must be an https:// URL.")
 
     try:
-        race = fetch(base, org)
+        race = fetch(base, org, time.monotonic() + TOTAL_BUDGET)
     except UnknownOrg:
         # Worth spelling out: the name is case-sensitive, "StackOne" works and
         # "stackone" does not, and nothing about the failure would tell you.
@@ -555,8 +565,12 @@ def build():
         return message("error", detail or "The derby returned %d." % error.code)
     except urllib.error.URLError as error:
         return message("error", "Couldn't reach the derby — %s." % error.reason)
-    except (ValueError, TimeoutError, OSError):
+    except TimeoutError:
+        return message("error", "The derby took too long to answer.")
+    except ValueError:
         return message("error", "The derby's response wasn't readable.")
+    except OSError as error:
+        return message("error", "Couldn't reach the derby — %s." % error)
 
     if not race:
         return message("empty", 'No races found for "%s".' % org)
