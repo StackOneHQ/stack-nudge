@@ -18,7 +18,12 @@ struct ExtensionTabView: View {
             // optional: a headerless document used to go stale, or spin, with
             // nothing on screen to say so.
             if let note = statusNote { statusStrip(note) }
-            if let document = pane.document {
+            // A fetch that supersedes what is on screen draws the loading
+            // state instead of it. Opening the tab onto the previous document
+            // and having it swap a second later reads as the pane changing its
+            // mind — and for the Derby it was a different race, not just older
+            // numbers.
+            if let document = pane.document, !pane.supersedingFetch {
                 content(document)
             } else {
                 cold

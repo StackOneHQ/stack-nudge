@@ -42,6 +42,18 @@ final class ExtensionHost: ObservableObject {
         // alone cannot answer this: it covers both a transient failure with
         // nothing yet to show and a permanently broken extension.
         var lastFailureWasTransient = false
+        // A fetch is in flight that is meant to *replace* what is on screen
+        // rather than top it up, so the pane shows its loading state instead of
+        // the previous document.
+        //
+        // Only opening the tab and asking for a refresh set this, never the
+        // scheduled poll: blanking the pane every interval while somebody is
+        // watching it is the periodic flicker this pane already had once. The
+        // difference that matters is that a document from before you opened the
+        // tab may not be about the same thing at all — the Derby's was a race
+        // that had since finished, so the pane showed one race and then
+        // silently became another.
+        var supersedingFetch = false
         // Survives a refresh by id rather than index, so a row that moves up
         // the list stays selected and a row that disappears deselects instead
         // of silently pointing at whatever took its place.
@@ -150,7 +162,7 @@ final class ExtensionHost: ObservableObject {
            now.timeIntervalSince(attemptedAt) < TimeInterval(Self.reopenFloor(manifest)) {
             return
         }
-        refresh(id)
+        refresh(id, superseding: true)
     }
 
     // What ⌘R does: refetch now, whatever the floor says.
@@ -160,7 +172,7 @@ final class ExtensionHost: ObservableObject {
     // is the opposite, and without it an extension declaring no actions of its
     // own has no way to refresh at all — the floor would otherwise have taken
     // away the switch-away-and-back that used to serve as one.
-    func forceRefresh(_ id: String) { refresh(id) }
+    func forceRefresh(_ id: String) { refresh(id, superseding: true) }
 
     // How stale a pane must be before coming on screen refetches it.
     //
@@ -180,7 +192,9 @@ final class ExtensionHost: ObservableObject {
             manifest.refresh.intervalSeconds ?? ExtensionManifest.minimumIntervalSeconds)
     }
 
-    func refresh(_ id: String) { invoke(id, action: nil, row: nil) }
+    func refresh(_ id: String, superseding: Bool = false) {
+        invoke(id, action: nil, row: nil, superseding: superseding)
+    }
 
     // A press while busy is ignored rather than queued: the user pressed it
     // because nothing visible happened yet, and queueing would run it twice.
@@ -267,12 +281,16 @@ final class ExtensionHost: ObservableObject {
         return true
     }
 
-    private func invoke(_ id: String, action: String?, row: String?) {
+    private func invoke(_ id: String, action: String?, row: String?,
+                        superseding: Bool = false) {
         guard let manifest = manifest(id) else { return }
         var pane = self.pane(id)
         guard !pane.busy else { return }
         pane.busy = true
         pane.status = .loading
+        // Nothing on screen yet means nothing to supersede; the cold state is
+        // already what gets drawn.
+        pane.supersedingFetch = superseding && pane.document != nil
         panes[id] = pane
 
         let runner = self.runner
@@ -287,6 +305,10 @@ final class ExtensionHost: ObservableObject {
         var pane = self.pane(id)
         pane.busy = false
         pane.attemptedAt = Date()
+        // Cleared whatever the outcome: a fetch that failed has not superseded
+        // anything, so the previous document comes back with its stale marker
+        // rather than the pane sitting on "Loading…" forever.
+        pane.supersedingFetch = false
         switch result {
         case .ok(let document):
             pane.lastFailureWasTransient = false

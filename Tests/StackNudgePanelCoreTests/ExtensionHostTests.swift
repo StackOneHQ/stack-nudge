@@ -541,6 +541,118 @@ final class ExtensionHostTests: XCTestCase {
                                               header: nil, rows: [], actions: [])))
     }
 
+    // MARK: - Superseding what is on screen
+
+    // Opening the tab onto the previous document and having it swap a second
+    // later reads as the pane changing its mind. For the Derby it was worse
+    // than stale numbers: the old document was a race that had since finished,
+    // so the pane showed one race and silently became another.
+    //
+    // Observed from inside the runner rather than after it: this harness runs
+    // the spawn synchronously, so `finish` clears the flag before a plain
+    // assertion could see it. What the pane renders while the fetch is in
+    // flight is the whole question here.
+    func testOpeningATabSupersedesTheDocumentItFinds() {
+        var observed: [Bool] = []
+        var hostRef: ExtensionHost?
+        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":600}")],
+                                result: {
+                                    observed.append(hostRef?.pane("derby").supersedingFetch ?? false)
+                                    return .ok(ExtensionDocument(schema: 1, state: .ok,
+                                                                 message: nil, header: nil,
+                                                                 rows: [], actions: []))
+                                })
+        hostRef = host
+        let now = Date()
+
+        // First open: nothing on screen, so nothing to supersede.
+        host.tabAppeared("derby", now: now)
+        XCTAssertEqual(observed, [false])
+
+        // Past the floor, so opening it again really does spawn — and this time
+        // there is a document to replace.
+        host.replacePaneForTesting(busyless(host.pane("derby"),
+                                            attemptedAt: now.addingTimeInterval(-601)),
+                                   on: "derby")
+        host.tabAppeared("derby", now: now)
+        XCTAssertEqual(observed, [false, true],
+                       "the pane must show loading, not last time's race")
+        // And it is cleared once the fetch lands.
+        XCTAssertFalse(host.pane("derby").supersedingFetch)
+    }
+
+    // Nothing on screen means nothing to supersede — the cold state is already
+    // what gets drawn, and flagging it would say "replacing" about an empty
+    // pane.
+    func testAColdPaneHasNothingToSupersede() {
+        let (host, _, _) = host([manifest("derby")])
+        host.tabAppeared("derby")
+        XCTAssertFalse(host.pane("derby").supersedingFetch)
+    }
+
+    // The scheduled poll never supersedes. Blanking the pane every interval
+    // while somebody is watching it is the periodic flicker this pane had once
+    // already.
+    //
+    // Observed inside the runner, like its neighbours: checking the flag after
+    // `tick` reads it once `finish` has already cleared it, which is true
+    // whatever the poll did. An earlier version of this test did exactly that
+    // and a mutation making the poll supersede survived it — reinstating the
+    // flicker while the suite stayed green.
+    func testTheScheduledPollLeavesWhatIsOnScreenAlone() {
+        var observed: [Bool] = []
+        var hostRef: ExtensionHost?
+        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":30}")],
+                                result: {
+                                    observed.append(hostRef?.pane("derby").supersedingFetch ?? false)
+                                    return .ok(ExtensionDocument(schema: 1, state: .ok,
+                                                                 message: nil, header: nil,
+                                                                 rows: [], actions: []))
+                                })
+        hostRef = host
+        let now = Date()
+        host.tabAppeared("derby", now: now)
+        host.replacePaneForTesting(busyless(host.pane("derby"),
+                                            attemptedAt: now.addingTimeInterval(-60)),
+                                   on: "derby")
+
+        host.tick(visibleTab: "derby", now: now)
+        XCTAssertEqual(observed.count, 2, "the poll ran")
+        XCTAssertFalse(observed[1],
+                       "a poll must not blank the pane somebody is watching")
+    }
+
+    // A fetch that fails has superseded nothing, so the previous document comes
+    // back with its stale marker rather than the pane sitting on "Loading…".
+    func testAFailedSupersedingFetchGivesTheDocumentBack() {
+        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":600}")])
+        let now = Date()
+        host.tabAppeared("derby", now: now)
+        settle(host, "derby")
+        host.replacePaneForTesting(busyless(host.pane("derby"),
+                                            attemptedAt: now.addingTimeInterval(-601)),
+                                   on: "derby")
+
+        // The pane is mid-supersede, which is the state the view draws loading
+        // for; the fetch then fails.
+        var mid = host.pane("derby")
+        mid.supersedingFetch = true
+        host.replacePaneForTesting(mid, on: "derby")
+
+        host.finish("derby", .transient("timed out"))
+        XCTAssertFalse(host.pane("derby").supersedingFetch,
+                       "a failed fetch has superseded nothing")
+        XCTAssertNotNil(host.pane("derby").document,
+                        "the previous document comes back rather than Loading… forever")
+    }
+
+    private func busyless(_ pane: ExtensionHost.Pane, attemptedAt: Date) -> ExtensionHost.Pane {
+        var copy = pane
+        copy.busy = false
+        copy.attemptedAt = attemptedAt
+        return copy
+    }
+
     // ⌘R is the deliberate override, and the only refresh an extension that
     // declares no actions of its own has once the floor is in place.
     func testForceRefreshIgnoresTheFloor() {
