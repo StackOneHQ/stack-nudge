@@ -229,4 +229,18 @@ final class TmuxFocusTests: XCTestCase {
         XCTAssertNil(match("%6", "✳ stack-nudge", clients: [controlClient],
                            [row("A", name: "✳ stack-nudge-extras")]))
     }
+
+    func test_match_titleNeverPicksASessionNumberedAsAnotherPane() {
+        // %6's tab isn't open in iTerm2; %7 sharing its title is still %7.
+        let rows = [row("SEVEN", pane: "7", name: "✳ task (claude)")]
+        XCTAssertNil(match("%6", "✳ task", clients: [controlClient], rows))
+    }
+
+    func test_tmuxPaneNumber_digitsOnly() {
+        XCTAssertEqual(AppActivator.tmuxPaneNumber("%6"), "6")
+        XCTAssertEqual(AppActivator.tmuxPaneNumber("38"), "38")
+        XCTAssertEqual(AppActivator.tmuxPaneNumber("%"), "")
+        XCTAssertEqual(AppActivator.tmuxPaneNumber("%6\" & x"), "")
+        XCTAssertEqual(AppActivator.tmuxPaneNumber("%٣"), "")
+    }
 }

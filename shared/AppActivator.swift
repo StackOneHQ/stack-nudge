@@ -341,11 +341,13 @@ struct AppActivator {
 
     // MARK: - iTerm2 (AppleScript bridge)
 
-    // iTerm2 sets ITERM_SESSION_ID on every shell. Walk windows -> tabs ->
-    // sessions to find the session whose id matches and select it. The
-    // returned bool tells the caller whether to fall through to the AX
-    // path: false means scripting bridge errored or the id didn't match
-    // any open session (closed since the event fired).
+    // iTerm2 sets ITERM_SESSION_ID on every shell. Find the session whose id
+    // matches and select it. The returned bool tells the caller whether to
+    // fall through to the AX path: false means scripting bridge errored or
+    // the id didn't match any open session (closed since the event fired).
+    //
+    // Ids are read in bulk, one Apple Event per property: at ~10ms an event,
+    // walking 43 sessions one by one took 1.3s.
     @discardableResult
     private static func focusIterm2Session(sessionID: String) -> Bool {
         // ITERM_SESSION_ID is "w0t0p0:UUID" (window-tab-pane prefix + UUID).
@@ -357,21 +359,24 @@ struct AppActivator {
         tell application "iTerm2"
           activate
           set target to "\(escaped)"
-          repeat with w in windows
-            repeat with t in tabs of w
-              repeat with s in sessions of t
-                try
-                  -- Match on `unique id` (the persistent session GUID that
-                  -- both ITERM_SESSION_ID and our tab enrichment carry);
-                  -- keep `id` as a fallback for iTerm2 versions where the
-                  -- two properties diverge.
-                  if ((unique id of s) as text) is target or ((id of s) as text) is target then
-                    tell w to select
-                    tell t to select
-                    tell s to select
-                    return "matched"
-                  end if
-                end try
+          set windowIDs to id of every window
+          -- Match on `unique id` (the persistent session GUID that both
+          -- ITERM_SESSION_ID and our tab enrichment carry); keep `id` as a
+          -- fallback for iTerm2 versions where the two properties diverge.
+          set uniqueIDs to unique id of every session of every tab of every window
+          set plainIDs to id of every session of every tab of every window
+          repeat with i from 1 to count of uniqueIDs
+            repeat with j from 1 to count of item i of uniqueIDs
+              repeat with k from 1 to count of item j of item i of uniqueIDs
+                set uniqueID to (item k of item j of item i of uniqueIDs) as text
+                set plainID to (item k of item j of item i of plainIDs) as text
+                if uniqueID is target or plainID is target then
+                  set w to window id (item i of windowIDs)
+                  tell w to select
+                  tell tab j of w to select
+                  tell session k of tab j of w to select
+                  return "matched"
+                end if
               end repeat
             end repeat
           end repeat
@@ -513,7 +518,7 @@ struct AppActivator {
             let title = runCapture(
                 tmux, base + ["display-message", "-p", "-t", pane, "#{pane_title}"])?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            let rows = listITermSessions()
+            let rows = listITermSessions(paneNumber: tmuxPaneNumber(pane))
             let guid = rows.flatMap {
                 matchITermSession(pane: pane, title: title, clients: clients, in: $0)
             }
@@ -601,8 +606,9 @@ struct AppActivator {
     }
 
     // One iTerm2 session as the matcher sees it. Every field but the GUID can
-    // be empty: `-CC` sessions have no tty, and iTerm2 builds before 3.3 have
-    // neither the tmux variables nor autoName.
+    // be empty: `-CC` sessions have no tty, iTerm2 builds before 3.3 have
+    // neither the tmux variables nor autoName, and role and titles are only
+    // read for sessions that could be the pane (see listITermSessions).
     struct ITermSessionRow: Equatable {
         let guid: String
         let tty: String
@@ -616,29 +622,46 @@ struct AppActivator {
     // Reads the rows OUT of AppleScript rather than matching inside it:
     // NSAppleScript decodes non-ASCII source literals as MacRoman, so Claude's
     // "✳ …" titles never compared equal there. nil when iTerm2 can't be asked.
-    private static func listITermSessions() -> [ITermSessionRow]? {
+    //
+    // Properties are read in bulk, but `variable named` costs an Apple Event
+    // (~10ms) per session, so role and titles are only read where the pane
+    // number is unset or equals `paneNumber`; the matcher never title-matches
+    // a session numbered as another pane. 3.4s → 0.5s over 48 `-CC` sessions.
+    // Variables are fetched by GUID so a tab opened mid-read can't pair a pane
+    // number with the wrong session.
+    private static func listITermSessions(paneNumber: String) -> [ITermSessionRow]? {
         let listScript = """
         tell application "iTerm2"
           set sep to character id 31
+          set target to "\(paneNumber)"
           set out to ""
-          repeat with w in windows
-            repeat with t in tabs of w
-              repeat with s in sessions of t
+          set windowIDs to id of every window
+          set guids to unique id of every session of every tab of every window
+          set ttys to tty of every session of every tab of every window
+          set names to name of every session of every tab of every window
+          repeat with i from 1 to count of guids
+            repeat with j from 1 to count of item i of guids
+              repeat with k from 1 to count of item j of item i of guids
                 try
-                  set fields to {(unique id of s) as text}
+                  set guid to (item k of item j of item i of guids) as text
+                  set s to a reference to session id guid of tab j of window id (item i of windowIDs)
+                  set fields to {guid, (item k of item j of item i of ttys) as text}
+                  set pane to ""
                   try
-                    set end of fields to (tty of s) as text
-                  on error
-                    set end of fields to ""
+                    tell s to set raw to get variable named "tmuxWindowPane"
+                    if raw is not missing value then set pane to raw as text
                   end try
-                  repeat with v in {"tmuxWindowPane", "tmuxRole", "tmuxPaneTitle", "autoName"}
-                    try
-                      tell s to set end of fields to (get variable named (v as text)) as text
-                    on error
-                      set end of fields to ""
-                    end try
+                  set end of fields to pane
+                  repeat with v in {"tmuxRole", "tmuxPaneTitle", "autoName"}
+                    set value to ""
+                    if pane is "" or pane is target then
+                      try
+                        tell s to set value to (get variable named (v as text)) as text
+                      end try
+                    end if
+                    set end of fields to value
                   end repeat
-                  set end of fields to (name of s) as text
+                  set end of fields to (item k of item j of item i of names) as text
                   set AppleScript's text item delimiters to sep
                   set out to out & (fields as text) & linefeed
                   set AppleScript's text item delimiters to ""
@@ -680,9 +703,11 @@ struct AppActivator {
     //   3. Title, for `-CC` on builds without the variables. `name` is the
     //      tab-bar title and may carry the job, so a " (job)" suffix is
     //      accepted. Only a unique match counts; identical titles mean guessing.
+    //      A session iTerm2 numbers as another pane is never a title match.
     // `clients` nil means tmux couldn't be asked, so neither `-CC` step is ruled out.
     static func matchITermSession(pane: String, title: String?, clients: [TmuxClient]?,
                                   in rows: [ITermSessionRow]) -> String? {
+        let paneNumber = tmuxPaneNumber(pane)
         let candidates = rows.filter { $0.tmuxRole != "gateway" }
         let wanted = normalizedTitle(title ?? "")
         let titleMatches = { (row: ITermSessionRow) -> Bool in
@@ -696,7 +721,6 @@ struct AppActivator {
         let controlModeAttached = clients.map { $0.contains(where: \.controlMode) } ?? true
 
         if controlModeAttached {
-            let paneNumber = pane.hasPrefix("%") ? String(pane.dropFirst()) : pane
             let byPane = candidates.filter { !$0.tmuxPane.isEmpty && $0.tmuxPane == paneNumber }
             if byPane.count == 1 { return byPane[0].guid }
             let tied = byPane.filter(titleMatches)
@@ -711,8 +735,19 @@ struct AppActivator {
             }
         }
         guard controlModeAttached else { return nil }
-        let titled = candidates.filter(titleMatches)
+        let titled = candidates.filter {
+            ($0.tmuxPane.isEmpty || $0.tmuxPane == paneNumber) && titleMatches($0)
+        }
         return titled.count == 1 ? titled[0].guid : nil
+    }
+
+    // "%6" → "6", the form iTerm2's tmuxWindowPane uses. Digits only, because
+    // listITermSessions interpolates it into AppleScript source and the pane
+    // can come from a sidecar file; anything else becomes "" and matches no
+    // pane number.
+    static func tmuxPaneNumber(_ pane: String) -> String {
+        let number = pane.hasPrefix("%") ? String(pane.dropFirst()) : pane
+        return !number.isEmpty && number.allSatisfy({ $0.isASCII && $0.isNumber }) ? number : ""
     }
 
     // Drop a leading run of whitespace and braille-pattern glyphs (U+2800–U+28FF,
