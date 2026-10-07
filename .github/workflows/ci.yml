@@ -16,7 +16,7 @@ jobs:
   pr-title:
     name: PR title (Conventional Commits)
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: warp-ubuntu-latest-x64-2x
     steps:
       # release-please only bumps/releases on a parseable Conventional Commit.
       # A malformed title (e.g. an empty scope `fix():`) silently skips the
@@ -35,7 +35,7 @@ jobs:
 
   shell:
     name: shell syntax + shellcheck
-    runs-on: ubuntu-latest
+    runs-on: warp-ubuntu-latest-x64-2x
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
 
@@ -55,7 +55,7 @@ jobs:
 
   extensions:
     name: validate + test extensions
-    runs-on: ubuntu-latest
+    runs-on: warp-ubuntu-latest-x64-4x
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
 
@@ -72,7 +72,7 @@ jobs:
 
   build-macos:
     name: swift build (${{ matrix.arch }})
-    runs-on: macos-15
+    runs-on: warp-macos-15-arm64-6x
     strategy:
       fail-fast: false
       matrix:
@@ -95,7 +95,7 @@ jobs:
 
   test-macos:
     name: swift test
-    runs-on: macos-15
+    runs-on: warp-macos-15-arm64-6x
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
 

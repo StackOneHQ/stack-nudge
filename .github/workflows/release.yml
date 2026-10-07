@@ -29,7 +29,7 @@ on:
 jobs:
   release:
     name: Build, sign, notarize (${{ matrix.arch }})
-    runs-on: macos-15
+    runs-on: warp-macos-15-arm64-6x
     permissions:
       contents: write
     strategy:
@@ -173,7 +173,7 @@ jobs:
   # it would upload every asset twice and race on the index.
   extensions:
     name: Package extensions
-    runs-on: ubuntu-latest
+    runs-on: warp-ubuntu-latest-x64-2x
     # After the app, deliberately. action-gh-release creates the release when
     # none exists, and this job takes about a minute against the matrix job's
     # sign-and-notarize — so on a hand-pushed tag the fast one would win and

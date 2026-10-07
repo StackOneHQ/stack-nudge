@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   release-please:
-    runs-on: ubuntu-latest
+    runs-on: warp-ubuntu-latest-x64-2x
     steps:
       # Watches conventional commits on main, opens (and updates) a Release PR
       # that bumps .release-please-manifest.json + regenerates CHANGELOG.md.
