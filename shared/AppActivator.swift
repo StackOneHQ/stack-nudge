@@ -359,12 +359,13 @@ struct AppActivator {
         tell application "iTerm2"
           activate
           set target to "\(escaped)"
-          set windowIDs to id of every window
           -- Match on `unique id` (the persistent session GUID that both
           -- ITERM_SESSION_ID and our tab enrichment carry); keep `id` as a
           -- fallback for iTerm2 versions where the two properties diverge.
           set uniqueIDs to unique id of every session of every tab of every window
+          set windowIDs to id of every window
           set plainIDs to id of every session of every tab of every window
+          \(iTermSnapshotGuard)
           repeat with i from 1 to count of uniqueIDs
             repeat with j from 1 to count of item i of uniqueIDs
               repeat with k from 1 to count of item j of item i of uniqueIDs
@@ -627,24 +628,28 @@ struct AppActivator {
     // (~10ms) per session, so role and titles are only read where the pane
     // number is unset or equals `paneNumber`; the matcher never title-matches
     // a session numbered as another pane. 3.4s → 0.5s over 48 `-CC` sessions.
-    // Variables are fetched by GUID so a tab opened mid-read can't pair a pane
-    // number with the wrong session.
+    // Variables are fetched by session id so a tab opened mid-loop can't pair
+    // a pane number with the wrong session.
     private static func listITermSessions(paneNumber: String) -> [ITermSessionRow]? {
         let listScript = """
         tell application "iTerm2"
           set sep to character id 31
           set target to "\(paneNumber)"
           set out to ""
+          set uniqueIDs to unique id of every session of every tab of every window
           set windowIDs to id of every window
-          set guids to unique id of every session of every tab of every window
+          set plainIDs to id of every session of every tab of every window
           set ttys to tty of every session of every tab of every window
           set names to name of every session of every tab of every window
-          repeat with i from 1 to count of guids
-            repeat with j from 1 to count of item i of guids
-              repeat with k from 1 to count of item j of item i of guids
+          \(iTermSnapshotGuard)
+          repeat with i from 1 to count of uniqueIDs
+            repeat with j from 1 to count of item i of uniqueIDs
+              repeat with k from 1 to count of item j of item i of uniqueIDs
                 try
-                  set guid to (item k of item j of item i of guids) as text
-                  set s to a reference to session id guid of tab j of window id (item i of windowIDs)
+                  set guid to (item k of item j of item i of uniqueIDs) as text
+                  -- `session id` looks up by `id`, which isn't always `unique id`.
+                  set plainID to (item k of item j of item i of plainIDs) as text
+                  set s to a reference to session id plainID of tab j of window id (item i of windowIDs)
                   set fields to {guid, (item k of item j of item i of ttys) as text}
                   set pane to ""
                   try
@@ -680,6 +685,13 @@ struct AppActivator {
         }
         return parseITermSessions(out)
     }
+
+    // The bulk reads pair up by position, so a tab opened, closed or moved
+    // between them would mispair ids or select the wrong pane. Re-read the ids
+    // after the last one and give up rather than act on a mixed snapshot.
+    private static let iTermSnapshotGuard = """
+    if (unique id of every session of every tab of every window) is not uniqueIDs then error "iTerm2 sessions changed mid-read"
+    """
 
     // Fields are split on U+001F because titles are free text and can hold "|".
     static func parseITermSessions(_ raw: String) -> [ITermSessionRow] {
