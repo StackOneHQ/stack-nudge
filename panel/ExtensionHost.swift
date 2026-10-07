@@ -35,6 +35,25 @@ final class ExtensionHost: ObservableObject {
         // 5s ticker cadence and stayed there — 18 spawns in 120s, forever.
         var updatedAt: Date?
         var attemptedAt: Date?
+        // Whether the last attempt failed in a way that is worth trying again.
+        // A timeout or a non-zero exit is; a missing script or a document that
+        // doesn't parse is not — those need the extension fixed, and retrying
+        // one on every panel appearance is churn nobody asked for. `.broken`
+        // alone cannot answer this: it covers both a transient failure with
+        // nothing yet to show and a permanently broken extension.
+        var lastFailureWasTransient = false
+        // A fetch is in flight that is meant to *replace* what is on screen
+        // rather than top it up, so the pane shows its loading state instead of
+        // the previous document.
+        //
+        // Only opening the tab and asking for a refresh set this, never the
+        // scheduled poll: blanking the pane every interval while somebody is
+        // watching it is the periodic flicker this pane already had once. The
+        // difference that matters is that a document from before you opened the
+        // tab may not be about the same thing at all — the Derby's was a race
+        // that had since finished, so the pane showed one race and then
+        // silently became another.
+        var supersedingFetch = false
         // Survives a refresh by id rather than index, so a row that moves up
         // the list stays selected and a row that disappears deselects instead
         // of silently pointing at whatever took its place.
@@ -112,14 +131,70 @@ final class ExtensionHost: ObservableObject {
 
     // MARK: - Invocation
 
-    // Opening a tab refreshes it unless the manifest opted out, and unless
-    // something is already in flight.
-    func tabAppeared(_ id: String) {
+    // The pane came on screen: a tab switch, the panel returning, or the pill
+    // expanding onto the tab someone left it on.
+    //
+    // One floor for all of them, because the view cannot tell them apart. In
+    // compact mode — the default, and effectively the only mode — collapsing to
+    // the pill removes this pane from the view tree entirely, so expanding it
+    // again fires `onAppear` exactly as switching tabs does. An earlier version
+    // of this tried to treat a switch as explicit and exempt it from the floor;
+    // that put the exemption on the path everyone actually uses and the floor
+    // on one almost nobody does, so every press of the hotkey spawned a script.
+    //
+    // ⌘R is the deliberate override. See `forceRefresh`.
+    func tabAppeared(_ id: String, now: Date = Date()) {
         guard let manifest = manifest(id), manifest.refresh.onOpen else { return }
-        refresh(id)
+        let pane = self.pane(id)
+        // A pane whose last attempt failed *transiently* and has nothing to
+        // show is not protected by the floor. The floor exists so that showing
+        // a window cannot spawn a script redundantly, and retrying a timeout is
+        // not redundant — it is the whole reason somebody is looking at the tab
+        // again. Without it a transient failure stuck for a full interval, and
+        // switching away and back did nothing, which is what a person tries
+        // first and what worked before the floor existed.
+        //
+        // Deliberately not every documentless pane. A missing script or a
+        // document that doesn't parse is not going to come good by being run
+        // again on every panel appearance; those want the extension fixed.
+        let worthRetrying = pane.document == nil && pane.lastFailureWasTransient
+        if !worthRetrying, let attemptedAt = pane.attemptedAt,
+           now.timeIntervalSince(attemptedAt) < TimeInterval(Self.reopenFloor(manifest)) {
+            return
+        }
+        refresh(id, superseding: true)
     }
 
-    func refresh(_ id: String) { invoke(id, action: nil, row: nil) }
+    // What ⌘R does: refetch now, whatever the floor says.
+    //
+    // The floor exists so that showing a window cannot spawn a script, which is
+    // a thing that happens to a user rather than something they ask for. This
+    // is the opposite, and without it an extension declaring no actions of its
+    // own has no way to refresh at all — the floor would otherwise have taken
+    // away the switch-away-and-back that used to serve as one.
+    func forceRefresh(_ id: String) { refresh(id, superseding: true) }
+
+    // How stale a pane must be before coming on screen refetches it.
+    //
+    // The manifest's own interval, not the schema's minimum. Those are
+    // different numbers and using the minimum was wrong: it is the fastest any
+    // extension is *permitted* to poll (ExtensionManifest clamps declared
+    // intervals up to it), not the cadence this one chose. An extension asking
+    // for 600s against a rate-limited API would have been spawned every 5
+    // seconds by someone toggling the panel — 120x what it declared.
+    //
+    // Reopening sooner than the interval leaves the pane showing data younger
+    // than the extension itself called acceptable, which is what it asked for.
+    // An onOpen-only extension has no interval to read, so it keeps the
+    // minimum.
+    static func reopenFloor(_ manifest: ExtensionManifest) -> Int {
+        max(ExtensionManifest.minimumIntervalSeconds,
+            manifest.refresh.intervalSeconds ?? ExtensionManifest.minimumIntervalSeconds)
+    }
+
+    func refresh(_ id: String, superseding: Bool = false) {
+        invoke(id, action: nil, row: nil, superseding: superseding)
+    }
 
     // A press while busy is ignored rather than queued: the user pressed it
     // because nothing visible happened yet, and queueing would run it twice.
@@ -206,12 +281,16 @@ final class ExtensionHost: ObservableObject {
         return true
     }
 
-    private func invoke(_ id: String, action: String?, row: String?) {
+    private func invoke(_ id: String, action: String?, row: String?,
+                        superseding: Bool = false) {
         guard let manifest = manifest(id) else { return }
         var pane = self.pane(id)
         guard !pane.busy else { return }
         pane.busy = true
         pane.status = .loading
+        // Nothing on screen yet means nothing to supersede; the cold state is
+        // already what gets drawn.
+        pane.supersedingFetch = superseding && pane.document != nil
         panes[id] = pane
 
         let runner = self.runner
@@ -226,8 +305,13 @@ final class ExtensionHost: ObservableObject {
         var pane = self.pane(id)
         pane.busy = false
         pane.attemptedAt = Date()
+        // Cleared whatever the outcome: a fetch that failed has not superseded
+        // anything, so the previous document comes back with its stale marker
+        // rather than the pane sitting on "Loading…" forever.
+        pane.supersedingFetch = false
         switch result {
         case .ok(let document):
+            pane.lastFailureWasTransient = false
             pane.document = document
             pane.updatedAt = Date()
             pane.status = .idle
@@ -240,8 +324,10 @@ final class ExtensionHost: ObservableObject {
         case .transient(let why):
             // Only a pane that has something to show can go stale; otherwise
             // "showing old data" would be a claim about an empty pane.
+            pane.lastFailureWasTransient = true
             pane.status = pane.document == nil ? .broken(why) : .stale(why)
         case .missing(let why), .malformed(let why):
+            pane.lastFailureWasTransient = false
             pane.status = .broken(why)
         }
         panes[id] = pane

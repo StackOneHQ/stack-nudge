@@ -396,6 +396,26 @@ final class ExtensionHostTests: XCTestCase {
                                               visible: true, now: now))
     }
 
+    // A click on a footer hint has to send what the keypress would. resolve()
+    // reads a row action as belonging to the selected row and a document action
+    // as belonging to none, so the pairing the footer renders must agree — a
+    // document action sent with a row id would spawn `--action refresh --row x`
+    // for a row the action was never about.
+    func testADocumentActionCarriesNoRowAndARowActionCarriesItsOwn() {
+        let json = """
+            {"schema":1,
+             "rows":[{"id":"h1","title":"A","actions":[{"id":"open","label":"Open","key":"o"}]}],
+             "actions":[{"id":"refresh","label":"Sync now","key":"r"}]}
+            """
+        guard case .success(let document) = ExtensionDocument.parse(Data(json.utf8)) else {
+            return XCTFail("fixture didn't parse")
+        }
+        XCTAssertEqual(ExtensionHost.resolve(key: "r", in: document, selectedRow: "h1")?.row, nil)
+        XCTAssertEqual(ExtensionHost.resolve(key: "o", in: document, selectedRow: "h1")?.row, "h1")
+        // With nothing selected a row action isn't reachable at all.
+        XCTAssertNil(ExtensionHost.resolve(key: "o", in: document, selectedRow: nil))
+    }
+
     // MARK: - Opening a tab
 
     func testOpeningATabRefreshesItUnlessTheManifestOptedOut() {
@@ -406,5 +426,324 @@ final class ExtensionHostTests: XCTestCase {
         host.tabAppeared("derby")
         host.tabAppeared("radar")
         XCTAssertEqual(recorder.calls.map(\.id), ["derby"])
+    }
+
+    // The panel is an NSPanel that is ordered out, not torn down, so its SwiftUI
+    // tree survives being hidden and `onAppear` — the only thing that calls
+    // tabAppeared — does not fire again when it comes back. Reopening onto a tab
+    // you were already on is therefore not an "open" as far as the host is
+    // concerned, and the pane shows whatever it last fetched.
+    //
+    // This asks whether the scheduled refresh covers that gap on its own.
+    // Coming on screen respects the cadence the manifest asked for, whether it
+    // was a tab switch, the panel returning, or the pill expanding. The view
+    // cannot tell those apart — in compact mode the pane leaves the tree
+    // entirely when the pill collapses, so expanding fires onAppear exactly as
+    // switching tabs does — and an earlier version exempting "switches" put the
+    // exemption on the path everyone uses.
+    //
+    // The floor is the manifest's own interval, not
+    // ExtensionManifest.minimumIntervalSeconds. Those are different numbers:
+    // the minimum is the fastest any extension is *permitted* to poll, not what
+    // this one chose. An extension asking for 600s against a rate-limited API
+    // was spawned every 5s by someone pressing the hotkey.
+    func testComingOnScreenRespectsTheManifestsOwnInterval() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":600}")],
+                                recorder: recorder)
+        let now = Date()
+        host.tabAppeared("derby", now: now)
+        settle(host, "derby")
+        XCTAssertEqual(recorder.calls.count, 1)
+
+        // Well past the schema minimum, nowhere near what the extension asked
+        // for: the old floor spawned here, 120x the declared cadence.
+        host.tabAppeared("derby", now: now.addingTimeInterval(30))
+        XCTAssertEqual(recorder.calls.count, 1)
+
+        host.tabAppeared("derby", now: now.addingTimeInterval(601))
+        XCTAssertEqual(recorder.calls.count, 2)
+    }
+
+    // A pane with nothing to show is not protected by the floor. The floor
+    // stops a window appearing from spawning a script redundantly, and
+    // retrying a failed fetch is not redundant — it is why someone is looking
+    // at the tab again. Switching away and back is what people try first, and
+    // it worked before the floor existed.
+    func testAFailedPaneRetriesOnEveryAppearance() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":600}")],
+                                recorder: recorder,
+                                result: { .transient("the derby took too long to answer") })
+        let now = Date()
+        host.tabAppeared("derby", now: now)
+        XCTAssertEqual(recorder.calls.count, 1)
+        XCTAssertNil(host.pane("derby").document, "nothing to show")
+
+        // Well inside the floor, which would otherwise suppress this for ten
+        // minutes.
+        host.tabAppeared("derby", now: now.addingTimeInterval(2))
+        XCTAssertEqual(recorder.calls.count, 2, "a broken pane must keep retrying")
+    }
+
+    // Not every documentless pane. A missing script or a document that does not
+    // parse will not come good by being run again on every panel appearance;
+    // those want the extension fixed, and retrying them is churn.
+    func testAPermanentlyBrokenPaneIsStillFloored() {
+        for result in [ExtensionRuntime.Fetch.missing("no run script"),
+                       .malformed("not valid JSON")] {
+            let recorder = Recorder()
+            let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":600}")],
+                                    recorder: recorder, result: { result })
+            let now = Date()
+            host.tabAppeared("derby", now: now)
+            XCTAssertEqual(recorder.calls.count, 1)
+            XCTAssertNil(host.pane("derby").document)
+
+            host.tabAppeared("derby", now: now.addingTimeInterval(2))
+            XCTAssertEqual(recorder.calls.count, 1, "\(result) must not retry on every appearance")
+        }
+    }
+
+    // And a pane that recovers stops being treated as retryable.
+    func testASuccessfulFetchClearsTheRetryFlag() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":600}")],
+                                recorder: recorder, result: { .transient("timed out") })
+        let now = Date()
+        host.tabAppeared("derby", now: now)
+        XCTAssertTrue(host.pane("derby").lastFailureWasTransient)
+
+        settle(host, "derby")
+        XCTAssertFalse(host.pane("derby").lastFailureWasTransient)
+        host.tabAppeared("derby", now: now.addingTimeInterval(2))
+        XCTAssertEqual(recorder.calls.count, 1, "a healthy pane is floored again")
+    }
+
+    // Once there is something to show, the floor applies again — including to a
+    // pane showing older data after a transient failure, which is data.
+    func testAPaneWithSomethingToShowIsFlooredAgain() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":600}")],
+                                recorder: recorder)
+        let now = Date()
+        host.tabAppeared("derby", now: now)
+        settle(host, "derby")
+        XCTAssertEqual(recorder.calls.count, 1)
+
+        host.tabAppeared("derby", now: now.addingTimeInterval(2))
+        XCTAssertEqual(recorder.calls.count, 1)
+    }
+
+    // A pane the floor can protect: it has something to show.
+    private func settle(_ host: ExtensionHost, _ id: String) {
+        host.finish(id, .ok(ExtensionDocument(schema: 1, state: .ok, message: nil,
+                                              header: nil, rows: [], actions: [])))
+    }
+
+    // MARK: - Superseding what is on screen
+
+    // Opening the tab onto the previous document and having it swap a second
+    // later reads as the pane changing its mind. For the Derby it was worse
+    // than stale numbers: the old document was a race that had since finished,
+    // so the pane showed one race and silently became another.
+    //
+    // Observed from inside the runner rather than after it: this harness runs
+    // the spawn synchronously, so `finish` clears the flag before a plain
+    // assertion could see it. What the pane renders while the fetch is in
+    // flight is the whole question here.
+    func testOpeningATabSupersedesTheDocumentItFinds() {
+        var observed: [Bool] = []
+        var hostRef: ExtensionHost?
+        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":600}")],
+                                result: {
+                                    observed.append(hostRef?.pane("derby").supersedingFetch ?? false)
+                                    return .ok(ExtensionDocument(schema: 1, state: .ok,
+                                                                 message: nil, header: nil,
+                                                                 rows: [], actions: []))
+                                })
+        hostRef = host
+        let now = Date()
+
+        // First open: nothing on screen, so nothing to supersede.
+        host.tabAppeared("derby", now: now)
+        XCTAssertEqual(observed, [false])
+
+        // Past the floor, so opening it again really does spawn — and this time
+        // there is a document to replace.
+        host.replacePaneForTesting(busyless(host.pane("derby"),
+                                            attemptedAt: now.addingTimeInterval(-601)),
+                                   on: "derby")
+        host.tabAppeared("derby", now: now)
+        XCTAssertEqual(observed, [false, true],
+                       "the pane must show loading, not last time's race")
+        // And it is cleared once the fetch lands.
+        XCTAssertFalse(host.pane("derby").supersedingFetch)
+    }
+
+    // Nothing on screen means nothing to supersede — the cold state is already
+    // what gets drawn, and flagging it would say "replacing" about an empty
+    // pane.
+    func testAColdPaneHasNothingToSupersede() {
+        let (host, _, _) = host([manifest("derby")])
+        host.tabAppeared("derby")
+        XCTAssertFalse(host.pane("derby").supersedingFetch)
+    }
+
+    // The scheduled poll never supersedes. Blanking the pane every interval
+    // while somebody is watching it is the periodic flicker this pane had once
+    // already.
+    //
+    // Observed inside the runner, like its neighbours: checking the flag after
+    // `tick` reads it once `finish` has already cleared it, which is true
+    // whatever the poll did. An earlier version of this test did exactly that
+    // and a mutation making the poll supersede survived it — reinstating the
+    // flicker while the suite stayed green.
+    func testTheScheduledPollLeavesWhatIsOnScreenAlone() {
+        var observed: [Bool] = []
+        var hostRef: ExtensionHost?
+        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":30}")],
+                                result: {
+                                    observed.append(hostRef?.pane("derby").supersedingFetch ?? false)
+                                    return .ok(ExtensionDocument(schema: 1, state: .ok,
+                                                                 message: nil, header: nil,
+                                                                 rows: [], actions: []))
+                                })
+        hostRef = host
+        let now = Date()
+        host.tabAppeared("derby", now: now)
+        host.replacePaneForTesting(busyless(host.pane("derby"),
+                                            attemptedAt: now.addingTimeInterval(-60)),
+                                   on: "derby")
+
+        host.tick(visibleTab: "derby", now: now)
+        XCTAssertEqual(observed.count, 2, "the poll ran")
+        XCTAssertFalse(observed[1],
+                       "a poll must not blank the pane somebody is watching")
+    }
+
+    // A fetch that fails has superseded nothing, so the previous document comes
+    // back with its stale marker rather than the pane sitting on "Loading…".
+    func testAFailedSupersedingFetchGivesTheDocumentBack() {
+        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":600}")])
+        let now = Date()
+        host.tabAppeared("derby", now: now)
+        settle(host, "derby")
+        host.replacePaneForTesting(busyless(host.pane("derby"),
+                                            attemptedAt: now.addingTimeInterval(-601)),
+                                   on: "derby")
+
+        // The pane is mid-supersede, which is the state the view draws loading
+        // for; the fetch then fails.
+        var mid = host.pane("derby")
+        mid.supersedingFetch = true
+        host.replacePaneForTesting(mid, on: "derby")
+
+        host.finish("derby", .transient("timed out"))
+        XCTAssertFalse(host.pane("derby").supersedingFetch,
+                       "a failed fetch has superseded nothing")
+        XCTAssertNotNil(host.pane("derby").document,
+                        "the previous document comes back rather than Loading… forever")
+    }
+
+    private func busyless(_ pane: ExtensionHost.Pane, attemptedAt: Date) -> ExtensionHost.Pane {
+        var copy = pane
+        copy.busy = false
+        copy.attemptedAt = attemptedAt
+        return copy
+    }
+
+    // ⌘R is the deliberate override, and the only refresh an extension that
+    // declares no actions of its own has once the floor is in place.
+    func testForceRefreshIgnoresTheFloor() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":600}")],
+                                recorder: recorder)
+        host.tabAppeared("derby")
+        settle(host, "derby")
+        XCTAssertEqual(recorder.calls.count, 1)
+
+        host.forceRefresh("derby")
+        XCTAssertEqual(recorder.calls.count, 2, "⌘R must not be floored")
+    }
+
+    // It is an override of the floor, not of everything: a spawn already in
+    // flight still wins, because two at once is what busy exists to prevent.
+    //
+    // The pane is made busy directly because this harness runs the runner
+    // synchronously — `tabAppeared` would complete the fetch inline and clear
+    // busy before the second call, which is the one case the real async path
+    // has and this one does not.
+    func testForceRefreshStillYieldsToAFetchInFlight() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby")], recorder: recorder)
+        var busy = ExtensionHost.Pane()
+        busy.busy = true
+        host.replacePaneForTesting(busy, on: "derby")
+
+        host.forceRefresh("derby")
+        XCTAssertTrue(recorder.calls.isEmpty, "a spawn in flight still wins")
+    }
+
+    func testTheReopenFloorIsTheManifestsInterval() {
+        XCTAssertEqual(ExtensionHost.reopenFloor(manifest("a", refresh: "{\"intervalSeconds\":600}")),
+                       600)
+        // No interval to read, so the schema minimum is the only sensible value.
+        XCTAssertEqual(ExtensionHost.reopenFloor(manifest("b", refresh: "{\"onOpen\":true}")),
+                       ExtensionManifest.minimumIntervalSeconds)
+        // A declared interval below the minimum is clamped at parse time, so it
+        // can never produce a floor under it.
+        XCTAssertEqual(ExtensionHost.reopenFloor(manifest("c", refresh: "{\"intervalSeconds\":1}")),
+                       ExtensionManifest.minimumIntervalSeconds)
+    }
+
+    // An extension that asks only for onOpen has no schedule to fall back on,
+    // so showing the panel onto its tab is the only thing that can refresh it.
+    func testATabWithNoScheduleStillRefreshesWhenThePanelComesBack() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby", refresh: "{\"onOpen\":true}")],
+                                recorder: recorder)
+        let now = Date()
+        host.tabAppeared("derby")
+        settle(host, "derby")
+        XCTAssertEqual(recorder.calls.count, 1)
+
+        // Hidden for ten minutes. No interval, so no tick will ever help.
+        var later = now
+        for _ in 0..<120 {
+            later = later.addingTimeInterval(5)
+            host.tick(visibleTab: nil, now: later)
+        }
+        XCTAssertEqual(recorder.calls.count, 1)
+
+        host.tabAppeared("derby", now: later)
+        XCTAssertEqual(recorder.calls.count, 2,
+                       "showing the panel is the only refresh this extension gets")
+    }
+
+    // The reported bug, end to end. An earlier version of this test drove only
+    // `tick` and so passed identically without the fix — it was exercising the
+    // pre-existing schedule, not the new path.
+    func testReopeningOntoATabYouWereAlreadyOnRefetchesWithoutAKeypress() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("derby", refresh: "{\"intervalSeconds\":30}")],
+                                recorder: recorder)
+        host.tabAppeared("derby")
+        settle(host, "derby")
+        XCTAssertEqual(recorder.calls.count, 1)
+
+        // Hidden for five minutes: whileFocusedOnly means no polling, by design.
+        var now = Date()
+        for _ in 0..<60 {
+            now = now.addingTimeInterval(5)
+            host.tick(visibleTab: nil, now: now)
+        }
+        XCTAssertEqual(recorder.calls.count, 1, "a hidden pane must not poll")
+
+        // The panel comes back. onAppear does not fire — the view never left
+        // the tree — so this call is the only thing standing between the user
+        // and stale numbers.
+        host.tabAppeared("derby", now: now.addingTimeInterval(5))
+        XCTAssertEqual(recorder.calls.count, 2)
     }
 }
