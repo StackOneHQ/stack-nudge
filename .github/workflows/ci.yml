@@ -57,7 +57,11 @@ jobs:
     name: validate + test extensions
     runs-on: ubuntu-latest
     steps:
+      # Full history: the version check resolves a merge base, which the
+      # default shallow clone does not contain.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          fetch-depth: 0
 
       # Curation is the security model for extensions, and a reviewer reads a
       # diff — which does not show where a symlink points. This is the part of
@@ -69,6 +73,16 @@ jobs:
       # loop cannot drift.
       - name: test extensions
         run: ./scripts/test-extensions.sh
+
+      # A changed extension that keeps its version is published as an update
+      # nobody can get: the app compares version strings to decide one exists,
+      # so republishing under the old number reaches no one who already
+      # installed it.
+      - name: check extension versions
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          ./scripts/check-extension-versions.sh "origin/${{ github.base_ref }}"
 
   build-macos:
     name: swift build (${{ matrix.arch }})

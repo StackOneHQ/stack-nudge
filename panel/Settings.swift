@@ -517,10 +517,24 @@ struct SettingsView: View {
     // one stale directory used to read "1 not loaded", with no sign the other
     // three existed.
     private var extensionsRowValue: String {
-        let installed = nav.extensionTabs.count
-        let refused = nav.refusedExtensionCount
-        let installedLabel = installed == 0 ? "None" : "\(installed) installed"
-        return refused == 0 ? installedLabel : "\(installedLabel) · \(refused) not loaded"
+        Self.extensionsRowValue(installed: nav.extensionTabs.count,
+                                updates: nav.installedExtensions.filter(\.updateAvailable).count,
+                                refused: nav.refusedExtensionCount)
+    }
+
+    // Pure, so the summary is testable without a view. The first test for this
+    // asserted the `updateAvailable` flags on hand-built rows and never touched
+    // the counting at all — it passed while the production path handed every
+    // row a nil availableVersion and the count was permanently zero.
+    //
+    // Updates are counted for the same reason refusals already were: this row
+    // is the only thing anyone sees without opening the browser, and an update
+    // visible only once you go looking is one nobody takes.
+    static func extensionsRowValue(installed: Int, updates: Int, refused: Int) -> String {
+        var parts = [installed == 0 ? "None" : "\(installed) installed"]
+        if updates > 0 { parts.append("\(updates) update\(updates == 1 ? "" : "s")") }
+        if refused > 0 { parts.append("\(refused) not loaded") }
+        return parts.joined(separator: " · ")
     }
 
     @ViewBuilder private func extensionCard(_ id: String) -> some View {
@@ -540,6 +554,12 @@ struct SettingsView: View {
                         if let version = extensionRow.installedVersion {
                             Text(version).font(.caption2.monospacedDigit())
                                 .foregroundStyle(.tertiary)
+                        }
+                        if extensionRow.updateAvailable,
+                           let available = extensionRow.availableVersion {
+                            Text("→ \(available)")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(Color.accentColor)
                         }
                     }
                     if let reason = extensionRow.refusedReason {

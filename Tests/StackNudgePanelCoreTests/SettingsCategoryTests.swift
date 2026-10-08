@@ -226,6 +226,59 @@ final class SettingsCategoryTests: XCTestCase {
         XCTAssertEqual(nav.mode, .settings)
     }
 
+    // The summary itself, not the flags it counts. The first version of this
+    // test asserted `updateAvailable` on hand-built rows and never touched the
+    // counting — so it passed while the production path handed every row a nil
+    // availableVersion and the count was permanently zero.
+    func testTheExtensionsRowSummarisesWhatIsInstalled() {
+        XCTAssertEqual(SettingsView.extensionsRowValue(installed: 2, updates: 0, refused: 0),
+                       "2 installed")
+        XCTAssertEqual(SettingsView.extensionsRowValue(installed: 2, updates: 1, refused: 0),
+                       "2 installed · 1 update")
+        XCTAssertEqual(SettingsView.extensionsRowValue(installed: 3, updates: 2, refused: 1),
+                       "3 installed · 2 updates · 1 not loaded")
+        XCTAssertEqual(SettingsView.extensionsRowValue(installed: 0, updates: 0, refused: 0),
+                       "None")
+        // A refusal is installed-but-broken, so it can be the only thing there.
+        XCTAssertEqual(SettingsView.extensionsRowValue(installed: 0, updates: 0, refused: 1),
+                       "None · 1 not loaded")
+    }
+
+    // What the row counts, end to end through the merge that feeds it: an
+    // installed extension with a newer version published, against one that is
+    // current. This is the half that was inert — rows() was being given an
+    // empty catalogue, so neither could ever have an availableVersion.
+    func testTheMergeGivesAnInstalledRowSomethingToCompareAgainst() {
+        let published = ExtensionInstaller.IndexEntry(
+            id: "derby", name: "Token Derby", version: "1.1.0", description: "",
+            asset: "extension-derby-1.1.0.tar.gz", sha256: "ab", requires: [], config: [])
+        let installed = ExtensionManifest(
+            id: "derby", name: "Token Derby", version: "1.0.0", schema: 1,
+            tab: .init(label: "Derby"), run: "./run", requires: [], config: [],
+            refresh: .never)
+
+        let rows = ExtensionCatalog.rows(catalogue: [published],
+                                         installed: [installed], refused: [])
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertTrue(rows[0].updateAvailable)
+        XCTAssertEqual(rows.filter(\.updateAvailable).count, 1)
+
+        // The empty catalogue this was shipped with: nothing to compare to, so
+        // nothing is ever an update.
+        let blind = ExtensionCatalog.rows(catalogue: [], installed: [installed], refused: [])
+        XCTAssertFalse(blind[0].updateAvailable,
+                       "an empty catalogue is what made the count permanently zero")
+    }
+
+    // An extension installed by hand has nothing to update to, which is not the
+    // same as being current — availableVersion is nil, not equal.
+    func testAnUnpublishedExtensionIsNotCountedAsAnUpdate() {
+        let row = ExtensionRow(id: "derby", name: "Derby", description: "",
+                               installedVersion: "1.0.0", availableVersion: nil,
+                               refusedReason: nil, requires: [], config: [])
+        XCTAssertFalse(row.updateAvailable)
+    }
+
     func testAttentionRowsAreAbsentUntilTheyApply() {
         let nav = PanelNav()
         XCTAssertTrue(nav.settingsAttentionRows.isEmpty)
