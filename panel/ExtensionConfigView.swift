@@ -411,7 +411,8 @@ struct ExtensionConfigView: View {
                     Text(version).font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
                 }
                 if model.row.updateAvailable, let available = model.row.availableVersion {
-                    Text("update to \(available)").font(.caption2).foregroundStyle(.orange)
+                    Text("update to \(available)").font(.caption2)
+                        .foregroundStyle(Color.accentColor)
                 }
             }
             if let reason = model.row.refusedReason {

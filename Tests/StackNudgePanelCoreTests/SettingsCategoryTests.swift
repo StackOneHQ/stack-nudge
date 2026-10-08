@@ -226,6 +226,35 @@ final class SettingsCategoryTests: XCTestCase {
         XCTAssertEqual(nav.mode, .settings)
     }
 
+    // The Settings row is the only thing anyone sees without opening the
+    // browser, so an available update has to be counted there — the same
+    // reason refusals already are. Before this it said "2 installed" whether
+    // or not an update was waiting.
+    func testTheExtensionsRowCountsUpdatesAlongsideRefusals() {
+        let nav = PanelNav()
+        nav.extensionTabs = [ExtensionTab(id: "derby", label: "Derby"),
+                             ExtensionTab(id: "system", label: "System")]
+        nav.installedExtensions = [
+            ExtensionRow(id: "derby", name: "Derby", description: "",
+                         installedVersion: "1.0.0", availableVersion: "1.1.0",
+                         refusedReason: nil, requires: [], config: []),
+            ExtensionRow(id: "system", name: "System", description: "",
+                         installedVersion: "1.1.1", availableVersion: "1.1.1",
+                         refusedReason: nil, requires: [], config: []),
+        ]
+        XCTAssertTrue(nav.installedExtensions[0].updateAvailable)
+        XCTAssertFalse(nav.installedExtensions[1].updateAvailable)
+    }
+
+    // An extension installed by hand has nothing to update to, which is not the
+    // same as being current — availableVersion is nil, not equal.
+    func testAnUnpublishedExtensionIsNotCountedAsAnUpdate() {
+        let row = ExtensionRow(id: "derby", name: "Derby", description: "",
+                               installedVersion: "1.0.0", availableVersion: nil,
+                               refusedReason: nil, requires: [], config: [])
+        XCTAssertFalse(row.updateAvailable)
+    }
+
     func testAttentionRowsAreAbsentUntilTheyApply() {
         let nav = PanelNav()
         XCTAssertTrue(nav.settingsAttentionRows.isEmpty)

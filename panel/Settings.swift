@@ -519,8 +519,14 @@ struct SettingsView: View {
     private var extensionsRowValue: String {
         let installed = nav.extensionTabs.count
         let refused = nav.refusedExtensionCount
-        let installedLabel = installed == 0 ? "None" : "\(installed) installed"
-        return refused == 0 ? installedLabel : "\(installedLabel) · \(refused) not loaded"
+        let updates = nav.installedExtensions.filter(\.updateAvailable).count
+        var parts = [installed == 0 ? "None" : "\(installed) installed"]
+        // Counted here for the same reason refusals are: this row is the only
+        // thing a person sees without opening the browser, and an update that
+        // is only visible once you go looking is one nobody takes.
+        if updates > 0 { parts.append("\(updates) update\(updates == 1 ? "" : "s")") }
+        if refused > 0 { parts.append("\(refused) not loaded") }
+        return parts.joined(separator: " · ")
     }
 
     @ViewBuilder private func extensionCard(_ id: String) -> some View {
@@ -540,6 +546,12 @@ struct SettingsView: View {
                         if let version = extensionRow.installedVersion {
                             Text(version).font(.caption2.monospacedDigit())
                                 .foregroundStyle(.tertiary)
+                        }
+                        if extensionRow.updateAvailable,
+                           let available = extensionRow.availableVersion {
+                            Text("→ \(available)")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(Color.accentColor)
                         }
                     }
                     if let reason = extensionRow.refusedReason {
