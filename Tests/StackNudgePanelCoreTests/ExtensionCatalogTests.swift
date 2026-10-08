@@ -562,6 +562,51 @@ final class ExtensionCatalogTests: XCTestCase {
         guard case .failed = c.work["derby"] else { return XCTFail("expected a failure") }
     }
 
+    // MARK: - The rows Settings lists
+
+    // The merge the Settings list is built from, including *which* catalogue it
+    // uses — which is the part that was wrong. The controller passed an empty
+    // one, so every installed row came back with no availableVersion, nothing
+    // was ever an update, and the count was permanently zero while tests over
+    // hand-built rows passed.
+    func testSettingsRowsCompareAgainstTheLoadedCatalogue() {
+        let c = catalog(fetch: { .success([self.entry("derby", version: "1.1.0")]) })
+        let installed = manifest("derby", version: "1.0.0")
+
+        // Before the catalogue lands there is nothing to compare against, and
+        // the row must not claim an update it cannot name.
+        let cold = c.settingsRows(installed: [installed], refused: [])
+        XCTAssertFalse(cold[0].updateAvailable)
+        XCTAssertNil(cold[0].availableVersion)
+
+        c.reload()
+        let warm = c.settingsRows(installed: [installed], refused: [])
+        XCTAssertEqual(warm[0].availableVersion, "1.1.0")
+        XCTAssertTrue(warm[0].updateAvailable)
+        XCTAssertEqual(warm.filter(\.updateAvailable).count, 1)
+    }
+
+    // A loaded catalogue listing the installed version is not an update.
+    func testAnExtensionAtTheLatestVersionIsNotAnUpdate() {
+        let c = catalog(fetch: { .success([self.entry("derby", version: "1.0.0")]) })
+        c.reload()
+        let rows = c.settingsRows(installed: [manifest("derby", version: "1.0.0")], refused: [])
+        XCTAssertFalse(rows[0].updateAvailable)
+    }
+
+    // Whoever merged the two lists needs telling when a catalogue lands, or the
+    // Settings list keeps whatever it was built from before the fetch.
+    func testLoadingTheCatalogueReportsThatItChanged() {
+        var rebuilds = 0
+        let c = ExtensionCatalog(fetchCatalogue: { .success([self.entry("derby")]) },
+                                 performInstall: { .success($0.id) },
+                                 performRemove: { .success($0) },
+                                 background: { $0() }, toMain: { $0() },
+                                 didLoadCatalogue: { rebuilds += 1 })
+        c.reload()
+        XCTAssertEqual(rebuilds, 1)
+    }
+
     // MARK: - Search
 
     private func row(_ id: String, name: String, description: String = "",

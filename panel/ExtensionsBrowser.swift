@@ -70,6 +70,7 @@ final class ExtensionCatalog: ObservableObject {
     private let background: (@escaping () -> Void) -> Void
     private let toMain: (@escaping () -> Void) -> Void
     private let didChange: () -> Void
+    private let didLoadCatalogue: () -> Void
 
     init(fetchCatalogue: @escaping () -> Result<[ExtensionInstaller.IndexEntry], ExtensionInstaller.Failure>,
          performInstall: @escaping (ExtensionInstaller.IndexEntry) -> Result<String, ExtensionInstaller.Failure>
@@ -80,13 +81,15 @@ final class ExtensionCatalog: ObservableObject {
             = { DispatchQueue.global(qos: .userInitiated).async(execute: $0) },
          toMain: @escaping (@escaping () -> Void) -> Void
             = { DispatchQueue.main.async(execute: $0) },
-         didChange: @escaping () -> Void = {}) {
+         didChange: @escaping () -> Void = {},
+         didLoadCatalogue: @escaping () -> Void = {}) {
         self.fetchCatalogue = fetchCatalogue
         self.performInstall = performInstall
         self.performRemove = performRemove
         self.background = background
         self.toMain = toMain
         self.didChange = didChange
+        self.didLoadCatalogue = didLoadCatalogue
     }
 
     // MARK: - Loading
@@ -112,6 +115,10 @@ final class ExtensionCatalog: ObservableObject {
                 case .success(let entries):
                     self.entries = entries
                     self.load = .loaded
+                    // An installed row has nothing to compare its version
+                    // against until this lands, so whoever merged the two
+                    // lists needs telling to do it again.
+                    self.didLoadCatalogue()
                 case .failure(let failure):
                     self.load = .failed(failure.message)
                 }
@@ -251,6 +258,19 @@ final class ExtensionCatalog: ObservableObject {
                 $0.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) != nil
             }
         }
+    }
+
+    // The rows Settings lists, merged against the catalogue this object holds.
+    //
+    // Here rather than at the call site because *which catalogue* is the thing
+    // that went wrong: the controller passed an empty one, so every installed
+    // row came back with no availableVersion, nothing was ever an update, and
+    // the count on the Settings row was permanently zero. PanelController is
+    // not reachable from a test, so that decision could not be asserted while
+    // it lived there — it can here.
+    func settingsRows(installed: [ExtensionManifest],
+                      refused: [ExtensionRuntime.Refusal]) -> [ExtensionRow] {
+        Self.rows(catalogue: entries, installed: installed, refused: refused)
     }
 
     func dismissFailure(for id: String) {

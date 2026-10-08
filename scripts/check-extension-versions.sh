@@ -47,7 +47,13 @@ for dir in extensions/*/; do
   id="$(basename "$dir")"
 
   # Nothing touched in this extension: nothing to require.
-  if git diff --quiet "$merge_base" -- "$dir"; then
+  #
+  # Untracked files count. A new test or helper dropped into an extension
+  # directory is invisible to `git diff` and still ends up in the tarball the
+  # index checksums, so skipping on the diff alone let exactly the change this
+  # check exists for walk past it locally.
+  untracked="$(git ls-files --others --exclude-standard -- "$dir")"
+  if git diff --quiet "$merge_base" -- "$dir" && [[ -z "$untracked" ]]; then
     continue
   fi
   checked=$((checked + 1))

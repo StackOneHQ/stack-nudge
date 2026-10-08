@@ -183,7 +183,13 @@ struct PanelContentView: View {
                 // permanently unfetched.
                 case .extensionTab(let id):
                     ExtensionTabView(host: extensions, id: id).id(id)
-                case .settings: SettingsView(nav: nav)
+                case .settings:
+                    // Fetches the catalogue if it hasn't been, so the
+                    // Extensions row can say an update is waiting without
+                    // somebody opening the browser to find out. loadIfNeeded
+                    // is a no-op once it has loaded.
+                    SettingsView(nav: nav)
+                        .onAppear { extensionCatalog.loadIfNeeded() }
                 case .phrases:  PhrasesView(model: phrases) { nav.mode = .settings }
                 case .extensions:
                     ExtensionsView(catalog: extensionCatalog,
@@ -1083,9 +1089,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // Rebuilt from the host on every change it already reports, so the settings
     // list and the tab strip can't disagree about what is installed.
     private func refreshInstalledExtensions() {
-        nav.installedExtensions = ExtensionCatalog.rows(catalogue: [],
-                                                        installed: extensions.manifests,
-                                                        refused: extensions.refused)
+        nav.installedExtensions = extensionCatalog.settingsRows(installed: extensions.manifests,
+                                                                refused: extensions.refused)
     }
 
     private lazy var extensionCatalog = ExtensionCatalog(
@@ -1093,7 +1098,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         performInstall: { entry in
             ExtensionInstaller.install(entry, from: ExtensionInstaller.releaseSources())
         },
-        didChange: { [weak self] in self?.extensions.load() })
+        didChange: { [weak self] in self?.extensions.load() },
+        // A fetched catalogue is what gives an installed row something to
+        // compare against, so the Settings list is rebuilt when one lands.
+        didLoadCatalogue: { [weak self] in self?.refreshInstalledExtensions() })
     // Extensions publish their tabs through nav, so nav stays the single source
     // of tab order and this stays the single source of what's in them.
     private lazy var extensions = ExtensionHost(onTabsChanged: { [weak self] tabs in
