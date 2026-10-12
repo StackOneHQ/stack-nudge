@@ -39,10 +39,13 @@ final class TranscriptReaderCacheTests: XCTestCase {
     }
 
     // A whole-second instant, stamped on the file both before the first read
-    // and after the rewrite. Restoring a captured mtime does not work: the
-    // filesystem keeps sub-second precision that setAttributes truncates, so
-    // the "restored" mtime differs from the original and the fingerprint
-    // misses. Stamping the same exact value twice is what makes them equal.
+    // and after the rewrite. Capturing the file's own mtime and restoring it
+    // does not work: a filesystem timestamp has nanosecond resolution, a Date
+    // cannot represent that many significant digits, and setAttributes writes
+    // back what the Date holds — measured, …729.521561435 restores as
+    // …729.521561000. The "restored" mtime therefore differs from the
+    // original and the fingerprint misses. Stamping the same exact
+    // microsecond-clean value twice is what makes the two reads agree.
     private let frozenMtime = Date(timeIntervalSince1970: 1_700_000_000)
 
     private func freezeMtime(_ path: String) {
@@ -66,7 +69,18 @@ final class TranscriptReaderCacheTests: XCTestCase {
         var body = line
         XCTAssertLessThanOrEqual(body.utf8.count + 1, size, "cannot pad up to \(size) bytes")
         while body.utf8.count + 1 < size { body += " " }
-        try? (body + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+
+        // Written through an open handle, NOT with write(toFile:atomically:),
+        // which renames a fresh file over the path and so changes the inode —
+        // which the fingerprint now (correctly) notices. Holding the
+        // fingerprint still means overwriting the same file in place.
+        guard let handle = FileHandle(forUpdatingAtPath: path) else {
+            return XCTFail("could not open \(path) for updating")
+        }
+        try? handle.seek(toOffset: 0)
+        handle.write(Data((body + "\n").utf8))
+        try? handle.truncate(atOffset: UInt64(size))
+        try? handle.close()
         freezeMtime(path)
 
         XCTAssertEqual((try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int, size)
@@ -206,6 +220,42 @@ final class TranscriptReaderCacheTests: XCTestCase {
         try? (assistant(tokens: 606) + "\n").write(toFile: target, atomically: true, encoding: .utf8)
         XCTAssertEqual(TranscriptReader.read(path: link)?.tokens, 606,
                        "a nil from a dangling link must not outlive the link going live")
+    }
+
+    // (size, mtime) alone is reproducible by an atomic replace: a different
+    // file renamed over the path with the same byte length and the times
+    // copied across, which is what `cp -p`, `rsync -t`, `touch -r` and a
+    // restore from backup all do. Size and mtime then match while the contents
+    // do not, and the stale answer would be served for the life of the
+    // process. The device and inode make the swap visible.
+    //
+    // Built with `touch -r` rather than by hand so the mtime is copied at the
+    // filesystem's own resolution — a Date cannot carry those digits, so
+    // setAttributes could not express this case at all.
+    func testAnAtomicReplaceWithCopiedTimesIsNoticed() {
+        let path = write([assistant(tokens: 1111)])
+        XCTAssertEqual(TranscriptReader.read(path: path)?.tokens, 1111)
+
+        // Same byte length, different contents, in a separate file.
+        let replacement = (path as NSString).deletingLastPathComponent + "/replacement.jsonl"
+        var body = assistant(tokens: 9999)
+        let want = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int ?? 0
+        while body.utf8.count + 1 < want { body += " " }
+        try? (body + "\n").write(toFile: replacement, atomically: true, encoding: .utf8)
+
+        // Copy the original's timestamps onto it, then rename it over.
+        let touch = Process()
+        touch.executableURL = URL(fileURLWithPath: "/usr/bin/touch")
+        touch.arguments = ["-r", path, replacement]
+        try? touch.run()
+        touch.waitUntilExit()
+        try? FileManager.default.replaceItem(at: URL(fileURLWithPath: path),
+                                             withItemAt: URL(fileURLWithPath: replacement),
+                                             backupItemName: nil,
+                                             resultingItemURL: nil)
+
+        XCTAssertEqual(TranscriptReader.read(path: path)?.tokens, 9999,
+                       "an atomic replace that preserves size and mtime must still be noticed")
     }
 
     // The cacheability rule, directly. Stats present is always worth keeping.

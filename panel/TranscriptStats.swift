@@ -59,11 +59,24 @@ enum TranscriptReader {
 
     private struct Fingerprint: Equatable {
         let size: Int
+
         // Seconds since the epoch, from fstat's nanosecond-resolution
-        // st_mtimespec. Kept as a Double rather than a Date so the comparison
-        // is against the value the kernel reported, with no conversion in
-        // between.
+        // st_mtimespec. Kept as the kernel's own numbers rather than a Date
+        // because Date cannot hold them: its Double has about 16 significant
+        // digits, and 10 go on the epoch seconds, so a nanosecond timestamp
+        // round-trips lossily (measured: …729.521561435 comes back as
+        // …729.521561000, truncated at the microsecond).
         let mtime: Double
+
+        // Identity of the file itself, not of the name. (size, mtime) alone is
+        // reproducible by an atomic replace — rename-over with the byte length
+        // matching and the times preserved, which `cp -p`, `rsync -t`,
+        // `touch -r` and a Time Machine restore all do. The device and inode
+        // make such a replace visible, and close two related holes for free: a
+        // path recycled for a different session's transcript, and an APFS
+        // clone. Both come out of the fstat already being paid for.
+        let device: UInt64
+        let inode: UInt64
     }
 
     private static let cacheLock = NSLock()
@@ -159,7 +172,10 @@ enum TranscriptReader {
         guard fstat(handle.fileDescriptor, &info) == 0 else { return nil }
         let mtime = Double(info.st_mtimespec.tv_sec)
             + Double(info.st_mtimespec.tv_nsec) / 1_000_000_000
-        return Fingerprint(size: Int(info.st_size), mtime: mtime)
+        return Fingerprint(size: Int(info.st_size),
+                           mtime: mtime,
+                           device: UInt64(info.st_dev),
+                           inode: UInt64(info.st_ino))
     }
 
     // Tests share process state with each other; drop the table so one test's
