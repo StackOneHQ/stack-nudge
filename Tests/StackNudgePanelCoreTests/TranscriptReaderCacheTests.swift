@@ -119,6 +119,24 @@ final class TranscriptReaderCacheTests: XCTestCase {
         XCTAssertEqual(TranscriptReader.read(path: path)?.tokens, 222)
     }
 
+    // And the mirror case, which is what makes `size` part of the fingerprint
+    // rather than decoration: a transcript that grew while its mtime stayed
+    // put must still be re-read. mtime alone passes every other test here
+    // (APFS timestamps are nanosecond-resolution, so an append practically
+    // always moves them), so without this the size field could be deleted and
+    // nothing would notice until a file arrived with a stale timestamp — from
+    // a restore, a copy, or a clock that stepped backwards.
+    func testGrowthWithAnUnchangedMtimeIsReReadOnSize() {
+        let path = write([assistant(tokens: 300)])
+        freezeMtime(path)
+        XCTAssertEqual(TranscriptReader.read(path: path)?.tokens, 300)
+
+        rewrite(path, [assistant(tokens: 300), assistant(tokens: 800)])
+        freezeMtime(path)
+        XCTAssertEqual(TranscriptReader.read(path: path)?.tokens, 800,
+                       "a changed size must re-read even when the mtime is identical")
+    }
+
     // A nil is memoised too — a transcript with no assistant turn yet is the
     // one most likely to be polled repeatedly to no effect. Same proof: a real
     // re-read under a frozen fingerprint would find the assistant line.
