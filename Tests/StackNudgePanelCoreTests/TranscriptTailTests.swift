@@ -122,22 +122,47 @@ final class TranscriptTailTests: XCTestCase {
     // serial queue — one such open would wedge stats for every session, with
     // nothing to time it out.
     //
-    // The deadline is the assertion. A regression here does not fail this test,
-    // it hangs it, so the elapsed check is what turns a hang into a verdict.
+    // The scan runs on another thread and the test waits with a timeout, so a
+    // regression FAILS rather than hangs. Measuring elapsed time around a
+    // synchronous call cannot do that: if the open blocks, the assertion after
+    // it is never reached and the whole suite stops — which is what the first
+    // version of this test did, while its comment claimed otherwise.
     func testAFifoIsRefusedRatherThanBlockingOnTheOpen() {
         let dir = NSTemporaryDirectory() + "tail-fifo-\(UUID().uuidString)/"
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         let fifo = dir + "pipe.jsonl"
         XCTAssertEqual(mkfifo(fifo, 0o644), 0, "could not create the fifo")
 
-        let started = Date()
-        var yielded = 0
-        let clean = TranscriptTail.scanLinesBackwards(path: fifo) { _ in yielded += 1; return false }
-        let elapsed = -started.timeIntervalSinceNow
+        let done = DispatchSemaphore(value: 0)
+        let yielded = Counter()
+        var clean: Bool?
+        DispatchQueue.global(qos: .userInitiated).async {
+            clean = TranscriptTail.scanLinesBackwards(path: fifo) { _ in
+                yielded.bump()
+                return false
+            }
+            done.signal()
+        }
 
-        XCTAssertFalse(clean, "a fifo is not a transcript and must not read as a clean empty one")
-        XCTAssertEqual(yielded, 0)
-        XCTAssertLessThan(elapsed, 2.0, "the open blocked; O_NONBLOCK or the S_ISREG check is gone")
+        // A blocked open never signals, so this is the regression's verdict.
+        // The thread is left parked on open(2) in that case — unavoidable, and
+        // acceptable in a test process that is about to fail anyway.
+        guard done.wait(timeout: .now() + 5) == .success else {
+            return XCTFail("the open blocked; O_NONBLOCK or the S_ISREG check is gone")
+        }
+
+        XCTAssertEqual(clean, false,
+                       "a fifo is not a transcript and must not read as a clean empty one")
+        XCTAssertEqual(yielded.value, 0)
+    }
+
+    // Minimal thread-safe counter, so the scan's callback does not mutate a
+    // captured var from another thread.
+    private final class Counter {
+        private let lock = NSLock()
+        private var count = 0
+        func bump() { lock.lock(); count += 1; lock.unlock() }
+        var value: Int { lock.lock(); defer { lock.unlock() }; return count }
     }
 
     // The same door rejects the other non-regular paths rather than treating

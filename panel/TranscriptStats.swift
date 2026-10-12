@@ -132,7 +132,14 @@ enum TranscriptReader {
         }
 
         cacheLock.lock()
-        if cache.count >= cacheLimit { cache.removeAll(keepingCapacity: true) }
+        // Only when the table would actually grow. Clearing on an *update* at
+        // the limit discards 511 live entries to make room for one that needs
+        // none, forcing a cold parse of every active transcript on the next
+        // poll — and a steady state of exactly `cacheLimit` live sessions would
+        // do it on every single read.
+        if cache[path] == nil && cache.count >= cacheLimit {
+            cache.removeAll(keepingCapacity: true)
+        }
         cache[path] = (current, result.stats)
         cacheLock.unlock()
         return result.stats
@@ -156,13 +163,23 @@ enum TranscriptReader {
     // that will never move again. mode changes touch ctime only, so size and
     // mtime are identical either side of a chmod — a nil memoised against that
     // fingerprint could never heal.
-    // Whether a parse result is worth remembering.
+    // Whether a parse result is worth remembering: only if the scan actually
+    // ran to a conclusion.
     //
-    // A nil from a read that never got off the ground is not evidence about the
-    // file's contents, and nothing about such a file has to change before the
-    // read would succeed — so caching it would make the failure permanent. A
-    // nil from a complete read IS evidence, and heals on the next turn because
-    // the file grows.
+    // A result from a scan that failed part-way is not evidence about the
+    // file's contents, in either direction, and nothing about such a file has
+    // to change before the read would succeed — so caching it would make the
+    // failure permanent. That holds for a partial success as much as for a nil:
+    // the Codex reader gathers tokens and a model separately, so an I/O error
+    // after the tokens but before the model returns real stats with a nil
+    // model, and memoising those would freeze the missing model in place.
+    // A nil from a *complete* read IS evidence, and heals on the next turn
+    // because the file grows.
+    //
+    // Note that finding everything and stopping early counts as complete —
+    // `scanLinesBackwards` returns true when the caller stops it — so this
+    // rejects only genuine read failures, which is why it needs no clause
+    // about `stats`.
     //
     // Reachable because the fingerprint and the read open the file separately:
     // the fingerprint can succeed and the read's own open then fail, which
@@ -171,7 +188,7 @@ enum TranscriptReader {
     // than a condition inline in `cached` — a mutation of it survived the suite
     // when it was inline.
     static func isCacheable(stats: TranscriptStats?, complete: Bool) -> Bool {
-        stats != nil || complete
+        complete
     }
 
     private static func fingerprint(path: String) -> Fingerprint? {

@@ -302,8 +302,9 @@ final class TranscriptReaderCacheTests: XCTestCase {
     func testOnlyAnEvidencedNilIsCacheable() {
         let stats = TranscriptStats(tokens: 1, model: nil)
         XCTAssertTrue(TranscriptReader.isCacheable(stats: stats, complete: true))
-        XCTAssertTrue(TranscriptReader.isCacheable(stats: stats, complete: false),
-                      "stats found mid-scan are still stats")
+        XCTAssertFalse(TranscriptReader.isCacheable(stats: stats, complete: false),
+                       "the Codex reader can find tokens and then fail before the model, "
+                       + "so a partial result would freeze a nil model in place")
         XCTAssertTrue(TranscriptReader.isCacheable(stats: nil, complete: true),
                       "a complete read that found nothing is evidence of nothing being there")
         XCTAssertFalse(TranscriptReader.isCacheable(stats: nil, complete: false),

@@ -140,7 +140,14 @@ enum PiTranscriptReader {
     // {"type":"session","version":N,"id":"<uuid>","timestamp":"...","cwd":"..."}.
     // Read only a bounded prefix — the header is tiny and the file can be MB.
     private static func sessionHeader(path: String) -> (id: String, cwd: String)? {
-        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        // Through TranscriptTail's door, not FileHandle's: `locate` picks this
+        // path by mtime out of a sessions directory, so a FIFO named *.jsonl
+        // sitting there would block in open(2) forever — and this read happens
+        // BEFORE the reader is reached, so guarding only the reader left the
+        // hole open. Every transcript read shares one serial queue, so that
+        // would stall stats for every session.
+        guard let opened = TranscriptTail.openRegularFile(path) else { return nil }
+        let handle = opened.handle
         defer { try? handle.close() }
         let prefix = handle.readData(ofLength: 65536)
         // Parse only the first line's bytes. Decoding the whole 64 KiB prefix as
