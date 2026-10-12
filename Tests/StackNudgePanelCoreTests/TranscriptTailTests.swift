@@ -116,6 +116,42 @@ final class TranscriptTailTests: XCTestCase {
         XCTAssertEqual(allLines(path, chunkSize: 4, maxBytes: 23), ["cccccccccc", "bbbbbbbbbb"])
     }
 
+    // A FIFO with no writer blocks in open(2) forever. Reachable because
+    // PiTranscriptReader.locate picks transcript paths out of a sessions
+    // directory by mtime, and serious because every transcript read shares one
+    // serial queue — one such open would wedge stats for every session, with
+    // nothing to time it out.
+    //
+    // The deadline is the assertion. A regression here does not fail this test,
+    // it hangs it, so the elapsed check is what turns a hang into a verdict.
+    func testAFifoIsRefusedRatherThanBlockingOnTheOpen() {
+        let dir = NSTemporaryDirectory() + "tail-fifo-\(UUID().uuidString)/"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let fifo = dir + "pipe.jsonl"
+        XCTAssertEqual(mkfifo(fifo, 0o644), 0, "could not create the fifo")
+
+        let started = Date()
+        var yielded = 0
+        let clean = TranscriptTail.scanLinesBackwards(path: fifo) { _ in yielded += 1; return false }
+        let elapsed = -started.timeIntervalSinceNow
+
+        XCTAssertFalse(clean, "a fifo is not a transcript and must not read as a clean empty one")
+        XCTAssertEqual(yielded, 0)
+        XCTAssertLessThan(elapsed, 2.0, "the open blocked; O_NONBLOCK or the S_ISREG check is gone")
+    }
+
+    // The same door rejects the other non-regular paths rather than treating
+    // them as transcripts. /dev/null used to read as a clean empty file, which
+    // was harmless but meant a nil got memoised against it.
+    func testNonRegularPathsAreRefused() {
+        let dir = NSTemporaryDirectory() + "tail-nonreg-\(UUID().uuidString)/"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        XCTAssertFalse(TranscriptTail.scanLinesBackwards(path: dir) { _ in true },
+                       "a directory is not a transcript")
+        XCTAssertFalse(TranscriptTail.scanLinesBackwards(path: "/dev/null") { _ in true },
+                       "a character device is not a transcript")
+    }
+
     func testRejectsNonPositiveBounds() {
         let path = write("a\nb\n")
         XCTAssertEqual(allLines(path, chunkSize: 0), [])

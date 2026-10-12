@@ -166,10 +166,9 @@ enum TranscriptReader {
     }
 
     private static func fingerprint(path: String) -> Fingerprint? {
-        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
-        defer { try? handle.close() }
-        var info = stat()
-        guard fstat(handle.fileDescriptor, &info) == 0 else { return nil }
+        guard let opened = TranscriptTail.openRegularFile(path) else { return nil }
+        try? opened.handle.close()
+        let info = opened.info
         let mtime = Double(info.st_mtimespec.tv_sec)
             + Double(info.st_mtimespec.tv_nsec) / 1_000_000_000
         return Fingerprint(size: Int(info.st_size),

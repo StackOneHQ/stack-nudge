@@ -16,6 +16,32 @@ enum TranscriptTail {
 
     static let defaultChunkSize = 64 * 1024
 
+    // Open `path` for reading, and only if it is a regular file, without ever
+    // blocking on the open itself.
+    //
+    // `FileHandle(forReadingAtPath:)` blocks in open(2) indefinitely on a FIFO
+    // with no writer. That is reachable: PiTranscriptReader.locate picks
+    // transcript paths out of a sessions directory by mtime, so a FIFO sitting
+    // there would be handed straight to a reader. It matters more than it looks
+    // because every transcript read now shares one serial queue — a single such
+    // open would wedge stats for every session, not just the one holding the
+    // FIFO, and nothing would time it out.
+    //
+    // O_NONBLOCK makes the open return immediately on a FIFO; it has no effect
+    // on a regular file, which is the only kind we go on to accept. The caller
+    // gets the stat as well, since it is needed anyway and this is the one open
+    // that proves the file both exists and is readable.
+    static func openRegularFile(_ path: String) -> (handle: FileHandle, info: stat)? {
+        let descriptor = open(path, O_RDONLY | O_NONBLOCK)
+        guard descriptor >= 0 else { return nil }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else {
+            close(descriptor)
+            return nil
+        }
+        return (FileHandle(fileDescriptor: descriptor, closeOnDealloc: false), info)
+    }
+
     // Stop after this much of the tail. The newest usage-bearing line sits
     // within a few KB of the end in every transcript we have looked at; this
     // is the backstop for a pathological file, large enough to be reached only
@@ -45,12 +71,12 @@ enum TranscriptTail {
                                    maxBytes: Int = defaultMaxBytes,
                                    _ body: (Data) -> Bool) -> Bool {
         guard chunkSize > 0, maxBytes > 0 else { return false }
-        guard let handle = FileHandle(forReadingAtPath: path) else { return false }
+        guard let opened = openRegularFile(path) else { return false }
+        let handle = opened.handle
         defer { try? handle.close() }
-        guard let end = try? handle.seekToEnd() else { return false }
-        if end == 0 { return true }
+        if opened.info.st_size == 0 { return true }
 
-        var offset = Int(end)
+        var offset = Int(opened.info.st_size)
         var consumed = 0
 
         // Pieces of the line straddling the start of what we have read, each
