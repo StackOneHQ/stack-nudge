@@ -60,13 +60,22 @@ enum TranscriptReader {
     private struct Fingerprint: Equatable {
         let size: Int
 
-        // Seconds since the epoch, from fstat's nanosecond-resolution
-        // st_mtimespec. Kept as the kernel's own numbers rather than a Date
-        // because Date cannot hold them: its Double has about 16 significant
-        // digits, and 10 go on the epoch seconds, so a nanosecond timestamp
-        // round-trips lossily (measured: …729.521561435 comes back as
-        // …729.521561000, truncated at the microsecond).
-        let mtime: Double
+        // st_mtimespec, as the kernel's own two integers.
+        //
+        // Not a Date and not a Double of seconds, because neither can hold a
+        // nanosecond timestamp at this epoch: a Double has about 16 significant
+        // digits and 10 go on the epoch seconds, leaving a resolution of
+        // 120 ns (measured) — so two mtimes a nanosecond apart compare equal,
+        // and only 1 of 6 sample nanosecond values round-trips exactly. Keeping
+        // the integers makes the comparison exact with no float arithmetic in
+        // it at all.
+        //
+        // Separately, and not the reason for this choice: `setAttributes`
+        // truncates to the microsecond on the WRITE path, which is why the
+        // tests freeze a whole-second constant instead of capturing and
+        // restoring the file's own mtime. The read path is not lossy.
+        let mtimeSeconds: Int
+        let mtimeNanoseconds: Int
 
         // Identity of the file itself, not of the name. (size, mtime) alone is
         // reproducible by an atomic replace — rename-over with the byte length
@@ -169,10 +178,9 @@ enum TranscriptReader {
         guard let opened = TranscriptTail.openRegularFile(path) else { return nil }
         try? opened.handle.close()
         let info = opened.info
-        let mtime = Double(info.st_mtimespec.tv_sec)
-            + Double(info.st_mtimespec.tv_nsec) / 1_000_000_000
         return Fingerprint(size: Int(info.st_size),
-                           mtime: mtime,
+                           mtimeSeconds: Int(info.st_mtimespec.tv_sec),
+                           mtimeNanoseconds: Int(info.st_mtimespec.tv_nsec),
                            device: UInt64(info.st_dev),
                            inode: UInt64(info.st_ino))
     }

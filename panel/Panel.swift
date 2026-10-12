@@ -2405,6 +2405,28 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         return "\(NSHomeDirectory())/.claude/projects/\(slug)/\(sessionID).jsonl"
     }
 
+    // Which model a handoff row should carry after a fresh reading.
+    //
+    // A nil reading means "I could not find the model", never "the model became
+    // nothing" — no agent can express the latter — so it must not erase what a
+    // previous Stop established. This matters because nil is now a routine
+    // outcome rather than a hypothetical one: a Codex rollout with no
+    // turn_context line has no model to find anywhere, and the model search is
+    // capped (CodexTranscriptReader.modelSearchBudget), so 40 of the 293
+    // rollouts on this machine report nil on every read.
+    //
+    // Unlike `record.ticket` just above the call site, whose comment reasons
+    // that "nil is fine — the rollup re-derives from the branch at display",
+    // `record.model` has no fallback anywhere: Insights reads it directly
+    // (Insights.swift:165) and simply drops the row from the by-model
+    // breakdown, while the by-agent and by-bucket totals on the same screen
+    // still count it — so the two charts stop agreeing and nothing says why.
+    // Keeping the last known model IS the self-correcting answer here, because
+    // the next Stop that does find a turn_context overwrites it.
+    static func mergedModel(existing: String?, incoming: String?) -> String? {
+        incoming ?? existing
+    }
+
     private func refreshTranscriptStats(for event: NudgeEvent) {
         guard let sessionID = event.claudeSessionID,
               let path = event.transcriptPath, !path.isEmpty
@@ -2472,7 +2494,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                     // fine — the rollup re-derives from the branch at display.
                     record.ticket = ticket
                     if let stats {
-                        record.model = stats.model
+                        record.model = Self.mergedModel(existing: record.model,
+                                                        incoming: stats.model)
                         // Fold the reading into a running total so a compacted
                         // session reflects its real effort, not just the
                         // post-compaction remainder (see ContextTokens.fold).

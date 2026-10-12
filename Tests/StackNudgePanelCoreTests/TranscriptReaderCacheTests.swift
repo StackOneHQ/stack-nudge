@@ -258,6 +258,43 @@ final class TranscriptReaderCacheTests: XCTestCase {
                        "an atomic replace that preserves size and mtime must still be noticed")
     }
 
+    // Two mtimes one nanosecond apart must be distinguishable. They are not if
+    // the fingerprint holds seconds as a Double: at this epoch a Double's
+    // resolution is 120 ns (measured), so a nanosecond-scale change vanishes
+    // and a rewrite inside that window would serve the stale answer.
+    //
+    // Set with utimensat, which is the only way to write an exact nanosecond
+    // mtime — setAttributes truncates to the microsecond, so it cannot build
+    // this case at all. Size and inode are held constant by writing in place,
+    // leaving the nanoseconds as the only difference.
+    func testOneNanosecondOfMtimeIsEnoughToReRead() {
+        let path = write([assistant(tokens: 700)])
+
+        func setMtime(nanoseconds: Int) {
+            var times = [timespec(tv_sec: 1_791_813_089, tv_nsec: 0),
+                         timespec(tv_sec: 1_791_813_089, tv_nsec: nanoseconds)]
+            XCTAssertEqual(utimensat(AT_FDCWD, path, &times, 0), 0, "could not set the mtime")
+        }
+
+        setMtime(nanoseconds: 123_456_789)
+        XCTAssertEqual(TranscriptReader.read(path: path)?.tokens, 700)
+
+        // Same bytes count, same inode, mtime one nanosecond later.
+        let size = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int ?? 0
+        var body = assistant(tokens: 900)
+        while body.utf8.count + 1 < size { body += " " }
+        if let handle = FileHandle(forUpdatingAtPath: path) {
+            try? handle.seek(toOffset: 0)
+            handle.write(Data((body + "\n").utf8))
+            try? handle.truncate(atOffset: UInt64(size))
+            try? handle.close()
+        }
+        setMtime(nanoseconds: 123_456_790)
+
+        XCTAssertEqual(TranscriptReader.read(path: path)?.tokens, 900,
+                       "a one-nanosecond mtime change must invalidate the entry")
+    }
+
     // The cacheability rule, directly. Stats present is always worth keeping.
     // A nil is worth keeping only when the read actually happened — otherwise
     // the failure would be memoised against a fingerprint that need never

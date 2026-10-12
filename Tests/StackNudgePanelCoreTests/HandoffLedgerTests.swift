@@ -7,6 +7,24 @@ import XCTest
 // reload-from-disk, and age/count retention.
 final class HandoffLedgerTests: XCTestCase {
 
+    // A nil model reading means "I could not find the model", never "the model
+    // became nothing", so it must not erase what an earlier Stop established.
+    // Routine rather than hypothetical: a Codex rollout with no turn_context
+    // line has no model anywhere, and the model search is capped, so a fresh
+    // read of one reports nil every time.
+    //
+    // The consequence of getting this wrong is quiet: Insights drops the row
+    // from its by-model breakdown while still counting it in the by-agent and
+    // by-bucket totals on the same screen, so the charts disagree silently.
+    func testANilModelReadingDoesNotEraseAKnownModel() {
+        XCTAssertEqual(PanelController.mergedModel(existing: "gpt-5.6-sol", incoming: nil),
+                       "gpt-5.6-sol", "a failed lookup must not clobber a known model")
+        XCTAssertEqual(PanelController.mergedModel(existing: "gpt-5.6-sol", incoming: "gpt-6"),
+                       "gpt-6", "a fresh reading still wins, so a model switch self-corrects")
+        XCTAssertEqual(PanelController.mergedModel(existing: nil, incoming: "gpt-6"), "gpt-6")
+        XCTAssertNil(PanelController.mergedModel(existing: nil, incoming: nil))
+    }
+
     private func tempURL() -> URL {
         URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("handoffs-\(UUID().uuidString).jsonl")
