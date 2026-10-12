@@ -30,31 +30,27 @@ enum PiTranscriptReader {
 
     private static let sessionsRoot = "\(NSHomeDirectory())/.pi/agent/sessions"
 
-    // Read the whole file and scan newest-first (same approach and tens-of-MB
-    // caveat as the Claude reader). First assistant message with a usage block
-    // wins. Returns nil for unreadable files or transcripts with no assistant
-    // turn yet.
+    // Scan the tail newest-first (same approach as the Claude reader; see
+    // TranscriptTail for why only the tail is read). First assistant message
+    // with a usage block wins. Returns nil for unreadable files or transcripts
+    // with no assistant turn yet.
     static func read(path: String) -> TranscriptStats? {
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path), options: .mappedIfSafe),
-              let text = String(data: data, encoding: .utf8)
-        else { return nil }
-
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
-        for line in lines.reversed() {
-            guard let lineData = line.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+        var found: TranscriptStats?
+        TranscriptTail.scanLinesBackwards(path: path) { line in
+            guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
                   (obj["type"] as? String) == "message",
                   let message = obj["message"] as? [String: Any],
                   (message["role"] as? String) == "assistant",
                   let usage = message["usage"] as? [String: Any]
-            else { continue }
+            else { return false }
             let input      = intValue(usage["input"])
             let cacheRead  = intValue(usage["cacheRead"])
             let cacheWrite = intValue(usage["cacheWrite"])
-            let model = message["model"] as? String
-            return TranscriptStats(tokens: input + cacheRead + cacheWrite, model: model)
+            found = TranscriptStats(tokens: input + cacheRead + cacheWrite,
+                                    model: message["model"] as? String)
+            return true
         }
-        return nil
+        return found
     }
 
     // Locate the active session file for a working directory. pi groups sessions

@@ -19,26 +19,23 @@ import Foundation
 // The active model is stamped on `turn_context` lines (and `session_meta`).
 enum CodexTranscriptReader {
 
-    // Read the whole file and scan newest-first, same approach (and same
-    // tens-of-MB caveat) as the Claude reader. The latest token_count gives
-    // current context occupancy; the latest model-bearing line gives the
-    // active model. Returns nil for unreadable files or rollouts with no
-    // token_count event yet.
+    // Scan the tail newest-first, same approach as the Claude reader. The
+    // latest token_count gives current context occupancy; the latest
+    // model-bearing line gives the active model. Returns nil for unreadable
+    // files or rollouts with no token_count event yet.
+    //
+    // Only the tail is read (see TranscriptTail for why). Codex stamps the
+    // model on a turn_context line every turn, so the tail carries it; a
+    // rollout long enough to exhaust the scan budget with the model named
+    // *only* in its opening session_meta resolves tokens without a model,
+    // which renders as the model shown verbatim rather than as no stats.
     static func read(path: String) -> TranscriptStats? {
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path), options: .mappedIfSafe),
-              let text = String(data: data, encoding: .utf8)
-        else { return nil }
-
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
-
         var tokens: Int?
         var model: String?
 
-        for line in lines.reversed() {
-            if tokens != nil && model != nil { break }
-            guard let lineData = line.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any]
-            else { continue }
+        TranscriptTail.scanLinesBackwards(path: path) { line in
+            guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any]
+            else { return false }
 
             let payload = obj["payload"] as? [String: Any]
             let payloadType = (payload?["type"] as? String) ?? (obj["type"] as? String)
@@ -55,6 +52,7 @@ enum CodexTranscriptReader {
             if model == nil {
                 model = modelFrom(obj: obj, payload: payload)
             }
+            return tokens != nil && model != nil
         }
 
         guard let tokens else { return nil }

@@ -2320,10 +2320,21 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // If STACKNUDGE_ACTIVATE_IMMEDIATELY is set, focus the source editor
     // right away without waiting for the user to click; we skip cues
     // entirely in that flow since the editor jump is the signal.
+    // Every transcript read goes through one serial queue. These loops fan out
+    // per active session, and on the global concurrent queue that meant N
+    // simultaneous reads: with a dozen live agents that was enough concurrent
+    // work to starve the utility pool (the same thread explosion
+    // ProcessOutput.run documents at its own spawn site) and to stack N files'
+    // worth of parsing into a single peak. Serialised, N sessions cost one read
+    // at a time; stats arrive a beat apart rather than together, which no
+    // caller can observe.
+    private static let transcriptQueue = DispatchQueue(label: "stack-nudge.transcript-stats",
+                                                      qos: .utility)
+
     // Re-read the Claude Code transcript referenced by an incoming
-    // event and publish updated context-window stats to nav. Runs
-    // off-main since transcripts can be a few MB; the final assignment
-    // hops back to main so SwiftUI re-renders cleanly.
+    // event and publish updated context-window stats to nav. Runs off-main
+    // because it touches the disk at all; the final assignment hops back to
+    // main so SwiftUI re-renders cleanly.
     // Refresh transcript stats for every known claude session whose
     // sidecar gave us a sessionId. Triggered when meaningful SessionStore
     // state changes, so stats stay current without rereading transcripts
@@ -2336,7 +2347,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                   let project = session.projectPath
             else { continue }
             let path = Self.transcriptPath(projectPath: project, sessionID: id)
-            DispatchQueue.global(qos: .utility).async { [weak self] in
+            Self.transcriptQueue.async { [weak self] in
                 guard let stats = TranscriptReader.read(path: path) else { return }
                 DispatchQueue.main.async {
                     self?.nav.claudeSessionStats[id] = stats
@@ -2353,7 +2364,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             guard session.agent != "claude",
                   let ref = nav.transcriptRefByPID[session.pid]
             else { continue }
-            DispatchQueue.global(qos: .utility).async { [weak self] in
+            Self.transcriptQueue.async { [weak self] in
                 guard let stats = TranscriptReader.read(path: ref.path) else { return }
                 DispatchQueue.main.async {
                     self?.nav.claudeSessionStats[ref.sessionID] = stats
@@ -2374,7 +2385,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             guard let id = session.claudeSessionID,
                   let project = session.projectPath
             else { continue }
-            DispatchQueue.global(qos: .utility).async { [weak self] in
+            Self.transcriptQueue.async { [weak self] in
                 guard let ref = PiTranscriptReader.locate(cwd: project),
                       let stats = TranscriptReader.read(path: ref.path)
                 else { return }
@@ -2404,7 +2415,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         if let pid = event.agentPID, pid > 0 {
             nav.transcriptRefByPID[pid] = TranscriptRef(sessionID: sessionID, path: path)
         }
-        DispatchQueue.global(qos: .utility).async { [weak self] in
+        Self.transcriptQueue.async { [weak self] in
             guard let stats = TranscriptReader.read(path: path) else { return }
             DispatchQueue.main.async {
                 self?.nav.claudeSessionStats[sessionID] = stats

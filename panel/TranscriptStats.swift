@@ -34,7 +34,14 @@ enum TranscriptReader {
     // Everything else is a Claude Code transcript. All return the same
     // TranscriptStats shape so the Sessions and Compact views render context
     // usage identically across agents.
+    //
+    // Results are memoised on (size, mtime) — see `cached`. Every caller comes
+    // through here, so all three agents get the skip.
     static func read(path: String) -> TranscriptStats? {
+        cached(path: path) { parse(path: $0) }
+    }
+
+    private static func parse(path: String) -> TranscriptStats? {
         if path.contains("/.pi/agent/sessions/") {
             return PiTranscriptReader.read(path: path)
         }
@@ -45,41 +52,98 @@ enum TranscriptReader {
         return readClaude(path: path)
     }
 
-    // Read a Claude Code transcript at `path`, scan from the end for the most
-    // recent assistant message with a usage block, and return its stats.
-    // Returns nil for unreadable files, empty transcripts, or transcripts that
-    // don't yet contain an assistant message.
-    //
-    // We read the whole file rather than tail-seeking — Claude Code
-    // transcripts are typically a few MB even for long sessions, and
-    // tail-seeking JSONL safely requires byte-by-byte reverse scanning
-    // to find a newline boundary. If transcripts grow to tens of MB
-    // in practice we can revisit.
-    private static func readClaude(path: String) -> TranscriptStats? {
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path), options: .mappedIfSafe),
-              let text = String(data: data, encoding: .utf8)
-        else { return nil }
+    // MARK: - Unchanged-file memoisation
 
-        // Iterate lines in reverse; first assistant entry with a usage
-        // block wins. Reverse scan is cheap even on a few-thousand-line
-        // transcript and means we don't pay to parse the whole file.
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
-        for line in lines.reversed() {
-            guard let lineData = line.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any]
-            else { continue }
+    private struct Fingerprint: Equatable {
+        let size: Int
+        let mtime: Date
+    }
+
+    private static let cacheLock = NSLock()
+    private static var cache: [String: (print: Fingerprint, stats: TranscriptStats?)] = [:]
+
+    // One entry per transcript path is tiny, but a long-lived panel sees a new
+    // path per session, so cap the table rather than let it creep. Transcripts
+    // are append-only: a stale entry can only be a path that stopped changing,
+    // which is exactly what is cheapest to re-read, so clearing wholesale on
+    // overflow costs one read per live session and needs no LRU bookkeeping.
+    private static let cacheLimit = 512
+
+    // The refresh poll re-reads every active session's transcript to keep stats
+    // live, but a transcript only changes when its agent writes a turn. Skip the
+    // read when neither size nor mtime has moved and replay the previous answer
+    // — replay rather than skip, because the callers rely on a refresh to
+    // repopulate stats after EventStore pruning or panel navigation.
+    //
+    // A nil result is memoised too: a transcript with no assistant turn yet is
+    // the case most likely to be polled repeatedly to no effect.
+    private static func cached(path: String,
+                               _ parse: (String) -> TranscriptStats?) -> TranscriptStats? {
+        guard let current = fingerprint(path: path) else {
+            // Cannot stat it: fall through to the parse, which will fail the
+            // same way the stat did, rather than serve a possibly stale hit.
+            return parse(path)
+        }
+
+        cacheLock.lock()
+        let hit = cache[path]
+        cacheLock.unlock()
+        if let hit, hit.print == current { return hit.stats }
+
+        let stats = parse(path)
+
+        cacheLock.lock()
+        if cache.count >= cacheLimit { cache.removeAll(keepingCapacity: true) }
+        cache[path] = (current, stats)
+        cacheLock.unlock()
+        return stats
+    }
+
+    private static func fingerprint(path: String) -> Fingerprint? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let size = attrs[.size] as? Int,
+              let mtime = attrs[.modificationDate] as? Date
+        else { return nil }
+        return Fingerprint(size: size, mtime: mtime)
+    }
+
+    // Tests share process state with each other; drop the table so one test's
+    // fixture cannot answer another's read.
+    static func resetCache() {
+        cacheLock.lock()
+        cache.removeAll()
+        cacheLock.unlock()
+    }
+
+    // MARK: - Claude Code transcripts
+
+    // Read a Claude Code transcript at `path`, scanning from the end for the
+    // most recent assistant message with a usage block. Returns nil for
+    // unreadable files, empty transcripts, or transcripts that don't yet
+    // contain an assistant message.
+    //
+    // Only the tail is read. This used to load the whole file and decode it to
+    // a String, which cost a full in-memory copy — 249 MB resident and 3.07s of
+    // CPU on a 241 MB transcript, per active session, per refresh. Sessions run
+    // for days now and transcripts reach hundreds of MB, so that is the budget
+    // TranscriptTail exists to avoid.
+    private static func readClaude(path: String) -> TranscriptStats? {
+        var found: TranscriptStats?
+        TranscriptTail.scanLinesBackwards(path: path) { line in
             // Claude Code transcript entries have type=assistant for model
             // turns; the usage block lives at .message.usage.
-            guard (obj["type"] as? String) == "assistant",
+            guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                  (obj["type"] as? String) == "assistant",
                   let message = obj["message"] as? [String: Any],
                   let usage   = message["usage"] as? [String: Any]
-            else { continue }
+            else { return false }
             let input   = usage["input_tokens"]                  as? Int ?? 0
             let cacheC  = usage["cache_creation_input_tokens"]   as? Int ?? 0
             let cacheR  = usage["cache_read_input_tokens"]       as? Int ?? 0
-            let model   = message["model"] as? String
-            return TranscriptStats(tokens: input + cacheC + cacheR, model: model)
+            found = TranscriptStats(tokens: input + cacheC + cacheR,
+                                    model: message["model"] as? String)
+            return true
         }
-        return nil
+        return found
     }
 }
