@@ -32,15 +32,23 @@ enum TranscriptTail {
     // Decoding a chunk to a String first would walk straight into that — the
     // same hazard PiTranscriptReader.sessionHeader documents for its prefix
     // read, where a straddling character silently loses an intact header.
+    // Returns whether the scan reached a natural end — the start of the file,
+    // the budget, or the caller saying stop. `false` means it could not open or
+    // could not read the file, which is NOT the same as finding nothing: the
+    // memoisation in TranscriptReader.cached refuses to cache a nil that came
+    // from a false, because nothing about such a file has to change before it
+    // would succeed, so the nil would stick forever. An empty file is a clean
+    // `true` — there is genuinely nothing in it.
+    @discardableResult
     static func scanLinesBackwards(path: String,
                                    chunkSize: Int = defaultChunkSize,
                                    maxBytes: Int = defaultMaxBytes,
-                                   _ body: (Data) -> Bool) {
-        guard chunkSize > 0, maxBytes > 0,
-              let handle = FileHandle(forReadingAtPath: path)
-        else { return }
+                                   _ body: (Data) -> Bool) -> Bool {
+        guard chunkSize > 0, maxBytes > 0 else { return false }
+        guard let handle = FileHandle(forReadingAtPath: path) else { return false }
         defer { try? handle.close() }
-        guard let end = try? handle.seekToEnd(), end > 0 else { return }
+        guard let end = try? handle.seekToEnd() else { return false }
+        if end == 0 { return true }
 
         var offset = Int(end)
         var consumed = 0
@@ -58,7 +66,7 @@ enum TranscriptTail {
             guard (try? handle.seek(toOffset: UInt64(offset))) != nil,
                   let chunk = try? handle.read(upToCount: size),
                   chunk.count == size
-            else { return }
+            else { return false }
 
             var buffer = chunk
             buffer.append(carry)
@@ -75,7 +83,7 @@ enum TranscriptTail {
             let complete = buffer[buffer.index(after: firstNewline)...]
             carry = Data(buffer[..<firstNewline])
             for line in complete.split(separator: 0x0A, omittingEmptySubsequences: true).reversed() {
-                if body(Data(line)) { return }
+                if body(Data(line)) { return true }
             }
         }
 
@@ -86,5 +94,6 @@ enum TranscriptTail {
         if offset == 0 && !carry.isEmpty {
             _ = body(carry)
         }
+        return true
     }
 }

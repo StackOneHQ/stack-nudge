@@ -34,9 +34,14 @@ enum PiTranscriptReader {
     // TranscriptTail for why only the tail is read). First assistant message
     // with a usage block wins. Returns nil for unreadable files or transcripts
     // with no assistant turn yet.
-    static func read(path: String) -> TranscriptStats? {
+    static func read(path: String) -> TranscriptStats? { scan(path: path).stats }
+
+    // As `read`, but also reporting whether the file could be read at all —
+    // TranscriptReader.cached needs the two apart to decide whether a nil is
+    // safe to memoise.
+    static func scan(path: String) -> (stats: TranscriptStats?, complete: Bool) {
         var found: TranscriptStats?
-        TranscriptTail.scanLinesBackwards(path: path) { line in
+        let complete = TranscriptTail.scanLinesBackwards(path: path) { line in
             guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
                   (obj["type"] as? String) == "message",
                   let message = obj["message"] as? [String: Any],
@@ -50,7 +55,7 @@ enum PiTranscriptReader {
                                     model: message["model"] as? String)
             return true
         }
-        return found
+        return (found, complete)
     }
 
     // Locate the active session file for a working directory. pi groups sessions

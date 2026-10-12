@@ -41,22 +41,29 @@ enum TranscriptReader {
         cached(path: path) { parse(path: $0) }
     }
 
-    private static func parse(path: String) -> TranscriptStats? {
+    // `complete` is false when the file could not be opened or read at all, as
+    // opposed to being read and found to hold no usage block. The distinction
+    // decides whether a nil is cacheable — see `cached`.
+    private static func parse(path: String) -> (stats: TranscriptStats?, complete: Bool) {
         if path.contains("/.pi/agent/sessions/") {
-            return PiTranscriptReader.read(path: path)
+            return PiTranscriptReader.scan(path: path)
         }
         if path.contains("/.codex/")
             || (path as NSString).lastPathComponent.hasPrefix("rollout-") {
-            return CodexTranscriptReader.read(path: path)
+            return CodexTranscriptReader.scan(path: path)
         }
-        return readClaude(path: path)
+        return scanClaude(path: path)
     }
 
     // MARK: - Unchanged-file memoisation
 
     private struct Fingerprint: Equatable {
         let size: Int
-        let mtime: Date
+        // Seconds since the epoch, from fstat's nanosecond-resolution
+        // st_mtimespec. Kept as a Double rather than a Date so the comparison
+        // is against the value the kernel reported, with no conversion in
+        // between.
+        let mtime: Double
     }
 
     private static let cacheLock = NSLock()
@@ -78,11 +85,13 @@ enum TranscriptReader {
     // A nil result is memoised too: a transcript with no assistant turn yet is
     // the case most likely to be polled repeatedly to no effect.
     private static func cached(path: String,
-                               _ parse: (String) -> TranscriptStats?) -> TranscriptStats? {
+                               _ parse: (String) -> (stats: TranscriptStats?, complete: Bool))
+        -> TranscriptStats? {
         guard let current = fingerprint(path: path) else {
-            // Cannot stat it: fall through to the parse, which will fail the
-            // same way the stat did, rather than serve a possibly stale hit.
-            return parse(path)
+            // Cannot open it: fall through to the parse, which will fail the
+            // same way, rather than serve a hit against a fingerprint we could
+            // not confirm.
+            return parse(path).stats
         }
 
         cacheLock.lock()
@@ -90,21 +99,52 @@ enum TranscriptReader {
         cacheLock.unlock()
         if let hit, hit.print == current { return hit.stats }
 
-        let stats = parse(path)
+        // Fingerprint is taken BEFORE the parse deliberately. A transcript
+        // appended to mid-parse then leaves a cached entry whose fingerprint
+        // already looks stale, so the next poll re-reads. Taking it afterwards
+        // would pair the new fingerprint with the older content and stick.
+        let result = parse(path)
+
+        // A nil from a read that never got off the ground is not evidence about
+        // the file's contents, and nothing about such a file has to change
+        // before the read would succeed — so caching it would make the failure
+        // permanent. A nil from a complete read is evidence, and heals on the
+        // next turn because the file grows.
+        guard result.stats != nil || result.complete else { return nil }
 
         cacheLock.lock()
         if cache.count >= cacheLimit { cache.removeAll(keepingCapacity: true) }
-        cache[path] = (current, stats)
+        cache[path] = (current, result.stats)
         cacheLock.unlock()
-        return stats
+        return result.stats
     }
 
+    // Fingerprint the file we would actually read, by opening it and stat'ing
+    // the descriptor.
+    //
+    // `FileManager.attributesOfItem` cannot be used here: it does not follow
+    // symlinks, while the reader (FileHandle) does. A symlink's size is the
+    // length of its target path and its mtime is when the link was made —
+    // neither moves while the agent appends to the target, so a symlinked
+    // transcript path would be fingerprinted once and then served from the
+    // cache forever, freezing the session's token count at its first reading.
+    // `~/.claude/projects` relocated to another volume or checked into a
+    // dotfiles repo is exactly that shape.
+    //
+    // Opening also makes readability part of the fingerprint's precondition: a
+    // file that stats but cannot be opened (mode 000, another uid, a dangling
+    // symlink, EMFILE under fan-out) yields nil here rather than a fingerprint
+    // that will never move again. mode changes touch ctime only, so size and
+    // mtime are identical either side of a chmod — a nil memoised against that
+    // fingerprint could never heal.
     private static func fingerprint(path: String) -> Fingerprint? {
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-              let size = attrs[.size] as? Int,
-              let mtime = attrs[.modificationDate] as? Date
-        else { return nil }
-        return Fingerprint(size: size, mtime: mtime)
+        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? handle.close() }
+        var info = stat()
+        guard fstat(handle.fileDescriptor, &info) == 0 else { return nil }
+        let mtime = Double(info.st_mtimespec.tv_sec)
+            + Double(info.st_mtimespec.tv_nsec) / 1_000_000_000
+        return Fingerprint(size: Int(info.st_size), mtime: mtime)
     }
 
     // Tests share process state with each other; drop the table so one test's
@@ -127,9 +167,9 @@ enum TranscriptReader {
     // CPU on a 241 MB transcript, per active session, per refresh. Sessions run
     // for days now and transcripts reach hundreds of MB, so that is the budget
     // TranscriptTail exists to avoid.
-    private static func readClaude(path: String) -> TranscriptStats? {
+    private static func scanClaude(path: String) -> (stats: TranscriptStats?, complete: Bool) {
         var found: TranscriptStats?
-        TranscriptTail.scanLinesBackwards(path: path) { line in
+        let complete = TranscriptTail.scanLinesBackwards(path: path) { line in
             // Claude Code transcript entries have type=assistant for model
             // turns; the usage block lives at .message.usage.
             guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
@@ -144,6 +184,6 @@ enum TranscriptReader {
                                     model: message["model"] as? String)
             return true
         }
-        return found
+        return (found, complete)
     }
 }

@@ -150,6 +150,64 @@ final class TranscriptReaderCacheTests: XCTestCase {
                      "an unchanged fingerprint must keep serving the memoised nil")
     }
 
+    // A symlinked transcript path must be fingerprinted by its TARGET, not by
+    // the link. `FileManager.attributesOfItem` does not follow symlinks while
+    // the reader does, so fingerprinting through it froze the link's own size
+    // (the length of its target path) and mtime (when the link was made) —
+    // neither of which moves while an agent appends. The session's token count
+    // would stick at its first reading for the life of the process.
+    func testASymlinkedPathFollowsItsTarget() {
+        let dir = NSTemporaryDirectory() + "transcript-link-\(UUID().uuidString)/"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let target = dir + "target.jsonl"
+        let link = dir + "link.jsonl"
+        try? (assistant(tokens: 1000) + "\n").write(toFile: target, atomically: true, encoding: .utf8)
+        try? FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: target)
+
+        XCTAssertEqual(TranscriptReader.read(path: link)?.tokens, 1000)
+
+        // Append through the target. The link's own stat does not budge.
+        try? ([assistant(tokens: 1000), assistant(tokens: 250_000)].joined(separator: "\n") + "\n")
+            .write(toFile: target, atomically: true, encoding: .utf8)
+        XCTAssertEqual(TranscriptReader.read(path: link)?.tokens, 250_000,
+                       "the fingerprint must track the target, not the link")
+    }
+
+    // A file that stats but cannot be opened must not have its nil memoised. A
+    // chmod touches ctime only — size and mtime are byte-identical either side
+    // of it — so a nil cached against that fingerprint could never heal, and
+    // the session would read as having no stats until the app restarted.
+    // Reachable without any permissions game via EMFILE under the read
+    // fan-out, a transcript owned by another uid, or a dangling symlink.
+    func testAnUnreadableFileDoesNotMemoiseItsNil() {
+        let path = write([assistant(tokens: 4242)])
+        try? FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: path)
+        // root can read a mode-000 file, so the premise would not hold there.
+        guard FileHandle(forReadingAtPath: path) == nil else { return }
+        XCTAssertNil(TranscriptReader.read(path: path))
+
+        try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: path)
+        XCTAssertEqual(TranscriptReader.read(path: path)?.tokens, 4242,
+                       "a nil from a file that could not be opened must not be cached")
+    }
+
+    // The same asymmetry through a dangling symlink, which stats fine (the link
+    // exists) but cannot be opened. Once the target appears the stats must
+    // resolve rather than stay pinned to the cached nil.
+    func testADanglingSymlinkDoesNotMemoiseItsNil() {
+        let dir = NSTemporaryDirectory() + "transcript-dangling-\(UUID().uuidString)/"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let target = dir + "target.jsonl"
+        let link = dir + "link.jsonl"
+        try? FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: target)
+
+        XCTAssertNil(TranscriptReader.read(path: link))
+
+        try? (assistant(tokens: 606) + "\n").write(toFile: target, atomically: true, encoding: .utf8)
+        XCTAssertEqual(TranscriptReader.read(path: link)?.tokens, 606,
+                       "a nil from a dangling link must not outlive the link going live")
+    }
+
     // An unstattable path must not serve another path's answer, and must not
     // crash. It falls through to the parse, which fails the same way.
     func testMissingFileReturnsNil() {

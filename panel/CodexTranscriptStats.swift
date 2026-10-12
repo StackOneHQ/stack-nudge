@@ -29,11 +29,16 @@ enum CodexTranscriptReader {
     // rollout long enough to exhaust the scan budget with the model named
     // *only* in its opening session_meta resolves tokens without a model,
     // which renders as the model shown verbatim rather than as no stats.
-    static func read(path: String) -> TranscriptStats? {
+    static func read(path: String) -> TranscriptStats? { scan(path: path).stats }
+
+    // As `read`, but also reporting whether the file could be read at all —
+    // TranscriptReader.cached needs the two apart to decide whether a nil is
+    // safe to memoise.
+    static func scan(path: String) -> (stats: TranscriptStats?, complete: Bool) {
         var tokens: Int?
         var model: String?
 
-        TranscriptTail.scanLinesBackwards(path: path) { line in
+        let complete = TranscriptTail.scanLinesBackwards(path: path) { line in
             guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any]
             else { return false }
 
@@ -55,8 +60,8 @@ enum CodexTranscriptReader {
             return tokens != nil && model != nil
         }
 
-        guard let tokens else { return nil }
-        return TranscriptStats(tokens: tokens, model: model)
+        guard let tokens else { return (nil, complete) }
+        return (TranscriptStats(tokens: tokens, model: model), complete)
     }
 
     // Locate the rollout file for a Codex session id. Codex's Stop hook may send
