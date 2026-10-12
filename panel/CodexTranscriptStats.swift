@@ -35,19 +35,26 @@ enum CodexTranscriptReader {
     //
     // Only the tail is read (see TranscriptTail for why), and the search for
     // the model is capped separately and much lower than the search for the
-    // tokens. The two are found at very different depths — measured over the
+    // tokens. The two are found at very different depths: measured over the
     // rollouts on this machine (293 at the time of measuring), tokens need at
     // most 28 KB, while the model runs to 2.5 MB at worst (p50 21 KB,
-    // p99 1.9 MB) and on 54 of them is absent altogether. Stopping only when
-    // BOTH are found therefore walked the entire budget on every read of those
-    // 54, which is exactly the cost this file was changed to avoid. Past
+    // p99 1.9 MB) and on some rollouts is absent altogether. Past
     // `modelSearchBudget` the tokens alone are enough; the model is left nil
     // and Sessions omits the model clause.
     //
-    // The two counts differ and are both load-bearing: the model is missing on
-    // 54, of which 40 also resolve tokens and so return stats carrying a nil
-    // model — which is the number that matters to
-    // PanelController.mergedModel. The other 14 return no stats at all.
+    // Three different counts live here and it is easy to quote the wrong one,
+    // so all three, bucketed by what `scan` actually returns:
+    //
+    //   226  tokens + model      deepest 2.47 MB, median 0.02 MB
+    //    40  tokens, no model    deepest 4.00 MB, median 2.40 MB   <- nil model
+    //    27  no tokens at all    deepest 0.16 MB, median 0.02 MB
+    //
+    // 54 rollouts have no model anywhere; 40 of those still resolve tokens and
+    // so return stats carrying a nil model, which is the number that matters
+    // to PanelController.mergedModel; and of those 40, **15** are the ones the
+    // budget actually stops — the other 25 reach the start of the file first.
+    // 15 is the count that justifies this cap existing, and before it those 15
+    // walked 8 MB on every read instead of 4.
     //
     // 4 MB clears every model depth observed with room to spare while halving
     // the worst case. Tighten it with fresh measurements rather than by
