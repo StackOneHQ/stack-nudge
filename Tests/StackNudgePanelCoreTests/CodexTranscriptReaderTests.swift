@@ -31,6 +31,44 @@ final class CodexTranscriptReaderTests: XCTestCase {
         return (root, path)
     }
 
+    // The stop rule governs how much of a large rollout is read. Tokens sit
+    // within 28 KB across all 293 rollouts measured; the model runs to 2.5 MB
+    // and on 40 of them is absent entirely, so stopping only when BOTH are
+    // found walked the whole 8 MB budget on every read of those. Past the model
+    // budget the tokens alone are enough.
+    func test_stop_waitsForTokensThenGivesUpOnTheModel() {
+        // No tokens yet: keep scanning however deep we are.
+        XCTAssertFalse(CodexTranscriptReader.stop(tokens: nil, model: nil, depth: 0))
+        XCTAssertFalse(CodexTranscriptReader.stop(tokens: nil, model: "gpt-5-codex", depth: 0))
+        XCTAssertFalse(CodexTranscriptReader.stop(tokens: nil, model: nil,
+                                                  depth: CodexTranscriptReader.modelSearchBudget * 2),
+                       "the token budget is TranscriptTail's, not this rule's")
+
+        // Tokens in hand: stop at once if the model is known.
+        XCTAssertTrue(CodexTranscriptReader.stop(tokens: 100, model: "gpt-5-codex", depth: 0))
+
+        // Tokens in hand, model still missing: keep looking, but not forever.
+        XCTAssertFalse(CodexTranscriptReader.stop(tokens: 100, model: nil, depth: 0))
+        XCTAssertFalse(CodexTranscriptReader.stop(tokens: 100, model: nil,
+                                                  depth: CodexTranscriptReader.modelSearchBudget),
+                       "the budget is a ceiling to exceed, not to reach")
+        XCTAssertTrue(CodexTranscriptReader.stop(tokens: 100, model: nil,
+                                                 depth: CodexTranscriptReader.modelSearchBudget + 1))
+    }
+
+    // A rollout with no turn_context line anywhere has no model to find —
+    // session_meta carries `model_provider`, not `model`. It must still report
+    // its tokens rather than resolving to nothing.
+    func test_read_resolvesTokensWhenNoLineCarriesAModel() {
+        let path = writeRollout([
+            #"{"type":"session_meta","payload":{"type":"session_meta","id":"s1","model_provider":"openai"}}"#,
+            #"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":4096,"reasoning_output_tokens":96}}}}"#,
+        ])
+        let stats = CodexTranscriptReader.read(path: path)
+        XCTAssertEqual(stats?.tokens, 4000)
+        XCTAssertNil(stats?.model, "no turn_context means no model, and that is not a failure")
+    }
+
     func test_rolloutPath_findsRolloutBySessionIdSuffix() {
         let sid = "019feb59-9aec-7480-b180-7e8b1cb64117"
         let tree = writeSessionsTree(sessionID: sid)

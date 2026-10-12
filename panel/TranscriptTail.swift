@@ -53,11 +53,27 @@ enum TranscriptTail {
         var offset = Int(end)
         var consumed = 0
 
-        // Bytes of the line straddling the start of what we have read so far.
-        // Its beginning lies earlier in the file, so it cannot be emitted until
-        // an earlier chunk completes it — or until we reach offset 0, where it
-        // is the file's first line and therefore already whole.
-        var carry = Data()
+        // Pieces of the line straddling the start of what we have read, each
+        // piece earlier in the file than the one appended before it — so the
+        // line in file order is `carryParts` reversed and joined.
+        //
+        // Held as pieces rather than one growing blob on purpose. Appending the
+        // accumulated carry into a fresh buffer once per chunk makes a long
+        // line quadratic in its length: at the default chunk size a 1.3 MB line
+        // — the longest in any transcript on this machine — copies ~13 MB, and
+        // the cost grows with the square, so a line at the budget ceiling would
+        // burn over a second to yield nothing. Appending a piece is O(1)
+        // amortised and each byte is copied once.
+        //
+        // No piece ever contains a newline, which is what lets the search below
+        // look at the incoming chunk alone rather than at the join.
+        var carryParts: [Data] = []
+
+        func assembledCarry() -> Data {
+            var out = Data()
+            for part in carryParts.reversed() { out.append(part) }
+            return out
+        }
 
         while offset > 0 && consumed < maxBytes {
             let size = min(chunkSize, offset, maxBytes - consumed)
@@ -68,31 +84,45 @@ enum TranscriptTail {
                   chunk.count == size
             else { return false }
 
-            var buffer = chunk
-            buffer.append(carry)
-
-            guard let firstNewline = buffer.firstIndex(of: 0x0A) else {
-                // No line boundary in this chunk: the whole buffer is still one
-                // unfinished line. Keep walking back for its start.
-                carry = buffer
+            guard let firstNewline = chunk.firstIndex(of: 0x0A),
+                  let lastNewline = chunk.lastIndex(of: 0x0A)
+            else {
+                // No line boundary here: the whole chunk belongs to the line
+                // still being assembled. Keep walking back for its start.
+                carryParts.append(chunk)
                 continue
             }
 
-            // Everything past the first newline is whole lines; everything
-            // before it belongs to a line that starts earlier still.
-            let complete = buffer[buffer.index(after: firstNewline)...]
-            carry = Data(buffer[..<firstNewline])
-            for line in complete.split(separator: 0x0A, omittingEmptySubsequences: true).reversed() {
-                if body(Data(line)) { return true }
+            // The bytes after this chunk's LAST newline, followed by everything
+            // carried, form one whole line — that newline proves where it
+            // starts. This is the only place the carry is concatenated, so each
+            // carried byte is copied exactly once.
+            var tail = Data(chunk[chunk.index(after: lastNewline)...])
+            for part in carryParts.reversed() { tail.append(part) }
+            carryParts.removeAll(keepingCapacity: true)
+            if !tail.isEmpty, body(tail) { return true }
+
+            // Lines lying wholly inside this chunk, between its first and last
+            // newline, newest first. When the chunk holds a single newline
+            // there is no such region — and the range would be invalid.
+            if firstNewline != lastNewline {
+                let middle = chunk[chunk.index(after: firstNewline)..<lastNewline]
+                for line in middle.split(separator: 0x0A, omittingEmptySubsequences: true).reversed() {
+                    if body(Data(line)) { return true }
+                }
             }
+
+            // Before the first newline: a line that starts earlier still.
+            carryParts.append(Data(chunk[..<firstNewline]))
         }
 
         // Reached the start of the file: the carry is its first line, complete.
         // A budget-exhausted carry is NOT emitted — it is a fragment, and
         // handing a truncated line to a JSON parser would at best fail and at
         // worst parse into something wrong.
-        if offset == 0 && !carry.isEmpty {
-            _ = body(carry)
+        if offset == 0 {
+            let carry = assembledCarry()
+            if !carry.isEmpty { _ = body(carry) }
         }
         return true
     }

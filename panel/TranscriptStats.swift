@@ -105,12 +105,9 @@ enum TranscriptReader {
         // would pair the new fingerprint with the older content and stick.
         let result = parse(path)
 
-        // A nil from a read that never got off the ground is not evidence about
-        // the file's contents, and nothing about such a file has to change
-        // before the read would succeed — so caching it would make the failure
-        // permanent. A nil from a complete read is evidence, and heals on the
-        // next turn because the file grows.
-        guard result.stats != nil || result.complete else { return nil }
+        guard isCacheable(stats: result.stats, complete: result.complete) else {
+            return nil
+        }
 
         cacheLock.lock()
         if cache.count >= cacheLimit { cache.removeAll(keepingCapacity: true) }
@@ -137,6 +134,24 @@ enum TranscriptReader {
     // that will never move again. mode changes touch ctime only, so size and
     // mtime are identical either side of a chmod — a nil memoised against that
     // fingerprint could never heal.
+    // Whether a parse result is worth remembering.
+    //
+    // A nil from a read that never got off the ground is not evidence about the
+    // file's contents, and nothing about such a file has to change before the
+    // read would succeed — so caching it would make the failure permanent. A
+    // nil from a complete read IS evidence, and heals on the next turn because
+    // the file grows.
+    //
+    // Reachable because the fingerprint and the read open the file separately:
+    // the fingerprint can succeed and the read's own open then fail, which
+    // under the per-session read fan-out means EMFILE. That window is hard to
+    // force in a test, which is the reason this rule is a pure function rather
+    // than a condition inline in `cached` — a mutation of it survived the suite
+    // when it was inline.
+    static func isCacheable(stats: TranscriptStats?, complete: Bool) -> Bool {
+        stats != nil || complete
+    }
+
     private static func fingerprint(path: String) -> Fingerprint? {
         guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
         defer { try? handle.close() }

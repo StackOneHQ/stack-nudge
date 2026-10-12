@@ -208,6 +208,21 @@ final class TranscriptReaderCacheTests: XCTestCase {
                        "a nil from a dangling link must not outlive the link going live")
     }
 
+    // The cacheability rule, directly. Stats present is always worth keeping.
+    // A nil is worth keeping only when the read actually happened — otherwise
+    // the failure would be memoised against a fingerprint that need never
+    // change again, and the session would show no stats until a restart.
+    func testOnlyAnEvidencedNilIsCacheable() {
+        let stats = TranscriptStats(tokens: 1, model: nil)
+        XCTAssertTrue(TranscriptReader.isCacheable(stats: stats, complete: true))
+        XCTAssertTrue(TranscriptReader.isCacheable(stats: stats, complete: false),
+                      "stats found mid-scan are still stats")
+        XCTAssertTrue(TranscriptReader.isCacheable(stats: nil, complete: true),
+                      "a complete read that found nothing is evidence of nothing being there")
+        XCTAssertFalse(TranscriptReader.isCacheable(stats: nil, complete: false),
+                       "a nil from a read that never got off the ground must not stick")
+    }
+
     // An unstattable path must not serve another path's answer, and must not
     // crash. It falls through to the parse, which fails the same way.
     func testMissingFileReturnsNil() {

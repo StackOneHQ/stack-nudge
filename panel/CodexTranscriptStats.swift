@@ -16,19 +16,36 @@ import Foundation
 //     subset, not additive), so we must not sum them — the mistake that
 //     produces the well-known token-inflation bugs in third-party parsers.
 //
-// The active model is stamped on `turn_context` lines (and `session_meta`).
+// The active model is stamped on `turn_context` lines. `session_meta` does NOT
+// carry it — its payload has `model_provider`, not `model` — so a rollout with
+// no `turn_context` line has no model to find anywhere. Verified across the 293
+// rollouts on this machine: 40 of them resolve tokens with no model at all.
+// `turn_context` is emitted when the turn context changes (model, effort,
+// approval), not once per turn: a long interactive session has thousands, a
+// short one has exactly one near the head, and a `codex exec` run has none.
 enum CodexTranscriptReader {
+
+    // How deep to keep looking for the model once the tokens are in hand.
+    static let modelSearchBudget = 4 * 1024 * 1024
 
     // Scan the tail newest-first, same approach as the Claude reader. The
     // latest token_count gives current context occupancy; the latest
     // model-bearing line gives the active model. Returns nil for unreadable
     // files or rollouts with no token_count event yet.
     //
-    // Only the tail is read (see TranscriptTail for why). Codex stamps the
-    // model on a turn_context line every turn, so the tail carries it; a
-    // rollout long enough to exhaust the scan budget with the model named
-    // *only* in its opening session_meta resolves tokens without a model,
-    // which renders as the model shown verbatim rather than as no stats.
+    // Only the tail is read (see TranscriptTail for why), and the search for
+    // the model is capped separately and much lower than the search for the
+    // tokens. The two are found at very different depths — measured over the
+    // 293 rollouts here, tokens need at most 28 KB, while the model runs to
+    // 2.5 MB at worst (p50 21 KB, p99 1.9 MB) and on 40 of them is absent
+    // altogether. Stopping only when BOTH are found therefore walked the entire
+    // budget on every read of those 40, which is exactly the cost this file was
+    // changed to avoid. Past `modelSearchBudget` the tokens alone are enough;
+    // the model is left nil and Sessions omits the model clause.
+    //
+    // 4 MB clears every model depth observed with room to spare while halving
+    // the worst case. Tighten it with fresh measurements rather than by
+    // guessing — the only cost of it being too low is a missing model label.
     static func read(path: String) -> TranscriptStats? { scan(path: path).stats }
 
     // As `read`, but also reporting whether the file could be read at all —
@@ -38,9 +55,12 @@ enum CodexTranscriptReader {
         var tokens: Int?
         var model: String?
 
+        var depth = 0
+
         let complete = TranscriptTail.scanLinesBackwards(path: path) { line in
+            depth += line.count + 1
             guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any]
-            else { return false }
+            else { return stop(tokens: tokens, model: model, depth: depth) }
 
             let payload = obj["payload"] as? [String: Any]
             let payloadType = (payload?["type"] as? String) ?? (obj["type"] as? String)
@@ -57,11 +77,20 @@ enum CodexTranscriptReader {
             if model == nil {
                 model = modelFrom(obj: obj, payload: payload)
             }
-            return tokens != nil && model != nil
+            return stop(tokens: tokens, model: model, depth: depth)
         }
 
         guard let tokens else { return (nil, complete) }
         return (TranscriptStats(tokens: tokens, model: model), complete)
+    }
+
+    // When to stop scanning: once the tokens are known, keep going only while
+    // the model might still turn up within its budget. Pure and exposed so the
+    // rule is testable without a rollout — it is the decision that governs how
+    // much of a 24 MB file gets read.
+    static func stop(tokens: Int?, model: String?, depth: Int) -> Bool {
+        guard tokens != nil else { return false }
+        return model != nil || depth > modelSearchBudget
     }
 
     // Locate the rollout file for a Codex session id. Codex's Stop hook may send
