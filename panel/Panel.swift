@@ -2412,8 +2412,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // previous Stop established. This matters because nil is now a routine
     // outcome rather than a hypothetical one: a Codex rollout with no
     // turn_context line has no model to find anywhere, and the model search is
-    // capped (CodexTranscriptReader.modelSearchBudget), so 40 of the 293
-    // rollouts on this machine report nil on every read.
+    // capped (CodexTranscriptReader.modelSearchBudget), so 40 of the rollouts
+    // on this machine (293 at the time of measuring) report nil on every read.
     //
     // Unlike `record.ticket` just above the call site, whose comment reasons
     // that "nil is fine — the rollup re-derives from the branch at display",

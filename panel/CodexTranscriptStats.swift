@@ -36,12 +36,18 @@ enum CodexTranscriptReader {
     // Only the tail is read (see TranscriptTail for why), and the search for
     // the model is capped separately and much lower than the search for the
     // tokens. The two are found at very different depths — measured over the
-    // 293 rollouts here, tokens need at most 28 KB, while the model runs to
-    // 2.5 MB at worst (p50 21 KB, p99 1.9 MB) and on 40 of them is absent
-    // altogether. Stopping only when BOTH are found therefore walked the entire
-    // budget on every read of those 40, which is exactly the cost this file was
-    // changed to avoid. Past `modelSearchBudget` the tokens alone are enough;
-    // the model is left nil and Sessions omits the model clause.
+    // rollouts on this machine (293 at the time of measuring), tokens need at
+    // most 28 KB, while the model runs to 2.5 MB at worst (p50 21 KB,
+    // p99 1.9 MB) and on 54 of them is absent altogether. Stopping only when
+    // BOTH are found therefore walked the entire budget on every read of those
+    // 54, which is exactly the cost this file was changed to avoid. Past
+    // `modelSearchBudget` the tokens alone are enough; the model is left nil
+    // and Sessions omits the model clause.
+    //
+    // The two counts differ and are both load-bearing: the model is missing on
+    // 54, of which 40 also resolve tokens and so return stats carrying a nil
+    // model — which is the number that matters to
+    // PanelController.mergedModel. The other 14 return no stats at all.
     //
     // 4 MB clears every model depth observed with room to spare while halving
     // the worst case. Tighten it with fresh measurements rather than by
