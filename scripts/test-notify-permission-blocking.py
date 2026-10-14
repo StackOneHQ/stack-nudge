@@ -37,6 +37,7 @@ import time
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NOTIFY = sys.argv[1] if len(sys.argv) > 1 else os.path.join(REPO_ROOT, "notify.sh")
 NOJQ_BIN = os.path.join(tempfile.gettempdir(), "stack-nudge-test-noparse-bin")
+BADJQ_BIN = os.path.join(tempfile.gettempdir(), "stack-nudge-test-badjq-bin")
 
 POST_TIMEOUT_S = 20
 
@@ -84,25 +85,46 @@ CASES = [
 # here, since that is where the two paths could disagree.
 NO_JQ_CASES = [CASES[0], CASES[3], CASES[6]]
 
-EXPECTED_CASE_COUNT = len(CASES) + len(NO_JQ_CASES) + 1  # +1 for the timing case
+# +3: the timing case and the two broken-jq cases. The first two assert on
+# the process rather than the posted payload.
+EXPECTED_CASE_COUNT = len(CASES) + len(NO_JQ_CASES) + 3
 
 
-def build_nojq_path():
-    """A PATH holding everything the hook needs except jq."""
-    shutil.rmtree(NOJQ_BIN, ignore_errors=True)
-    os.makedirs(NOJQ_BIN)
+def _link_system_bins(target, skip=("jq",)):
+    shutil.rmtree(target, ignore_errors=True)
+    os.makedirs(target)
     for source_dir in ("/bin", "/usr/bin", "/usr/sbin", "/sbin"):
         if not os.path.isdir(source_dir):
             continue
         for entry in os.listdir(source_dir):
-            if entry == "jq":
+            if entry in skip:
                 continue
-            link = os.path.join(NOJQ_BIN, entry)
+            link = os.path.join(target, entry)
             if not os.path.exists(link):
                 os.symlink(os.path.join(source_dir, entry), link)
 
 
-def run_hook(agent, payload_overrides, without_jq):
+def build_nojq_path():
+    """A PATH holding everything the hook needs except jq."""
+    _link_system_bins(NOJQ_BIN)
+
+
+def build_badjq_path():
+    """A PATH whose jq exists but exits non-zero on every input.
+
+    This is the reachable trigger for the whole change. jq is tried first and,
+    before the fix beside it in hook_json_field, a jq that failed returned the
+    same empty string as "field absent" — so a broken jq made every permission
+    event unclassifiable, and unclassifiable meant block.
+    """
+    _link_system_bins(BADJQ_BIN)
+    fake = os.path.join(BADJQ_BIN, "jq")
+    with open(fake, "w", encoding="utf-8") as handle:
+        handle.write('#!/bin/sh\necho "jq: error" >&2\nexit 5\n')
+    os.chmod(fake, 0o755)
+
+
+def run_hook(agent, payload_overrides, without_jq, path_override=None):
     """Run one permission hook. Returns (posted payload or None, hook process)."""
     home = tempfile.mkdtemp(prefix="stack-nudge-test-home-")
     os.makedirs(os.path.join(home, ".stack-nudge"))
@@ -145,7 +167,9 @@ def run_hook(agent, payload_overrides, without_jq):
             payload[key] = value
 
     env = dict(os.environ, HOME=home, TMPDIR=home)
-    if without_jq:
+    if path_override:
+        env["PATH"] = path_override
+    elif without_jq:
         env["PATH"] = NOJQ_BIN
 
     hook = subprocess.Popen(
@@ -188,6 +212,57 @@ def run_case(name, agent, payload_overrides, expected, without_jq=False):
     return passed
 
 
+def run_badjq_case():
+    """A broken jq must not turn a question into a 550s stall.
+
+    The payload is well formed and names AskUserQuestion; only the parser is
+    broken. Before the fix the hook could not read tool_name, so the question
+    gate missed it, the FIFO was created, and the hook blocked while Claude
+    Code's own dialog never rendered. Asserts on the process, because the
+    stall is the harm.
+    """
+    posted, hook, home = run_hook(
+        "claude-code",
+        {"tool_name": "AskUserQuestion",
+         "tool_input": {"questions": [{"question": "Tabs or spaces?"}]}},
+        False,
+        path_override=BADJQ_BIN,
+    )
+    try:
+        hook.wait(timeout=EXIT_TIMEOUT_S)
+        exited = True
+    except subprocess.TimeoutExpired:
+        exited = False
+    blockable = posted.get("has_action_button") if posted else None
+    finish(hook, home)
+
+    passed = exited and blockable is False
+    print("%-4s %-38s exited=%-5r blockable=%r"
+          % ("PASS" if passed else "FAIL", "broken jq does not swallow a question",
+             exited, blockable))
+    return passed
+
+
+def run_badjq_approval_case():
+    """A broken jq must not cost an ordinary approval its Allow button.
+
+    This is what hook_json_field's python3 fallback buys that the gate alone
+    does not. With the gate fix but no fallback, a broken jq makes every
+    permission event unclassifiable, so the banner still shows but nothing can
+    be approved from it. With the fallback, tool_name resolves and the event is
+    blockable again.
+    """
+    posted, hook, home = run_hook("claude-code", {}, False, path_override=BADJQ_BIN)
+    blockable = posted.get("has_action_button") if posted else None
+    finish(hook, home)
+
+    passed = blockable is True
+    print("%-4s %-38s blockable expected=%-5r actual=%r"
+          % ("PASS" if passed else "FAIL", "broken jq keeps an approval's button",
+             True, blockable))
+    return passed
+
+
 def run_timing_case():
     """An unclassifiable payload must let the hook EXIT, not just drop the button.
 
@@ -222,12 +297,16 @@ def main():
         return 1
 
     build_nojq_path()
+    build_badjq_path()
     try:
         results = [run_case(*case) for case in CASES]
         results += [run_case(*case, without_jq=True) for case in NO_JQ_CASES]
         results.append(run_timing_case())
+        results.append(run_badjq_case())
+        results.append(run_badjq_approval_case())
     finally:
         shutil.rmtree(NOJQ_BIN, ignore_errors=True)
+        shutil.rmtree(BADJQ_BIN, ignore_errors=True)
 
     # A case silently dropped from the table would make a green run mean less
     # than it appears to, so assert the count as well as the results.

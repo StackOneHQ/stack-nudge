@@ -356,9 +356,20 @@ agent_supports_decision() {
 hook_json_field() {
   local field="$1"
   [[ -z "$HOOK_JSON" ]] && return
+  local value
   if command -v jq &>/dev/null; then
-    printf '%s' "$HOOK_JSON" | jq -r --arg field "$field" '.[$field] // empty' 2>/dev/null
-    return
+    # Fall through to python3 when jq FAILS, not when it answers empty. An
+    # absent field is a legitimate empty answer, and re-parsing for it would
+    # put a python3 start on the path to the banner, where latency is the
+    # product. A jq that exits non-zero — broken install, wrong build, OOM on
+    # a large tool_input — is the case that matters: before this it returned
+    # the same empty string as "field absent", and an absent tool_name made
+    # the permission gate block a question for 550s (permission_is_blockable).
+    if value=$(printf '%s' "$HOOK_JSON" \
+        | jq -r --arg field "$field" '.[$field] // empty' 2>/dev/null); then
+      printf '%s' "$value"
+      return
+    fi
   fi
   command -v python3 &>/dev/null || return
   printf '%s' "$HOOK_JSON" | NUDGE_HOOK_FIELD="$field" python3 -c 'import json, os, sys
@@ -490,9 +501,11 @@ is_question_event() {
 # Three gates, and the third is the one worth explaining. Blocking is only
 # correct when we KNOW the event is an ordinary tool approval. Every gate above
 # reads a top-level `tool_name` out of the payload, so an absent one means we
-# could not tell what this event is — a shape we don't recognise, stdin that
-# arrived truncated, or a machine with neither jq nor python3. Treating
-# "don't know" as "block" is the expensive mistake in both directions:
+# could not tell what this event is — a parse that failed (see hook_json_field:
+# a jq that exits non-zero answers the same empty string as "field absent"),
+# stdin that arrived truncated or on a tty, or a payload shape newer than this
+# script. Treating "don't know" as "block" is the expensive mistake in both
+# directions:
 #
 #   block a question  -> the dialog never renders and the session stalls 550s,
 #                        because answering in the agent's own UI doesn't end
