@@ -3,9 +3,12 @@
 
 A permission hook that creates a FIFO blocks for up to 550s waiting for the
 panel's Allow/Deny. That is correct for an ordinary tool approval and wrong for
-anything else: answering in the agent's own UI does not end our hook, so a
-blocked hook on an event the user answers elsewhere stalls the session for nine
-minutes and the agent's own dialog never renders.
+anything else. The agent renders its own dialog either way, so the harm is not
+a hidden prompt — it is that the panel offers an Allow which the agent reads as
+"press Enter on the highlighted option", answering a question with a default
+the user never chose; and that answering in the agent's own UI does not end our
+hook, so it holds its FIFO for the full 550s while the panel keeps reminding
+about a prompt already answered (#177).
 
 notify.sh decides this from the hook payload alone, in permission_is_blockable.
 These cases pin down the decision for the shapes that reach it, including the
@@ -85,9 +88,14 @@ CASES = [
 # here, since that is where the two paths could disagree.
 NO_JQ_CASES = [CASES[0], CASES[3], CASES[6]]
 
-# +3: the timing case and the two broken-jq cases. The first two assert on
-# the process rather than the posted payload.
-EXPECTED_CASE_COUNT = len(CASES) + len(NO_JQ_CASES) + 3
+# Written out rather than derived from len(CASES), which would fall with the
+# table it is meant to guard: deleting a row would quietly lower the
+# expectation too, and the run would stay green. Adding a case means changing
+# this number on purpose, which is the point.
+#
+# 11 table cases + 3 no-jq repeats + 3 that assert on the process rather than
+# the posted payload (timing, and the two broken-jq cases).
+EXPECTED_CASE_COUNT = 17
 
 
 def _link_system_bins(target, skip=("jq",)):
@@ -213,13 +221,14 @@ def run_case(name, agent, payload_overrides, expected, without_jq=False):
 
 
 def run_badjq_case():
-    """A broken jq must not turn a question into a 550s stall.
+    """A broken jq must not put a question on the FIFO path.
 
     The payload is well formed and names AskUserQuestion; only the parser is
     broken. Before the fix the hook could not read tool_name, so the question
-    gate missed it, the FIFO was created, and the hook blocked while Claude
-    Code's own dialog never rendered. Asserts on the process, because the
-    stall is the harm.
+    gate missed it and the FIFO was created — offering an Allow that would
+    answer the question with a default, and holding the hook for 550s.
+    Asserts on the process as well as the button, since the hook outliving the
+    answer is the half that nags.
     """
     posted, hook, home = run_hook(
         "claude-code",
@@ -238,7 +247,7 @@ def run_badjq_case():
 
     passed = exited and blockable is False
     print("%-4s %-38s exited=%-5r blockable=%r"
-          % ("PASS" if passed else "FAIL", "broken jq does not swallow a question",
+          % ("PASS" if passed else "FAIL", "broken jq keeps a question off the FIFO",
              exited, blockable))
     return passed
 

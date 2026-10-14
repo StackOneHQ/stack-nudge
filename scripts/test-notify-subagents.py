@@ -162,8 +162,12 @@ STOP_CASES = [
 # python3: prove suppress-and-fire still hold there.
 NO_JQ_STOP_CASES = [STOP_CASES[0], STOP_CASES[1]]
 
-EXPECTED_CASE_COUNT = (len(CASES) + len(NO_JQ_CASES)
-                       + len(STOP_CASES) + len(NO_JQ_STOP_CASES))
+# Written out rather than derived from the tables, which would fall with the
+# thing it guards: deleting a case would quietly lower the expectation too and
+# the run would stay green. Adding one means changing this number on purpose.
+#
+# 11 permission + 3 no-jq repeats + 6 stop + 2 no-jq stop repeats.
+EXPECTED_CASE_COUNT = 22
 
 
 def build_nojq_path():

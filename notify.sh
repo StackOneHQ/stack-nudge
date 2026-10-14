@@ -507,17 +507,26 @@ is_question_event() {
 # script. Treating "don't know" as "block" is the expensive mistake in both
 # directions:
 #
-#   block a question  -> the dialog never renders and the session stalls 550s,
+#   block a question  -> the panel offers an Allow that writes "allow" to the
+#                        FIFO, which the agent reads as "press Enter on the
+#                        highlighted option" — answering a question the user
+#                        never read, with a default they didn't choose. And
 #                        because answering in the agent's own UI doesn't end
-#                        this hook (the reason ExitPlanMode is excluded above)
+#                        this hook, it holds its FIFO for the full 550s while
+#                        the panel goes on reminding about a prompt already
+#                        answered (#177, where that ran for nine minutes).
 #   don't block a tool -> the banner loses its Allow button and the user
-#                        approves in the terminal, where they already are
+#                        approves in the agent's own UI, where they already are
 #
-# So an unreadable payload fails open. It costs a button; the other way costs
-# nine minutes and hides the prompt. This is also what keeps a future
-# question-shaped tool out of the FIFO: the allowlist above can only name the
-# tools we know about today, and anything we can't classify now declines to
-# block rather than swallowing it.
+# Note what blocking does NOT do: the agent renders its own dialog either way.
+# The hook and that dialog race, and whichever answers first wins — which is
+# why a wrongly-blocked question is a wrong ANSWER waiting to happen rather
+# than a hidden one. That asymmetry is the whole argument: failing open costs
+# a button, failing closed can answer for the user.
+#
+# This is also what keeps a future question-shaped tool out of the FIFO: the
+# allowlist above can only name the tools we know about today, and anything we
+# can't classify now declines to block rather than offering to answer it.
 permission_is_blockable() {
   agent_supports_decision || return 1
   [[ -n "$(hook_tool_name)" ]] || return 1
