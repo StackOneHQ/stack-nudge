@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+"""Behaviour tests for which permission events notify.sh blocks on.
+
+A permission hook that creates a FIFO blocks for up to 550s waiting for the
+panel's Allow/Deny. That is correct for an ordinary tool approval and wrong for
+anything else: answering in the agent's own UI does not end our hook, so a
+blocked hook on an event the user answers elsewhere stalls the session for nine
+minutes and the agent's own dialog never renders.
+
+notify.sh decides this from the hook payload alone, in permission_is_blockable.
+These cases pin down the decision for the shapes that reach it, including the
+ones it cannot parse — an unrecognised payload must decline to block rather than
+swallow a prompt it failed to classify.
+
+They drive the real notify.sh end to end, like the subagent tests beside them,
+because the decision depends on the whole path: payload extraction with and
+without jq, the agent gate, and the has_action_button that finally reaches the
+panel. The same isolation applies — a throwaway $HOME and $TMPDIR per case, and
+a fake panel socket there, so the developer's own ~/.stack-nudge is untouched
+and no banner reaches their screen.
+
+macOS only: elsewhere notify.sh plays a sound and never posts to the panel.
+
+Usage: scripts/test-notify-permission-blocking.py [path/to/notify.sh]
+"""
+
+import json
+import os
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+NOTIFY = sys.argv[1] if len(sys.argv) > 1 else os.path.join(REPO_ROOT, "notify.sh")
+NOJQ_BIN = os.path.join(tempfile.gettempdir(), "stack-nudge-test-noparse-bin")
+
+POST_TIMEOUT_S = 20
+
+# How long a non-blocking hook gets to exit on its own. The blocking path waits
+# 550s, so anything that returns inside this window demonstrably took the other
+# branch. Generous because a cold python3 start is on this path.
+EXIT_TIMEOUT_S = 25
+
+# name, agent, payload overrides (None deletes the key), expected has_action_button
+#
+# `blockable` here means: the panel offers Allow/Deny and the hook waits on a
+# FIFO for the answer. False means the banner still shows — only the button and
+# the wait are dropped.
+CASES = [
+    # The ordinary case the FIFO exists for.
+    ("bash approval", "claude-code", {}, True),
+    ("codex approval", "codex", {}, True),
+    ("codex apply_patch", "codex", {"tool_name": "apply_patch"}, True),
+    # Questions: the user answers in the agent's own UI, so blocking would hide
+    # the dialog and stall. Already handled before this test existed.
+    ("AskUserQuestion", "claude-code",
+     {"tool_name": "AskUserQuestion",
+      "tool_input": {"questions": [{"question": "Which one?"}]}}, False),
+    ("ExitPlanMode", "claude-code", {"tool_name": "ExitPlanMode"}, False),
+    # An agent whose hook cannot consume a decision at all.
+    ("gemini approval", "gemini", {}, False),
+    # The shapes that cannot be classified. Each one must decline to block:
+    # we do not know that this is a tool approval, and guessing wrong hides a
+    # prompt for 550s.
+    ("tool_name absent", "claude-code", {"tool_name": None}, False),
+    ("tool_name empty", "claude-code", {"tool_name": ""}, False),
+    ("tool_name nested, not top level", "claude-code",
+     {"tool_name": None, "tool_use": {"name": "Bash"}}, False),
+    ("tool_name camelCased", "claude-code",
+     {"tool_name": None, "toolName": "Bash"}, False),
+    # A question tool we have never heard of. The allowlist cannot name it, so
+    # the unreadable-payload rule is what has to carry it — it stays blockable
+    # only because it DOES carry a tool_name, which is the honest trade: we
+    # cannot tell a future question tool from a future approval tool by shape.
+    ("unknown tool with a name", "claude-code", {"tool_name": "SomeFutureTool"}, True),
+]
+
+# Both extractor paths matter: only macOS 15+ preinstalls jq, so the python3
+# fallback is what most machines actually run. The unreadable cases matter most
+# here, since that is where the two paths could disagree.
+NO_JQ_CASES = [CASES[0], CASES[3], CASES[6]]
+
+EXPECTED_CASE_COUNT = len(CASES) + len(NO_JQ_CASES) + 1  # +1 for the timing case
+
+
+def build_nojq_path():
+    """A PATH holding everything the hook needs except jq."""
+    shutil.rmtree(NOJQ_BIN, ignore_errors=True)
+    os.makedirs(NOJQ_BIN)
+    for source_dir in ("/bin", "/usr/bin", "/usr/sbin", "/sbin"):
+        if not os.path.isdir(source_dir):
+            continue
+        for entry in os.listdir(source_dir):
+            if entry == "jq":
+                continue
+            link = os.path.join(NOJQ_BIN, entry)
+            if not os.path.exists(link):
+                os.symlink(os.path.join(source_dir, entry), link)
+
+
+def run_hook(agent, payload_overrides, without_jq):
+    """Run one permission hook. Returns (posted payload or None, hook process)."""
+    home = tempfile.mkdtemp(prefix="stack-nudge-test-home-")
+    os.makedirs(os.path.join(home, ".stack-nudge"))
+
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(os.path.join(home, ".stack-nudge", "panel.sock"))
+    server.listen(1)
+    server.settimeout(POST_TIMEOUT_S)
+    received = {}
+
+    def accept_one():
+        try:
+            connection, _ = server.accept()
+            connection.settimeout(POST_TIMEOUT_S)
+            chunks = []
+            while True:
+                chunk = connection.recv(65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            connection.close()
+            received["payload"] = b"".join(chunks).decode("utf-8", "replace")
+        except OSError:
+            pass
+
+    listener = threading.Thread(target=accept_one, daemon=True)
+    listener.start()
+
+    payload = {
+        "hook_event_name": "PermissionRequest",
+        "session_id": "test-session",
+        "transcript_path": os.path.join(home, "transcript.jsonl"),
+        "tool_name": "Bash",
+        "tool_input": {"command": "rg --files"},
+    }
+    for key, value in payload_overrides.items():
+        if value is None:
+            payload.pop(key, None)
+        else:
+            payload[key] = value
+
+    env = dict(os.environ, HOME=home, TMPDIR=home)
+    if without_jq:
+        env["PATH"] = NOJQ_BIN
+
+    hook = subprocess.Popen(
+        [NOTIFY, agent, "permission"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=env,
+    )
+    hook.stdin.write(json.dumps(payload).encode())
+    hook.stdin.close()
+
+    listener.join(timeout=POST_TIMEOUT_S)
+    server.close()
+
+    parsed = None
+    if "payload" in received:
+        try:
+            parsed = json.loads(received["payload"])
+        except ValueError:
+            parsed = {"<unparseable>": received["payload"][:120]}
+
+    return parsed, hook, home
+
+
+def finish(hook, home):
+    hook.kill()
+    hook.wait()
+    shutil.rmtree(home, ignore_errors=True)
+
+
+def run_case(name, agent, payload_overrides, expected, without_jq=False):
+    posted, hook, home = run_hook(agent, payload_overrides, without_jq)
+    finish(hook, home)
+    actual = posted.get("has_action_button") if posted else None
+    passed = actual == expected
+    print("%-4s %-38s blockable expected=%-5r actual=%r"
+          % ("PASS" if passed else "FAIL",
+             name + (" [no jq]" if without_jq else ""), expected, actual))
+    return passed
+
+
+def run_timing_case():
+    """An unclassifiable payload must let the hook EXIT, not just drop the button.
+
+    has_action_button is the visible half of the decision; the FIFO wait is the
+    half that costs 550s. A regression could restore the wait while still
+    reporting has_action_button=false, so assert on the process, not the payload.
+    """
+    posted, hook, home = run_hook("claude-code", {"tool_name": None}, False)
+    started = time.time()
+    try:
+        hook.wait(timeout=EXIT_TIMEOUT_S)
+        exited = True
+    except subprocess.TimeoutExpired:
+        exited = False
+    elapsed = time.time() - started
+    finish(hook, home)
+
+    passed = exited and posted is not None
+    print("%-4s %-38s exited=%-5r after %.1fs (banner posted=%r)"
+          % ("PASS" if passed else "FAIL", "unreadable payload does not block",
+             exited, elapsed, posted is not None))
+    return passed
+
+
+def main():
+    if sys.platform != "darwin":
+        print("skipped: notify.sh only posts to the panel on macOS")
+        return 0
+
+    if not os.access(NOTIFY, os.X_OK):
+        print("FAIL no executable notify.sh at %s" % NOTIFY)
+        return 1
+
+    build_nojq_path()
+    try:
+        results = [run_case(*case) for case in CASES]
+        results += [run_case(*case, without_jq=True) for case in NO_JQ_CASES]
+        results.append(run_timing_case())
+    finally:
+        shutil.rmtree(NOJQ_BIN, ignore_errors=True)
+
+    # A case silently dropped from the table would make a green run mean less
+    # than it appears to, so assert the count as well as the results.
+    if len(results) != EXPECTED_CASE_COUNT:
+        print("\nFAIL ran %d cases, expected %d" % (len(results), EXPECTED_CASE_COUNT))
+        return 1
+
+    print("\n%d/%d passed" % (sum(results), len(results)))
+    return 0 if all(results) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

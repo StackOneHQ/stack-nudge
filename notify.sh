@@ -484,6 +484,33 @@ is_question_event() {
   esac
 }
 
+# Whether a permission event may be answered from the panel — which means
+# creating a FIFO and blocking this hook on it for up to 550s.
+#
+# Three gates, and the third is the one worth explaining. Blocking is only
+# correct when we KNOW the event is an ordinary tool approval. Every gate above
+# reads a top-level `tool_name` out of the payload, so an absent one means we
+# could not tell what this event is — a shape we don't recognise, stdin that
+# arrived truncated, or a machine with neither jq nor python3. Treating
+# "don't know" as "block" is the expensive mistake in both directions:
+#
+#   block a question  -> the dialog never renders and the session stalls 550s,
+#                        because answering in the agent's own UI doesn't end
+#                        this hook (the reason ExitPlanMode is excluded above)
+#   don't block a tool -> the banner loses its Allow button and the user
+#                        approves in the terminal, where they already are
+#
+# So an unreadable payload fails open. It costs a button; the other way costs
+# nine minutes and hides the prompt. This is also what keeps a future
+# question-shaped tool out of the FIFO: the allowlist above can only name the
+# tools we know about today, and anything we can't classify now declines to
+# block rather than swallowing it.
+permission_is_blockable() {
+  agent_supports_decision || return 1
+  [[ -n "$(hook_tool_name)" ]] || return 1
+  ! is_question_event
+}
+
 # Bundled voice engine paths. stackvox 0.3.x consolidated the CLI — there
 # is no separate `stackvox-say` console script anymore; speech goes through
 # `stackvox say <text>` as a subcommand.
@@ -815,7 +842,7 @@ notify_macos() {
   # only agents the banner still shows; the user approves in the agent's own UI.
   local has_action="false"
   local fifo_path=""
-  if [[ "${EVENT}" == "permission" ]] && agent_supports_decision && ! is_question_event; then
+  if [[ "${EVENT}" == "permission" ]] && permission_is_blockable; then
     has_action="true"
     fifo_path=$(create_perm_fifo)
   fi

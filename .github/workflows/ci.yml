@@ -126,3 +126,6 @@ jobs:
       # macOS-only; on Linux the script just plays a sound.
       - name: notify.sh subagent tests
         run: python3 scripts/test-notify-subagents.py
+
+      - name: notify.sh permission-blocking tests
+        run: python3 scripts/test-notify-permission-blocking.py
