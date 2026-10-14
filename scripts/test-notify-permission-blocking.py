@@ -103,17 +103,21 @@ CASES = [
 _NO_JQ_NAMES = ("bash approval", "AskUserQuestion", "tool_name absent",
                 "tool_name is a number")
 NO_JQ_CASES = [case for case in CASES if case[0] in _NO_JQ_NAMES]
-assert len(NO_JQ_CASES) == len(_NO_JQ_NAMES), (
-    "no-jq selection missed a name: %s"
-    % (set(_NO_JQ_NAMES) - {case[0] for case in CASES}))
+# A raise, not an assert: `python3 -O` strips asserts, and a guard that can be
+# optimised away is a guard that silently stops guarding.
+if len(NO_JQ_CASES) != len(_NO_JQ_NAMES):
+    raise SystemExit("no-jq selection missed a name: %s"
+                     % (set(_NO_JQ_NAMES) - {case[0] for case in CASES}))
 
 # Written out rather than derived from len(CASES), which would fall with the
 # table it is meant to guard: deleting a row would quietly lower the
 # expectation too, and the run would stay green. Adding a case means changing
 # this number on purpose, which is the point.
 #
-# 13 table cases + 4 no-jq repeats + 3 that assert on the process rather than
-# the posted payload (timing, and the two broken-jq cases).
+# 13 table cases + 4 no-jq repeats + 2 that assert on the process as well as
+# the payload (the timing case and the broken-jq question) + 1 that asserts on
+# the posted button alone (the broken-jq approval — it pins that the fallback
+# keeps the button, and deliberately does not wait out the FIFO).
 EXPECTED_CASE_COUNT = 20
 
 
