@@ -365,8 +365,13 @@ hook_json_field() {
     # a large tool_input — is the case that matters: before this it returned
     # the same empty string as "field absent", and an absent tool_name made
     # the permission gate block a question for 550s (permission_is_blockable).
+    # `| strings` rather than `// empty`: jq stringifies any JSON type, while
+    # the python3 branch below returns empty for a non-str. Without it the same
+    # payload takes opposite branches on a jq machine and a jq-less one — and a
+    # non-string tool_name is exactly the "shape we don't recognise" that
+    # permission_is_blockable promises to fail open on.
     if value=$(printf '%s' "$HOOK_JSON" \
-        | jq -r --arg field "$field" '.[$field] // empty' 2>/dev/null); then
+        | jq -r --arg field "$field" '.[$field] | strings' 2>/dev/null); then
       printf '%s' "$value"
       return
     fi
@@ -484,11 +489,12 @@ sys.exit(0 if any(i not in completed for i in latest_launch_ids) else 1)' 2>/dev
 # the FIFO path for a second reason — answering in CC's own UI doesn't end our
 # hook, so it blocked for its full 550s timeout while the panel, seeing a live
 # hook on a live FIFO, went on reminding about a plan already approved.
+# Takes the tool name rather than reading it, so the caller pays for one
+# extraction instead of two. Both gates need the same value, and on the common
+# path that read is a python3 start (~40ms) on the way to the banner.
 is_question_event() {
+  local tool_name="$1"
   [[ "$AGENT" != "claude-code" ]] && return 1
-  [[ -z "$HOOK_JSON" ]] && return 1
-  local tool_name
-  tool_name=$(hook_tool_name)
   case "$tool_name" in
     AskUserQuestion|ExitPlanMode) return 0 ;;
     *)                            return 1 ;;
@@ -524,13 +530,23 @@ is_question_event() {
 # than a hidden one. That asymmetry is the whole argument: failing open costs
 # a button, failing closed can answer for the user.
 #
-# This is also what keeps a future question-shaped tool out of the FIFO: the
-# allowlist above can only name the tools we know about today, and anything we
-# can't classify now declines to block rather than offering to answer it.
+# What this does NOT do: protect against a future question-shaped tool that
+# carries a perfectly readable tool_name. Nothing here can tell `SomeFutureAsk`
+# from `SomeFutureTool` by shape, so it is blockable and the allowlist above
+# has to learn its name. The fail-open rule only covers the tools whose
+# payloads we cannot read at all.
+#
+# Cost: one tool_name extraction per permission event — the same as before for
+# claude-code, and one more than before for codex, which used to short-circuit
+# on the agent check inside is_question_event. That read is ~15ms via jq and
+# ~41ms via the python3 fallback, once, on the way to the banner. It is the
+# price of the emptiness check below, which is the fix.
 permission_is_blockable() {
   agent_supports_decision || return 1
-  [[ -n "$(hook_tool_name)" ]] || return 1
-  ! is_question_event
+  local tool_name
+  tool_name=$(hook_tool_name)
+  [[ -n "$tool_name" ]] || return 1
+  ! is_question_event "$tool_name"
 }
 
 # Bundled voice engine paths. stackvox 0.3.x consolidated the CLI — there
@@ -865,8 +881,11 @@ notify_macos() {
   local has_action="false"
   local fifo_path=""
   if [[ "${EVENT}" == "permission" ]] && permission_is_blockable; then
-    has_action="true"
+    # Order matters: create_perm_fifo returns empty when mktemp or mkfifo fails,
+    # and an Approve button with no FIFO behind it sends a blind Return to the
+    # terminal (AppActivator.swift) — a keystroke into whatever is focused.
     fifo_path=$(create_perm_fifo)
+    [[ -n "$fifo_path" ]] && has_action="true"
   fi
 
   # Audio (chime + voice) and mute-when-focused now live in the .app —

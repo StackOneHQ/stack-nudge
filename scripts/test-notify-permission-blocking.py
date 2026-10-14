@@ -39,8 +39,12 @@ import time
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NOTIFY = sys.argv[1] if len(sys.argv) > 1 else os.path.join(REPO_ROOT, "notify.sh")
-NOJQ_BIN = os.path.join(tempfile.gettempdir(), "stack-nudge-test-noparse-bin")
-BADJQ_BIN = os.path.join(tempfile.gettempdir(), "stack-nudge-test-badjq-bin")
+# Unique per run: a fixed path is shared state, and two suites running at once
+# (a local run beside a CI run on the same box) would rebuild it under each
+# other mid-case.
+_FAKE_BIN_ROOT = tempfile.mkdtemp(prefix="stack-nudge-test-bin-")
+NOJQ_BIN = os.path.join(_FAKE_BIN_ROOT, "nojq")
+BADJQ_BIN = os.path.join(_FAKE_BIN_ROOT, "badjq")
 
 POST_TIMEOUT_S = 20
 
@@ -76,6 +80,13 @@ CASES = [
      {"tool_name": None, "tool_use": {"name": "Bash"}}, False),
     ("tool_name camelCased", "claude-code",
      {"tool_name": None, "toolName": "Bash"}, False),
+    # Not a string. jq stringifies any JSON type and the python3 fallback
+    # returns empty, so before `| strings` these took OPPOSITE branches
+    # depending on whether the machine had jq. Either way it is a shape we
+    # cannot classify, so both must fail open.
+    ("tool_name is a number", "claude-code", {"tool_name": 123}, False),
+    ("tool_name is an object", "claude-code",
+     {"tool_name": {"name": "Bash"}}, False),
     # A question tool we have never heard of. The allowlist cannot name it, so
     # the unreadable-payload rule is what has to carry it — it stays blockable
     # only because it DOES carry a tool_name, which is the honest trade: we
@@ -86,16 +97,24 @@ CASES = [
 # Both extractor paths matter: only macOS 15+ preinstalls jq, so the python3
 # fallback is what most machines actually run. The unreadable cases matter most
 # here, since that is where the two paths could disagree.
-NO_JQ_CASES = [CASES[0], CASES[3], CASES[6]]
+# Selected by name, not by index: `CASES[0], CASES[3], CASES[6]` silently
+# re-aimed at different rows the moment anything was inserted above them,
+# dropping the unreadable-payload coverage this set exists for.
+_NO_JQ_NAMES = ("bash approval", "AskUserQuestion", "tool_name absent",
+                "tool_name is a number")
+NO_JQ_CASES = [case for case in CASES if case[0] in _NO_JQ_NAMES]
+assert len(NO_JQ_CASES) == len(_NO_JQ_NAMES), (
+    "no-jq selection missed a name: %s"
+    % (set(_NO_JQ_NAMES) - {case[0] for case in CASES}))
 
 # Written out rather than derived from len(CASES), which would fall with the
 # table it is meant to guard: deleting a row would quietly lower the
 # expectation too, and the run would stay green. Adding a case means changing
 # this number on purpose, which is the point.
 #
-# 11 table cases + 3 no-jq repeats + 3 that assert on the process rather than
+# 13 table cases + 4 no-jq repeats + 3 that assert on the process rather than
 # the posted payload (timing, and the two broken-jq cases).
-EXPECTED_CASE_COUNT = 17
+EXPECTED_CASE_COUNT = 20
 
 
 def _link_system_bins(target, skip=("jq",)):
@@ -133,7 +152,12 @@ def build_badjq_path():
 
 
 def run_hook(agent, payload_overrides, without_jq, path_override=None):
-    """Run one permission hook. Returns (posted payload or None, hook process)."""
+    """Run one permission hook.
+
+    Returns (posted payload or None, hook process, home, started). `started` is
+    taken before the hook is spawned: a caller timing the run must not clock
+    from after the panel post, which already waited for it.
+    """
     home = tempfile.mkdtemp(prefix="stack-nudge-test-home-")
     os.makedirs(os.path.join(home, ".stack-nudge"))
 
@@ -180,6 +204,7 @@ def run_hook(agent, payload_overrides, without_jq, path_override=None):
     elif without_jq:
         env["PATH"] = NOJQ_BIN
 
+    started = time.time()
     hook = subprocess.Popen(
         [NOTIFY, agent, "permission"],
         stdin=subprocess.PIPE,
@@ -200,7 +225,7 @@ def run_hook(agent, payload_overrides, without_jq, path_override=None):
         except ValueError:
             parsed = {"<unparseable>": received["payload"][:120]}
 
-    return parsed, hook, home
+    return parsed, hook, home, started
 
 
 def finish(hook, home):
@@ -210,7 +235,7 @@ def finish(hook, home):
 
 
 def run_case(name, agent, payload_overrides, expected, without_jq=False):
-    posted, hook, home = run_hook(agent, payload_overrides, without_jq)
+    posted, hook, home, _ = run_hook(agent, payload_overrides, without_jq)
     finish(hook, home)
     actual = posted.get("has_action_button") if posted else None
     passed = actual == expected
@@ -230,7 +255,7 @@ def run_badjq_case():
     Asserts on the process as well as the button, since the hook outliving the
     answer is the half that nags.
     """
-    posted, hook, home = run_hook(
+    posted, hook, home, _ = run_hook(
         "claude-code",
         {"tool_name": "AskUserQuestion",
          "tool_input": {"questions": [{"question": "Tabs or spaces?"}]}},
@@ -261,7 +286,7 @@ def run_badjq_approval_case():
     be approved from it. With the fallback, tool_name resolves and the event is
     blockable again.
     """
-    posted, hook, home = run_hook("claude-code", {}, False, path_override=BADJQ_BIN)
+    posted, hook, home, _ = run_hook("claude-code", {}, False, path_override=BADJQ_BIN)
     blockable = posted.get("has_action_button") if posted else None
     finish(hook, home)
 
@@ -279,8 +304,7 @@ def run_timing_case():
     half that costs 550s. A regression could restore the wait while still
     reporting has_action_button=false, so assert on the process, not the payload.
     """
-    posted, hook, home = run_hook("claude-code", {"tool_name": None}, False)
-    started = time.time()
+    posted, hook, home, started = run_hook("claude-code", {"tool_name": None}, False)
     try:
         hook.wait(timeout=EXIT_TIMEOUT_S)
         exited = True
@@ -314,8 +338,7 @@ def main():
         results.append(run_badjq_case())
         results.append(run_badjq_approval_case())
     finally:
-        shutil.rmtree(NOJQ_BIN, ignore_errors=True)
-        shutil.rmtree(BADJQ_BIN, ignore_errors=True)
+        shutil.rmtree(_FAKE_BIN_ROOT, ignore_errors=True)
 
     # A case silently dropped from the table would make a green run mean less
     # than it appears to, so assert the count as well as the results.
