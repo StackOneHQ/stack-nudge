@@ -216,7 +216,8 @@ final class Updater {
         //     login; left as `true`, the new bundle's first-launch migration
         //     would unload/load it and RunAtLoad would start a second copy.
         let retargeted = Bootstrap.retargetAgentsAfterUpdate(
-            toBundle: installedURL.path, agentsDir: Bootstrap.launchAgentsDir)
+            toBundle: installedURL.path, agentsDir: Bootstrap.launchAgentsDir,
+            venvSymlinkPath: Bootstrap.venvSymlinkPath)
         for label in retargeted.sorted() {
             appendLog("Launch agent \(label) now points at \(installedURL.path)")
         }
@@ -293,9 +294,17 @@ final class Updater {
     //     either hangs on a program the update removed (#205) or, if the old
     //     bundle is still there, kills us and relaunches the PREVIOUS
     //     version, so Settings offers the update again and every update
-    //     repeats. Nor can it be reloaded from here: if we are that job,
-    //     `unload` kills us before `load` runs. It is left for next login,
-    //     which reads the corrected file. Until then the stale definition
+    //     repeats. It is not reloaded from here either — by choice, not
+    //     because it can't be. Two launchctl calls from this process can't do
+    //     it (if we are the job, the first kills us), but a single child
+    //     process can: Foundation's Process gives it its own process group,
+    //     and review measured one completing bootout + bootstrap. It isn't
+    //     chosen because launchd can't adopt a running process, so the
+    //     reload's RunAtLoad and our NSWorkspace relaunch can't both happen
+    //     without two panels, and of the two launchers the relaunch fails
+    //     safer: the new version is already running before anything
+    //     destructive. The cost is that launchd doesn't manage the panel
+    //     until next login, which reads the corrected file. Until then the stale definition
     //     is inert — nothing kicks it, our clean exit doesn't trip
     //     KeepAlive's crash-only respawn, and notify.sh relaunches by
     //     bundle path with `open`, not through launchd.
@@ -346,6 +355,19 @@ final class Updater {
         // Exit 3 when not loaded; harmless, the bootstrap below still runs.
         _ = Self.runBounded("/bin/launchctl", ["bootout", "\(domain)/\(label)"],
                             timeout: Self.kickstartTimeout)
+        // Wait for the old job to be GONE before bootstrapping. bootout can be
+        // abandoned at its timeout while launchd is still tearing the job down
+        // (it blocks until the process exits, ~6s for a job slow to honour
+        // SIGTERM, measured in review). A bootstrap inside that window fails
+        // with 5, the teardown then finishes, and the daemon stays down until
+        // next login. Polling the job's presence asks the question directly,
+        // where retrying bootstrap only guesses at how long to keep asking.
+        let gone = Date().addingTimeInterval(Self.daemonTeardownBudget)
+        while Date() < gone,
+              Self.runBounded("/bin/launchctl", ["print", "\(domain)/\(label)"],
+                              timeout: Self.kickstartTimeout) == .exited(0) {
+            Thread.sleep(forTimeInterval: 0.25)
+        }
         let outcome = Self.runBounded("/bin/launchctl", ["bootstrap", domain, plist],
                                       timeout: Self.kickstartTimeout)
         if outcome != .exited(0) {
@@ -663,6 +685,11 @@ final class Updater {
     // PR's one new diagnostic into a false alarm — while still being long
     // enough for a user to sit through twice.
     static let kickstartTimeout: TimeInterval = 2
+
+    // How long to wait for the voice daemon's old job to finish tearing down
+    // before reloading it. Only spent on an update that re-pointed the
+    // daemon, and only as long as the old daemon takes to exit.
+    static let daemonTeardownBudget: TimeInterval = 8
 
     // Extraction and the quarantine walk are over a ~200MB bundle on an
     // arbitrary disk, so these are generous: they exist to catch a wedged

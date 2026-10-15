@@ -15,7 +15,8 @@ final class LaunchAgentRetargetTests: XCTestCase {
     private func retarget(_ path: String,
                           exists: ((String) -> Bool)? = nil) -> String? {
         Bootstrap.retargetedBundlePath(path, toBundle: installed,
-                                       exists: exists ?? everythingExists)
+                                       exists: exists ?? everythingExists,
+                                       isSuperseded: { _ in true })
     }
 
     // MARK: - The two cases this exists for
@@ -77,7 +78,8 @@ final class LaunchAgentRetargetTests: XCTestCase {
             arguments: ["\(old)/bin/python3", "\(old)/bin/stackvox", "serve"],
             environment: ["ESPEAK_DATA_PATH": "\(old)/lib/espeak-ng-data", "LANG": "en_GB.UTF-8"],
             toBundle: installed,
-            exists: everythingExists))
+            exists: everythingExists,
+            isSuperseded: { _ in true }))
 
         let new = "\(installed)/Contents/Resources/venv"
         XCTAssertEqual(spec.arguments, ["\(new)/bin/python3", "\(new)/bin/stackvox", "serve"])
@@ -90,7 +92,8 @@ final class LaunchAgentRetargetTests: XCTestCase {
             arguments: ["\(installed)/Contents/MacOS/stack-nudge"],
             environment: [:],
             toBundle: installed,
-            exists: everythingExists))
+            exists: everythingExists,
+            isSuperseded: { _ in true }))
     }
 
     // MARK: - On disk
@@ -109,6 +112,23 @@ final class LaunchAgentRetargetTests: XCTestCase {
 
     // A real bundle layout with the binary present, so the existence check
     // passes for real rather than through a stub.
+    // A path in scratch where no venv link exists, for tests not about it.
+    private var noLink: String { scratch.appendingPathComponent("no-venv-link").path }
+
+    private func makeBundle(at relative: String, version: String?) throws -> String {
+        let bundle = scratch.appendingPathComponent(relative)
+        let macOS = bundle.appendingPathComponent("Contents/MacOS")
+        try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: macOS.appendingPathComponent("stack-nudge").path,
+                                       contents: Data())
+        if let version {
+            let info = try PropertyListSerialization.data(
+                fromPropertyList: ["CFBundleShortVersionString": version], format: .xml, options: 0)
+            try info.write(to: bundle.appendingPathComponent("Contents/Info.plist"))
+        }
+        return bundle.path
+    }
+
     private func makeInstalledBundle() throws -> String {
         let bundle = scratch.appendingPathComponent("Applications/StackNudge.app")
         let macOS = bundle.appendingPathComponent("Contents/MacOS")
@@ -183,7 +203,22 @@ final class LaunchAgentRetargetTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: "\(bundle)/Contents/MacOS"),
                       "precondition: the same path exists inside our bundle")
         XCTAssertNil(Bootstrap.retargetedBundlePath(
-            foreign, toBundle: bundle, exists: { FileManager.default.fileExists(atPath: $0) }))
+            foreign, toBundle: bundle, exists: { FileManager.default.fileExists(atPath: $0) },
+            isSuperseded: { _ in true }))
+    }
+
+    // The installed bundle reached through a symlinked parent is the SAME
+    // bundle. Comparing spelling would call it different and trigger a
+    // spurious retarget: skip the app kickstart and retire a good job.
+    func test_recognisesTheInstalledBundleThroughASymlinkedParent() throws {
+        let bundle = try makeInstalledBundle()
+        let alias = scratch.appendingPathComponent("Apps")
+        try FileManager.default.createSymbolicLink(
+            at: alias, withDestinationURL: scratch.appendingPathComponent("Applications"))
+        let viaAlias = alias.appendingPathComponent("StackNudge.app/Contents/MacOS/stack-nudge").path
+        XCTAssertNil(Bootstrap.retargetedBundlePath(
+            viaAlias, toBundle: bundle, exists: { FileManager.default.fileExists(atPath: $0) },
+            isSuperseded: { _ in true }))
     }
 
     // Names our bundle has actually had: the pre-1.7 one, and Finder's
@@ -201,7 +236,7 @@ final class LaunchAgentRetargetTests: XCTestCase {
         let spec = try XCTUnwrap(Bootstrap.retargetedLaunchSpec(
             arguments: ["\(installed)/Contents/Resources/venv/bin/python3", "serve"],
             environment: ["ESPEAK_DATA_PATH": "/Users/u/Applications/stack-nudge.app/Contents/Resources/data"],
-            toBundle: installed, exists: everythingExists))
+            toBundle: installed, exists: everythingExists, isSuperseded: { _ in true }))
         XCTAssertEqual(spec.environment["ESPEAK_DATA_PATH"], "\(installed)/Contents/Resources/data")
     }
 
@@ -233,8 +268,16 @@ final class LaunchAgentRetargetTests: XCTestCase {
             "EnvironmentVariables": ["ESPEAK_DATA_PATH": "\(old)/Contents/Resources/venv/lib/espeak-ng-data"],
         ], label: Bootstrap.daemonLabel)
 
-        let retargeted = Bootstrap.retargetAgentsAfterUpdate(toBundle: bundle, agentsDir: scratch.path)
+        // The voice-engine link, pointing into the same old bundle.
+        let link = scratch.appendingPathComponent("venv-link").path
+        try FileManager.default.createSymbolicLink(atPath: link,
+                                                   withDestinationPath: "\(old)/Contents/Resources/venv")
+
+        let retargeted = Bootstrap.retargetAgentsAfterUpdate(toBundle: bundle, agentsDir: scratch.path,
+                                                              venvSymlinkPath: link)
         XCTAssertEqual(retargeted, [Bootstrap.appLabel, Bootstrap.daemonLabel])
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link), venv.path,
+                       "the update-time step didn't re-point the voice-engine link")
 
         let app = try readAgent(appPath)
         XCTAssertEqual(app["ProgramArguments"] as? [String], ["\(bundle)/Contents/MacOS/stack-nudge"])
@@ -256,9 +299,99 @@ final class LaunchAgentRetargetTests: XCTestCase {
                                       "ProgramArguments": ["\(bundle)/Contents/MacOS/stack-nudge"]],
                                      label: Bootstrap.appLabel)
         let before = FileManager.default.contents(atPath: appPath)
-        XCTAssertEqual(Bootstrap.retargetAgentsAfterUpdate(toBundle: bundle, agentsDir: scratch.path), [])
+        XCTAssertEqual(Bootstrap.retargetAgentsAfterUpdate(toBundle: bundle, agentsDir: scratch.path,
+                                                              venvSymlinkPath: noLink), [])
         XCTAssertEqual(FileManager.default.contents(atPath: appPath), before,
                        "touched an agent that didn't need retargeting")
+    }
+
+    // MARK: - Which bundles to move away from
+
+    func test_superseded_whenTheOldBundleIsGone() throws {
+        let installed = try makeBundle(at: "Applications/StackNudge.app", version: "2.1.6")
+        XCTAssertTrue(Bootstrap.bundleIsSuperseded(scratch.appendingPathComponent("Downloads/StackNudge.app").path,
+                                                   by: installed))
+    }
+
+    func test_superseded_whenTheOldBundleIsThePreRebrandName() throws {
+        let installed = try makeBundle(at: "Applications/StackNudge.app", version: "2.1.6")
+        let legacy = try makeBundle(at: "Applications/stack-nudge.app", version: "2.1.6")
+        XCTAssertTrue(Bootstrap.bundleIsSuperseded(legacy, by: installed))
+    }
+
+    func test_superseded_whenTheOldBundleIsAnOlderVersion() throws {
+        let installed = try makeBundle(at: "Applications/StackNudge.app", version: "2.1.6")
+        let stale = try makeBundle(at: "Downloads/StackNudge.app", version: "2.1.5")
+        XCTAssertTrue(Bootstrap.bundleIsSuperseded(stale, by: installed))
+    }
+
+    // The developer case review found: a build/ bundle at the current
+    // version or ahead of it is deliberate, and an in-app update must not
+    // silently re-point their launch agent at the release.
+    func test_notSuperseded_aCurrentOrNewerDeveloperBuild() throws {
+        let installed = try makeBundle(at: "Applications/StackNudge.app", version: "2.1.6")
+        let same = try makeBundle(at: "code/build/StackNudge.app", version: "2.1.6")
+        let ahead = try makeBundle(at: "code2/build/StackNudge.app", version: "2.2.0")
+        XCTAssertFalse(Bootstrap.bundleIsSuperseded(same, by: installed))
+        XCTAssertFalse(Bootstrap.bundleIsSuperseded(ahead, by: installed))
+    }
+
+    func test_superseded_whenTheOldBundlesVersionCantBeRead() throws {
+        let installed = try makeBundle(at: "Applications/StackNudge.app", version: "2.1.6")
+        let damaged = try makeBundle(at: "Downloads/StackNudge.app", version: nil)
+        XCTAssertTrue(Bootstrap.bundleIsSuperseded(damaged, by: installed))
+    }
+
+    // End to end on disk: a dev's agent pointing at their current build is
+    // left byte-for-byte alone by the update-time step.
+    func test_retargetAgentsAfterUpdate_leavesACurrentDeveloperBuildAlone() throws {
+        let installed = try makeBundle(at: "Applications/StackNudge.app", version: "2.1.6")
+        let dev = try makeBundle(at: "code/build/StackNudge.app", version: "2.1.6")
+        let appPath = try writeAgent(["Label": Bootstrap.appLabel,
+                                      "ProgramArguments": ["\(dev)/Contents/MacOS/stack-nudge"]],
+                                     label: Bootstrap.appLabel)
+        let before = FileManager.default.contents(atPath: appPath)
+        XCTAssertEqual(Bootstrap.retargetAgentsAfterUpdate(toBundle: installed, agentsDir: scratch.path,
+                                                          venvSymlinkPath: noLink), [])
+        XCTAssertEqual(FileManager.default.contents(atPath: appPath), before)
+    }
+
+    // MARK: - The venv symlink
+
+    private func makeVenv(in bundle: String) throws -> String {
+        let venv = "\(bundle)/Contents/Resources/venv"
+        try FileManager.default.createDirectory(atPath: venv, withIntermediateDirectories: true)
+        return venv
+    }
+
+    func test_venvSymlink_isRepointedFromADeletedCopy() throws {
+        let installed = try makeBundle(at: "Applications/StackNudge.app", version: "2.1.6")
+        let venv = try makeVenv(in: installed)
+        let link = scratch.appendingPathComponent("venv").path
+        try FileManager.default.createSymbolicLink(
+            atPath: link,
+            withDestinationPath: scratch.appendingPathComponent("Downloads/StackNudge.app/Contents/Resources/venv").path)
+
+        XCTAssertTrue(Bootstrap.retargetVenvSymlink(toBundle: installed, symlinkPath: link))
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link), venv)
+        // Still a link — replaced, not resolved into a copy or a directory.
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: link)[.type] as? FileAttributeType,
+                       .typeSymbolicLink)
+    }
+
+    func test_venvSymlink_isLeftAloneWhenAlreadyCurrent() throws {
+        let installed = try makeBundle(at: "Applications/StackNudge.app", version: "2.1.6")
+        let venv = try makeVenv(in: installed)
+        let link = scratch.appendingPathComponent("venv").path
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: venv)
+        XCTAssertFalse(Bootstrap.retargetVenvSymlink(toBundle: installed, symlinkPath: link))
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link), venv)
+    }
+
+    func test_venvSymlink_noLinkIsNotAnError() throws {
+        let installed = try makeBundle(at: "Applications/StackNudge.app", version: "2.1.6")
+        XCTAssertFalse(Bootstrap.retargetVenvSymlink(toBundle: installed, symlinkPath: noLink))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: noLink), "invented a link")
     }
 
     // MARK: - KeepAlive
