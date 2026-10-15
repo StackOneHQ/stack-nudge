@@ -192,8 +192,8 @@ final class Updater {
 
         // 6. Atomic swap into ~/Applications/.
         setPhase(.installing)
-        try atomicSwap(extractedAppURL: extractedAppURL)
-        appendLog("Installed to \(Self.installedAppPath)")
+        let installedURL = try atomicSwap(extractedAppURL: extractedAppURL)
+        appendLog("Installed to \(installedURL.path)")
 
         // 7. Write status file so the next launch surfaces the welcome view.
         try writeStatusFile(state: "success", version: release.version, error: nil)
@@ -203,21 +203,22 @@ final class Updater {
         //     Bootstrap.retargetLaunchAgentOnDisk for the two ways they come
         //     to point elsewhere. Best-effort and non-throwing: a plist we
         //     can't rewrite leaves things exactly as they were before.
-        var retargeted: Set<String> = []
-        for label in [Bootstrap.appLabel, Bootstrap.daemonLabel]
-        where Bootstrap.retargetLaunchAgentOnDisk(label: label, toBundle: Self.installedAppPath) {
-            retargeted.insert(label)
-            appendLog("Launch agent \(label) now points at \(Self.installedAppPath)")
-        }
-        // A plist old enough to need retargeting is old enough to predate
-        // #106, so it likely still says `KeepAlive: true`. Its own fix lives
-        // in the same gated migration that never ran. Correct it on disk
-        // now: the retired job (see restartSequence) is reloaded from this
-        // file at next login, and if it still said `true` there, the new
-        // bundle's first-launch migration would unload/load it and
-        // RunAtLoad would start a second copy alongside ours.
-        if retargeted.contains(Bootstrap.appLabel) {
-            Bootstrap.crashOnlyKeepAliveOnDisk(label: Bootstrap.appLabel)
+        //
+        //     Takes `installedURL` from the swap rather than a constant, so
+        //     it can't be moved above the swap (where the new bundle doesn't
+        //     exist yet, every existence check fails, and the fix silently
+        //     does nothing) without failing to compile.
+        //
+        //     The app agent also gets crash-only KeepAlive on disk. A plist
+        //     old enough to need retargeting predates #106, and its own fix
+        //     lives in the same gated migration that never ran. The retired
+        //     job (see restartSequence) is reloaded from this file at next
+        //     login; left as `true`, the new bundle's first-launch migration
+        //     would unload/load it and RunAtLoad would start a second copy.
+        let retargeted = Bootstrap.retargetAgentsAfterUpdate(
+            toBundle: installedURL.path, agentsDir: Bootstrap.launchAgentsDir)
+        for label in retargeted.sorted() {
+            appendLog("Launch agent \(label) now points at \(installedURL.path)")
         }
 
         // 8. Restart. Try launchctl first (handles cases where a launchd
@@ -312,7 +313,7 @@ final class Updater {
     // launchd as the last act. If we are that job, bootout kills us — fine,
     // we were quitting — and the job is gone, so nothing restarts it
     // (measured). The corrected plist loads at next login.
-    static func restartSequence(retargeted: Set<String> = [],
+    static func restartSequence(retargeted: Set<String>,
                                 announce: () -> Void,
                                 kickstart: (String) -> LaunchctlOutcome,
                                 reload: (String) -> LaunchctlOutcome,
@@ -333,13 +334,22 @@ final class Updater {
 
     // Unload and reload one agent from its plist, both bounded. Only for
     // agents this process cannot be — see restartSequence.
+    //
+    // bootout/bootstrap rather than unload/load: `load` exits 0 even when it
+    // fails — measured against a nonexistent plist and an already-loaded
+    // one — so a check on its status could never fire. `bootstrap` reports
+    // both (exit 5).
     @discardableResult
     private func reloadLaunchAgent(_ label: String) -> LaunchctlOutcome {
+        let domain = "gui/\(getuid())"
         let plist = "\(Bootstrap.launchAgentsDir)/\(label).plist"
-        _ = Self.runBounded("/bin/launchctl", ["unload", plist], timeout: Self.kickstartTimeout)
-        let outcome = Self.runBounded("/bin/launchctl", ["load", plist], timeout: Self.kickstartTimeout)
+        // Exit 3 when not loaded; harmless, the bootstrap below still runs.
+        _ = Self.runBounded("/bin/launchctl", ["bootout", "\(domain)/\(label)"],
+                            timeout: Self.kickstartTimeout)
+        let outcome = Self.runBounded("/bin/launchctl", ["bootstrap", domain, plist],
+                                      timeout: Self.kickstartTimeout)
         if outcome != .exited(0) {
-            appendLog("launchctl load \(label): \(outcome) (non-fatal; takes effect at next login)")
+            appendLog("launchctl bootstrap \(label): \(outcome) (non-fatal; loads at next login)")
         }
         return outcome
     }
@@ -601,7 +611,8 @@ final class Updater {
     // applicationDidFinishLaunching runs Bootstrap.cleanupPostUpdateBackup
     // — that's intentional: it's a rollback safety net for the failure
     // window between swap and successful launch.
-    private func atomicSwap(extractedAppURL: URL) throws {
+    @discardableResult
+    private func atomicSwap(extractedAppURL: URL) throws -> URL {
         let fm = FileManager.default
         let target = URL(fileURLWithPath: Self.installedAppPath)
         let backup = URL(fileURLWithPath: Self.installedAppPath + ".old")
@@ -632,6 +643,7 @@ final class Updater {
         // at, and the very next kickstart hung forever (#205). The cleanup
         // still happens: the new bundle's first launch passes that gate and
         // recycles the folder to the Trash, after the switch, not before.
+        return target
     }
 
     // MARK: - Launchd
@@ -839,7 +851,7 @@ final class Updater {
     // restartSequence for when and why. It runs inside the delay, not before
     // it, so the relaunch request has two seconds to land before a bootout
     // that may kill this process.
-    private func scheduleAutoQuit(retiring label: String? = nil) {
+    private func scheduleAutoQuit(retiring label: String?) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             if let label {
                 _ = Self.runBounded("/bin/launchctl", ["bootout", "gui/\(getuid())/\(label)"],

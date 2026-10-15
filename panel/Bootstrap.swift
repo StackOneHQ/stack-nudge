@@ -338,7 +338,7 @@ enum Bootstrap {
     // even after an explicit user Quit. Rewrite to the dict form that
     // restarts on crash only.
     private static func migrateKeepAliveIfNeeded(label: String) {
-        guard crashOnlyKeepAliveOnDisk(label: label) else { return }
+        guard crashOnlyKeepAliveOnDisk(label: label, agentsDir: launchAgentsDir) else { return }
         let plistPath = "\(launchAgentsDir)/\(label).plist"
         _ = try? runLaunchctl(["unload", plistPath])
         _ = try? runLaunchctl(["load",   plistPath])
@@ -350,7 +350,7 @@ enum Bootstrap {
     // Panel agent only — the daemon's `KeepAlive: true` is deliberate.
     @discardableResult
     static func crashOnlyKeepAliveOnDisk(label: String,
-                                         agentsDir: String = launchAgentsDir) -> Bool {
+                                         agentsDir: String) -> Bool {
         let plistPath = "\(agentsDir)/\(label).plist"
         guard let data = FileManager.default.contents(atPath: plistPath),
               var plist = (try? PropertyListSerialization.propertyList(
@@ -423,6 +423,14 @@ enum Bootstrap {
         let root = (String(path[..<marker.lowerBound]) + ".app" as NSString).standardizingPath
         let target = (installed as NSString).standardizingPath
         guard root != target else { return nil }
+        // Only OUR bundles, under any name they have shipped or been saved
+        // as: `StackNudge.app`, the pre-1.7 `stack-nudge.app`, and Finder's
+        // duplicate-download `StackNudge 2.app`. Existence alone isn't a
+        // guard here, because directories pass it: another app's
+        // `Contents/Resources` exists inside ours too, so without this a
+        // path into a foreign app would be re-pointed into stack-nudge.
+        let name = (root as NSString).lastPathComponent.lowercased()
+        guard name.hasPrefix("stacknudge") || name.hasPrefix("stack-nudge") else { return nil }
         let candidate = target + "/" + String(path[marker.upperBound...])
         return exists(candidate) ? candidate : nil
     }
@@ -465,7 +473,7 @@ enum Bootstrap {
     @discardableResult
     static func retargetLaunchAgentOnDisk(label: String,
                                           toBundle installed: String,
-                                          agentsDir: String = launchAgentsDir) -> Bool {
+                                          agentsDir: String) -> Bool {
         let plistPath = "\(agentsDir)/\(label).plist"
         guard let data = FileManager.default.contents(atPath: plistPath),
               var plist = (try? PropertyListSerialization.propertyList(
@@ -488,6 +496,24 @@ enum Bootstrap {
               (try? updated.write(to: URL(fileURLWithPath: plistPath), options: [.atomic])) != nil
         else { return false }
         return true
+    }
+
+    // Everything the updater does to the launch agents on disk, in one
+    // testable place: re-point both, and bring the app agent's KeepAlive up
+    // to crash-only (see Updater for why). Returns the labels re-pointed.
+    //
+    // App only for KeepAlive — the daemon's `KeepAlive: true` is deliberate.
+    static func retargetAgentsAfterUpdate(toBundle installed: String,
+                                          agentsDir: String) -> Set<String> {
+        var retargeted: Set<String> = []
+        for label in [appLabel, daemonLabel]
+        where retargetLaunchAgentOnDisk(label: label, toBundle: installed, agentsDir: agentsDir) {
+            retargeted.insert(label)
+        }
+        if retargeted.contains(appLabel) {
+            crashOnlyKeepAliveOnDisk(label: appLabel, agentsDir: agentsDir)
+        }
+        return retargeted
     }
 
     // Agents present on this Mac. The bootstrap wizard checks all of these

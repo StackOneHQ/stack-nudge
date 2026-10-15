@@ -58,13 +58,6 @@ final class LaunchAgentRetargetTests: XCTestCase {
                               exists: { _ in false }))
     }
 
-    // A directory merely NAMED like a bundle is not one. The existence check
-    // is what keeps it safe: the rewritten path won't exist inside the app.
-    func test_leavesADirectoryThatMerelyEndsInDotAppAlone() {
-        let projectPath = "/Users/u/code/my.app/scripts/run.sh"
-        XCTAssertNil(retarget(projectPath, exists: { FileManager.default.fileExists(atPath: $0) }))
-    }
-
     // A path into a helper nested inside the app belongs to the app, so the
     // OUTERMOST bundle is the one replaced.
     func test_retargetsByTheOutermostBundle() {
@@ -179,6 +172,95 @@ final class LaunchAgentRetargetTests: XCTestCase {
             label: "not.there", toBundle: try makeInstalledBundle(), agentsDir: scratch.path))
     }
 
+    // A path into ANOTHER app must be left alone even when the same relative
+    // path exists inside ours. Directories pass the existence check, and
+    // every app has `Contents/Resources`, so existence alone would re-point a
+    // foreign app's path into stack-nudge. Uses a real bundle, so the file
+    // really does exist and only the ours-only guard can stop it.
+    func test_leavesAPathIntoAForeignAppAloneEvenWhenItExistsInOurs() throws {
+        let bundle = try makeInstalledBundle()
+        let foreign = scratch.appendingPathComponent("Applications/Other.app/Contents/MacOS").path
+        XCTAssertTrue(FileManager.default.fileExists(atPath: "\(bundle)/Contents/MacOS"),
+                      "precondition: the same path exists inside our bundle")
+        XCTAssertNil(Bootstrap.retargetedBundlePath(
+            foreign, toBundle: bundle, exists: { FileManager.default.fileExists(atPath: $0) }))
+    }
+
+    // Names our bundle has actually had: the pre-1.7 one, and Finder's
+    // duplicate-download suffix. Case-insensitive, as APFS is by default.
+    func test_retargetsEveryNameOurBundleHasShippedOrBeenSavedAs() {
+        for name in ["stack-nudge.app", "StackNudge.app", "StackNudge 2.app", "stacknudge.app"] {
+            XCTAssertNotNil(retarget("/Users/u/Downloads/\(name)/Contents/MacOS/stack-nudge"),
+                            "\(name) should be recognised as ours")
+        }
+    }
+
+    // E/M8: args already correct, only the environment stale. The spec
+    // must still report a change — otherwise the stale data dir survives.
+    func test_specMovesAStaleEnvironmentEvenWhenTheArgumentsAreCorrect() throws {
+        let spec = try XCTUnwrap(Bootstrap.retargetedLaunchSpec(
+            arguments: ["\(installed)/Contents/Resources/venv/bin/python3", "serve"],
+            environment: ["ESPEAK_DATA_PATH": "/Users/u/Applications/stack-nudge.app/Contents/Resources/data"],
+            toBundle: installed, exists: everythingExists))
+        XCTAssertEqual(spec.environment["ESPEAK_DATA_PATH"], "\(installed)/Contents/Resources/data")
+    }
+
+    // MARK: - The whole update-time step
+
+    // The wiring the updater relies on, end to end on disk: both agents
+    // re-pointed, the daemon's environment saved (not just computed), and
+    // crash-only KeepAlive applied to the app ONLY — the daemon's `true` is
+    // deliberate, and flipping it would stop voice coming back after a crash.
+    func test_retargetAgentsAfterUpdate_rewritesBothAndFixesKeepAliveOnTheAppOnly() throws {
+        let bundle = try makeInstalledBundle()
+        let venv = URL(fileURLWithPath: bundle).appendingPathComponent("Contents/Resources/venv")
+        for sub in ["bin", "lib/espeak-ng-data"] {
+            try FileManager.default.createDirectory(at: venv.appendingPathComponent(sub),
+                                                    withIntermediateDirectories: true)
+        }
+        for file in ["bin/python3", "bin/stackvox"] {
+            FileManager.default.createFile(atPath: venv.appendingPathComponent(file).path, contents: Data())
+        }
+
+        let old = "/Users/u/Applications/stack-nudge.app"
+        let appPath = try writeAgent(["Label": Bootstrap.appLabel, "KeepAlive": true,
+                                      "ProgramArguments": ["\(old)/Contents/MacOS/stack-nudge"]],
+                                     label: Bootstrap.appLabel)
+        let daemonPath = try writeAgent([
+            "Label": Bootstrap.daemonLabel, "KeepAlive": true,
+            "ProgramArguments": ["\(old)/Contents/Resources/venv/bin/python3",
+                                 "\(old)/Contents/Resources/venv/bin/stackvox", "serve"],
+            "EnvironmentVariables": ["ESPEAK_DATA_PATH": "\(old)/Contents/Resources/venv/lib/espeak-ng-data"],
+        ], label: Bootstrap.daemonLabel)
+
+        let retargeted = Bootstrap.retargetAgentsAfterUpdate(toBundle: bundle, agentsDir: scratch.path)
+        XCTAssertEqual(retargeted, [Bootstrap.appLabel, Bootstrap.daemonLabel])
+
+        let app = try readAgent(appPath)
+        XCTAssertEqual(app["ProgramArguments"] as? [String], ["\(bundle)/Contents/MacOS/stack-nudge"])
+        XCTAssertEqual(app["KeepAlive"] as? [String: Bool], ["SuccessfulExit": false])
+
+        let daemon = try readAgent(daemonPath)
+        XCTAssertEqual((daemon["ProgramArguments"] as? [String])?.first,
+                       "\(bundle)/Contents/Resources/venv/bin/python3")
+        XCTAssertEqual((daemon["EnvironmentVariables"] as? [String: String])?["ESPEAK_DATA_PATH"],
+                       "\(bundle)/Contents/Resources/venv/lib/espeak-ng-data",
+                       "daemon environment was computed but not saved")
+        XCTAssertEqual(daemon["KeepAlive"] as? Bool, true, "daemon KeepAlive must stay unconditional")
+    }
+
+    // An ordinary install: nothing to move, nothing touched, nothing reported.
+    func test_retargetAgentsAfterUpdate_isANoOpForAnOrdinaryInstall() throws {
+        let bundle = try makeInstalledBundle()
+        let appPath = try writeAgent(["Label": Bootstrap.appLabel, "KeepAlive": true,
+                                      "ProgramArguments": ["\(bundle)/Contents/MacOS/stack-nudge"]],
+                                     label: Bootstrap.appLabel)
+        let before = FileManager.default.contents(atPath: appPath)
+        XCTAssertEqual(Bootstrap.retargetAgentsAfterUpdate(toBundle: bundle, agentsDir: scratch.path), [])
+        XCTAssertEqual(FileManager.default.contents(atPath: appPath), before,
+                       "touched an agent that didn't need retargeting")
+    }
+
     // MARK: - KeepAlive
 
     // Plists old enough to need retargeting predate #106 and say
@@ -200,6 +282,20 @@ final class LaunchAgentRetargetTests: XCTestCase {
         let before = FileManager.default.contents(atPath: path)
         XCTAssertFalse(Bootstrap.crashOnlyKeepAliveOnDisk(label: "test.agent", agentsDir: scratch.path))
         XCTAssertEqual(FileManager.default.contents(atPath: path), before)
+    }
+
+    // `false` means "never respawn" and absent means the same; rewriting
+    // either to crash-only would turn a job that stays down into one that
+    // comes back. Only the unconditional `true` is the old bug.
+    func test_crashOnlyKeepAlive_leavesFalseAndAbsentAlone() throws {
+        for (label, plist) in [("ka.false", ["Label": "ka.false", "KeepAlive": false,
+                                             "ProgramArguments": ["/x"]] as [String: Any]),
+                               ("ka.absent", ["Label": "ka.absent", "ProgramArguments": ["/x"]])] {
+            let path = try writeAgent(plist, label: label)
+            let before = FileManager.default.contents(atPath: path)
+            XCTAssertFalse(Bootstrap.crashOnlyKeepAliveOnDisk(label: label, agentsDir: scratch.path), label)
+            XCTAssertEqual(FileManager.default.contents(atPath: path), before, label)
+        }
     }
 
     // A plist we can't parse is left byte-for-byte as we found it.

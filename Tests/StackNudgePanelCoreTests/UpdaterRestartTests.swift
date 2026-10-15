@@ -206,6 +206,7 @@ final class UpdaterRestartTests: XCTestCase {
 
         var announced = false
         Updater.restartSequence(
+            retargeted: [],
             announce: { announced = true },
             kickstart: { label in kicked.append(label); return .timedOut },
             reload: { _ in .timedOut },
@@ -226,7 +227,8 @@ final class UpdaterRestartTests: XCTestCase {
                                                   .failedToStart("boom")] {
             var relaunched = false
             var quit = false
-            Updater.restartSequence(announce: {},
+            Updater.restartSequence(retargeted: [],
+                                    announce: {},
                                     kickstart: { _ in outcome },
                                     reload: { _ in outcome },
                                     relaunch: { relaunched = true },
