@@ -39,10 +39,14 @@ final class UsageHistoryTests: XCTestCase {
                             input: Int = 10,
                             cacheRead: Int = 1_000,
                             cacheCreate: Int = 500,
-                            uuid: String = UUID().uuidString) -> String {
-        """
-        {"type":"assistant","uuid":"\(uuid)","timestamp":"\(Self.stamp.string(from: when))",\
-        "message":{"model":"claude-opus-5","usage":{"input_tokens":\(input),\
+                            uuid: String = UUID().uuidString,
+                            requestId: String? = nil,
+                            messageId: String? = nil) -> String {
+        let request = requestId.map { #""requestId":"\#($0)","# } ?? ""
+        let message = messageId.map { #""id":"\#($0)","# } ?? ""
+        return """
+        {"type":"assistant","uuid":"\(uuid)",\(request)"timestamp":"\(Self.stamp.string(from: when))",\
+        "message":{\(message)"model":"claude-opus-5","usage":{"input_tokens":\(input),\
         "output_tokens":\(output),"cache_read_input_tokens":\(cacheRead),\
         "cache_creation_input_tokens":\(cacheCreate)}}}
         """
@@ -149,6 +153,102 @@ final class UsageHistoryTests: XCTestCase {
         let series = UsageHistoryReader.claudeSeries(now: now, root: dir)
         XCTAssertEqual(series.total(for: .outputTokens), 500)
         XCTAssertEqual(series.total(for: .turns), 1)
+    }
+
+    // MARK: One request, many lines
+
+    // Claude writes a transcript line per content block (thinking, text, each tool
+    // call) and repeats the request's usage on all of them, each with its own uuid.
+    func test_blocksOfOneRequest_countOnce() {
+        let dir = fixtureDirectory()
+        let now = Date(timeIntervalSince1970: 1_785_150_000)
+        let when = now.addingTimeInterval(-1_200)
+        _ = write((0..<3).map { offset in
+            claudeLine(at: when.addingTimeInterval(Double(offset)),
+                       output: 100, input: 10, cacheRead: 1_000, cacheCreate: 500, requestId: "req_a")
+        }, to: dir, name: "a.jsonl", modified: now)
+
+        let series = UsageHistoryReader.claudeSeries(now: now, root: dir)
+        XCTAssertEqual(series.total(for: .turns), 1)
+        XCTAssertEqual(series.total(for: .outputTokens), 100)
+        XCTAssertEqual(series.total(for: .excludingCacheReads), 610)
+        XCTAssertEqual(series.total(for: .inputAndCache), 1_510)
+    }
+
+    func test_requestsWithSeveralBlocksEach_stayDistinct() {
+        let dir = fixtureDirectory()
+        let now = Date(timeIntervalSince1970: 1_785_150_000)
+        let when = now.addingTimeInterval(-1_200)
+        _ = write([
+            claudeLine(at: when, requestId: "req_a"),
+            claudeLine(at: when.addingTimeInterval(1), requestId: "req_a"),
+            claudeLine(at: when.addingTimeInterval(60), requestId: "req_b"),
+            claudeLine(at: when.addingTimeInterval(61), requestId: "req_b"),
+        ], to: dir, name: "a.jsonl", modified: now)
+
+        let series = UsageHistoryReader.claudeSeries(now: now, root: dir)
+        XCTAssertEqual(series.total(for: .turns), 2)
+        XCTAssertEqual(series.total(for: .outputTokens), 200)
+    }
+
+    // A block written while the response was still streaming reports less output
+    // than the last one, so the larger figure wins whichever order they arrive in.
+    func test_streamingBlock_keepsTheLargestOutput() {
+        let now = Date(timeIntervalSince1970: 1_785_150_000)
+        let when = now.addingTimeInterval(-1_200)
+        for lines in [[20, 300], [300, 20]] {
+            let dir = fixtureDirectory()
+            _ = write(lines.enumerated().map { offset, output in
+                claudeLine(at: when.addingTimeInterval(Double(offset)), output: output, requestId: "req_a")
+            }, to: dir, name: "a.jsonl", modified: now)
+
+            let series = UsageHistoryReader.claudeSeries(now: now, root: dir)
+            XCTAssertEqual(series.total(for: .outputTokens), 300, "order \(lines)")
+            XCTAssertEqual(series.total(for: .turns), 1)
+        }
+    }
+
+    func test_sameRequestCopiedIntoAnotherTranscript_countsOnce() {
+        let dir = fixtureDirectory()
+        let now = Date(timeIntervalSince1970: 1_785_150_000)
+        let when = now.addingTimeInterval(-1_200)
+        _ = write([claudeLine(at: when, output: 500, requestId: "req_a")], to: dir, name: "a.jsonl", modified: now)
+        _ = write([claudeLine(at: when, output: 500, requestId: "req_a")], to: dir, name: "b.jsonl", modified: now)
+
+        let series = UsageHistoryReader.claudeSeries(now: now, root: dir)
+        XCTAssertEqual(series.total(for: .outputTokens), 500)
+        XCTAssertEqual(series.total(for: .turns), 1)
+    }
+
+    func test_messageId_standsInWhenThereIsNoRequestId() {
+        let dir = fixtureDirectory()
+        let now = Date(timeIntervalSince1970: 1_785_150_000)
+        let when = now.addingTimeInterval(-1_200)
+        _ = write([
+            claudeLine(at: when, output: 100, messageId: "msg_a"),
+            claudeLine(at: when.addingTimeInterval(1), output: 100, messageId: "msg_a"),
+        ], to: dir, name: "a.jsonl", modified: now)
+
+        let series = UsageHistoryReader.claudeSeries(now: now, root: dir)
+        XCTAssertEqual(series.total(for: .turns), 1)
+        XCTAssertEqual(series.total(for: .outputTokens), 100)
+    }
+
+    func test_aRequestIsPlacedWhereItStarted() {
+        let dir = fixtureDirectory()
+        let now = Date(timeIntervalSince1970: 1_785_150_000)
+        let start = now.addingTimeInterval(-1_200)
+        _ = write([
+            claudeLine(at: start.addingTimeInterval(400), output: 300, requestId: "req_a"),
+            claudeLine(at: start, output: 20, requestId: "req_a"),
+        ], to: dir, name: "a.jsonl", modified: now)
+
+        let series = UsageHistoryReader.claudeSeries(now: now, root: dir)
+        let active = series.buckets.filter { $0.turns > 0 }
+        XCTAssertEqual(active.count, 1)
+        XCTAssertEqual(active.first?.start, series.buckets.first {
+            $0.start <= start && start < $0.start.addingTimeInterval(Double(series.bucketSeconds))
+        }?.start)
     }
 
     // MARK: Robustness

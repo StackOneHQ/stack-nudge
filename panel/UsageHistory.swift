@@ -2,8 +2,8 @@ import Foundation
 
 // MARK: - Series model
 
-// One time bucket of a usage series. Token fields are sums over every agent
-// turn that landed in the bucket; `turns` counts the turns themselves.
+// One time bucket of a usage series. Token fields are sums over every model
+// request that landed in the bucket; `turns` counts the requests themselves.
 struct UsageBucket: Equatable {
     let start: Date
     var inputTokens:       Int = 0
@@ -132,9 +132,12 @@ struct UsageModelKey: Hashable {
 // a refresh where nothing changed — never re-reads or re-parses anything.
 struct UsageEntry: Equatable {
     let when: Date
-    // Stable per-turn id where the agent provides one (Claude's `uuid`), used to
-    // drop turns replayed into a second transcript by a resumed or forked
-    // session. nil for agents with no such id.
+    // Stable id of the model request this entry reports, where the agent has one
+    // (Claude's `requestId`). Claude writes one transcript line per content block
+    // and repeats the request's usage on each, so several entries can share an
+    // identity: they are one request, and `collapsingRepeats` folds them into
+    // one. It also folds a request replayed into a second transcript by a
+    // resumed or forked session. nil for agents with no such id.
     let identity: String?
     let inputTokens:       Int
     let outputTokens:      Int
@@ -150,6 +153,42 @@ struct UsageEntry: Equatable {
 }
 
 extension UsageEntry {
+    // One entry per request. A request's lines repeat the same input and cache
+    // figures, so summing them multiplies those by the number of content blocks
+    // (2.6 on average over a real month); only output varies, because a block
+    // written while the response was still streaming reports less of it. Each
+    // field therefore keeps its largest value, and the entry keeps the earliest
+    // timestamp, when the request started. Entries with no identity are kept as
+    // they are, since there is nothing to say two of them are the same request.
+    static func collapsingRepeats(_ entries: [UsageEntry]) -> [UsageEntry] {
+        var collapsed: [UsageEntry] = []
+        var positions: [String: Int] = [:]
+        for entry in entries {
+            guard let identity = entry.identity else { collapsed.append(entry); continue }
+            guard let position = positions[identity] else {
+                positions[identity] = collapsed.count
+                collapsed.append(entry)
+                continue
+            }
+            collapsed[position] = collapsed[position].merging(entry)
+        }
+        return collapsed
+    }
+
+    private func merging(_ other: UsageEntry) -> UsageEntry {
+        UsageEntry(
+            when: min(when, other.when),
+            identity: identity,
+            inputTokens: max(inputTokens, other.inputTokens),
+            outputTokens: max(outputTokens, other.outputTokens),
+            cacheReadTokens: max(cacheReadTokens, other.cacheReadTokens),
+            cacheCreateTokens: max(cacheCreateTokens, other.cacheCreateTokens),
+            isLocal: isLocal,
+            model: model,
+            provider: provider
+        )
+    }
+
     // The measure the graph's `excludingCacheReads` metric plots. Cache reads
     // are replays of content already paid for, so counting them would let a
     // resumed session burn a budget without doing any new work.
@@ -266,9 +305,8 @@ final class UsageHistoryStore {
             // Shrunk means truncated or replaced, so the cached entries can't be
             // trusted; anything else is treated as an append and resumes from the
             // last complete line. A whole-file rewrite that happened to grow
-            // would be mis-resumed, which is why identity-based deduplication
-            // stays in the merge step below rather than being dropped as
-            // redundant.
+            // would be mis-resumed, which is why the identity collapse in `series`
+            // and `totals` stays rather than being dropped as redundant.
             let resumeFrom = (cached.map { candidate.size < $0.size ? 0 : $0.parsedUpTo }) ?? 0
             var entries = resumeFrom == 0 ? [] : (cached?.entries ?? [])
 
@@ -320,13 +358,13 @@ final class UsageHistoryStore {
         lock.unlock()
 
         var accumulator = Accumulator(now: now, windowHours: window.hours, bucketSeconds: bucketSeconds)
-        for entry in all { accumulator.add(entry) }
+        for entry in UsageEntry.collapsingRepeats(all) { accumulator.add(entry) }
         return accumulator.series()
     }
 
     // Tokens per model over [from, to). Sums entries rather than buckets: the pi
     // budget's windows are calendar days and weeks, which no bucket grid lines up
-    // with and which run wider than any UsageWindow. Deduplicated by identity the
+    // with and which run wider than any UsageWindow. Collapsed by identity the
     // same way bucketing is, and pure computation over what refresh already
     // cached, so the caller must have retained a span this wide. Entries with no
     // model (Claude, Codex) are skipped.
@@ -335,10 +373,8 @@ final class UsageHistoryStore {
         let all = (cache[source] ?? [:]).values.flatMap { $0.entries }
         lock.unlock()
 
-        var seen: Set<String> = []
         var result: [UsageModelKey: Int] = [:]
-        for entry in all {
-            if let identity = entry.identity, !seen.insert(identity).inserted { continue }
+        for entry in UsageEntry.collapsingRepeats(all) {
             guard entry.when >= from, entry.when < to,
                   let model = entry.model, entry.tokensExcludingCacheReads > 0
             else { continue }
@@ -371,7 +407,6 @@ final class UsageHistoryStore {
         let bucketCount: Int
 
         private var totals: [Int: UsageBucket] = [:]
-        private var seenIdentities: Set<String> = []
 
         init(now: Date, windowHours: Int, bucketSeconds: Int) {
             self.bucketSeconds = bucketSeconds
@@ -387,12 +422,6 @@ final class UsageHistoryStore {
         }
 
         mutating func add(_ entry: UsageEntry) {
-            // Resumed or forked sessions can replay earlier turns into a second
-            // transcript. Measured duplication over a real 24h was zero, but this
-            // also covers a file being re-read after a rewrite, so it earns its
-            // keep beyond the replay case.
-            if let identity = entry.identity, !seenIdentities.insert(identity).inserted { return }
-
             let offset = entry.when.timeIntervalSince(firstBucketStart)
             guard offset >= 0 else { return }
             let index = Int(offset) / bucketSeconds
@@ -473,7 +502,13 @@ final class UsageHistoryStore {
         else { return nil }
         return UsageEntry(
             when: when,
-            identity: object["uuid"] as? String,
+            // `requestId`, not `uuid`: the uuid is per transcript LINE, so it tells
+            // the blocks of one response apart instead of together. The message
+            // id is the same request under another name; the uuid is the last
+            // resort for a line with neither.
+            identity: (object["requestId"] as? String)
+                ?? (message["id"] as? String)
+                ?? (object["uuid"] as? String),
             inputTokens:       usage["input_tokens"]               as? Int ?? 0,
             outputTokens:      usage["output_tokens"]              as? Int ?? 0,
             cacheReadTokens:   usage["cache_read_input_tokens"]     as? Int ?? 0,
