@@ -414,18 +414,30 @@ final class Updater {
 
     private func extractTarball(_ tarballURL: URL) throws -> URL {
         let workDir = tarballURL.deletingLastPathComponent()
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
-        task.arguments = ["-xzf", tarballURL.path, "-C", workDir.path]
-        task.standardOutput = Pipe()
-        let errPipe = Pipe()
-        task.standardError = errPipe
-        try task.run()
-        task.waitUntilExit()
-        if task.terminationStatus != 0 {
-            let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(),
-                             encoding: .utf8) ?? ""
-            throw UpdateError.extractFailed(stderr: err)
+        // stderr goes to a file, not a Pipe read after waitUntilExit() — that
+        // ordering is the textbook deadlock: a tar chatty enough to fill the
+        // pipe buffer blocks on write() before we ever reach the read, and
+        // the panel hangs on "Extracting…". A file has no such buffer, and we
+        // still get the text for the error message.
+        let errLog = workDir.appendingPathComponent("tar-stderr.log")
+        FileManager.default.createFile(atPath: errLog.path, contents: nil)
+        let errHandle = try FileHandle(forWritingTo: errLog)
+        let outcome = Self.runBounded("/usr/bin/tar",
+                                      ["-xzf", tarballURL.path, "-C", workDir.path],
+                                      timeout: Self.extractTimeout,
+                                      standardError: errHandle)
+        try? errHandle.close()
+        let stderrText = (try? String(contentsOf: errLog, encoding: .utf8)) ?? ""
+        switch outcome {
+        case .exited(0):
+            break
+        case .exited:
+            throw UpdateError.extractFailed(stderr: stderrText)
+        case .timedOut:
+            throw UpdateError.extractFailed(
+                stderr: "tar timed out after \(Int(Self.extractTimeout))s. \(stderrText)")
+        case .failedToStart(let message):
+            throw UpdateError.extractFailed(stderr: message)
         }
         // Find the extracted .app — tarball wraps StackNudge.app at the top level.
         let contents = try FileManager.default
@@ -438,15 +450,23 @@ final class Updater {
     }
 
     private func stripQuarantine(at url: URL) throws {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
-        task.arguments = ["-dr", "com.apple.quarantine", url.path]
-        task.standardOutput = Pipe()
-        task.standardError = Pipe()
-        try task.run()
-        task.waitUntilExit()
+        // Bounded, and through /dev/null rather than a Pipe nobody reads.
+        // `xattr -dr` walks a freshly extracted ~200MB bundle and prints a
+        // line per failure; once that filled the pipe buffer the child
+        // blocked on write() while we blocked on it, and the panel hung on
+        // "Installing…" — worse than the hang this PR is named for, because
+        // this runs BEFORE writeStatusFile, so there is no success marker
+        // and no relaunch to recover with.
+        let outcome = Self.runBounded("/usr/bin/xattr",
+                                      ["-dr", "com.apple.quarantine", url.path],
+                                      timeout: Self.quarantineTimeout)
         // Ignore exit status — xattr -d is "success" even when the attr
         // wasn't set on macOS. Non-zero may be benign.
+        if case .timedOut = outcome {
+            // Not fatal: quarantine left on means Gatekeeper may prompt on
+            // first launch, which is a worse first run, not a broken one.
+            appendLog("xattr timed out after \(Int(Self.quarantineTimeout))s (non-fatal)")
+        }
     }
 
     static let installedAppPath = "\(NSHomeDirectory())/Applications/StackNudge.app"
@@ -501,6 +521,24 @@ final class Updater {
     // short enough that a wedged one is a pause rather than a hang.
     static let kickstartTimeout: TimeInterval = 10
 
+    // Extraction and the quarantine walk are over a ~200MB bundle on an
+    // arbitrary disk, so these are generous: they exist to catch a wedged
+    // child, not to police a slow one.
+    static let extractTimeout: TimeInterval = 300
+    static let quarantineTimeout: TimeInterval = 120
+
+    // Grace given to SIGTERM before SIGKILL, and again to SIGKILL before we
+    // give up waiting for the reap. Both are paid only by a child that
+    // ignores SIGTERM — a wedged `launchctl` dies on it immediately
+    // (measured), so in practice a bounded call costs its timeout.
+    static let terminateGrace: TimeInterval = 2
+
+    // The true worst case for ONE bounded call: the timeout, plus both
+    // grace periods. Named because the obvious arithmetic (just the
+    // timeout) understates it, and a budget assertion that uses the
+    // obvious number is measuring something that isn't the budget.
+    static var boundedCallCeiling: TimeInterval { kickstartTimeout + terminateGrace * 2 }
+
     // Outcome of a bounded subprocess run. `.timedOut` is the case that
     // matters here: it is precisely the one the old unbounded
     // `waitUntilExit()` could not report, because it never returned to
@@ -532,12 +570,16 @@ final class Updater {
     // Static and internal so the timeout path is testable without launchd.
     static func runBounded(_ executable: String,
                            _ args: [String],
-                           timeout: TimeInterval) -> LaunchctlOutcome {
+                           timeout: TimeInterval,
+                           standardError: Any? = nil) -> LaunchctlOutcome {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: executable)
         task.arguments = args
         task.standardOutput = FileHandle.nullDevice
-        task.standardError = FileHandle.nullDevice
+        // A caller that needs the text passes a FileHandle on a real file.
+        // Never a Pipe: an undrained one is the deadlock this helper exists
+        // to avoid, and draining it correctly means reading before the wait.
+        task.standardError = standardError ?? FileHandle.nullDevice
 
         let finished = DispatchSemaphore(value: 0)
         task.terminationHandler = { _ in finished.signal() }
@@ -551,9 +593,19 @@ final class Updater {
             // it, so we never leave the child behind holding the work the
             // timeout was supposed to abandon.
             task.terminate()
-            if finished.wait(timeout: .now() + 2) != .success {
-                kill(task.processIdentifier, SIGKILL)
-                _ = finished.wait(timeout: .now() + 2)
+            if finished.wait(timeout: .now() + Self.terminateGrace) != .success {
+                // Guarded, because this is a raw syscall against a number.
+                // Foundation reaps the child before it invokes the
+                // termination handler, so between the reap and our wait
+                // expiring the pid is free and the kernel may already have
+                // handed it to someone else — an unguarded kill would land
+                // on an unrelated process of the user's.
+                if task.isRunning { kill(task.processIdentifier, SIGKILL) }
+                // Wait again so we return with the child reaped rather than
+                // a zombie: on the restart path we quit moments later, and
+                // orphaning a launchctl mid-kickstart is how this file got
+                // its reputation.
+                _ = finished.wait(timeout: .now() + Self.terminateGrace)
             }
             return .timedOut
         }
