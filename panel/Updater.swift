@@ -217,10 +217,38 @@ final class Updater {
         //    user on the progress screen with the new bundle already on disk.
         setPhase(.done)
         appendLog("Restarting…")
-        kickstartLaunchd()
-        restartDaemon()          // pick up the stackvox engine the swap just installed
-        relaunchInstalledBundle()
-        scheduleAutoQuit()
+        Self.restartSequence(
+            kickstart: { [weak self] label in
+                self?.kickstartLaunchd(label) ?? .failedToStart("updater went away")
+            },
+            relaunch: { [weak self] in self?.relaunchInstalledBundle() },
+            quit:     { [weak self] in self?.scheduleAutoQuit() })
+    }
+
+    // The restart, with its side effects injected.
+    //
+    // This exists as a seam for one assertion: `relaunch` and `quit` run
+    // whatever the kickstarts return. That is the whole of #205 — a kickstart
+    // sat in front of those two calls and never came back — and without a
+    // seam the only thing protecting it is a comment. A refactor that gates
+    // the relaunch on `.exited(0)`, or routes a `.timedOut` through `fail()`,
+    // reproduces the bug exactly while every other test stays green.
+    //
+    // The kickstarts stay first so the voice daemon is restarted before we
+    // quit; they are bounded, so first is now safe. That daemon kick is
+    // #124: the daemon is a long-running `stackvox serve` job, and without
+    // an explicit kickstart it keeps running the pre-update engine until the
+    // next login, so engine fixes silently don't take effect after an app
+    // update. Non-fatal either way — KeepAlive brings it back at login, and
+    // a shell install that never registered the agent just gets a harmless
+    // "not loaded".
+    static func restartSequence(kickstart: (String) -> LaunchctlOutcome,
+                                relaunch: () -> Void,
+                                quit: () -> Void) {
+        _ = kickstart(Bootstrap.appLabel)
+        _ = kickstart(Bootstrap.daemonLabel)   // pick up the engine the swap installed
+        relaunch()
+        quit()
     }
 
     private func relaunchInstalledBundle() {
@@ -433,6 +461,9 @@ final class Updater {
             break
         case .exited:
             throw UpdateError.extractFailed(stderr: stderrText)
+        case .killedBySignal(let signal):
+            throw UpdateError.extractFailed(
+                stderr: "tar killed by signal \(signal). \(stderrText)")
         case .timedOut:
             throw UpdateError.extractFailed(
                 stderr: "tar timed out after \(Int(Self.extractTimeout))s. \(stderrText)")
@@ -545,6 +576,7 @@ final class Updater {
     // report anything.
     enum LaunchctlOutcome: Equatable {
         case exited(Int32)
+        case killedBySignal(Int32)
         case timedOut
         case failedToStart(String)
     }
@@ -552,17 +584,30 @@ final class Updater {
     // Run a subprocess and give up on it after `timeout`.
     //
     // `launchctl kickstart -k` blocks for as long as launchd takes to respawn
-    // the job, and when the job's program is missing that is forever —
-    // measured on macOS 15: a kickstart against an agent whose
-    // ProgramArguments[0] does not exist never returns (the job sits in
-    // "spawn scheduled"), while a crash-looping job costs ~20s of respawn
-    // throttle. That is not a hypothetical state for us: the voice daemon's
-    // plist points at a path *inside the app bundle*
-    // (Resources/venv/bin/python3), and atomicSwap has just replaced that
-    // bundle — so if the new bundle ships without the venv, this code has
-    // itself created the job that can never spawn. Issue #205 is the result:
-    // the panel sat on "Restarting stack-nudge…" forever, because the
-    // updater thread never reached the lines that relaunch and quit it.
+    // the job, and when the job's program is missing that is forever.
+    // Measured against throwaway agents, and replicated on a second machine:
+    //
+    //     healthy, long-running      rc 0    0.05s
+    //     label not loaded           rc 113  0.03s
+    //     ProgramArguments[0] gone   —       never returns ("spawn scheduled")
+    //
+    // Issue #205 is what that costs: the panel sat on "Restarting
+    // stack-nudge…" forever, because the updater thread never reached the
+    // lines that relaunch and quit it.
+    //
+    // Why we can reach that state at all: the voice daemon's plist points at
+    // a path *inside the app bundle* (Bootstrap.swift), atomicSwap replaces
+    // that bundle wholesale, and the plist is written at install time and
+    // never revalidated against the new one.
+    //
+    // What does NOT cause it, so nobody re-derives it from this comment: a
+    // release that ships without the venv. release.yml sets
+    // STACKNUDGE_BUNDLE_VENV=1 at job level over both matrix arches, build.sh
+    // runs under `set -e`, and ProgramArguments[0] is the venv's python3 —
+    // the one file present in any bundle that has a venv at all. Which path
+    // was actually missing on the reporting machine is not established and
+    // cannot be from the evidence: a hang logged nothing. Hence the timeout
+    // below logs the case that used to be silent.
     //
     // Output goes to /dev/null rather than a Pipe nobody drains, so a chatty
     // child cannot fill a pipe buffer and deadlock instead.
@@ -609,6 +654,12 @@ final class Updater {
             }
             return .timedOut
         }
+        // Foundation puts the SIGNAL number in terminationStatus when the
+        // child was killed, so reporting it as an exit code turns a launchctl
+        // killed by SIGSEGV into "exited 11" in the one log the user reads.
+        if task.terminationReason == .uncaughtSignal {
+            return .killedBySignal(task.terminationStatus)
+        }
         return .exited(task.terminationStatus)
     }
 
@@ -629,6 +680,8 @@ final class Updater {
             // shell install that never registered it) — launchctl exits 113.
             // The new bundle is on disk either way.
             appendLog("launchctl kickstart \(label) exited \(status) (non-fatal)")
+        case .killedBySignal(let signal):
+            appendLog("launchctl kickstart \(label) killed by signal \(signal) (non-fatal)")
         case .timedOut:
             appendLog("launchctl kickstart \(label) timed out after "
                       + "\(Int(Self.kickstartTimeout))s (non-fatal)")
@@ -636,18 +689,6 @@ final class Updater {
             appendLog("launchctl kickstart \(label) could not start: \(message) (non-fatal)")
         }
         return outcome
-    }
-
-    /// Restart the stackvox TTS daemon so it re-execs the engine the atomic
-    /// swap just placed on disk. The daemon is a long-running `stackvox serve`
-    /// launchd job; without an explicit kickstart it keeps running the
-    /// pre-update engine until the next login or crash, so engine fixes
-    /// (streaming playback, pronunciation, …) silently don't take effect after
-    /// an app update. Non-fatal: launchd KeepAlive brings it back on next login
-    /// regardless, and shell installs that never registered the daemon agent
-    /// simply get a harmless "not loaded" kickstart.
-    private func restartDaemon() {
-        kickstartLaunchd(Bootstrap.daemonLabel)
     }
 
     // MARK: - Status file

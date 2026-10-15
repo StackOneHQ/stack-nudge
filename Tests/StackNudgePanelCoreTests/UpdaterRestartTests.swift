@@ -55,9 +55,17 @@ final class UpdaterRestartTests: XCTestCase {
         let recorded = try String(contentsOfFile: marker, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let pid = try XCTUnwrap(pid_t(recorded), "child never recorded a pid")
-        // kill(pid, 0) succeeds only while the process still exists.
+        // kill(pid, 0) succeeds only while the process still exists. Check
+        // errno too: if the pid were recycled by a process of ANOTHER uid,
+        // kill returns -1 with EPERM and a bare `== -1` would pass against a
+        // live process. ESRCH is the one that means "gone".
+        //
+        // This samples immediately and deliberately: it is what pins the
+        // post-terminate wait, i.e. that we return with the child reaped
+        // rather than a zombie. Polling here would lose that coverage.
         XCTAssertEqual(kill(pid, 0), -1,
                        "child \(pid) survived the timeout that was meant to kill it")
+        XCTAssertEqual(errno, ESRCH, "child \(pid) is not gone; errno \(errno)")
     }
 
     // The case above `exec`s /bin/sleep, which dies on SIGTERM — so it never
@@ -86,6 +94,7 @@ final class UpdaterRestartTests: XCTestCase {
         defer { if kill(pid, 0) == 0 { kill(pid, SIGKILL) } }
         XCTAssertEqual(kill(pid, 0), -1,
                        "SIGTERM-proof child \(pid) outlived runBounded — SIGKILL never landed")
+        XCTAssertEqual(errno, ESRCH, "child \(pid) is not gone; errno \(errno)")
     }
 
     // MARK: - The paths that must keep working
@@ -177,6 +186,54 @@ final class UpdaterRestartTests: XCTestCase {
                        Updater.kickstartTimeout + Updater.terminateGrace * 2)
         XCTAssertGreaterThan(Updater.boundedCallCeiling, Updater.kickstartTimeout,
                              "ceiling must exceed the timeout, or it is not the ceiling")
+    }
+
+    // MARK: - The bug itself
+
+    // Everything above proves the *helper* is bounded. This is the only test
+    // that encodes #205: the restart must happen whatever the kickstarts do.
+    // A refactor that gates the relaunch on a clean exit, or routes a
+    // timeout through fail(), reproduces the original bug exactly — and
+    // every other test in this file would stay green.
+    func test_restartSequence_relaunchesAndQuitsEvenWhenBothKickstartsHang() {
+        var relaunched = false
+        var quit = false
+        var kicked: [String] = []
+
+        Updater.restartSequence(
+            kickstart: { label in kicked.append(label); return .timedOut },
+            relaunch: { relaunched = true },
+            quit: { quit = true })
+
+        XCTAssertTrue(relaunched, "a hung kickstart stopped the new version from launching")
+        XCTAssertTrue(quit, "a hung kickstart stopped the old process from quitting")
+        XCTAssertEqual(kicked.count, 2, "both launchd labels should still be kicked")
+    }
+
+    // Same guarantee for the other failure shapes, since .timedOut is only
+    // one of the ways a kickstart can come back unhappy.
+    func test_restartSequence_relaunchesAndQuitsOnEveryKickstartOutcome() {
+        for outcome: Updater.LaunchctlOutcome in [.exited(0), .exited(113),
+                                                  .killedBySignal(9), .timedOut,
+                                                  .failedToStart("boom")] {
+            var relaunched = false
+            var quit = false
+            Updater.restartSequence(kickstart: { _ in outcome },
+                                    relaunch: { relaunched = true },
+                                    quit: { quit = true })
+            XCTAssertTrue(relaunched, "no relaunch after \(outcome)")
+            XCTAssertTrue(quit, "no quit after \(outcome)")
+        }
+    }
+
+    // MARK: - Reporting
+
+    // terminationStatus carries the SIGNAL number when the child was killed,
+    // so reporting it as an exit code would log a SIGKILLed launchctl as
+    // "exited 9" in the one log a user ever sees.
+    func test_runBounded_distinguishesASignalFromAnExitCode() {
+        let outcome = Updater.runBounded("/bin/sh", ["-c", "kill -9 $$"], timeout: 10)
+        XCTAssertEqual(outcome, .killedBySignal(SIGKILL))
     }
 
     // What the user actually waits through, named in one place.
