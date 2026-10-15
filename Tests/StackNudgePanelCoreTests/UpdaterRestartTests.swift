@@ -208,8 +208,9 @@ final class UpdaterRestartTests: XCTestCase {
         Updater.restartSequence(
             announce: { announced = true },
             kickstart: { label in kicked.append(label); return .timedOut },
+            reload: { _ in .timedOut },
             relaunch: { relaunched = true },
-            quit: { quit = true })
+            quit: { _ in quit = true })
         XCTAssertTrue(announced, "the restart was never announced to the UI")
 
         XCTAssertTrue(relaunched, "a hung kickstart stopped the new version from launching")
@@ -227,11 +228,89 @@ final class UpdaterRestartTests: XCTestCase {
             var quit = false
             Updater.restartSequence(announce: {},
                                     kickstart: { _ in outcome },
+                                    reload: { _ in outcome },
                                     relaunch: { relaunched = true },
-                                    quit: { quit = true })
+                                    quit: { _ in quit = true })
             XCTAssertTrue(relaunched, "no relaunch after \(outcome)")
             XCTAssertTrue(quit, "no quit after \(outcome)")
         }
+    }
+
+    // MARK: - Retargeted agents
+
+    // Records what restartSequence did, in order, so a test can assert both
+    // what was called and what wasn't.
+    private func runRestart(retargeted: Set<String>,
+                            outcome: Updater.LaunchctlOutcome = .exited(0)) -> [String] {
+        var calls: [String] = []
+        Updater.restartSequence(
+            retargeted: retargeted,
+            announce: { calls.append("announce") },
+            kickstart: { calls.append("kick:\($0)"); return outcome },
+            reload: { calls.append("reload:\($0)"); return outcome },
+            relaunch: { calls.append("relaunch") },
+            quit: { calls.append($0.map { "quit+retire:\($0)" } ?? "quit") })
+        return calls
+    }
+
+    // The ordinary update: nothing retargeted, so behaviour is exactly what
+    // #214 shipped. Pinned so the new branches can't quietly change it.
+    func test_restartSequence_unchangedWhenNothingWasRetargeted() {
+        XCTAssertEqual(runRestart(retargeted: []),
+                       ["announce",
+                        "kick:\(Bootstrap.appLabel)",
+                        "kick:\(Bootstrap.daemonLabel)",
+                        "relaunch", "quit"])
+    }
+
+    // A retargeted app agent must not be kicked. launchd still holds the old
+    // definition, and kicking it either hangs on a program the update moved
+    // (#205) or relaunches the PREVIOUS version, an update that repeats
+    // forever. It must not be reloaded either: if we are that job, unload
+    // kills us before load runs.
+    func test_restartSequence_neverKicksOrReloadsARetargetedAppAgent() {
+        let calls = runRestart(retargeted: [Bootstrap.appLabel])
+        XCTAssertFalse(calls.contains("kick:\(Bootstrap.appLabel)"),
+                       "kicked the stale app definition: \(calls)")
+        XCTAssertFalse(calls.contains("reload:\(Bootstrap.appLabel)"),
+                       "reloaded the app agent from inside its own process: \(calls)")
+        XCTAssertEqual(calls.suffix(2), ["relaunch", "quit+retire:\(Bootstrap.appLabel)"])
+    }
+
+    // A retargeted daemon is reloaded instead of kicked: kicking would just
+    // restart it from the old path, and reloading is safe because we are
+    // never the daemon's process.
+    func test_restartSequence_reloadsARetargetedDaemonInsteadOfKickingIt() {
+        let calls = runRestart(retargeted: [Bootstrap.daemonLabel])
+        XCTAssertTrue(calls.contains("reload:\(Bootstrap.daemonLabel)"), "\(calls)")
+        XCTAssertFalse(calls.contains("kick:\(Bootstrap.daemonLabel)"), "\(calls)")
+        XCTAssertTrue(calls.contains("kick:\(Bootstrap.appLabel)"),
+                      "the app agent wasn't retargeted, so it should still be kicked")
+    }
+
+    // #205's guarantee has to survive the new branches too.
+    func test_restartSequence_stillRelaunchesAndQuitsWhenBothWereRetargetedAndTheReloadHangs() {
+        let calls = runRestart(retargeted: [Bootstrap.appLabel, Bootstrap.daemonLabel],
+                               outcome: .timedOut)
+        XCTAssertEqual(calls, ["announce", "reload:\(Bootstrap.daemonLabel)", "relaunch",
+                               "quit+retire:\(Bootstrap.appLabel)"])
+    }
+
+    // A stale app job that says `KeepAlive: true` is restarted by launchd on
+    // ANY exit, including our clean quit — with the old bundle no longer
+    // deleted, that would launch the previous version beside the new one.
+    // So quitting after an app retarget must retire the job first.
+    func test_restartSequence_retiresTheStaleAppJobOnQuitAfterRetargetingIt() {
+        XCTAssertEqual(runRestart(retargeted: [Bootstrap.appLabel]).last,
+                       "quit+retire:\(Bootstrap.appLabel)")
+    }
+
+    // And only then. Booting out a CORRECT app job would unload the user's
+    // launch-at-login until next login for no reason; booting out the daemon
+    // would stop voice.
+    func test_restartSequence_retiresNothingUnlessTheAppAgentWasRetargeted() {
+        XCTAssertEqual(runRestart(retargeted: []).last, "quit")
+        XCTAssertEqual(runRestart(retargeted: [Bootstrap.daemonLabel]).last, "quit")
     }
 
     // MARK: - Reporting

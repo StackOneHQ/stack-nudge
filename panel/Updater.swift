@@ -198,6 +198,28 @@ final class Updater {
         // 7. Write status file so the next launch surfaces the welcome view.
         try writeStatusFile(state: "success", version: release.version, error: nil)
 
+        // 7b. Point the launch agents at the bundle we just installed, before
+        //     anything asks launchd to start from them. See
+        //     Bootstrap.retargetLaunchAgentOnDisk for the two ways they come
+        //     to point elsewhere. Best-effort and non-throwing: a plist we
+        //     can't rewrite leaves things exactly as they were before.
+        var retargeted: Set<String> = []
+        for label in [Bootstrap.appLabel, Bootstrap.daemonLabel]
+        where Bootstrap.retargetLaunchAgentOnDisk(label: label, toBundle: Self.installedAppPath) {
+            retargeted.insert(label)
+            appendLog("Launch agent \(label) now points at \(Self.installedAppPath)")
+        }
+        // A plist old enough to need retargeting is old enough to predate
+        // #106, so it likely still says `KeepAlive: true`. Its own fix lives
+        // in the same gated migration that never ran. Correct it on disk
+        // now: the retired job (see restartSequence) is reloaded from this
+        // file at next login, and if it still said `true` there, the new
+        // bundle's first-launch migration would unload/load it and
+        // RunAtLoad would start a second copy alongside ours.
+        if retargeted.contains(Bootstrap.appLabel) {
+            Bootstrap.crashOnlyKeepAliveOnDisk(label: Bootstrap.appLabel)
+        }
+
         // 8. Restart. Try launchctl first (handles cases where a launchd
         //    agent is loaded and will respawn us), then explicitly launch
         //    the new bundle via NSWorkspace — this covers users who never
@@ -216,6 +238,7 @@ final class Updater {
         //    reason — a thrown error would route to fail() and strand the
         //    user on the progress screen with the new bundle already on disk.
         Self.restartSequence(
+            retargeted: retargeted,
             announce: { [weak self] in
                 self?.setPhase(.done)
                 self?.appendLog("Restarting…")
@@ -223,8 +246,11 @@ final class Updater {
             kickstart: { [weak self] label in
                 self?.kickstartLaunchd(label) ?? .failedToStart("updater went away")
             },
+            reload: { [weak self] label in
+                self?.reloadLaunchAgent(label) ?? .failedToStart("updater went away")
+            },
             relaunch: { [weak self] in self?.relaunchInstalledBundle() },
-            quit:     { [weak self] in self?.scheduleAutoQuit() })
+            quit:     { [weak self] retiring in self?.scheduleAutoQuit(retiring: retiring) })
     }
 
     // The restart, with its side effects injected.
@@ -257,15 +283,65 @@ final class Updater {
     // at the call site, a throwing call inserted between them and this
     // function would reproduce #205 while the test below stayed green —
     // the seam only protects what it actually contains.
-    static func restartSequence(announce: () -> Void,
+    //
+    // `retargeted` names the agents whose plists were just re-pointed on
+    // disk. launchd still holds the OLD definition for those, and acting on
+    // it is worse than not acting:
+    //
+    //   - App agent: never kicked. `kickstart -k` on the stale definition
+    //     either hangs on a program the update removed (#205) or, if the old
+    //     bundle is still there, kills us and relaunches the PREVIOUS
+    //     version, so Settings offers the update again and every update
+    //     repeats. Nor can it be reloaded from here: if we are that job,
+    //     `unload` kills us before `load` runs. It is left for next login,
+    //     which reads the corrected file. Until then the stale definition
+    //     is inert — nothing kicks it, our clean exit doesn't trip
+    //     KeepAlive's crash-only respawn, and notify.sh relaunches by
+    //     bundle path with `open`, not through launchd.
+    //   - Daemon agent: reloaded rather than kicked. We are never the
+    //     daemon's process, so unload/load is safe here, and it is the only
+    //     way to start the daemon from the new path — #124's restart,
+    //     delivered by other means.
+    //
+    // The stale app job is not inert if it says `KeepAlive: true`, which a
+    // plist old enough to need retargeting usually does: launchd restarts
+    // such a job on ANY exit, including our clean quit (measured — runs
+    // went 1→2 after `exit 0`). Since the old bundle is no longer deleted,
+    // that restart would launch the previous version next to the new one.
+    // So `quit` is handed the app label to retire: boot the job out of
+    // launchd as the last act. If we are that job, bootout kills us — fine,
+    // we were quitting — and the job is gone, so nothing restarts it
+    // (measured). The corrected plist loads at next login.
+    static func restartSequence(retargeted: Set<String> = [],
+                                announce: () -> Void,
                                 kickstart: (String) -> LaunchctlOutcome,
+                                reload: (String) -> LaunchctlOutcome,
                                 relaunch: () -> Void,
-                                quit: () -> Void) {
+                                quit: (_ retiring: String?) -> Void) {
         announce()
-        _ = kickstart(Bootstrap.appLabel)
-        _ = kickstart(Bootstrap.daemonLabel)   // pick up the engine the swap installed
+        if !retargeted.contains(Bootstrap.appLabel) {
+            _ = kickstart(Bootstrap.appLabel)
+        }
+        if retargeted.contains(Bootstrap.daemonLabel) {
+            _ = reload(Bootstrap.daemonLabel)
+        } else {
+            _ = kickstart(Bootstrap.daemonLabel)   // pick up the engine the swap installed
+        }
         relaunch()
-        quit()
+        quit(retargeted.contains(Bootstrap.appLabel) ? Bootstrap.appLabel : nil)
+    }
+
+    // Unload and reload one agent from its plist, both bounded. Only for
+    // agents this process cannot be — see restartSequence.
+    @discardableResult
+    private func reloadLaunchAgent(_ label: String) -> LaunchctlOutcome {
+        let plist = "\(Bootstrap.launchAgentsDir)/\(label).plist"
+        _ = Self.runBounded("/bin/launchctl", ["unload", plist], timeout: Self.kickstartTimeout)
+        let outcome = Self.runBounded("/bin/launchctl", ["load", plist], timeout: Self.kickstartTimeout)
+        if outcome != .exited(0) {
+            appendLog("launchctl load \(label): \(outcome) (non-fatal; takes effect at next login)")
+        }
+        return outcome
     }
 
     private func relaunchInstalledBundle() {
@@ -518,10 +594,6 @@ final class Updater {
     }
 
     static let installedAppPath = "\(NSHomeDirectory())/Applications/StackNudge.app"
-    // Pre-rename path; migrated away on launch via Bootstrap.migrateBundleNameIfNeeded.
-    // Kept here so the Updater can detect a pre-1.7 install and delete its
-    // bundle after the new one is in place.
-    static let legacyInstalledAppPath = "\(NSHomeDirectory())/Applications/stack-nudge.app"
 
     // Move the existing bundle aside, move the new bundle into place. On
     // any error the swap reverts so the user isn't left with a half-
@@ -551,15 +623,15 @@ final class Updater {
             throw UpdateError.swapFailed(underlying: error)
         }
 
-        // Post-swap: scrub the pre-1.7 bundle name if a migrating user
-        // still has it sitting in ~/Applications. The plist already points
-        // at the new path (Bootstrap.migrateBundleNameIfNeeded rewrote it
-        // on first launch of the new bundle), so the old .app is just
-        // dead weight at this point.
-        let legacy = URL(fileURLWithPath: Self.legacyInstalledAppPath)
-        if fm.fileExists(atPath: legacy.path) {
-            try? fm.removeItem(at: legacy)
-        }
+        // Deliberately does NOT remove a pre-1.7 `stack-nudge.app` here.
+        // It used to, on the strength of a comment saying the plist "already
+        // points at the new path" — true only once migrateBundleNameIfNeeded
+        // has run, and that is gated on running from `StackNudge.app`. For a
+        // user the v1.6 updater left running modern code from the old-named
+        // folder, this deleted the program their loaded launch agent pointed
+        // at, and the very next kickstart hung forever (#205). The cleanup
+        // still happens: the new bundle's first launch passes that gate and
+        // recycles the folder to the Trash, after the switch, not before.
     }
 
     // MARK: - Launchd
@@ -763,8 +835,16 @@ final class Updater {
         try? writeStatusFile(state: "failed", version: "", error: message)
     }
 
-    private func scheduleAutoQuit() {
+    // `retiring` names a launch agent to boot out first — see
+    // restartSequence for when and why. It runs inside the delay, not before
+    // it, so the relaunch request has two seconds to land before a bootout
+    // that may kill this process.
+    private func scheduleAutoQuit(retiring label: String? = nil) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            if let label {
+                _ = Self.runBounded("/bin/launchctl", ["bootout", "gui/\(getuid())/\(label)"],
+                                    timeout: Self.kickstartTimeout)
+            }
             NSApp.terminate(nil)
         }
     }

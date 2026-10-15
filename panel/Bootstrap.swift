@@ -338,20 +338,31 @@ enum Bootstrap {
     // even after an explicit user Quit. Rewrite to the dict form that
     // restarts on crash only.
     private static func migrateKeepAliveIfNeeded(label: String) {
-        let fm = FileManager.default
+        guard crashOnlyKeepAliveOnDisk(label: label) else { return }
         let plistPath = "\(launchAgentsDir)/\(label).plist"
-        guard fm.fileExists(atPath: plistPath),
-              let data = try? Data(contentsOf: URL(fileURLWithPath: plistPath)),
-              var plist = (try? PropertyListSerialization.propertyList(
-                  from: data, options: [], format: nil)) as? [String: Any]
-        else { return }
-        guard (plist["KeepAlive"] as? Bool) == true else { return }
-        plist["KeepAlive"] = ["SuccessfulExit": false]
-        guard let updated = try? PropertyListSerialization.data(
-            fromPropertyList: plist, format: .xml, options: 0) else { return }
-        try? updated.write(to: URL(fileURLWithPath: plistPath), options: [.atomic])
         _ = try? runLaunchctl(["unload", plistPath])
         _ = try? runLaunchctl(["load",   plistPath])
+    }
+
+    // The disk half of migrateKeepAliveIfNeeded, split out so the updater can
+    // apply it without the reload. Returns whether it changed anything.
+    //
+    // Panel agent only — the daemon's `KeepAlive: true` is deliberate.
+    @discardableResult
+    static func crashOnlyKeepAliveOnDisk(label: String,
+                                         agentsDir: String = launchAgentsDir) -> Bool {
+        let plistPath = "\(agentsDir)/\(label).plist"
+        guard let data = FileManager.default.contents(atPath: plistPath),
+              var plist = (try? PropertyListSerialization.propertyList(
+                  from: data, options: [], format: nil)) as? [String: Any],
+              (plist["KeepAlive"] as? Bool) == true
+        else { return false }
+        plist["KeepAlive"] = ["SuccessfulExit": false]
+        guard let updated = try? PropertyListSerialization.data(
+                  fromPropertyList: plist, format: .xml, options: 0),
+              (try? updated.write(to: URL(fileURLWithPath: plistPath), options: [.atomic])) != nil
+        else { return false }
+        return true
     }
 
     // Read the on-disk launchd plist for `label`; if its first program-
@@ -379,6 +390,104 @@ enum Bootstrap {
         try? updated.write(to: URL(fileURLWithPath: plistPath), options: [.atomic])
         _ = try? runLaunchctl(["unload", plistPath])
         _ = try? runLaunchctl(["load", plistPath])
+    }
+
+    // MARK: - Retarget on update
+
+    // The launch agents record absolute paths into whichever bundle ran the
+    // setup wizard (writePanelPlist uses Bundle.main), and nothing on the
+    // update path used to correct them. Two ways that goes wrong:
+    //
+    //   - A pre-1.7 user. The v1.6 updater installed into `stack-nudge.app`
+    //     whatever .app it extracted, so modern code has been running from
+    //     the old-named folder ever since, and migrateBundleNameIfNeeded
+    //     (gated on running from `StackNudge.app`) never fires for them.
+    //   - The wizard run from a copy that later moves or is deleted, e.g. an
+    //     extracted tarball in ~/Downloads.
+    //
+    // Either way the plist points somewhere the update never touches. At
+    // best launchd keeps starting the old version at login; at worst the
+    // program is gone and `kickstart` never returns, which is #205.
+    //
+    // The rule: a path inside some `.app` bundle that is NOT `installed` is
+    // re-pointed at the same location inside `installed` — but only if that
+    // file exists there. A path into a bundle that no longer contains it is
+    // left alone rather than swapped for a second missing path. Pure, so the
+    // rule is testable without a plist or a filesystem.
+    static func retargetedBundlePath(_ path: String,
+                                     toBundle installed: String,
+                                     exists: (String) -> Bool) -> String? {
+        // The OUTERMOST bundle: a path into a helper nested inside the app
+        // belongs to the app.
+        guard let marker = path.range(of: ".app/") else { return nil }
+        let root = (String(path[..<marker.lowerBound]) + ".app" as NSString).standardizingPath
+        let target = (installed as NSString).standardizingPath
+        guard root != target else { return nil }
+        let candidate = target + "/" + String(path[marker.upperBound...])
+        return exists(candidate) ? candidate : nil
+    }
+
+    // Applies retargetedBundlePath to a plist's ProgramArguments and its
+    // EnvironmentVariables — the daemon's ESPEAK_DATA_PATH points into the
+    // bundle too, and a corrected binary reading a stale data dir is the
+    // same bug one level down. Nil when nothing would change.
+    static func retargetedLaunchSpec(arguments: [String],
+                                     environment: [String: String],
+                                     toBundle installed: String,
+                                     exists: (String) -> Bool)
+        -> (arguments: [String], environment: [String: String])? {
+        var changed = false
+        let arguments = arguments.map { argument -> String in
+            guard let moved = retargetedBundlePath(argument, toBundle: installed, exists: exists)
+            else { return argument }
+            changed = true
+            return moved
+        }
+        var environment = environment
+        for (key, value) in environment {
+            if let moved = retargetedBundlePath(value, toBundle: installed, exists: exists) {
+                environment[key] = moved
+                changed = true
+            }
+        }
+        return changed ? (arguments, environment) : nil
+    }
+
+    // Rewrite one agent's plist on disk to point into `installed`. Returns
+    // whether it changed anything.
+    //
+    // Disk only — deliberately no unload/load. The caller is the updater,
+    // which may itself be the process this agent launched; `launchctl
+    // unload` on our own job would SIGTERM us before `load` ever ran, and
+    // stack-nudge would simply vanish. The file is what launchd reads at
+    // next login, and the caller decides how to treat the stale loaded copy
+    // in the meantime (see Updater.restartSequence).
+    @discardableResult
+    static func retargetLaunchAgentOnDisk(label: String,
+                                          toBundle installed: String,
+                                          agentsDir: String = launchAgentsDir) -> Bool {
+        let plistPath = "\(agentsDir)/\(label).plist"
+        guard let data = FileManager.default.contents(atPath: plistPath),
+              var plist = (try? PropertyListSerialization.propertyList(
+                  from: data, options: [], format: nil)) as? [String: Any],
+              let arguments = plist["ProgramArguments"] as? [String]
+        else { return false }
+        let environment = plist["EnvironmentVariables"] as? [String: String] ?? [:]
+
+        guard let spec = retargetedLaunchSpec(
+            arguments: arguments, environment: environment, toBundle: installed,
+            exists: { FileManager.default.fileExists(atPath: $0) })
+        else { return false }
+
+        plist["ProgramArguments"] = spec.arguments
+        if !spec.environment.isEmpty {
+            plist["EnvironmentVariables"] = spec.environment
+        }
+        guard let updated = try? PropertyListSerialization.data(
+                  fromPropertyList: plist, format: .xml, options: 0),
+              (try? updated.write(to: URL(fileURLWithPath: plistPath), options: [.atomic])) != nil
+        else { return false }
+        return true
     }
 
     // Agents present on this Mac. The bootstrap wizard checks all of these
