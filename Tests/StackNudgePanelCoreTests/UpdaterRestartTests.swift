@@ -100,21 +100,25 @@ final class UpdaterRestartTests: XCTestCase {
     // MARK: - The paths that must keep working
 
     func test_runBounded_reportsACleanExit() {
-        XCTAssertEqual(Updater.runBounded("/bin/sh", ["-c", "exit 0"], timeout: 5), .exited(0))
+        XCTAssertEqual(Updater.runBounded("/bin/sh", ["-c", "exit 0"], timeout: slack), .exited(0))
     }
 
     // launchctl exits 113 ("could not find service") when the agent isn't
     // loaded, which is the common case on a shell install and must stay a
     // logged non-event rather than a thrown error.
     func test_runBounded_reportsANonZeroExitRatherThanThrowing() {
-        XCTAssertEqual(Updater.runBounded("/bin/sh", ["-c", "exit 113"], timeout: 5), .exited(113))
+        XCTAssertEqual(Updater.runBounded("/bin/sh", ["-c", "exit 113"], timeout: slack), .exited(113))
     }
 
     func test_runBounded_reportsAnExecutableThatCannotStart() {
         let outcome = Updater.runBounded("/nonexistent/launchctl", ["kickstart"], timeout: 5)
-        guard case .failedToStart = outcome else {
+        guard case .failedToStart(let message) = outcome else {
             return XCTFail("expected .failedToStart, got \(outcome)")
         }
+        // The message is what reaches appendLog, i.e. the only diagnostic a
+        // user ever sends back. `catch { .failedToStart("") }` would satisfy
+        // the case match alone.
+        XCTAssertFalse(message.isEmpty, "failedToStart carried no reason")
     }
 
     // Output goes to /dev/null, not to a Pipe nobody reads. With a pipe, a
@@ -200,10 +204,13 @@ final class UpdaterRestartTests: XCTestCase {
         var quit = false
         var kicked: [String] = []
 
+        var announced = false
         Updater.restartSequence(
+            announce: { announced = true },
             kickstart: { label in kicked.append(label); return .timedOut },
             relaunch: { relaunched = true },
             quit: { quit = true })
+        XCTAssertTrue(announced, "the restart was never announced to the UI")
 
         XCTAssertTrue(relaunched, "a hung kickstart stopped the new version from launching")
         XCTAssertTrue(quit, "a hung kickstart stopped the old process from quitting")
@@ -218,7 +225,8 @@ final class UpdaterRestartTests: XCTestCase {
                                                   .failedToStart("boom")] {
             var relaunched = false
             var quit = false
-            Updater.restartSequence(kickstart: { _ in outcome },
+            Updater.restartSequence(announce: {},
+                                    kickstart: { _ in outcome },
                                     relaunch: { relaunched = true },
                                     quit: { quit = true })
             XCTAssertTrue(relaunched, "no relaunch after \(outcome)")
@@ -239,7 +247,7 @@ final class UpdaterRestartTests: XCTestCase {
     // What the user actually waits through, named in one place.
     func test_restartStall_staysWithinItsBudget() {
         let twoKickstarts = Updater.boundedCallCeiling * 2
-        XCTAssertLessThanOrEqual(twoKickstarts, 30,
+        XCTAssertLessThanOrEqual(twoKickstarts, 15,
                                  "worst-case restart stall is \(twoKickstarts)s")
     }
 }

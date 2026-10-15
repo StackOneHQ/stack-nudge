@@ -215,9 +215,11 @@ final class Updater {
         //    quit it by hand. Nothing on this path throws for the same
         //    reason — a thrown error would route to fail() and strand the
         //    user on the progress screen with the new bundle already on disk.
-        setPhase(.done)
-        appendLog("Restarting…")
         Self.restartSequence(
+            announce: { [weak self] in
+                self?.setPhase(.done)
+                self?.appendLog("Restarting…")
+            },
             kickstart: { [weak self] label in
                 self?.kickstartLaunchd(label) ?? .failedToStart("updater went away")
             },
@@ -234,17 +236,32 @@ final class Updater {
     // the relaunch on `.exited(0)`, or routes a `.timedOut` through `fail()`,
     // reproduces the bug exactly while every other test stays green.
     //
-    // The kickstarts stay first so the voice daemon is restarted before we
-    // quit; they are bounded, so first is now safe. That daemon kick is
-    // #124: the daemon is a long-running `stackvox serve` job, and without
-    // an explicit kickstart it keeps running the pre-update engine until the
-    // next login, so engine fixes silently don't take effect after an app
-    // update. Non-fatal either way — KeepAlive brings it back at login, and
-    // a shell install that never registered the agent just gets a harmless
-    // "not loaded".
-    static func restartSequence(kickstart: (String) -> LaunchctlOutcome,
+    // On the order, since the obvious question is why the best-effort kicks
+    // go first. The original answer given here was that relaunching first
+    // would cut the daemon kickstart short and lose #124 — that was wrong,
+    // and measurement killed it: launchd owns the respawn, so a kickstart
+    // interrupted at 10ms still restarts its job. Nor does the order protect
+    // #124 anyway, because a *successful* app-label `kickstart -k` kills
+    // this process before the daemon line is ever reached.
+    //
+    // What survives is smaller and honest: relaunching first would mean a
+    // `createsNewApplicationInstance` launch AND a launchd respawn of the
+    // same app, briefly putting three icons in the menu bar. With the
+    // timeout at 2s that trade buys at most ~4s, so it isn't worth a visible
+    // glitch — but if these calls ever grow teeth again, reorder rather than
+    // re-deriving the old reason.
+    //
+    // The daemon kick itself is #124: a long-running `stackvox serve` job
+    // that otherwise keeps running the pre-update engine until next login.
+    // `announce` is inside the seam on purpose. With the phase/log lines left
+    // at the call site, a throwing call inserted between them and this
+    // function would reproduce #205 while the test below stayed green —
+    // the seam only protects what it actually contains.
+    static func restartSequence(announce: () -> Void,
+                                kickstart: (String) -> LaunchctlOutcome,
                                 relaunch: () -> Void,
                                 quit: () -> Void) {
+        announce()
         _ = kickstart(Bootstrap.appLabel)
         _ = kickstart(Bootstrap.daemonLabel)   // pick up the engine the swap installed
         relaunch()
@@ -547,10 +564,21 @@ final class Updater {
 
     // MARK: - Launchd
 
-    // How long a best-effort launchctl call may hold up the restart. Ten
-    // seconds is far longer than a healthy kickstart (measured at ~0.5s) and
-    // short enough that a wedged one is a pause rather than a hang.
-    static let kickstartTimeout: TimeInterval = 10
+    // How long a best-effort launchctl call may hold up the restart.
+    //
+    // Two seconds, because the wait buys nothing. launchd owns the respawn,
+    // not launchctl: SIGTERM a `kickstart -k` 10ms in and the job is still
+    // killed and still comes back — measured, the job sat in "spawn
+    // scheduled" and respawned on its own at t≈10s with a fresh pid.
+    // So abandoning the wait abandons only the reporting, never the restart.
+    //
+    // Ten was the first number here, and it was the worst of both: a
+    // crash-looping job's respawn throttle straddles it (measured 10.2s,
+    // 11.6s, 20.0s, 20.0s across consecutive runs), so a 10s timeout would
+    // fire routinely on jobs that were recovering normally — turning this
+    // PR's one new diagnostic into a false alarm — while still being long
+    // enough for a user to sit through twice.
+    static let kickstartTimeout: TimeInterval = 2
 
     // Extraction and the quarantine walk are over a ~200MB bundle on an
     // arbitrary disk, so these are generous: they exist to catch a wedged
@@ -683,8 +711,9 @@ final class Updater {
         case .killedBySignal(let signal):
             appendLog("launchctl kickstart \(label) killed by signal \(signal) (non-fatal)")
         case .timedOut:
-            appendLog("launchctl kickstart \(label) timed out after "
-                      + "\(Int(Self.kickstartTimeout))s (non-fatal)")
+            // Not a warning: launchd continues the respawn without us.
+            appendLog("launchctl kickstart \(label) still working after "
+                      + "\(Int(Self.kickstartTimeout))s; left to launchd")
         case .failedToStart(let message):
             appendLog("launchctl kickstart \(label) could not start: \(message) (non-fatal)")
         }
