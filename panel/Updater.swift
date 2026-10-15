@@ -206,9 +206,18 @@ final class Updater {
         //    than ~/Applications/ (e.g. a dev build still in the picture).
         //    Without the explicit launch, kickstart silently fails and
         //    the auto-quit kills the panel with nothing to restart it.
+        //
+        //    The two kickstarts are best-effort and bounded (see runBounded).
+        //    They must not be able to gate the two calls below them, which
+        //    are what actually restarts stack-nudge: in #205 an unbounded
+        //    kickstart sat here forever and the panel never relaunched, never
+        //    quit, and sat on "Restarting stack-nudge…" until the user
+        //    quit it by hand. Nothing on this path throws for the same
+        //    reason — a thrown error would route to fail() and strand the
+        //    user on the progress screen with the new bundle already on disk.
         setPhase(.done)
         appendLog("Restarting…")
-        try kickstartLaunchd()
+        kickstartLaunchd()
         restartDaemon()          // pick up the stackvox engine the swap just installed
         relaunchInstalledBundle()
         scheduleAutoQuit()
@@ -487,22 +496,94 @@ final class Updater {
 
     // MARK: - Launchd
 
-    private func kickstartLaunchd(_ label: String = Bootstrap.appLabel) throws {
-        let uid = getuid()
+    // How long a best-effort launchctl call may hold up the restart. Ten
+    // seconds is far longer than a healthy kickstart (measured at ~0.5s) and
+    // short enough that a wedged one is a pause rather than a hang.
+    static let kickstartTimeout: TimeInterval = 10
+
+    // Outcome of a bounded subprocess run. `.timedOut` is the case that
+    // matters here: it is precisely the one the old unbounded
+    // `waitUntilExit()` could not report, because it never returned to
+    // report anything.
+    enum LaunchctlOutcome: Equatable {
+        case exited(Int32)
+        case timedOut
+        case failedToStart(String)
+    }
+
+    // Run a subprocess and give up on it after `timeout`.
+    //
+    // `launchctl kickstart -k` blocks for as long as launchd takes to respawn
+    // the job, and when the job's program is missing that is forever —
+    // measured on macOS 15: a kickstart against an agent whose
+    // ProgramArguments[0] does not exist never returns (the job sits in
+    // "spawn scheduled"), while a crash-looping job costs ~20s of respawn
+    // throttle. That is not a hypothetical state for us: the voice daemon's
+    // plist points at a path *inside the app bundle*
+    // (Resources/venv/bin/python3), and atomicSwap has just replaced that
+    // bundle — so if the new bundle ships without the venv, this code has
+    // itself created the job that can never spawn. Issue #205 is the result:
+    // the panel sat on "Restarting stack-nudge…" forever, because the
+    // updater thread never reached the lines that relaunch and quit it.
+    //
+    // Output goes to /dev/null rather than a Pipe nobody drains, so a chatty
+    // child cannot fill a pipe buffer and deadlock instead.
+    //
+    // Static and internal so the timeout path is testable without launchd.
+    static func runBounded(_ executable: String,
+                           _ args: [String],
+                           timeout: TimeInterval) -> LaunchctlOutcome {
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        task.arguments = ["kickstart", "-k",
-                          "gui/\(uid)/\(label)"]
-        task.standardOutput = Pipe()
-        task.standardError = Pipe()
-        try task.run()
-        task.waitUntilExit()
-        if task.terminationStatus != 0 {
-            // Not fatal — the kickstart can fail if the agent isn't loaded
-            // (e.g. fresh dev install). The new bundle is in place; user
-            // can hit the hotkey to launch it manually next time.
-            appendLog("launchctl kickstart \(label) exited \(task.terminationStatus) (non-fatal)")
+        task.executableURL = URL(fileURLWithPath: executable)
+        task.arguments = args
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+
+        let finished = DispatchSemaphore(value: 0)
+        task.terminationHandler = { _ in finished.signal() }
+        do {
+            try task.run()
+        } catch {
+            return .failedToStart(error.localizedDescription)
         }
+        guard finished.wait(timeout: .now() + timeout) == .success else {
+            // SIGTERM first; SIGKILL if it is wedged badly enough to ignore
+            // it, so we never leave the child behind holding the work the
+            // timeout was supposed to abandon.
+            task.terminate()
+            if finished.wait(timeout: .now() + 2) != .success {
+                kill(task.processIdentifier, SIGKILL)
+                _ = finished.wait(timeout: .now() + 2)
+            }
+            return .timedOut
+        }
+        return .exited(task.terminationStatus)
+    }
+
+    // Best-effort, and bounded. Never throws: every caller is on the restart
+    // path, where the only thing worse than a failed kickstart is one that
+    // prevents the relaunch from happening at all.
+    @discardableResult
+    private func kickstartLaunchd(_ label: String = Bootstrap.appLabel) -> LaunchctlOutcome {
+        let outcome = Self.runBounded(
+            "/bin/launchctl",
+            ["kickstart", "-k", "gui/\(getuid())/\(label)"],
+            timeout: Self.kickstartTimeout)
+        switch outcome {
+        case .exited(0):
+            break
+        case .exited(let status):
+            // Expected when the agent isn't loaded (fresh dev install, or a
+            // shell install that never registered it) — launchctl exits 113.
+            // The new bundle is on disk either way.
+            appendLog("launchctl kickstart \(label) exited \(status) (non-fatal)")
+        case .timedOut:
+            appendLog("launchctl kickstart \(label) timed out after "
+                      + "\(Int(Self.kickstartTimeout))s (non-fatal)")
+        case .failedToStart(let message):
+            appendLog("launchctl kickstart \(label) could not start: \(message) (non-fatal)")
+        }
+        return outcome
     }
 
     /// Restart the stackvox TTS daemon so it re-execs the engine the atomic
@@ -514,11 +595,7 @@ final class Updater {
     /// regardless, and shell installs that never registered the daemon agent
     /// simply get a harmless "not loaded" kickstart.
     private func restartDaemon() {
-        do {
-            try kickstartLaunchd(Bootstrap.daemonLabel)
-        } catch {
-            appendLog("daemon kickstart failed: \(error) (non-fatal)")
-        }
+        kickstartLaunchd(Bootstrap.daemonLabel)
     }
 
     // MARK: - Status file
