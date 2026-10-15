@@ -3536,25 +3536,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
 
         // Resolve a blocking permission's FIFO from the chosen action so the
-        // agent never hangs to its 550s timeout: Allow → "allow"; Deny or a
-        // swipe-away dismiss → "deny". A plain body-tap (DEFAULT) on a blocking
-        // permission is left in the panel to decide there (not removed), so it
-        // falls through to focus the editor without resolving the decision.
+        // agent never hangs to its 550s timeout. Only a body tap goes on to
+        // focus the editor.
+        store.remove(id: event.id)
         if let fifo = event.fifoPath {
-            switch response.actionIdentifier {
-            case "ALLOW":
-                store.remove(id: event.id)
-                DispatchQueue.global(qos: .userInitiated).async { Self.writeFIFO(fifo, "allow") }
-                return
-            case "DENY", UNNotificationDismissActionIdentifier:
-                store.remove(id: event.id)
-                DispatchQueue.global(qos: .userInitiated).async { Self.writeFIFO(fifo, "deny") }
-                return
-            default:
-                break  // body tap: keep the event in the panel, focus editor below
-            }
-        } else {
-            store.remove(id: event.id)
+            let reply = Self.bannerReply(to: response.actionIdentifier)
+            DispatchQueue.global(qos: .userInitiated).async { Self.writeFIFO(fifo, reply) }
+            guard reply == .release else { return }
         }
 
         let approve = response.actionIdentifier == "ALLOW"
@@ -3588,13 +3576,25 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
     }
 
-    // Write a decision string to the hook's FIFO. The source notify.sh
+    // A swipe-away denies, so the hook doesn't sit out its 550s with the banner
+    // gone. A body tap means "take me there": the hook lets go and the agent's
+    // own prompt takes over. Codex draws that prompt only once its hook returns,
+    // so holding on left its terminal with nothing to answer.
+    static func bannerReply(to actionIdentifier: String) -> PromptReply {
+        switch actionIdentifier {
+        case "ALLOW": return .allow
+        case "DENY", UNNotificationDismissActionIdentifier: return .deny
+        default: return .release
+        }
+    }
+
+    // Write a reply to the hook's FIFO. The source notify.sh
     // is blocked on `select`, so this returns immediately after writing.
-    private static func writeFIFO(_ path: String, _ decision: String) {
+    private static func writeFIFO(_ path: String, _ reply: PromptReply) {
         let fd = Darwin.open(path, O_WRONLY | O_NONBLOCK)
         guard fd >= 0 else { return }
         defer { Darwin.close(fd) }
-        let line = decision + "\n"
+        let line = reply.rawValue + "\n"
         _ = line.withCString { Darwin.write(fd, $0, strlen($0)) }
     }
 
@@ -4600,14 +4600,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func actOnSelected(approve: Bool) {
         guard let event = store.selectedEvent else { return }
         let sendApproval = approve && event.hasActionButton
-
-        // A blocking permission opened via 'O' (approve:false, "Open editor")
-        // must stay in the panel so the user can still resolve it (Dismiss →
-        // deny); removing it would orphan the hook for ~550s with no recovery
-        // path. Approvals — and any event without a pending FIFO — are removed.
-        if sendApproval || event.fifoPath == nil {
-            store.remove(id: event.id)
-        }
+        store.remove(id: event.id)
 
         // Approve a blocking permission by writing "allow" to its FIFO; the agent
         // then skips its own prompt. This path doesn't hand focus to the editor,
@@ -4617,9 +4610,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         if sendApproval, let fifo = event.fifoPath {
             if store.events.isEmpty { hidePanel() }
             DispatchQueue.global(qos: .userInitiated).async {
-                Self.writeFIFO(fifo, "allow")
+                Self.writeFIFO(fifo, .allow)
             }
             return
+        }
+
+        // 'O' on a blocking permission hands it to the agent's own prompt, as a
+        // banner body tap does (see bannerReply).
+        if let fifo = event.fifoPath {
+            DispatchQueue.global(qos: .userInitiated).async { Self.writeFIFO(fifo, .release) }
         }
 
         // Every remaining path hands focus to the source app — either jumping
@@ -4661,7 +4660,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // agent gets an answer instead of hanging to its 550s timeout.
         if let fifo = event.fifoPath {
             DispatchQueue.global(qos: .userInitiated).async {
-                Self.writeFIFO(fifo, "deny")
+                Self.writeFIFO(fifo, .deny)
             }
         }
         store.remove(id: event.id)

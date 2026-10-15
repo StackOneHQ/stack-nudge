@@ -111,7 +111,7 @@ The hook calls `notify.sh <agent> <event>`, which plays a sound and shows a bann
 
 ### Click-to-focus (macOS)
 
-When you click the banner, `stack-nudge.app` uses System Events to raise the exact window that triggered the notification — even if you have multiple Cursor or terminal windows open. Supported apps:
+When you click the banner, `stack-nudge.app` uses System Events to raise the exact window that triggered the notification — even if you have multiple Cursor or terminal windows open. Clicking a permission banner also hands the prompt back to the agent, so it's waiting for you in the terminal (Codex won't show its own prompt while the hook is still holding it). Supported apps:
 
 - Cursor, VS Code, Zed
 - iTerm2, Warp, Ghostty, Terminal.app
@@ -146,7 +146,7 @@ Recent nudges in chronological order. Each shows agent, message, project name, t
 |-----|--------|
 | `↑ ↓` | Move selection |
 | `⏎` | Approve permission / focus source editor |
-| `O` | Focus source editor without approving |
+| `O` | Focus source editor without approving, a waiting prompt goes back to the agent to answer there |
 | `M` | Mute all notifications for the configured duration (press again to resume) |
 | `⌫` | Dismiss the selected nudge locally |
 | `H` | Open the searchable history pane |

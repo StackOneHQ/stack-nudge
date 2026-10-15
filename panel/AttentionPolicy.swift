@@ -168,6 +168,13 @@ enum AttentionPolicy {
     }
 }
 
+// The line the panel writes to a blocking prompt's FIFO. notify.sh turns allow
+// and deny into a decision. Release, like its timeout, prints none, so the hook
+// exits and the agent draws its own prompt.
+enum PromptReply: String {
+    case allow, deny, release
+}
+
 extension NudgeEvent {
     // "Is this prompt still waiting on me?", asked against the live system.
     // Lives here rather than on PanelController because the view layer asks it
