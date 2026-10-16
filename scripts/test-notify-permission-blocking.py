@@ -3,17 +3,24 @@
 
 A permission hook that creates a FIFO blocks for up to 550s waiting for the
 panel's Allow/Deny. That is correct for an ordinary tool approval and wrong for
-anything else. The agent renders its own dialog either way, so the harm is not
-a hidden prompt — it is that the panel offers an Allow which the agent reads as
-"press Enter on the highlighted option", answering a question with a default
-the user never chose; and that answering in the agent's own UI does not end our
-hook, so it holds its FIFO for the full 550s while the panel keeps reminding
-about a prompt already answered (#177).
+anything else. Claude Code renders its own dialog either way, so there the harm
+is not a hidden prompt — it is that the panel offers an Allow which the agent
+reads as "press Enter on the highlighted option", answering a question with a
+default the user never chose; and that answering in the agent's own UI does not
+end our hook, so it holds its FIFO for the full 550s while the panel keeps
+reminding about a prompt already answered (#177). Codex draws its prompt only
+once the hook returns, so a blocked Codex hook does hide it until the panel
+answers.
 
 notify.sh decides this from the hook payload alone, in permission_is_blockable.
 These cases pin down the decision for the shapes that reach it, including the
 ones it cannot parse — an unrecognised payload must decline to block rather than
 swallow a prompt it failed to classify.
+
+The panel's answer is pinned too. It writes allow, deny or release to the FIFO.
+allow and deny become the hook's decision. release is what a banner click or
+`O` sends when the user goes to the terminal instead, and the hook has to exit
+straight away with no decision, or Codex's prompt stays hidden.
 
 They drive the real notify.sh end to end, like the subagent tests beside them,
 because the decision depends on the whole path: payload extraction with and
@@ -27,6 +34,7 @@ macOS only: elsewhere notify.sh plays a sound and never posts to the panel.
 Usage: scripts/test-notify-permission-blocking.py [path/to/notify.sh]
 """
 
+import errno
 import json
 import os
 import shutil
@@ -63,8 +71,8 @@ CASES = [
     ("bash approval", "claude-code", {}, True),
     ("codex approval", "codex", {}, True),
     ("codex apply_patch", "codex", {"tool_name": "apply_patch"}, True),
-    # Questions: the user answers in the agent's own UI, so blocking would hide
-    # the dialog and stall. Already handled before this test existed.
+    # Questions: the user answers in the agent's own UI, so an Allow would pick
+    # a default for them. Already handled before this test existed.
     ("AskUserQuestion", "claude-code",
      {"tool_name": "AskUserQuestion",
       "tool_input": {"questions": [{"question": "Which one?"}]}}, False),
@@ -109,16 +117,29 @@ if len(NO_JQ_CASES) != len(_NO_JQ_NAMES):
     raise SystemExit("no-jq selection missed a name: %s"
                      % (set(_NO_JQ_NAMES) - {case[0] for case in CASES}))
 
+# agent, what the panel writes to the FIFO, decision the hook prints (None = no
+# output). allow and deny are the control: they prove a reply reaches the hook,
+# so an empty stdout on release is the hook letting go, not one that never read.
+REPLY_CASES = [
+    ("claude-code", "allow", "allow"),
+    ("claude-code", "deny", "deny"),
+    ("claude-code", "release", None),
+    ("codex", "allow", "allow"),
+    ("codex", "deny", "deny"),
+    ("codex", "release", None),
+]
+
 # Written out rather than derived from len(CASES), which would fall with the
 # table it is meant to guard: deleting a row would quietly lower the
 # expectation too, and the run would stay green. Adding a case means changing
 # this number on purpose, which is the point.
 #
-# 13 table cases + 4 no-jq repeats + 2 that assert on the process as well as
-# the payload (the timing case and the broken-jq question) + 1 that asserts on
-# the posted button alone (the broken-jq approval — it pins that the fallback
-# keeps the button, and deliberately does not wait out the FIFO).
-EXPECTED_CASE_COUNT = 20
+# 13 table cases + 4 no-jq repeats + 6 FIFO replies + 2 that assert on the
+# process as well as the payload (the timing case and the broken-jq question)
+# + 1 that asserts on the posted button alone (the broken-jq approval — it pins
+# that the fallback keeps the button, and deliberately does not wait out the
+# FIFO).
+EXPECTED_CASE_COUNT = 26
 
 
 def _link_system_bins(target, skip=("jq",)):
@@ -155,7 +176,8 @@ def build_badjq_path():
     os.chmod(fake, 0o755)
 
 
-def run_hook(agent, payload_overrides, without_jq, path_override=None):
+def run_hook(agent, payload_overrides, without_jq, path_override=None,
+             capture_stdout=False):
     """Run one permission hook.
 
     Returns (posted payload or None, hook process, home, started). `started` is
@@ -212,7 +234,7 @@ def run_hook(agent, payload_overrides, without_jq, path_override=None):
     hook = subprocess.Popen(
         [NOTIFY, agent, "permission"],
         stdin=subprocess.PIPE,
-        stdout=subprocess.DEVNULL,
+        stdout=subprocess.PIPE if capture_stdout else subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         env=env,
     )
@@ -324,6 +346,58 @@ def run_timing_case():
     return passed
 
 
+def write_reply(fifo, reply):
+    """Write a reply once the hook has opened its end of the FIFO.
+
+    The banner is posted before the hook opens the FIFO to read, so the first
+    open can find no reader (ENXIO) and is retried. False if it never could.
+    """
+    deadline = time.time() + EXIT_TIMEOUT_S
+    while True:
+        try:
+            fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+            break
+        except OSError as error:
+            if error.errno != errno.ENXIO or time.time() > deadline:
+                return False
+            time.sleep(0.05)
+    try:
+        os.write(fd, (reply + "\n").encode())
+    finally:
+        os.close(fd)
+    return True
+
+
+def run_reply_case(agent, reply, expected):
+    """What the hook prints for each reply the panel can write.
+
+    Asserts on the process as well as stdout: a release the hook ignored would
+    leave it waiting out the FIFO, which is the stall release exists to end.
+    """
+    posted, hook, home, _ = run_hook(agent, {}, False, capture_stdout=True)
+    fifo = posted.get("fifo_path") if posted else None
+    exited, output = False, ""
+    if fifo and write_reply(fifo, reply):
+        try:
+            stdout, _ = hook.communicate(timeout=EXIT_TIMEOUT_S)
+            exited, output = True, stdout.decode().strip()
+        except subprocess.TimeoutExpired:
+            pass
+    finish(hook, home)
+
+    decision = None
+    if output:
+        try:
+            decision = json.loads(output)["hookSpecificOutput"]["decision"]["behavior"]
+        except (ValueError, KeyError, TypeError):
+            decision = "<unparseable: %r>" % output[:60]
+    passed = exited and decision == expected
+    print("%-4s %-38s exited=%-5r decision=%r"
+          % ("PASS" if passed else "FAIL", "%s replies %s" % (agent, reply),
+             exited, decision))
+    return passed
+
+
 def main():
     if sys.platform != "darwin":
         print("skipped: notify.sh only posts to the panel on macOS")
@@ -338,6 +412,7 @@ def main():
     try:
         results = [run_case(*case) for case in CASES]
         results += [run_case(*case, without_jq=True) for case in NO_JQ_CASES]
+        results += [run_reply_case(*case) for case in REPLY_CASES]
         results.append(run_timing_case())
         results.append(run_badjq_case())
         results.append(run_badjq_approval_case())

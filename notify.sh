@@ -524,11 +524,13 @@ is_question_event() {
 #   don't block a tool -> the banner loses its Allow button and the user
 #                        approves in the agent's own UI, where they already are
 #
-# Note what blocking does NOT do: the agent renders its own dialog either way.
+# Note what blocking does NOT do in Claude Code: its dialog renders either way.
 # The hook and that dialog race, and whichever answers first wins — which is
 # why a wrongly-blocked question is a wrong ANSWER waiting to happen rather
-# than a hidden one. That asymmetry is the whole argument: failing open costs
-# a button, failing closed can answer for the user.
+# than a hidden one. Codex is the exception, since it draws its prompt only
+# once this hook returns, so there a wrongly-blocked event is hidden until the
+# panel answers. That asymmetry is the whole argument: failing open costs
+# a button, failing closed can answer for the user or hide the prompt.
 #
 # What this does NOT do: protect against a future question-shaped tool that
 # carries a perfectly readable tool_name. Nothing here can tell `SomeFutureAsk`
@@ -956,8 +958,9 @@ create_perm_fifo() {
 }
 
 # Block reading the user's decision from the FIFO with a timeout. Outputs
-# the PermissionRequest JSON to stdout when read; silent on timeout so
-# Claude Code falls back to its own UI prompt.
+# the PermissionRequest JSON for "allow" or "deny". Silent on timeout and on
+# "release" (the user went to the terminal to answer there), so the agent falls
+# back to its own prompt. Codex draws that prompt only once this hook returns.
 # Uses Python because bash's `read -t` doesn't time out the FIFO open() call.
 wait_for_permission_response() {
   local fifo="$1"
