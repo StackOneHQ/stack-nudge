@@ -4,6 +4,15 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [2.1.6](https://github.com/StackOneHQ/stack-nudge/compare/v2.1.5...v2.1.6) (2026-10-16)
+
+
+### Bug Fixes
+
+* **panel:** count each Claude request once in the usage graph ([#218](https://github.com/StackOneHQ/stack-nudge/issues/218)) ([b186307](https://github.com/StackOneHQ/stack-nudge/commit/b186307315aa9f2c4993f7aa8e8f4fa5a967b761))
+* **update:** don't let a wedged launchctl strand the restart ([#214](https://github.com/StackOneHQ/stack-nudge/issues/214)) ([1094c48](https://github.com/StackOneHQ/stack-nudge/commit/1094c4879b1c44ae7e88f074181205fd2574731b))
+* **update:** point the launch agents at the bundle the update installed ([#216](https://github.com/StackOneHQ/stack-nudge/issues/216)) ([802bb59](https://github.com/StackOneHQ/stack-nudge/commit/802bb590b5d96c4dc51ab08674f4905eb3845d30))
+
 ## [2.1.5](https://github.com/StackOneHQ/stack-nudge/compare/v2.1.4...v2.1.5) (2026-10-14)
 
 
