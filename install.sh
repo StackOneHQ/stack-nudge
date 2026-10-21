@@ -282,10 +282,14 @@ for event in dropped_events():
     groups = hooks.get(event)
     if not isinstance(groups, list):
         continue
+    # Entries of a shape we don't know are someone else's: kept as they are.
     cleaned = []
     for g in groups:
-        inner = g.get("hooks", [])
-        kept = [h for h in inner if not ours_exactly(h.get("command"))]
+        inner = g.get("hooks") if isinstance(g, dict) else None
+        if not isinstance(inner, list):
+            cleaned.append(g)
+            continue
+        kept = [h for h in inner if not (isinstance(h, dict) and ours_exactly(h.get("command")))]
         if kept:
             cleaned.append(g if kept == inner else {**g, "hooks": kept})
     groups[:] = cleaned
@@ -345,7 +349,7 @@ for event in dropped_events():
     entries = hooks.get(event)
     if not isinstance(entries, list):
         continue
-    entries[:] = [h for h in entries if not ours_exactly(h.get("command"))]
+    entries[:] = [h for h in entries if not (isinstance(h, dict) and ours_exactly(h.get("command")))]
     if not entries:
         del hooks[event]
 for event, arg, _ in manifest_hooks():
@@ -389,10 +393,14 @@ for event in dropped_events():
     groups = hooks.get(event)
     if not isinstance(groups, list):
         continue
+    # Entries of a shape we don't know are someone else's: kept as they are.
     cleaned = []
     for g in groups:
-        inner = g.get("hooks", [])
-        kept = [h for h in inner if not ours_exactly(h.get("command"))]
+        inner = g.get("hooks") if isinstance(g, dict) else None
+        if not isinstance(inner, list):
+            cleaned.append(g)
+            continue
+        kept = [h for h in inner if not (isinstance(h, dict) and ours_exactly(h.get("command")))]
         if kept:
             cleaned.append(g if kept == inner else {**g, "hooks": kept})
     groups[:] = cleaned
@@ -453,10 +461,14 @@ for event in dropped_events():
     groups = hooks.get(event)
     if not isinstance(groups, list):
         continue
+    # Entries of a shape we don't know are someone else's: kept as they are.
     cleaned = []
     for g in groups:
-        inner = g.get("hooks", [])
-        kept = [h for h in inner if not ours_exactly(h.get("command"))]
+        inner = g.get("hooks") if isinstance(g, dict) else None
+        if not isinstance(inner, list):
+            cleaned.append(g)
+            continue
+        kept = [h for h in inner if not (isinstance(h, dict) and ours_exactly(h.get("command")))]
         if kept:
             cleaned.append(g if kept == inner else {**g, "hooks": kept})
     groups[:] = cleaned
@@ -515,10 +527,14 @@ for event in dropped_events():
     groups = hooks.get(event)
     if not isinstance(groups, list):
         continue
+    # Entries of a shape we don't know are someone else's: kept as they are.
     cleaned = []
     for g in groups:
-        inner = g.get("hooks", [])
-        kept = [h for h in inner if not ours_exactly(h.get("command"))]
+        inner = g.get("hooks") if isinstance(g, dict) else None
+        if not isinstance(inner, list):
+            cleaned.append(g)
+            continue
+        kept = [h for h in inner if not (isinstance(h, dict) and ours_exactly(h.get("command")))]
         if kept:
             cleaned.append(g if kept == inner else {**g, "hooks": kept})
     groups[:] = cleaned

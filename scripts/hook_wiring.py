@@ -29,12 +29,22 @@ def manifest_version():
 
 
 def read_applied():
+    # Anything but the shape the app writes reads as "nothing applied yet", as
+    # in the app; this record must never be what stops an install.
     try:
         with open(APPLIED) as f:
             record = json.load(f)
-        return record if isinstance(record, dict) and isinstance(record.get("agents"), dict) else {}
     except Exception:
         return {}
+    if not isinstance(record, dict):
+        return {}
+    version = record.get("manifest_version", 0)
+    agents = record.get("agents")
+    if not isinstance(version, int) or isinstance(version, bool) or not isinstance(agents, dict):
+        return {}
+    return {"manifest_version": version,
+            "agents": {k: [e for e in v if isinstance(e, str)]
+                       for k, v in agents.items() if isinstance(k, str) and isinstance(v, list)}}
 
 
 def dropped_events():
@@ -46,7 +56,7 @@ def dropped_events():
         return []
     applied = record.get("agents", {}).get(os.environ["HOOK_AGENT"], [])
     current = {event for event, _, _ in manifest_hooks()}
-    return [e for e in applied if isinstance(e, str) and e not in current]
+    return [e for e in applied if e not in current]
 
 
 def ours_exactly(command):
@@ -54,8 +64,10 @@ def ours_exactly(command):
     # event: a wrapper or a checkout wired by hand is the user's, as in the app.
     with open(os.environ["HOOK_MANIFEST"]) as f:
         agent_arg = json.load(f)["agents"][os.environ["HOOK_AGENT"]]["agent_arg"]
+    if not isinstance(command, str):
+        return False
     try:
-        words = shlex.split(command or "")
+        words = shlex.split(command)
     except ValueError:
         return False
     return (len(words) == 3 and words[1] == agent_arg
