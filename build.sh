@@ -37,6 +37,8 @@ build_app() {
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   cp "$repo_root/notify.sh" "$contents/Resources/notify.sh"
   chmod +x "$contents/Resources/notify.sh"
+  # The hooks this version wants per agent; reconciled on every launch.
+  cp "$repo_root/hook-manifest.json" "$contents/Resources/hook-manifest.json"
   if [[ -d "$repo_root/phrases" ]]; then
     cp -R "$repo_root/phrases" "$contents/Resources/phrases"
   fi

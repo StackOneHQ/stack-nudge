@@ -1,0 +1,45 @@
+{
+  "description": "The agent hooks this version of StackNudge wants, per agent. hooks/hooks.json (the Claude Code plugin) must list the same Claude events; a test checks it. Read by the app (HookManifest.swift), which reconciles every wired agent against it at launch, and by install.sh. To add a hook, add a row: existing installs pick it up on their next launch. `legacy` marks hooks that predate this file; if a user removed one of those by hand, reconciling leaves it removed. Timeouts are seconds, except Gemini and Antigravity, which take milliseconds.",
+  "version": 1,
+  "agents": {
+    "claude": {
+      "agent_arg": "claude-code",
+      "shape": "matcher-groups",
+      "hooks": [
+        { "event": "Stop", "arg": "stop", "timeout": 30, "legacy": true },
+        { "event": "PermissionRequest", "arg": "permission", "timeout": 600, "legacy": true }
+      ]
+    },
+    "codex": {
+      "agent_arg": "codex",
+      "shape": "matcher-groups",
+      "hooks": [
+        { "event": "Stop", "arg": "stop", "timeout": 30, "legacy": true },
+        { "event": "PermissionRequest", "arg": "permission", "timeout": 600, "legacy": true }
+      ]
+    },
+    "gemini": {
+      "agent_arg": "gemini",
+      "shape": "matcher-groups",
+      "hooks": [
+        { "event": "AfterAgent", "arg": "stop", "timeout": 30000, "legacy": true },
+        { "event": "Notification", "arg": "permission", "timeout": 30000, "legacy": true }
+      ]
+    },
+    "antigravity": {
+      "agent_arg": "antigravity",
+      "shape": "matcher-groups",
+      "hooks": [
+        { "event": "AfterAgent", "arg": "stop", "timeout": 30000, "legacy": true },
+        { "event": "Notification", "arg": "permission", "timeout": 30000, "legacy": true }
+      ]
+    },
+    "cursor": {
+      "agent_arg": "cursor",
+      "shape": "flat",
+      "hooks": [
+        { "event": "stop", "arg": "stop", "legacy": true }
+      ]
+    }
+  }
+}

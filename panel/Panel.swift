@@ -1208,7 +1208,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // resets Codex's hook-trust hash (Codex silently skips a changed hook
         // until re-trusted, and there's no trust API for us to call), so when one
         // happens and Codex is wired, nudge the user to re-trust via /hooks.
-        if Bootstrap.refreshNotifyScriptIfNeeded() != nil,
+        // The same drift, for the hooks themselves: wired agents are brought in
+        // line with this version's hook-manifest.json (new events added, changed ones
+        // updated). Rewriting Codex's hooks also needs a re-trust.
+        let scriptRefreshed = Bootstrap.refreshNotifyScriptIfNeeded() != nil
+        let rewired = Bootstrap.reconcileWiredAgents()
+        if scriptRefreshed || rewired.contains(.codex),
            FileManager.default.fileExists(atPath: "\(NSHomeDirectory())/.codex/hooks.json") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
                 self?.postCodexRetrustBanner()

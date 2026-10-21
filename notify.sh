@@ -15,6 +15,14 @@
 
 AGENT="${1:-agent}"
 EVENT="${2:-stop}"
+
+# An event this version doesn't know is a no-op. Hooks can outlive the script
+# that handles them (a downgrade, a config from a newer install), and falling
+# through to the stop banner would nudge on every such event.
+case "$EVENT" in
+  stop|permission|welcome) ;;
+  *) exit 0 ;;
+esac
 OS="$(uname -s 2>/dev/null || echo Windows)"
 
 # Load user config (overrides defaults below). Parse as KEY=VALUE data only —

@@ -250,6 +250,9 @@ if [[ ! -f "$INSTALL_DIR/config" && -f "$SCRIPT_DIR/notify.conf.example" ]]; the
 fi
 
 echo "# STAGE: hooks"
+# Which hooks to wire comes from hook-manifest.json, the list the app also
+# reconciles against, so the two install paths can't drift apart.
+export HOOK_MANIFEST="$SCRIPT_DIR/hook-manifest.json"
 # Detect agents and wire up their hooks
 installed_any=false
 
@@ -257,8 +260,16 @@ installed_any=false
 if [[ -d "$HOME/.claude" ]]; then
   echo ""
   echo "Detected Claude Code (~/.claude)"
-  python3 - "$HOME/.claude/settings.json" "$NOTIFY" <<'PY'
+  HOOK_AGENT=claude python3 - "$HOME/.claude/settings.json" "$NOTIFY" <<'PY'
 import json, os, re, sys
+
+def manifest_hooks():
+    # This version's hooks for the agent, from hook-manifest.json: the same
+    # list the app reconciles against at launch.
+    import os
+    with open(os.environ["HOOK_MANIFEST"]) as f:
+        spec = json.load(f)["agents"][os.environ["HOOK_AGENT"]]
+    return [(h["event"], h["arg"], h.get("timeout")) for h in spec["hooks"]]
 from pathlib import Path
 
 path = Path(sys.argv[1])
@@ -278,7 +289,7 @@ STALE = re.compile(r"(?:^|/)\.?(?:tinynudge|stack-nudge)/notify\.sh(?:\s|$)")
 hooks = settings.setdefault("hooks", {})
 # Permission hook blocks on a FIFO until the user approves via stack-nudge,
 # so it needs a longer timeout than Claude Code's 600s default.
-for event, arg, timeout in [("Stop", "stop", 30), ("PermissionRequest", "permission", 600)]:
+for event, arg, timeout in manifest_hooks():
     groups = hooks.setdefault(event, [])
 
     # Drop any existing group whose inner hook commands all look like ours
@@ -298,7 +309,7 @@ for event, arg, timeout in [("Stop", "stop", 30), ("PermissionRequest", "permiss
     cmd = f"{notify} claude-code {arg}"
     groups.append({
         "matcher": "",
-        "hooks": [{"type": "command", "command": cmd, "timeout": timeout}],
+        "hooks": [{"type": "command", "command": cmd, **({"timeout": timeout} if timeout is not None else {})}],
     })
 
 path.write_text(json.dumps(settings, indent=2) + "\n")
@@ -311,8 +322,16 @@ fi
 if [[ -d "$HOME/.cursor" ]]; then
   echo ""
   echo "Detected Cursor (~/.cursor)"
-  python3 - "$HOME/.cursor/hooks.json" "$NOTIFY" <<'PY'
+  HOOK_AGENT=cursor python3 - "$HOME/.cursor/hooks.json" "$NOTIFY" <<'PY'
 import json, re, sys
+
+def manifest_hooks():
+    # This version's hooks for the agent, from hook-manifest.json: the same
+    # list the app reconciles against at launch.
+    import os
+    with open(os.environ["HOOK_MANIFEST"]) as f:
+        spec = json.load(f)["agents"][os.environ["HOOK_AGENT"]]
+    return [(h["event"], h["arg"], h.get("timeout")) for h in spec["hooks"]]
 from pathlib import Path
 
 path = Path(sys.argv[1])
@@ -325,10 +344,10 @@ settings = json.loads(path.read_text()) if path.exists() else {}
 STALE = re.compile(r"(?:^|/)\.?(?:tinynudge|stack-nudge)/notify\.sh(?:\s|$)")
 
 hooks = settings.setdefault("hooks", {})
-stop_cmd = f"{notify} cursor stop"
-stop = hooks.setdefault("stop", [])
-stop[:] = [h for h in stop if not STALE.search(h.get("command", "") or "")]
-stop.append({"type": "command", "command": stop_cmd})
+for event, arg, _ in manifest_hooks():
+    entries = hooks.setdefault(event, [])
+    entries[:] = [h for h in entries if not STALE.search(h.get("command", "") or "")]
+    entries.append({"type": "command", "command": f"{notify} cursor {arg}"})
 
 path.write_text(json.dumps(settings, indent=2) + "\n")
 print(f"  Updated {path}")
@@ -343,8 +362,16 @@ fi
 if [[ -d "$HOME/.codex" ]]; then
   echo ""
   echo "Detected Codex (~/.codex)"
-  python3 - "$HOME/.codex/hooks.json" "$NOTIFY" "codex" <<'PY'
+  HOOK_AGENT=codex python3 - "$HOME/.codex/hooks.json" "$NOTIFY" "codex" <<'PY'
 import json, os, re, sys
+
+def manifest_hooks():
+    # This version's hooks for the agent, from hook-manifest.json: the same
+    # list the app reconciles against at launch.
+    import os
+    with open(os.environ["HOOK_MANIFEST"]) as f:
+        spec = json.load(f)["agents"][os.environ["HOOK_AGENT"]]
+    return [(h["event"], h["arg"], h.get("timeout")) for h in spec["hooks"]]
 from pathlib import Path
 
 path = Path(sys.argv[1])
@@ -361,7 +388,7 @@ STALE = re.compile(r"(?:^|/)\.?(?:tinynudge|stack-nudge)/notify\.sh(?:\s|$)")
 hooks = settings.setdefault("hooks", {})
 # PermissionRequest blocks on a FIFO until the user approves via stack-nudge,
 # so it needs a longer timeout than the default.
-for event, arg, timeout in [("Stop", "stop", 30), ("PermissionRequest", "permission", 600)]:
+for event, arg, timeout in manifest_hooks():
     groups = hooks.setdefault(event, [])
 
     cleaned = []
@@ -378,7 +405,7 @@ for event, arg, timeout in [("Stop", "stop", 30), ("PermissionRequest", "permiss
     cmd = f"{notify} {agent} {arg}"
     groups.append({
         "matcher": "",
-        "hooks": [{"type": "command", "command": cmd, "timeout": timeout}],
+        "hooks": [{"type": "command", "command": cmd, **({"timeout": timeout} if timeout is not None else {})}],
     })
 
 path.write_text(json.dumps(settings, indent=2) + "\n")
@@ -391,8 +418,16 @@ fi
 if [[ -d "$HOME/.gemini" ]]; then
   echo ""
   echo "Detected Gemini CLI (~/.gemini)"
-  python3 - "$HOME/.gemini/settings.json" "$NOTIFY" "gemini" <<'PY'
+  HOOK_AGENT=gemini python3 - "$HOME/.gemini/settings.json" "$NOTIFY" "gemini" <<'PY'
 import json, os, re, sys
+
+def manifest_hooks():
+    # This version's hooks for the agent, from hook-manifest.json: the same
+    # list the app reconciles against at launch.
+    import os
+    with open(os.environ["HOOK_MANIFEST"]) as f:
+        spec = json.load(f)["agents"][os.environ["HOOK_AGENT"]]
+    return [(h["event"], h["arg"], h.get("timeout")) for h in spec["hooks"]]
 from pathlib import Path
 
 path = Path(sys.argv[1])
@@ -407,7 +442,7 @@ else:
 STALE = re.compile(r"(?:^|/)\.?(?:tinynudge|stack-nudge)/notify\.sh(?:\s|$)")
 
 hooks = settings.setdefault("hooks", {})
-for event, arg, timeout in [("AfterAgent", "stop", 30000), ("Notification", "permission", 30000)]:
+for event, arg, timeout in manifest_hooks():
     groups = hooks.setdefault(event, [])
 
     cleaned = []
@@ -424,7 +459,7 @@ for event, arg, timeout in [("AfterAgent", "stop", 30000), ("Notification", "per
     cmd = f"{notify} {agent} {arg}"
     groups.append({
         "matcher": "",
-        "hooks": [{"type": "command", "command": cmd, "timeout": timeout}],
+        "hooks": [{"type": "command", "command": cmd, **({"timeout": timeout} if timeout is not None else {})}],
     })
 
 path.write_text(json.dumps(settings, indent=2) + "\n")
@@ -437,8 +472,16 @@ fi
 if [[ -d "$HOME/.gemini/antigravity-cli" ]]; then
   echo ""
   echo "Detected Antigravity CLI (~/.gemini/antigravity-cli)"
-  python3 - "$HOME/.gemini/antigravity-cli/settings.json" "$NOTIFY" "antigravity" <<'PY'
+  HOOK_AGENT=antigravity python3 - "$HOME/.gemini/antigravity-cli/settings.json" "$NOTIFY" "antigravity" <<'PY'
 import json, os, re, sys
+
+def manifest_hooks():
+    # This version's hooks for the agent, from hook-manifest.json: the same
+    # list the app reconciles against at launch.
+    import os
+    with open(os.environ["HOOK_MANIFEST"]) as f:
+        spec = json.load(f)["agents"][os.environ["HOOK_AGENT"]]
+    return [(h["event"], h["arg"], h.get("timeout")) for h in spec["hooks"]]
 from pathlib import Path
 
 path = Path(sys.argv[1])
@@ -453,7 +496,7 @@ else:
 STALE = re.compile(r"(?:^|/)\.?(?:tinynudge|stack-nudge)/notify\.sh(?:\s|$)")
 
 hooks = settings.setdefault("hooks", {})
-for event, arg, timeout in [("AfterAgent", "stop", 30000), ("Notification", "permission", 30000)]:
+for event, arg, timeout in manifest_hooks():
     groups = hooks.setdefault(event, [])
 
     cleaned = []
@@ -470,7 +513,7 @@ for event, arg, timeout in [("AfterAgent", "stop", 30000), ("Notification", "per
     cmd = f"{notify} {agent} {arg}"
     groups.append({
         "matcher": "",
-        "hooks": [{"type": "command", "command": cmd, "timeout": timeout}],
+        "hooks": [{"type": "command", "command": cmd, **({"timeout": timeout} if timeout is not None else {})}],
     })
 
 path.write_text(json.dumps(settings, indent=2) + "\n")
