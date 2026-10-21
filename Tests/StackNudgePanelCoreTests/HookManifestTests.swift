@@ -43,9 +43,9 @@ final class HookManifestTests: XCTestCase {
     }
 
     private func reconcile(_ hooks: [String: Any], applied: Set<String>?, everything: Bool = false,
-                           spec: AgentHookSpec? = nil) -> HookReconciler.Outcome {
-        HookReconciler.reconcile(hooks: hooks, spec: spec ?? claude, applied: applied, notifyPath: notify,
-                                 ourScript: Bootstrap.isOurScript, everything: everything)
+                           spec: AgentHookSpec? = nil) throws -> HookReconciler.Outcome {
+        try HookReconciler.reconcile(hooks: hooks, spec: spec ?? claude, applied: applied, notifyPath: notify,
+                                     ourScript: Bootstrap.isOurScript, everything: everything)
     }
 
     private var current: [String: Any] {
@@ -55,16 +55,35 @@ final class HookManifestTests: XCTestCase {
 
     // MARK: The manifest itself
 
+    private let agentArgs: [BootstrapAgent: String] = [
+        .claude: "claude-code", .codex: "codex", .gemini: "gemini", .antigravity: "antigravity", .cursor: "cursor",
+    ]
+
+    // The hook events each agent defines, from its docs. A manifest row for a
+    // new event needs it added here, after checking the agent really fires it.
+    private let agentEvents: [BootstrapAgent: Set<String>] = [
+        .claude: ["Stop", "PermissionRequest", "SessionStart", "SessionEnd", "UserPromptSubmit",
+                  "Notification", "PreToolUse", "PostToolUse", "SubagentStop", "PreCompact"],
+        .codex: ["Stop", "PermissionRequest", "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse"],
+        .gemini: ["AfterAgent", "Notification", "SessionStart", "SessionEnd", "BeforeAgent"],
+        .antigravity: ["AfterAgent", "Notification", "SessionStart", "SessionEnd", "BeforeAgent"],
+        .cursor: ["stop", "beforeSubmitPrompt", "afterAgentResponse"],
+    ]
+
     func testTheRepoManifestCoversEveryAgent() throws {
         let manifest = try repoManifest()
         XCTAssertGreaterThan(manifest.version, 0)
         XCTAssertEqual(Set(manifest.agents.keys), Set(BootstrapAgent.allCases))
         for (agent, spec) in manifest.agents {
             XCTAssertFalse(spec.hooks.isEmpty, "\(agent) has no hooks")
-            // notify.sh treats any other event as a no-op, so a row whose arg it
-            // doesn't handle would wire a hook that silently does nothing.
+            XCTAssertEqual(spec.agentArg, agentArgs[agent], "\(agent)'s notify.sh agent arg")
             for hook in spec.hooks {
+                // notify.sh treats any other event as a no-op, so a row whose arg it
+                // doesn't handle would wire a hook that silently does nothing.
                 XCTAssertTrue(["stop", "permission"].contains(hook.arg), "\(agent) \(hook.event): notify.sh doesn't handle \(hook.arg)")
+                // The agent never fires an event it doesn't define, so a typo'd
+                // event name would be just as silent.
+                XCTAssertTrue(agentEvents[agent, default: []].contains(hook.event), "\(hook.event) isn't a known \(agent) hook event")
             }
         }
         XCTAssertEqual(manifest.agents[.cursor]?.shape, .flat)
@@ -75,22 +94,23 @@ final class HookManifestTests: XCTestCase {
     func testThePluginHookFileMatchesTheManifestForClaude() throws {
         let plugin = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: repoFile("hooks/hooks.json"))) as? [String: Any])
         let hooks = try XCTUnwrap(plugin["hooks"] as? [String: Any])
-        var pluginArgs: [String: String] = [:]
-        for event in hooks.keys {
-            let command = try XCTUnwrap(commands(hooks, event).first)
-            pluginArgs[event] = command.split(separator: " ").last.map(String.init)
-        }
+        var pluginCommands: [String: [String]] = [:]
+        for event in hooks.keys { pluginCommands[event] = commands(hooks, event) }
         let manifest = try XCTUnwrap(repoManifest().agents[.claude])
-        XCTAssertEqual(pluginArgs, Dictionary(uniqueKeysWithValues: manifest.hooks.map { ($0.event, $0.arg) }))
+        // Exactly one hook per event, in the same form the app writes, with the
+        // plugin's own copy of notify.sh in place of the installed one.
+        XCTAssertEqual(pluginCommands, Dictionary(uniqueKeysWithValues: manifest.hooks.map {
+            ($0.event, ["${CLAUDE_PLUGIN_ROOT}/notify.sh \(manifest.agentArg) \($0.arg)"])
+        }))
     }
 
-    func testAManifestWithADuplicateEventOrNoVersionIsRefused() {
+    func testAManifestWithADuplicateEventOrNoVersionIsRefused() throws {
         let duplicate = #"{"version":1,"agents":{"claude":{"agent_arg":"claude-code","shape":"matcher-groups","hooks":[{"event":"Stop","arg":"stop"},{"event":"Stop","arg":"stop"}]}}}"#
         XCTAssertThrowsError(try HookManifest.parse(Data(duplicate.utf8)))
         XCTAssertThrowsError(try HookManifest.parse(Data(#"{"agents":{}}"#.utf8)))
     }
 
-    func testOurScriptIsOnlyAnInstalledCopy() {
+    func testOurScriptIsOnlyAnInstalledCopy() throws {
         XCTAssertTrue(Bootstrap.isOurScript("/Users/me/.stack-nudge/notify.sh"))
         XCTAssertTrue(Bootstrap.isOurScript("\"/Users/me/.stack-nudge/notify.sh\""))
         XCTAssertTrue(Bootstrap.isOurScript("/Users/me/.tinynudge/notify.sh"))
@@ -101,34 +121,34 @@ final class HookManifestTests: XCTestCase {
     // MARK: Launch pass
 
     func testAnExistingInstallGainsAHookANewVersionAdds() throws {
-        let outcome = reconcile(current, applied: nil)
+        let outcome = try reconcile(current, applied: nil)
         let result = try XCTUnwrap(outcome.hooks)
         XCTAssertEqual(commands(result, "SessionStart"), ["\(notify) claude-code session-start"])
         XCTAssertEqual(commands(result, "Stop"), ["\(notify) claude-code stop"], "not duplicated")
         XCTAssertEqual(outcome.applied, ["Stop", "PermissionRequest", "SessionStart"])
-        XCTAssertNil(reconcile(result, applied: outcome.applied).hooks, "a second launch changes nothing")
+        XCTAssertNil(try reconcile(result, applied: outcome.applied).hooks, "a second launch changes nothing")
     }
 
-    func testAHookTheUserDeletedStaysDeleted() {
+    func testAHookTheUserDeletedStaysDeleted() throws {
         let hooks: [String: Any] = ["Stop": [group("\(notify) claude-code stop", timeout: 30)]]
-        XCTAssertNil(reconcile(hooks, applied: ["Stop", "PermissionRequest", "SessionStart"]).hooks)
+        XCTAssertNil(try reconcile(hooks, applied: ["Stop", "PermissionRequest", "SessionStart"]).hooks)
         // With no record, the legacy PermissionRequest counts as applied, so it isn't put back either.
-        XCTAssertNil(commands(reconcile(hooks, applied: nil).hooks ?? hooks, "PermissionRequest").first)
+        XCTAssertNil(commands(try reconcile(hooks, applied: nil).hooks ?? hooks, "PermissionRequest").first)
     }
 
-    func testTheUsersOwnSettingsOnOurHooksAreKept() {
+    func testTheUsersOwnSettingsOnOurHooksAreKept() throws {
         var hooks = current
         hooks["PermissionRequest"] = [group("\(notify) claude-code permission", timeout: 3600, matcher: "Bash")]
         hooks["SessionStart"] = [group("\(notify) claude-code session-start", timeout: 10)]
-        XCTAssertNil(reconcile(hooks, applied: nil).hooks, "a raised timeout and a custom matcher are left alone")
+        XCTAssertNil(try reconcile(hooks, applied: nil).hooks, "a raised timeout and a custom matcher are left alone")
     }
 
-    func testWrappersAndHandAddedHooksAreNotOurs() {
+    func testWrappersAndHandAddedHooksAreNotOurs() throws {
         var hooks = current
         hooks["SessionStart"] = [group("\(notify) claude-code session-start", timeout: 10)]
         hooks["Stop"] = [group("FOO=1 \(notify) claude-code stop || true", timeout: 30)]
         hooks["SubagentStop"] = [group("\(notify) claude-code stop")]
-        let outcome = reconcile(hooks, applied: ["Stop", "PermissionRequest", "SessionStart"])
+        let outcome = try reconcile(hooks, applied: ["Stop", "PermissionRequest", "SessionStart"])
         XCTAssertNil(outcome.hooks, "the wrapper and the SubagentStop hook are the user's")
     }
 
@@ -136,7 +156,7 @@ final class HookManifestTests: XCTestCase {
         var hooks = current
         hooks["Stop"] = [group("/usr/local/bin/other"), group("/Users/me/.tinynudge/notify.sh claude-code stop", timeout: 45, matcher: "x")]
         hooks["SessionStart"] = [group("\(notify) claude-code session-start", timeout: 10)]
-        let result = try XCTUnwrap(reconcile(hooks, applied: nil).hooks)
+        let result = try XCTUnwrap(try reconcile(hooks, applied: nil).hooks)
         let stop = try XCTUnwrap(result["Stop"] as? [[String: Any]])
         XCTAssertEqual(commands(result, "Stop"), ["/usr/local/bin/other", "\(notify) claude-code stop"])
         XCTAssertEqual(stop[1]["matcher"] as? String, "x")
@@ -147,15 +167,15 @@ final class HookManifestTests: XCTestCase {
         var hooks = current
         hooks["UserPromptSubmit"] = [group("\(notify) claude-code prompt", timeout: 10), group("other")]
         hooks["SessionStart"] = [group("\(notify) claude-code session-start", timeout: 10)]
-        let result = try XCTUnwrap(reconcile(hooks, applied: ["Stop", "PermissionRequest", "SessionStart", "UserPromptSubmit"]).hooks)
+        let result = try XCTUnwrap(try reconcile(hooks, applied: ["Stop", "PermissionRequest", "SessionStart", "UserPromptSubmit"]).hooks)
         XCTAssertEqual(commands(result, "UserPromptSubmit"), ["other"])
-        XCTAssertNil(reconcile(hooks, applied: nil).hooks, "never applied by us: not ours to remove")
+        XCTAssertNil(try reconcile(hooks, applied: nil).hooks, "never applied by us: not ours to remove")
     }
 
-    func testADroppedEventAlreadyGoneIsNotARewrite() {
+    func testADroppedEventAlreadyGoneIsNotARewrite() throws {
         var hooks = current
         hooks["SessionStart"] = [group("\(notify) claude-code session-start", timeout: 10)]
-        XCTAssertNil(reconcile(hooks, applied: ["Stop", "PermissionRequest", "SessionStart", "UserPromptSubmit"]).hooks)
+        XCTAssertNil(try reconcile(hooks, applied: ["Stop", "PermissionRequest", "SessionStart", "UserPromptSubmit"]).hooks)
     }
 
     func testRepointingLeavesASingleCopy() throws {
@@ -163,31 +183,63 @@ final class HookManifestTests: XCTestCase {
         hooks["Stop"] = [group("\"/Users/me/.tinynudge/notify.sh\" claude-code stop", timeout: 30),
                          group("\(notify) claude-code stop", timeout: 30)]
         hooks["SessionStart"] = [group("\(notify) claude-code session-start", timeout: 10)]
-        let result = try XCTUnwrap(reconcile(hooks, applied: nil).hooks)
+        let result = try XCTUnwrap(try reconcile(hooks, applied: nil).hooks)
         XCTAssertEqual(commands(result, "Stop"), ["\(notify) claude-code stop"])
     }
 
     func testAHomeWithASpaceIsQuotedAndStillRecognised() throws {
         let spaced = "/Users/Jo Smith/.stack-nudge/notify.sh"
-        let outcome = HookReconciler.reconcile(hooks: [:], spec: claude, applied: nil, notifyPath: spaced,
-                                               ourScript: Bootstrap.isOurScript, everything: true)
+        let outcome = try HookReconciler.reconcile(hooks: [:], spec: claude, applied: nil, notifyPath: spaced,
+                                                   ourScript: Bootstrap.isOurScript, everything: true)
         let result = try XCTUnwrap(outcome.hooks)
-        XCTAssertEqual(commands(result, "Stop"), ["\"\(spaced)\" claude-code stop"])
-        XCTAssertNil(HookReconciler.reconcile(hooks: result, spec: claude, applied: nil, notifyPath: spaced,
-                                              ourScript: Bootstrap.isOurScript, everything: true).hooks,
+        XCTAssertEqual(commands(result, "Stop"), ["'\(spaced)' claude-code stop"])
+        XCTAssertNil(try HookReconciler.reconcile(hooks: result, spec: claude, applied: nil, notifyPath: spaced,
+                                                  ourScript: Bootstrap.isOurScript, everything: true).hooks,
                      "the wizard doesn't append another copy")
-        XCTAssertEqual(HookReconciler.tokens("\"/a b/notify.sh\" claude-code stop"), ["\"/a b/notify.sh\"", "claude-code", "stop"])
+        XCTAssertEqual(HookReconciler.tokens("\"/a b/notify.sh\" claude-code stop"), ["/a b/notify.sh", "claude-code", "stop"],
+                       "a double-quoted path")
+    }
+
+    // Matches Python's shlex.quote, which install.sh uses, so both installers
+    // write the same command and recognise each other's.
+    func testAPathIsQuotedLikeShlexAndReadBack() {
+        XCTAssertEqual(HookReconciler.shellQuoted("/Users/me/.stack-nudge/notify.sh"), "/Users/me/.stack-nudge/notify.sh")
+        XCTAssertEqual(HookReconciler.shellQuoted("/Users/Jo Smith/x"), "'/Users/Jo Smith/x'")
+        XCTAssertEqual(HookReconciler.shellQuoted("/Users/o'neil/$x"), #"'/Users/o'"'"'neil/$x'"#)
+        for path in ["/Users/Jo Smith/.stack-nudge/notify.sh", "/Users/o'neil/$HOME/`x`/.stack-nudge/notify.sh"] {
+            XCTAssertEqual(HookReconciler.tokens("\(HookReconciler.shellQuoted(path)) claude-code stop"), [path, "claude-code", "stop"])
+        }
+    }
+
+    func testAMalformedEventValueIsRefused() {
+        var hooks = current
+        hooks["Stop"] = "not a list"
+        XCTAssertThrowsError(try reconcile(hooks, applied: nil))
+        XCTAssertThrowsError(try reconcile(hooks, applied: nil, everything: true))
+        // An event that isn't ours, whatever its shape, is no reason to refuse.
+        var other = current
+        other["SessionStart"] = [group("\(notify) claude-code session-start", timeout: 10)]
+        other["Elsewhere"] = 7
+        XCTAssertNoThrow(try reconcile(other, applied: nil))
     }
 
     // MARK: Wizard and Set up
 
     func testEverythingRestoresAllHooksAndResetsOurs() throws {
         let hooks: [String: Any] = ["Stop": [group("\(notify) claude-code stop", timeout: 5), group("other")]]
-        let result = try XCTUnwrap(reconcile(hooks, applied: ["Stop", "PermissionRequest", "SessionStart"], everything: true).hooks)
+        let result = try XCTUnwrap(try reconcile(hooks, applied: ["Stop", "PermissionRequest", "SessionStart"], everything: true).hooks)
         XCTAssertEqual(commands(result, "Stop"), ["other", "\(notify) claude-code stop"])
         XCTAssertEqual(commands(result, "PermissionRequest"), ["\(notify) claude-code permission"])
         XCTAssertEqual(commands(result, "SessionStart"), ["\(notify) claude-code session-start"])
-        XCTAssertNil(reconcile(result, applied: nil, everything: true).hooks, "already exact: no write")
+        XCTAssertNil(try reconcile(result, applied: nil, everything: true).hooks, "already exact: no write")
+    }
+
+    func testEverythingAlsoDropsEventsThisVersionNoLongerLists() throws {
+        var hooks = current
+        hooks["UserPromptSubmit"] = [group("\(notify) claude-code prompt", timeout: 10), group("other")]
+        let result = try XCTUnwrap(try reconcile(hooks, applied: ["Stop", "PermissionRequest", "UserPromptSubmit"], everything: true).hooks)
+        XCTAssertEqual(commands(result, "UserPromptSubmit"), ["other"])
+        XCTAssertEqual(commands(result, "SessionStart"), ["\(notify) claude-code session-start"])
     }
 
     func testCursorsFlatShape() throws {
@@ -195,12 +247,12 @@ final class HookManifestTests: XCTestCase {
                                    hooks: [HookSpec(event: "stop", arg: "stop", timeout: nil, legacy: true)])
         let hooks: [String: Any] = ["stop": [["type": "command", "command": "keep-me"],
                                              ["type": "command", "command": "/x/.tinynudge/notify.sh cursor stop"]]]
-        let result = try XCTUnwrap(reconcile(hooks, applied: nil, spec: cursor).hooks)
+        let result = try XCTUnwrap(try reconcile(hooks, applied: nil, spec: cursor).hooks)
         XCTAssertEqual(commands(result, "stop"), ["keep-me", "\(notify) cursor stop"])
-        XCTAssertNil(reconcile(result, applied: ["stop"], spec: cursor).hooks, "second pass changes nothing")
+        XCTAssertNil(try reconcile(result, applied: ["stop"], spec: cursor).hooks, "second pass changes nothing")
     }
 
-    func testPruningRemovesOursFromEveryEvent() {
+    func testPruningRemovesOursFromEveryEvent() throws {
         let hooks: [String: Any] = ["Stop": [group("\(notify) claude-code stop")],
                                     "SomeFutureEvent": [group("\(notify) claude-code future"), group("other")]]
         let result = HookReconciler.pruned(hooks, isOurs: { $0.contains("stack-nudge/notify.sh") })

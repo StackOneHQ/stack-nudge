@@ -91,6 +91,13 @@ struct HookManifest: Equatable {
 // resets our entries for the manifest's events to exactly what it lists.
 enum HookReconciler {
 
+    // A managed event's value isn't a list of objects: someone else's shape,
+    // so the config is refused rather than overwritten with ours.
+    struct Malformed: Error, CustomStringConvertible {
+        let event: String
+        var description: String { "hooks.\(event) isn't a list of objects" }
+    }
+
     struct Outcome {
         // nil when nothing should be written.
         let hooks: [String: Any]?
@@ -102,13 +109,17 @@ enum HookReconciler {
     // at the current path or an old one.
     static func reconcile(hooks: [String: Any], spec: AgentHookSpec, applied: Set<String>?,
                           notifyPath: String, ourScript: (String) -> Bool,
-                          everything: Bool) -> Outcome {
+                          everything: Bool) throws -> Outcome {
         let known = applied ?? Set(spec.hooks.filter(\.legacy).map(\.event))
         let manifestEvents = Set(spec.hooks.map(\.event))
         let newApplied = manifestEvents
-        // Quoted when the path has a space (a home folder like "/Users/Jo Smith"),
-        // or the agent's shell would split it.
-        let script = notifyPath.contains(" ") ? "\"\(notifyPath)\"" : notifyPath
+        for event in known.union(manifestEvents) {
+            if let value = hooks[event], !(value is [[String: Any]]) { throw Malformed(event: event) }
+        }
+        // The agent runs the command through a shell, so a home folder like
+        // "/Users/Jo Smith" must be quoted. Quoted the way install.sh's
+        // shlex.quote does, so both installers write the same string.
+        let script = shellQuoted(notifyPath)
         func canonical(_ hook: HookSpec) -> String { "\(script) \(spec.agentArg) \(hook.arg)" }
         // Ours in exactly the form we write: script, agent arg, event arg, nothing else.
         func ours(_ command: String, event: String) -> Bool {
@@ -121,6 +132,17 @@ enum HookReconciler {
         var result = hooks
         var changed = false
 
+        // Events this version dropped: they were ours to apply, so ours to
+        // remove, in both modes.
+        for event in known.subtracting(manifestEvents) {
+            guard let old = result[event] as? [[String: Any]] else { continue }
+            let list = removing(from: old, where: { ours($0, event: event) })
+            if list.count != old.count || commands(in: list).count != commands(in: old).count {
+                result[event] = list.isEmpty ? nil : list
+                changed = true
+            }
+        }
+
         if everything {
             for hook in spec.hooks {
                 var list = removing(from: result[hook.event], where: { ours($0, event: hook.event) })
@@ -130,15 +152,6 @@ enum HookReconciler {
             return Outcome(hooks: equal(result, hooks) ? nil : result, applied: newApplied)
         }
 
-        // Events this version dropped: they were ours to apply, so ours to remove.
-        for event in known.subtracting(manifestEvents) {
-            guard let old = result[event] as? [[String: Any]] else { continue }
-            let list = removing(from: old, where: { ours($0, event: event) })
-            if list.count != old.count || commands(in: list).count != commands(in: old).count {
-                result[event] = list.isEmpty ? nil : list
-                changed = true
-            }
-        }
         for hook in spec.hooks {
             let present = commands(in: result[hook.event]).filter { ours($0, event: hook.event) }
             if present.isEmpty {
@@ -176,15 +189,49 @@ enum HookReconciler {
         return result
     }
 
-    // Space-separated tokens, where a leading double-quoted token may contain spaces.
+    // Python's shlex.quote: bare when every character is shell-safe, otherwise
+    // single-quoted with any ' written as '"'"'.
+    static func shellQuoted(_ word: String) -> String {
+        let safe = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@%+=:,./-")
+        if !word.isEmpty, word.allSatisfy(safe.contains) { return word }
+        return "'" + word.replacingOccurrences(of: "'", with: #"'"'"'"#) + "'"
+    }
+
+    // The command's shell words with quoting removed: '…', "…" (where \ escapes
+    // $ ` " \), and \ outside quotes. Enough to read back what shellQuoted wrote,
+    // and a double-quoted path.
     static func tokens(_ command: String) -> [String] {
-        let trimmed = command.trimmingCharacters(in: .whitespaces)
-        if trimmed.hasPrefix("\""), let close = trimmed.dropFirst().firstIndex(of: "\"") {
-            let head = String(trimmed[...close])
-            let rest = trimmed[trimmed.index(after: close)...].split(separator: " ").map(String.init)
-            return [head] + rest
+        var words: [String] = []
+        var word = ""
+        var inWord = false
+        var chars = command.makeIterator()
+        while let c = chars.next() {
+            switch c {
+            case " ", "\t", "\n":
+                if inWord { words.append(word); word = ""; inWord = false }
+            case "'":
+                inWord = true
+                while let q = chars.next(), q != "'" { word.append(q) }
+            case "\"":
+                inWord = true
+                while let q = chars.next(), q != "\"" {
+                    if q == "\\", let next = chars.next() {
+                        if !"$`\"\\".contains(next) { word.append(q) }
+                        word.append(next)
+                    } else {
+                        word.append(q)
+                    }
+                }
+            case "\\":
+                inWord = true
+                if let next = chars.next() { word.append(next) }
+            default:
+                inWord = true
+                word.append(c)
+            }
         }
-        return trimmed.split(separator: " ").map(String.init)
+        if inWord { words.append(word) }
+        return words
     }
 
     // MARK: List helpers (matcher groups hold `hooks`; Cursor's entries are flat)

@@ -253,6 +253,7 @@ echo "# STAGE: hooks"
 # Which hooks to wire comes from hook-manifest.json, the list the app also
 # reconciles against, so the two install paths can't drift apart.
 export HOOK_MANIFEST="$SCRIPT_DIR/hook-manifest.json"
+export HOOK_HELPERS="$SCRIPT_DIR/scripts"
 # Detect agents and wire up their hooks
 installed_any=false
 
@@ -261,15 +262,10 @@ if [[ -d "$HOME/.claude" ]]; then
   echo ""
   echo "Detected Claude Code (~/.claude)"
   HOOK_AGENT=claude python3 - "$HOME/.claude/settings.json" "$NOTIFY" <<'PY'
-import json, os, re, sys
-
-def manifest_hooks():
-    # This version's hooks for the agent, from hook-manifest.json: the same
-    # list the app reconciles against at launch.
-    import os
-    with open(os.environ["HOOK_MANIFEST"]) as f:
-        spec = json.load(f)["agents"][os.environ["HOOK_AGENT"]]
-    return [(h["event"], h["arg"], h.get("timeout")) for h in spec["hooks"]]
+import json, os, shlex, sys
+# The helpers shared by every agent block, beside this script.
+sys.path.insert(0, os.environ["HOOK_HELPERS"])
+from hook_wiring import STALE, dropped_events, manifest_hooks, ours_exactly, record_applied
 from pathlib import Path
 
 path = Path(sys.argv[1])
@@ -280,13 +276,21 @@ if path.exists():
 else:
     settings = {}
 
-# Match any prior stack-nudge / tinynudge hook entry regardless of where it
-# was installed (legacy ~/.tinynudge, moved checkouts, etc.) so upgrades
-# replace the stale entry instead of appending a duplicate that points at a
-# dead path.
-STALE = re.compile(r"(?:^|/)\.?(?:tinynudge|stack-nudge)/notify\.sh(?:\s|$)")
-
 hooks = settings.setdefault("hooks", {})
+# Events an earlier version wired that this one no longer lists.
+for event in dropped_events():
+    groups = hooks.get(event)
+    if not isinstance(groups, list):
+        continue
+    cleaned = []
+    for g in groups:
+        inner = g.get("hooks", [])
+        kept = [h for h in inner if not ours_exactly(h.get("command"))]
+        if kept:
+            cleaned.append(g if kept == inner else {**g, "hooks": kept})
+    groups[:] = cleaned
+    if not groups:
+        del hooks[event]
 # Permission hook blocks on a FIFO until the user approves via stack-nudge,
 # so it needs a longer timeout than Claude Code's 600s default.
 for event, arg, timeout in manifest_hooks():
@@ -306,7 +310,7 @@ for event, arg, timeout in manifest_hooks():
         cleaned.append(g)
     groups[:] = cleaned
 
-    cmd = f"{notify} claude-code {arg}"
+    cmd = f"{shlex.quote(notify)} claude-code {arg}"
     groups.append({
         "matcher": "",
         "hooks": [{"type": "command", "command": cmd, **({"timeout": timeout} if timeout is not None else {})}],
@@ -314,6 +318,7 @@ for event, arg, timeout in manifest_hooks():
 
 path.write_text(json.dumps(settings, indent=2) + "\n")
 print(f"  Updated {path}")
+record_applied()
 PY
   installed_any=true
 fi
@@ -323,15 +328,10 @@ if [[ -d "$HOME/.cursor" ]]; then
   echo ""
   echo "Detected Cursor (~/.cursor)"
   HOOK_AGENT=cursor python3 - "$HOME/.cursor/hooks.json" "$NOTIFY" <<'PY'
-import json, re, sys
-
-def manifest_hooks():
-    # This version's hooks for the agent, from hook-manifest.json: the same
-    # list the app reconciles against at launch.
-    import os
-    with open(os.environ["HOOK_MANIFEST"]) as f:
-        spec = json.load(f)["agents"][os.environ["HOOK_AGENT"]]
-    return [(h["event"], h["arg"], h.get("timeout")) for h in spec["hooks"]]
+import json, os, shlex, sys
+# The helpers shared by every agent block, beside this script.
+sys.path.insert(0, os.environ["HOOK_HELPERS"])
+from hook_wiring import STALE, dropped_events, manifest_hooks, ours_exactly, record_applied
 from pathlib import Path
 
 path = Path(sys.argv[1])
@@ -339,18 +339,23 @@ notify = sys.argv[2]
 path.parent.mkdir(parents=True, exist_ok=True)
 settings = json.loads(path.read_text()) if path.exists() else {}
 
-# Match any prior stack-nudge / tinynudge entry regardless of install path
-# so upgrades replace stale entries rather than appending duplicates.
-STALE = re.compile(r"(?:^|/)\.?(?:tinynudge|stack-nudge)/notify\.sh(?:\s|$)")
-
 hooks = settings.setdefault("hooks", {})
+# Events an earlier version wired that this one no longer lists.
+for event in dropped_events():
+    entries = hooks.get(event)
+    if not isinstance(entries, list):
+        continue
+    entries[:] = [h for h in entries if not ours_exactly(h.get("command"))]
+    if not entries:
+        del hooks[event]
 for event, arg, _ in manifest_hooks():
     entries = hooks.setdefault(event, [])
     entries[:] = [h for h in entries if not STALE.search(h.get("command", "") or "")]
-    entries.append({"type": "command", "command": f"{notify} cursor {arg}"})
+    entries.append({"type": "command", "command": f"{shlex.quote(notify)} cursor {arg}"})
 
 path.write_text(json.dumps(settings, indent=2) + "\n")
 print(f"  Updated {path}")
+record_applied()
 PY
   installed_any=true
 fi
@@ -363,15 +368,10 @@ if [[ -d "$HOME/.codex" ]]; then
   echo ""
   echo "Detected Codex (~/.codex)"
   HOOK_AGENT=codex python3 - "$HOME/.codex/hooks.json" "$NOTIFY" "codex" <<'PY'
-import json, os, re, sys
-
-def manifest_hooks():
-    # This version's hooks for the agent, from hook-manifest.json: the same
-    # list the app reconciles against at launch.
-    import os
-    with open(os.environ["HOOK_MANIFEST"]) as f:
-        spec = json.load(f)["agents"][os.environ["HOOK_AGENT"]]
-    return [(h["event"], h["arg"], h.get("timeout")) for h in spec["hooks"]]
+import json, os, shlex, sys
+# The helpers shared by every agent block, beside this script.
+sys.path.insert(0, os.environ["HOOK_HELPERS"])
+from hook_wiring import STALE, dropped_events, manifest_hooks, ours_exactly, record_applied
 from pathlib import Path
 
 path = Path(sys.argv[1])
@@ -383,9 +383,21 @@ if path.exists():
 else:
     settings = {}
 
-STALE = re.compile(r"(?:^|/)\.?(?:tinynudge|stack-nudge)/notify\.sh(?:\s|$)")
-
 hooks = settings.setdefault("hooks", {})
+# Events an earlier version wired that this one no longer lists.
+for event in dropped_events():
+    groups = hooks.get(event)
+    if not isinstance(groups, list):
+        continue
+    cleaned = []
+    for g in groups:
+        inner = g.get("hooks", [])
+        kept = [h for h in inner if not ours_exactly(h.get("command"))]
+        if kept:
+            cleaned.append(g if kept == inner else {**g, "hooks": kept})
+    groups[:] = cleaned
+    if not groups:
+        del hooks[event]
 # PermissionRequest blocks on a FIFO until the user approves via stack-nudge,
 # so it needs a longer timeout than the default.
 for event, arg, timeout in manifest_hooks():
@@ -402,7 +414,7 @@ for event, arg, timeout in manifest_hooks():
         cleaned.append(g)
     groups[:] = cleaned
 
-    cmd = f"{notify} {agent} {arg}"
+    cmd = f"{shlex.quote(notify)} {agent} {arg}"
     groups.append({
         "matcher": "",
         "hooks": [{"type": "command", "command": cmd, **({"timeout": timeout} if timeout is not None else {})}],
@@ -410,6 +422,7 @@ for event, arg, timeout in manifest_hooks():
 
 path.write_text(json.dumps(settings, indent=2) + "\n")
 print(f"  Updated {path}")
+record_applied()
 PY
   installed_any=true
 fi
@@ -419,15 +432,10 @@ if [[ -d "$HOME/.gemini" ]]; then
   echo ""
   echo "Detected Gemini CLI (~/.gemini)"
   HOOK_AGENT=gemini python3 - "$HOME/.gemini/settings.json" "$NOTIFY" "gemini" <<'PY'
-import json, os, re, sys
-
-def manifest_hooks():
-    # This version's hooks for the agent, from hook-manifest.json: the same
-    # list the app reconciles against at launch.
-    import os
-    with open(os.environ["HOOK_MANIFEST"]) as f:
-        spec = json.load(f)["agents"][os.environ["HOOK_AGENT"]]
-    return [(h["event"], h["arg"], h.get("timeout")) for h in spec["hooks"]]
+import json, os, shlex, sys
+# The helpers shared by every agent block, beside this script.
+sys.path.insert(0, os.environ["HOOK_HELPERS"])
+from hook_wiring import STALE, dropped_events, manifest_hooks, ours_exactly, record_applied
 from pathlib import Path
 
 path = Path(sys.argv[1])
@@ -439,9 +447,21 @@ if path.exists():
 else:
     settings = {}
 
-STALE = re.compile(r"(?:^|/)\.?(?:tinynudge|stack-nudge)/notify\.sh(?:\s|$)")
-
 hooks = settings.setdefault("hooks", {})
+# Events an earlier version wired that this one no longer lists.
+for event in dropped_events():
+    groups = hooks.get(event)
+    if not isinstance(groups, list):
+        continue
+    cleaned = []
+    for g in groups:
+        inner = g.get("hooks", [])
+        kept = [h for h in inner if not ours_exactly(h.get("command"))]
+        if kept:
+            cleaned.append(g if kept == inner else {**g, "hooks": kept})
+    groups[:] = cleaned
+    if not groups:
+        del hooks[event]
 for event, arg, timeout in manifest_hooks():
     groups = hooks.setdefault(event, [])
 
@@ -456,7 +476,7 @@ for event, arg, timeout in manifest_hooks():
         cleaned.append(g)
     groups[:] = cleaned
 
-    cmd = f"{notify} {agent} {arg}"
+    cmd = f"{shlex.quote(notify)} {agent} {arg}"
     groups.append({
         "matcher": "",
         "hooks": [{"type": "command", "command": cmd, **({"timeout": timeout} if timeout is not None else {})}],
@@ -464,6 +484,7 @@ for event, arg, timeout in manifest_hooks():
 
 path.write_text(json.dumps(settings, indent=2) + "\n")
 print(f"  Updated {path}")
+record_applied()
 PY
   installed_any=true
 fi
@@ -473,15 +494,10 @@ if [[ -d "$HOME/.gemini/antigravity-cli" ]]; then
   echo ""
   echo "Detected Antigravity CLI (~/.gemini/antigravity-cli)"
   HOOK_AGENT=antigravity python3 - "$HOME/.gemini/antigravity-cli/settings.json" "$NOTIFY" "antigravity" <<'PY'
-import json, os, re, sys
-
-def manifest_hooks():
-    # This version's hooks for the agent, from hook-manifest.json: the same
-    # list the app reconciles against at launch.
-    import os
-    with open(os.environ["HOOK_MANIFEST"]) as f:
-        spec = json.load(f)["agents"][os.environ["HOOK_AGENT"]]
-    return [(h["event"], h["arg"], h.get("timeout")) for h in spec["hooks"]]
+import json, os, shlex, sys
+# The helpers shared by every agent block, beside this script.
+sys.path.insert(0, os.environ["HOOK_HELPERS"])
+from hook_wiring import STALE, dropped_events, manifest_hooks, ours_exactly, record_applied
 from pathlib import Path
 
 path = Path(sys.argv[1])
@@ -493,9 +509,21 @@ if path.exists():
 else:
     settings = {}
 
-STALE = re.compile(r"(?:^|/)\.?(?:tinynudge|stack-nudge)/notify\.sh(?:\s|$)")
-
 hooks = settings.setdefault("hooks", {})
+# Events an earlier version wired that this one no longer lists.
+for event in dropped_events():
+    groups = hooks.get(event)
+    if not isinstance(groups, list):
+        continue
+    cleaned = []
+    for g in groups:
+        inner = g.get("hooks", [])
+        kept = [h for h in inner if not ours_exactly(h.get("command"))]
+        if kept:
+            cleaned.append(g if kept == inner else {**g, "hooks": kept})
+    groups[:] = cleaned
+    if not groups:
+        del hooks[event]
 for event, arg, timeout in manifest_hooks():
     groups = hooks.setdefault(event, [])
 
@@ -510,7 +538,7 @@ for event, arg, timeout in manifest_hooks():
         cleaned.append(g)
     groups[:] = cleaned
 
-    cmd = f"{notify} {agent} {arg}"
+    cmd = f"{shlex.quote(notify)} {agent} {arg}"
     groups.append({
         "matcher": "",
         "hooks": [{"type": "command", "command": cmd, **({"timeout": timeout} if timeout is not None else {})}],
@@ -518,6 +546,7 @@ for event, arg, timeout in manifest_hooks():
 
 path.write_text(json.dumps(settings, indent=2) + "\n")
 print(f"  Updated {path}")
+record_applied()
 PY
   installed_any=true
 fi

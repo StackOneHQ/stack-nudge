@@ -10,7 +10,8 @@
 #
 # Usage: notify.sh <agent> <event>
 #   agent: claude-code | cursor | gemini | codex | <any name>
-#   event: stop | permission
+#   event: stop | permission | welcome (install.sh's first-run greeting)
+#   Any other event exits without doing anything (see below).
 # Example: notify.sh claude-code stop
 
 AGENT="${1:-agent}"

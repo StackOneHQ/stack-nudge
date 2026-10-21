@@ -751,18 +751,29 @@ enum Bootstrap {
         }
 
         progress("Removing hook entries…")
+        var rewriteFailure: Error?
         for agent in BootstrapAgent.allCases {
             let path = agent.hookConfigPath
-            // One unreadable config (not JSON, or not an object) must not stop
-            // the rest of the uninstall: there's nothing in it we could safely strip.
-            if fm.fileExists(atPath: path) {
-                do {
-                    try unwireHooks(at: path)
-                } catch {
-                    progress("Skipped \((path as NSString).abbreviatingWithTildeInPath): \(error.localizedDescription)")
-                }
+            guard fm.fileExists(atPath: path) else { continue }
+            // An unreadable config (not JSON, or not an object) is skipped: there's
+            // nothing in it we could safely strip, and it can't fire our hooks.
+            let root: [String: Any]
+            do {
+                root = try readJSONObject(at: path)
+            } catch {
+                progress("Skipped \((path as NSString).abbreviatingWithTildeInPath): \(error.localizedDescription)")
+                continue
+            }
+            // A readable config we failed to rewrite still points at notify.sh, so
+            // finish the other agents but stop before deleting the script.
+            do {
+                try unwireHooks(root, at: path)
+            } catch {
+                progress("Couldn't update \((path as NSString).abbreviatingWithTildeInPath): \(error.localizedDescription)")
+                rewriteFailure = rewriteFailure ?? error
             }
         }
+        if let rewriteFailure { throw rewriteFailure }
 
         progress("Removing \(installDir)…")
         try? fm.removeItem(atPath: installDir)
@@ -873,10 +884,15 @@ enum Bootstrap {
         }
         var record = readHooksApplied()
         let before = record
-        let outcome = HookReconciler.reconcile(
-            hooks: root["hooks"] as? [String: Any] ?? [:], spec: spec,
-            applied: record.agents[agent.rawValue].map(Set.init),
-            notifyPath: notifyPath, ourScript: isOurScript(_:), everything: everything)
+        let outcome: HookReconciler.Outcome
+        do {
+            outcome = try HookReconciler.reconcile(
+                hooks: root["hooks"] as? [String: Any] ?? [:], spec: spec,
+                applied: record.agents[agent.rawValue].map(Set.init),
+                notifyPath: notifyPath, ourScript: isOurScript(_:), everything: everything)
+        } catch {
+            throw BootstrapError.writeFailed(path, underlying: error)
+        }
         if let hooks = outcome.hooks {
             root["hooks"] = hooks
             try writeJSONObject(root, to: path)
@@ -884,7 +900,13 @@ enum Bootstrap {
         }
         record.agents[agent.rawValue] = outcome.applied.sorted()
         record.version = max(record.version, manifest.version)
-        if record != before { writeHooksApplied(record) }
+        // Written after the config: a record ahead of the config would read a
+        // never-added hook as deleted by hand. A failed write is logged, not
+        // thrown: the config is already written (Codex still needs its re-trust
+        // banner), and a lost record only falls back to the legacy set.
+        if record != before {
+            do { try writeHooksApplied(record) } catch { log("hooks-applied record not saved: \(error.localizedDescription)") }
+        }
         return outcome.hooks != nil
     }
 
@@ -903,11 +925,14 @@ enum Bootstrap {
                             agents: object["agents"] as? [String: [String]] ?? [:])
     }
 
-    private static func writeHooksApplied(_ record: HooksApplied) {
+    private static func writeHooksApplied(_ record: HooksApplied) throws {
         let object: [String: Any] = ["manifest_version": record.version, "agents": record.agents]
-        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
-        else { return }
-        try? data.write(to: URL(fileURLWithPath: hooksAppliedPath), options: [.atomic])
+        do {
+            let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: URL(fileURLWithPath: hooksAppliedPath), options: [.atomic])
+        } catch {
+            throw BootstrapError.writeFailed(hooksAppliedPath, underlying: error)
+        }
     }
 
     // A command's first token is our installed notify.sh: ~/.stack-nudge, or the
@@ -931,8 +956,8 @@ enum Bootstrap {
 
     // Uninstall reverse: strip every entry of ours (the regex matches old and
     // current paths) from every event, including ones a newer version wired.
-    private static func unwireHooks(at path: String) throws {
-        var root = try readJSONObject(at: path)
+    private static func unwireHooks(_ root: [String: Any], at path: String) throws {
+        var root = root
         guard let hooks = root["hooks"] as? [String: Any] else { return }
         let cleaned = HookReconciler.pruned(hooks, isOurs: isStaleHook(command:))
         if cleaned.isEmpty {
