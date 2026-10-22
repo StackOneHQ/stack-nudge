@@ -153,6 +153,11 @@ w = fresh("cursor")
 hooks = {"stop": [{"command": OURS + " cursor stop"}, {"command": "keep"}]}
 w.prune_for_uninstall(hooks)
 check("uninstall: Cursor's flat entries", hooks, {"stop": [{"command": "keep"}]})
+w = fresh()
+os.environ["HOOK_MANIFEST"] = os.path.join(os.environ["HOME"], "missing.json")
+hooks = {"Stop": [group(wrapper)], "PreToolUse": [group(OURS + " claude-code future"), group(wrapper)]}
+w.prune_for_uninstall(hooks)
+check("uninstall: no manifest falls back, without crashing", hooks, {"PreToolUse": [group(wrapper)]})
 
 # The installed path is quoted exactly as the app quotes it (HookReconciler.shellQuoted).
 import shlex
@@ -162,7 +167,7 @@ for path, expected in [("/Users/me/.stack-nudge/notify.sh", "/Users/me/.stack-nu
                        ("/Users/Jo Smith/x", "'/Users/Jo Smith/x'")]:
     check("shlex.quote(%r)" % path, shlex.quote(path), expected)
 
-EXPECTED = 41
+EXPECTED = 42
 if len(results) != EXPECTED:
     print("\nFAIL ran %d cases, expected %d" % (len(results), EXPECTED))
     sys.exit(1)

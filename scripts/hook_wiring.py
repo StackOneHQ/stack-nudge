@@ -59,11 +59,21 @@ def dropped_events():
     return [e for e in applied if e not in current]
 
 
+def manifest_agent_arg():
+    # The agent's notify.sh arg, from the manifest; without one (uninstall.sh
+    # from a partial checkout) the arg every version has used.
+    agent = os.environ["HOOK_AGENT"]
+    try:
+        with open(os.environ["HOOK_MANIFEST"]) as f:
+            return json.load(f)["agents"][agent]["agent_arg"]
+    except Exception:
+        return "claude-code" if agent == "claude" else agent
+
+
 def ours_exactly(command):
     # Only our exact form, `<installed notify.sh> <agent> <arg>`, under a dropped
     # event: a wrapper or a checkout wired by hand is the user's, as in the app.
-    with open(os.environ["HOOK_MANIFEST"]) as f:
-        agent_arg = json.load(f)["agents"][os.environ["HOOK_AGENT"]]["agent_arg"]
+    agent_arg = manifest_agent_arg()
     if not isinstance(command, str):
         return False
     try:
