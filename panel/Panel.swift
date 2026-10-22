@@ -1209,8 +1209,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // until re-trusted, and there's no trust API for us to call), so when one
         // happens and Codex is wired, nudge the user to re-trust via /hooks.
         // The same drift, for the hooks themselves: wired agents are brought in
-        // line with this version's hook-manifest.json (new events added, changed ones
-        // updated). Codex wants a re-trust after either: a changed
+        // line with this version's hook-manifest.json (new events added, dropped ones
+        // removed, our commands repointed to the current path and arg). Codex wants a re-trust after either: a changed
         // notify.sh, or a changed entry in its hooks.json.
         let scriptRefreshed = Bootstrap.refreshNotifyScriptIfNeeded() != nil
         let rewired = Bootstrap.reconcileWiredAgents()

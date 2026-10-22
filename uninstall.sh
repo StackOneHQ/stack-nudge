@@ -16,149 +16,38 @@ INSTALL_DIR="${HOME}/.stack-nudge"
 
 echo "Uninstalling stack-nudge..."
 
-# Remove hooks from Claude Code. Matches anything inside a `tinynudge` or
-# `stack-nudge` install dir — including quoted forms like
-# `"$HOME/.stack-nudge/notify.sh"` — so legacy entries (and dev checkouts
-# pointing at moved paths) get cleaned up too, not just the current $NOTIFY.
-if [[ -f "$HOME/.claude/settings.json" ]]; then
-  python3 - "$HOME/.claude/settings.json" <<'PY'
-import json, re, sys
+# Remove our hooks from each agent's config, as the in-app uninstall does:
+# under the events StackNudge wires (hook-manifest.json), anything inside a
+# `tinynudge` or `stack-nudge` install dir goes, legacy and quoted forms
+# included; under any other event only our exact `notify.sh <agent> <arg>`
+# form does, so a wrapper or a checkout's script there stays. A file with
+# nothing of ours is left untouched.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export HOOK_MANIFEST="$SCRIPT_DIR/hook-manifest.json"
+export HOOK_HELPERS="$SCRIPT_DIR/scripts"
+unwire_hooks() {
+  [[ -f "$2" ]] || return 0
+  HOOK_AGENT="$1" python3 - "$2" <<'PY'
+import json, os, sys
+sys.path.insert(0, os.environ["HOOK_HELPERS"])
+from hook_wiring import prune_for_uninstall
 from pathlib import Path
 
 path = Path(sys.argv[1])
-STALE = re.compile(r'(?:^|/|")\.?(?:tinynudge|stack-nudge)/notify\.sh')
-settings = json.loads(path.read_text())
-hooks = settings.get("hooks", {})
-for event in list(hooks.keys()):
-    cleaned = []
-    for g in hooks[event]:
-        inner = g.get("hooks", [])
-        kept = [h for h in inner if not STALE.search(h.get("command", "") or "")]
-        if not kept:
-            continue
-        if kept != inner:
-            g = {**g, "hooks": kept}
-        cleaned.append(g)
-    hooks[event] = cleaned
-    if not hooks[event]:
-        del hooks[event]
-if not hooks:
-    settings.pop("hooks", None)
-path.write_text(json.dumps(settings, indent=2) + "\n")
-print(f"  Cleaned {path}")
+settings = json.loads(path.read_text() or "{}")
+hooks = settings.get("hooks")
+if isinstance(hooks, dict) and prune_for_uninstall(hooks):
+    if not hooks:
+        settings.pop("hooks", None)
+    path.write_text(json.dumps(settings, indent=2) + "\n")
+    print(f"  Cleaned {path}")
 PY
-fi
-
-# Remove hooks from Cursor. Same path-agnostic match as the Claude block.
-if [[ -f "$HOME/.cursor/hooks.json" ]]; then
-  python3 - "$HOME/.cursor/hooks.json" <<'PY'
-import json, re, sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-STALE = re.compile(r'(?:^|/|")\.?(?:tinynudge|stack-nudge)/notify\.sh')
-settings = json.loads(path.read_text())
-hooks = settings.get("hooks", {})
-for event in list(hooks.keys()):
-    hooks[event] = [h for h in hooks[event] if not STALE.search(h.get("command", "") or "")]
-    if not hooks[event]:
-        del hooks[event]
-if not hooks:
-    settings.pop("hooks", None)
-path.write_text(json.dumps(settings, indent=2) + "\n")
-print(f"  Cleaned {path}")
-PY
-fi
-
-# Remove hooks from Gemini CLI.
-if [[ -f "$HOME/.gemini/settings.json" ]]; then
-  python3 - "$HOME/.gemini/settings.json" <<'PY'
-import json, re, sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-STALE = re.compile(r'(?:^|/|")\.?(?:tinynudge|stack-nudge)/notify\.sh')
-settings = json.loads(path.read_text())
-hooks = settings.get("hooks", {})
-for event in list(hooks.keys()):
-    cleaned = []
-    for g in hooks[event]:
-        inner = g.get("hooks", [])
-        kept = [h for h in inner if not STALE.search(h.get("command", "") or "")]
-        if not kept:
-            continue
-        if kept != inner:
-            g = {**g, "hooks": kept}
-        cleaned.append(g)
-    hooks[event] = cleaned
-    if not hooks[event]:
-        del hooks[event]
-if not hooks:
-    settings.pop("hooks", None)
-path.write_text(json.dumps(settings, indent=2) + "\n")
-print(f"  Cleaned {path}")
-PY
-fi
-
-# Remove hooks from Antigravity CLI.
-if [[ -f "$HOME/.gemini/antigravity-cli/settings.json" ]]; then
-  python3 - "$HOME/.gemini/antigravity-cli/settings.json" <<'PY'
-import json, re, sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-STALE = re.compile(r'(?:^|/|")\.?(?:tinynudge|stack-nudge)/notify\.sh')
-settings = json.loads(path.read_text())
-hooks = settings.get("hooks", {})
-for event in list(hooks.keys()):
-    cleaned = []
-    for g in hooks[event]:
-        inner = g.get("hooks", [])
-        kept = [h for h in inner if not STALE.search(h.get("command", "") or "")]
-        if not kept:
-            continue
-        if kept != inner:
-            g = {**g, "hooks": kept}
-        cleaned.append(g)
-    hooks[event] = cleaned
-    if not hooks[event]:
-        del hooks[event]
-if not hooks:
-    settings.pop("hooks", None)
-path.write_text(json.dumps(settings, indent=2) + "\n")
-print(f"  Cleaned {path}")
-PY
-fi
-
-# Remove hooks from Codex. Same matcher-group shape as Claude/Gemini.
-if [[ -f "$HOME/.codex/hooks.json" ]]; then
-  python3 - "$HOME/.codex/hooks.json" <<'PY'
-import json, re, sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-STALE = re.compile(r'(?:^|/|")\.?(?:tinynudge|stack-nudge)/notify\.sh')
-settings = json.loads(path.read_text())
-hooks = settings.get("hooks", {})
-for event in list(hooks.keys()):
-    cleaned = []
-    for g in hooks[event]:
-        inner = g.get("hooks", [])
-        kept = [h for h in inner if not STALE.search(h.get("command", "") or "")]
-        if not kept:
-            continue
-        if kept != inner:
-            g = {**g, "hooks": kept}
-        cleaned.append(g)
-    hooks[event] = cleaned
-    if not hooks[event]:
-        del hooks[event]
-if not hooks:
-    settings.pop("hooks", None)
-path.write_text(json.dumps(settings, indent=2) + "\n")
-print(f"  Cleaned {path}")
-PY
-fi
+}
+unwire_hooks claude "$HOME/.claude/settings.json"
+unwire_hooks cursor "$HOME/.cursor/hooks.json"
+unwire_hooks gemini "$HOME/.gemini/settings.json"
+unwire_hooks antigravity "$HOME/.gemini/antigravity-cli/settings.json"
+unwire_hooks codex "$HOME/.codex/hooks.json"
 
 # pi has no hook config to splice — it loads an extension from
 # ~/.pi/agent/extensions/. Left behind it would keep spawning a now-removed

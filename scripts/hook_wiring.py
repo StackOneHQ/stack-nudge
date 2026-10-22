@@ -70,8 +70,85 @@ def ours_exactly(command):
         words = shlex.split(command)
     except ValueError:
         return False
+    # The arg must be a plain word: shlex keeps `stop>>/tmp/log` as one word.
     return (len(words) == 3 and words[1] == agent_arg
+            and re.fullmatch(r"[A-Za-z0-9_-]+", words[2]) is not None
             and re.search(r"(?:^|/)\.(?:tinynudge|stack-nudge)/notify\.sh$", words[0]) is not None)
+
+
+def prune_dropped(hooks):
+    """Removes our exact-form commands from the events dropped_events() names,
+    in place, for both shapes: matcher groups ({matcher, hooks: [...]}) and
+    Cursor's flat entries. Anything of a shape we don't know is kept as is."""
+    for event in dropped_events():
+        entries = hooks.get(event)
+        if not isinstance(entries, list):
+            continue
+        cleaned = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                cleaned.append(entry)
+            elif "hooks" in entry:
+                inner = entry["hooks"]
+                if not isinstance(inner, list):
+                    cleaned.append(entry)
+                    continue
+                kept = [h for h in inner if not (isinstance(h, dict) and ours_exactly(h.get("command")))]
+                if kept:
+                    cleaned.append(entry if kept == inner else {**entry, "hooks": kept})
+            elif not ours_exactly(entry.get("command")):
+                cleaned.append(entry)
+        if cleaned:
+            hooks[event] = cleaned
+        else:
+            del hooks[event]
+
+
+# What uninstall always stripped broadly, for a checkout without a manifest.
+LEGACY_EVENTS = {"Stop", "PermissionRequest", "AfterAgent", "Notification", "stop"}
+UNINSTALL_STALE = re.compile(r'(?:^|/|")\.?(?:tinynudge|stack-nudge)/notify\.sh')
+
+
+def prune_for_uninstall(hooks):
+    """uninstall.sh, matching the app's uninstall: under the manifest's events
+    every entry the stale-path regex matches goes, as it always has; under any
+    other event only our exact form does. Returns True if anything changed."""
+    try:
+        broad = {event for event, _, _ in manifest_hooks()}
+    except Exception:
+        broad = LEGACY_EVENTS
+    changed = False
+    for event in list(hooks):
+        entries = hooks[event]
+        if not isinstance(entries, list):
+            continue
+
+        def ours(command):
+            if event in broad:
+                return isinstance(command, str) and UNINSTALL_STALE.search(command) is not None
+            return ours_exactly(command)
+
+        cleaned = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                cleaned.append(entry)
+            elif "hooks" in entry:
+                inner = entry["hooks"]
+                if not isinstance(inner, list):
+                    cleaned.append(entry)
+                    continue
+                kept = [h for h in inner if not (isinstance(h, dict) and ours(h.get("command")))]
+                if kept:
+                    cleaned.append(entry if kept == inner else {**entry, "hooks": kept})
+            elif not ours(entry.get("command")):
+                cleaned.append(entry)
+        if cleaned != entries:
+            changed = True
+            if cleaned:
+                hooks[event] = cleaned
+            else:
+                del hooks[event]
+    return changed
 
 
 def record_applied():

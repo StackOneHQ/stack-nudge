@@ -15,7 +15,11 @@
 # Example: notify.sh claude-code stop
 
 AGENT="${1:-agent}"
-EVENT="${2:-stop}"
+# Lowercased (tr, not ${2,,}: macOS ships bash 3.2), so a hook wired by hand
+# with the agent's own event name, `notify.sh claude-code Stop` or
+# `… PermissionRequest`, still works.
+EVENT="$(printf '%s' "${2:-stop}" | tr '[:upper:]' '[:lower:]')"
+[[ "$EVENT" == "permissionrequest" ]] && EVENT=permission
 
 # An event this version doesn't know is a no-op. Hooks can outlive the script
 # that handles them (a downgrade, a config from a newer install), and falling

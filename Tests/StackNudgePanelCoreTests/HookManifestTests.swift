@@ -116,6 +116,24 @@ final class HookManifestTests: XCTestCase {
         XCTAssertTrue(Bootstrap.isOurScript("/Users/me/.tinynudge/notify.sh"))
         XCTAssertFalse(Bootstrap.isOurScript("/Users/me/src/stack-nudge/notify.sh"), "a checkout wired by hand")
         XCTAssertFalse(Bootstrap.isOurScript("FOO=1"))
+        XCTAssertFalse(Bootstrap.isOurScript("/Users/me/.stack-nudge/notify.sh.bak"))
+        XCTAssertFalse(Bootstrap.isOurScript("/Users/me/.stack-nudge/notify.shx"))
+    }
+
+    // Only `<installed notify.sh> <agent> <arg>`, nothing more or less.
+    func testOnlyTheExactFormIsOurs() {
+        func ours(_ command: String) -> Bool {
+            HookReconciler.isExactlyOurs(command, agentArg: "claude-code", ourScript: Bootstrap.isOurScript)
+        }
+        XCTAssertTrue(ours("\(notify) claude-code stop"))
+        XCTAssertTrue(ours("\(notify) claude-code anything"), "any arg: a renamed one is still ours")
+        XCTAssertFalse(ours("\(notify) claude-code stop 2>/dev/null"))
+        XCTAssertFalse(ours("\(notify) claude-code stop>>/tmp/log"), "one token, but a redirect")
+        XCTAssertFalse(ours("\(notify) claude-code stop&&say"))
+        XCTAssertFalse(ours("\(notify) claude-code"))
+        XCTAssertFalse(ours("\(notify) codex stop"), "another agent's")
+        XCTAssertFalse(ours("/Users/me/.stack-nudge/notify.sh.bak claude-code stop"))
+        XCTAssertFalse(ours("bash -c '\(notify) claude-code stop; say done'"))
     }
 
     // MARK: Launch pass
@@ -178,6 +196,66 @@ final class HookManifestTests: XCTestCase {
         XCTAssertNil(try reconcile(hooks, applied: ["Stop", "PermissionRequest", "SessionStart", "UserPromptSubmit"]).hooks)
     }
 
+    func testWrappedOrForeignCommandsUnderOurEventsAreLeftAlone() throws {
+        var hooks = current
+        hooks["Stop"] = [group("\(notify) claude-code stop 2>/dev/null", timeout: 30),
+                         group("\(notify) codex stop"),
+                         group("/Users/me/.stack-nudge/notify.sh.bak claude-code stop")]
+        hooks["SessionStart"] = [group("\(notify) claude-code session-start", timeout: 10)]
+        XCTAssertNil(try reconcile(hooks, applied: nil).hooks, "none of them is ours, and Stop was applied before")
+        let reset = try XCTUnwrap(try reconcile(hooks, applied: nil, everything: true).hooks)
+        XCTAssertEqual(commands(reset, "Stop"), ["\(notify) claude-code stop 2>/dev/null", "\(notify) codex stop",
+                                                 "/Users/me/.stack-nudge/notify.sh.bak claude-code stop",
+                                                 "\(notify) claude-code stop"])
+    }
+
+    func testARenamedArgIsRewrittenNotDuplicated() throws {
+        var hooks = current
+        hooks["Stop"] = [group("\(notify) claude-code done", timeout: 45)]
+        hooks["SessionStart"] = [group("\(notify) claude-code session-start", timeout: 10)]
+        let launch = try XCTUnwrap(try reconcile(hooks, applied: nil).hooks)
+        XCTAssertEqual(commands(launch, "Stop"), ["\(notify) claude-code stop"])
+        XCTAssertEqual(((launch["Stop"] as? [[String: Any]])?.first?["hooks"] as? [[String: Any]])?.first?["timeout"] as? Int, 45,
+                       "the timeout stays the user's on launch")
+        let reset = try XCTUnwrap(try reconcile(hooks, applied: nil, everything: true).hooks)
+        XCTAssertEqual(commands(reset, "Stop"), ["\(notify) claude-code stop"], "Set up doesn't leave the old arg firing too")
+    }
+
+    func testCopiesUnderDifferentMatchersAreBothKept() throws {
+        var hooks = current
+        hooks["PermissionRequest"] = [group("\(notify) claude-code permission", timeout: 600, matcher: "Bash"),
+                                      group("\(notify) claude-code permission", timeout: 600, matcher: "Edit|Write")]
+        hooks["SessionStart"] = [group("\(notify) claude-code session-start", timeout: 10)]
+        XCTAssertNil(try reconcile(hooks, applied: nil).hooks, "each matcher covers its own tools")
+        hooks["Stop"] = [group("\(notify) claude-code stop>>/tmp/log", timeout: 30)]
+        XCTAssertNil(try reconcile(hooks, applied: nil).hooks, "a redirect glued to the arg is the user's")
+        hooks["Stop"] = current["Stop"]
+        hooks["PermissionRequest"] = [group("/Users/me/.tinynudge/notify.sh claude-code permission", matcher: "Bash"),
+                                      group("/Users/me/.tinynudge/notify.sh claude-code permission", matcher: "Edit|Write")]
+        let result = try XCTUnwrap(try reconcile(hooks, applied: nil).hooks)
+        XCTAssertEqual(commands(result, "PermissionRequest"), ["\(notify) claude-code permission", "\(notify) claude-code permission"])
+        XCTAssertEqual((result["PermissionRequest"] as? [[String: Any]])?.compactMap { $0["matcher"] as? String }, ["Bash", "Edit|Write"])
+        XCTAssertNil(try reconcile(result, applied: ["Stop", "PermissionRequest", "SessionStart"]).hooks, "a second launch changes nothing")
+    }
+
+    // Stop fires without consulting a matcher, so two copies there are two banners.
+    func testOnAMatcherlessEventCopiesUnderAnyMatcherBecomeOne() throws {
+        var hooks = current
+        hooks["Stop"] = [group("\(notify) claude-code stop", timeout: 30, matcher: "*"),
+                         ["hooks": [["type": "command", "command": "\(notify) claude-code stop"]]]]
+        hooks["SessionStart"] = [group("\(notify) claude-code session-start", timeout: 10)]
+        let result = try XCTUnwrap(try reconcile(hooks, applied: nil).hooks)
+        XCTAssertEqual(commands(result, "Stop"), ["\(notify) claude-code stop"])
+    }
+
+    func testTwoCopiesUnderOneMatcherBecomeOne() throws {
+        var hooks = current
+        hooks["Stop"] = [group("\(notify) claude-code stop", timeout: 30), group("\(notify) claude-code stop", timeout: 30)]
+        hooks["SessionStart"] = [group("\(notify) claude-code session-start", timeout: 10)]
+        let result = try XCTUnwrap(try reconcile(hooks, applied: nil).hooks)
+        XCTAssertEqual(commands(result, "Stop"), ["\(notify) claude-code stop"])
+    }
+
     func testRepointingLeavesASingleCopy() throws {
         var hooks = current
         hooks["Stop"] = [group("\"/Users/me/.tinynudge/notify.sh\" claude-code stop", timeout: 30),
@@ -205,6 +283,8 @@ final class HookManifestTests: XCTestCase {
     func testAPathIsQuotedLikeShlexAndReadBack() {
         XCTAssertEqual(HookReconciler.shellQuoted("/Users/me/.stack-nudge/notify.sh"), "/Users/me/.stack-nudge/notify.sh")
         XCTAssertEqual(HookReconciler.shellQuoted("/Users/Jo Smith/x"), "'/Users/Jo Smith/x'")
+        XCTAssertEqual(HookReconciler.shellQuoted("/Users/a@b%c+d=e:f,g/x"), "/Users/a@b%c+d=e:f,g/x", "shlex's safe set")
+        XCTAssertEqual(HookReconciler.shellQuoted(""), "''")
         XCTAssertEqual(HookReconciler.shellQuoted("/Users/o'neil/$x"), #"'/Users/o'"'"'neil/$x'"#)
         for path in ["/Users/Jo Smith/.stack-nudge/notify.sh", "/Users/o'neil/$HOME/`x`/.stack-nudge/notify.sh"] {
             XCTAssertEqual(HookReconciler.tokens("\(HookReconciler.shellQuoted(path)) claude-code stop"), [path, "claude-code", "stop"])
@@ -252,11 +332,21 @@ final class HookManifestTests: XCTestCase {
         XCTAssertNil(try reconcile(result, applied: ["stop"], spec: cursor).hooks, "second pass changes nothing")
     }
 
-    func testPruningRemovesOursFromEveryEvent() throws {
-        let hooks: [String: Any] = ["Stop": [group("\(notify) claude-code stop")],
-                                    "SomeFutureEvent": [group("\(notify) claude-code future"), group("other")]]
-        let result = HookReconciler.pruned(hooks, isOurs: { $0.contains("stack-nudge/notify.sh") })
+    // Uninstall: broad under the events we've always wired, exact everywhere else.
+    func testPruningIsBroadOnlyUnderOurEvents() throws {
+        let wrapper = "bash -c '\(notify) claude-code stop; say done'"
+        let hooks: [String: Any] = [
+            "Stop": [group("\(notify) claude-code stop"), group(wrapper)],
+            "SomeFutureEvent": [group("\(notify) claude-code future"), group("other")],
+            "PreToolUse": [group(wrapper), group("/Users/me/.stack-nudge/notify.sh.bak claude-code stop"),
+                           group("/Users/me/src/stack-nudge/notify.sh claude-code stop")],
+        ]
+        let result = HookReconciler.pruned(
+            hooks, broadEvents: ["Stop"], isBroadlyOurs: { $0.contains("stack-nudge/notify.sh") },
+            isExactlyOurs: { HookReconciler.isExactlyOurs($0, agentArg: "claude-code", ourScript: Bootstrap.isOurScript) })
         XCTAssertNil(result["Stop"])
         XCTAssertEqual(commands(result, "SomeFutureEvent"), ["other"])
+        XCTAssertEqual(commands(result, "PreToolUse"), [wrapper, "/Users/me/.stack-nudge/notify.sh.bak claude-code stop",
+                                                        "/Users/me/src/stack-nudge/notify.sh claude-code stop"])
     }
 }

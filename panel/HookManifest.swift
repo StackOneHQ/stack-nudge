@@ -84,11 +84,13 @@ struct HookManifest: Equatable {
 //
 // Two modes. A launch pass is deliberately narrow: within the manifest's events
 // (and any it applied before), it adds hooks this version introduced, removes
-// the ones it dropped, and repoints a stale script path in place. It recognises
-// only commands in our exact form, `<…/notify.sh> <agent> <arg>`, so a wrapper,
-// a hand-added hook under another event, a raised timeout or a custom matcher
-// is the user's and stays as it is. `everything` (the wizard, "Set up") instead
-// resets our entries for the manifest's events to exactly what it lists.
+// the ones it dropped, and rewrites a command of ours in place when its script
+// path or event arg differs from the manifest's. It recognises only commands in
+// our exact form, `<…/notify.sh> <agent> <arg>`, so a wrapper or a hand-added
+// hook under another event is the user's. Timeouts and matchers on our entries
+// are the user's too: a manifest change to a timeout reaches existing installs
+// only through `everything` (the wizard, "Set up"), which resets our entries for
+// the manifest's events to exactly what it lists.
 enum HookReconciler {
 
     // A managed event's value isn't a list of objects: someone else's shape,
@@ -121,69 +123,70 @@ enum HookReconciler {
         // shlex.quote does, so both installers write the same string.
         let script = shellQuoted(notifyPath)
         func canonical(_ hook: HookSpec) -> String { "\(script) \(spec.agentArg) \(hook.arg)" }
-        // Ours in exactly the form we write: script, agent arg, event arg, nothing else.
-        func ours(_ command: String, event: String) -> Bool {
-            let parts = tokens(command)
-            guard parts.count == 3, parts[1] == spec.agentArg, ourScript(parts[0]) else { return false }
-            if let hook = spec.hooks.first(where: { $0.event == event }) { return parts[2] == hook.arg }
-            return true
+        // Any event arg: under a manifest event, one that differs is an older
+        // name for the same hook, so a renamed arg is rewritten rather than
+        // left firing next to the new one.
+        func ours(_ command: String) -> Bool {
+            isExactlyOurs(command, agentArg: spec.agentArg, ourScript: ourScript)
         }
 
         var result = hooks
-        var changed = false
 
         // Events this version dropped: they were ours to apply, so ours to
         // remove, in both modes.
         for event in known.subtracting(manifestEvents) {
             guard let old = result[event] as? [[String: Any]] else { continue }
-            let list = removing(from: old, where: { ours($0, event: event) })
-            if list.count != old.count || commands(in: list).count != commands(in: old).count {
-                result[event] = list.isEmpty ? nil : list
-                changed = true
-            }
+            let list = removing(from: old, where: ours)
+            result[event] = list.isEmpty ? nil : list
         }
 
         if everything {
             for hook in spec.hooks {
-                var list = removing(from: result[hook.event], where: { ours($0, event: hook.event) })
+                var list = removing(from: result[hook.event], where: ours)
                 list.append(entry(canonical(hook), timeout: hook.timeout, shape: spec.shape))
                 result[hook.event] = list
             }
-            return Outcome(hooks: equal(result, hooks) ? nil : result, applied: newApplied)
-        }
-
-        for hook in spec.hooks {
-            let present = commands(in: result[hook.event]).filter { ours($0, event: hook.event) }
-            if present.isEmpty {
-                // New in this version; one applied before and now missing was removed by hand.
-                guard !known.contains(hook.event) else { continue }
-                var list = result[hook.event] as? [[String: Any]] ?? []
-                list.append(entry(canonical(hook), timeout: hook.timeout, shape: spec.shape))
-                result[hook.event] = list
-                changed = true
-            } else if present.count > 1 || present[0] != canonical(hook) {
-                // An older install path: repoint the first where it stands, and
-                // drop any other copy of ours so the hook doesn't fire twice.
-                var first = true
-                let deduped = removing(from: result[hook.event], where: { command in
-                    guard ours(command, event: hook.event) else { return false }
-                    defer { first = false }
-                    return !first
-                })
-                result[hook.event] = rewriting(deduped, where: { ours($0, event: hook.event) }, to: canonical(hook))
-                changed = true
+        } else {
+            for hook in spec.hooks {
+                if commands(in: result[hook.event]).contains(where: ours) {
+                    // Repoint ours in place (an older install path or arg), and
+                    // drop a second copy so the hook doesn't fire twice. On an
+                    // event that filters by matcher, copies under different
+                    // matchers (`Bash`, `Edit|Write`) each cover their own tools.
+                    result[hook.event] = rewriting(dedupedPerMatcher(result[hook.event], where: ours,
+                                                                     byMatcher: !matcherlessEvents.contains(hook.event)),
+                                                   where: ours, to: canonical(hook))
+                } else if !known.contains(hook.event) {
+                    // New in this version; one applied before and now missing was removed by hand.
+                    var list = result[hook.event] as? [[String: Any]] ?? []
+                    list.append(entry(canonical(hook), timeout: hook.timeout, shape: spec.shape))
+                    result[hook.event] = list
+                }
             }
         }
-        return Outcome(hooks: changed ? result : nil, applied: newApplied)
+        return Outcome(hooks: equal(result, hooks) ? nil : result, applied: newApplied)
     }
 
-    // Every event: a hook a newer version wired stays ours to remove after a
-    // downgrade, and uninstall must catch it too. `isOurs` is broad on purpose
-    // here; this only runs on uninstall.
-    static func pruned(_ hooks: [String: Any], isOurs: (String) -> Bool) -> [String: Any] {
+    // `<our notify.sh> <agent> <arg>` and nothing else: no wrapper, redirect or
+    // extra argument, and the script an installed copy rather than a checkout.
+    // The arg must be a plain word: `tokens` doesn't split on shell operators,
+    // so `stop>>/tmp/log` or `stop&&say` is one token, and the user's.
+    static func isExactlyOurs(_ command: String, agentArg: String, ourScript: (String) -> Bool) -> Bool {
+        let parts = tokens(command)
+        return parts.count == 3 && parts[1] == agentArg && ourScript(parts[0])
+            && !parts[2].isEmpty && parts[2].allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }
+    }
+
+    // Uninstall. Under `broadEvents` (the events we've always wired) `isBroadlyOurs`
+    // decides, as uninstall always has, so older hand-tweaked entries go too.
+    // Every other event, including ones a newer version wired before a downgrade,
+    // loses only commands in our exact form: a wrapper, a .bak copy or a
+    // checkout's notify.sh there is the user's.
+    static func pruned(_ hooks: [String: Any], broadEvents: Set<String>,
+                       isBroadlyOurs: (String) -> Bool, isExactlyOurs: (String) -> Bool) -> [String: Any] {
         var result = hooks
         for (event, value) in hooks where value is [[String: Any]] {
-            let list = removing(from: value, where: isOurs)
+            let list = removing(from: value, where: broadEvents.contains(event) ? isBroadlyOurs : isExactlyOurs)
             result[event] = list.isEmpty ? nil : list
         }
         return result
@@ -264,6 +267,35 @@ enum HookReconciler {
                 return copy
             }
             return matches((item["command"] as? String) ?? "") ? nil : item
+        }
+    }
+
+    // Events the agents fire without consulting a matcher, so a copy of ours
+    // under any matcher fires on every one of them. Unknown events keep their
+    // matchers apart: a duplicate banner beats a lost permission prompt.
+    static let matcherlessEvents: Set<String> = ["Stop", "SubagentStop", "UserPromptSubmit", "AfterAgent", "stop"]
+
+    // Keeps the first command of ours under each matcher (or, with `byMatcher`
+    // off, the first overall) and removes the rest. Cursor's flat entries have
+    // no matcher, so they share one.
+    private static func dedupedPerMatcher(_ value: Any?, where matches: (String) -> Bool,
+                                          byMatcher: Bool) -> [[String: Any]] {
+        var seen = Set<String>()
+        return (value as? [[String: Any]] ?? []).compactMap { item in
+            let matcher = byMatcher ? item["matcher"] as? String ?? "" : ""
+            if let inner = item["hooks"] as? [[String: Any]] {
+                let remaining = inner.filter { hook in
+                    guard matches((hook["command"] as? String) ?? "") else { return true }
+                    return seen.insert(matcher).inserted
+                }
+                if remaining.isEmpty { return nil }
+                if remaining.count == inner.count { return item }
+                var copy = item
+                copy["hooks"] = remaining
+                return copy
+            }
+            guard matches((item["command"] as? String) ?? "") else { return item }
+            return seen.insert(matcher).inserted ? item : nil
         }
     }
 

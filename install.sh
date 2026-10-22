@@ -265,7 +265,7 @@ if [[ -d "$HOME/.claude" ]]; then
 import json, os, shlex, sys
 # The helpers shared by every agent block, beside this script.
 sys.path.insert(0, os.environ["HOOK_HELPERS"])
-from hook_wiring import STALE, dropped_events, manifest_hooks, ours_exactly, record_applied
+from hook_wiring import STALE, manifest_hooks, prune_dropped, record_applied
 from pathlib import Path
 
 path = Path(sys.argv[1])
@@ -278,23 +278,7 @@ else:
 
 hooks = settings.setdefault("hooks", {})
 # Events an earlier version wired that this one no longer lists.
-for event in dropped_events():
-    groups = hooks.get(event)
-    if not isinstance(groups, list):
-        continue
-    # Entries of a shape we don't know are someone else's: kept as they are.
-    cleaned = []
-    for g in groups:
-        inner = g.get("hooks") if isinstance(g, dict) else None
-        if not isinstance(inner, list):
-            cleaned.append(g)
-            continue
-        kept = [h for h in inner if not (isinstance(h, dict) and ours_exactly(h.get("command")))]
-        if kept:
-            cleaned.append(g if kept == inner else {**g, "hooks": kept})
-    groups[:] = cleaned
-    if not groups:
-        del hooks[event]
+prune_dropped(hooks)
 # Permission hook blocks on a FIFO until the user approves via stack-nudge,
 # so it needs a longer timeout than Claude Code's 600s default.
 for event, arg, timeout in manifest_hooks():
@@ -335,7 +319,7 @@ if [[ -d "$HOME/.cursor" ]]; then
 import json, os, shlex, sys
 # The helpers shared by every agent block, beside this script.
 sys.path.insert(0, os.environ["HOOK_HELPERS"])
-from hook_wiring import STALE, dropped_events, manifest_hooks, ours_exactly, record_applied
+from hook_wiring import STALE, manifest_hooks, prune_dropped, record_applied
 from pathlib import Path
 
 path = Path(sys.argv[1])
@@ -345,13 +329,7 @@ settings = json.loads(path.read_text()) if path.exists() else {}
 
 hooks = settings.setdefault("hooks", {})
 # Events an earlier version wired that this one no longer lists.
-for event in dropped_events():
-    entries = hooks.get(event)
-    if not isinstance(entries, list):
-        continue
-    entries[:] = [h for h in entries if not (isinstance(h, dict) and ours_exactly(h.get("command")))]
-    if not entries:
-        del hooks[event]
+prune_dropped(hooks)
 for event, arg, _ in manifest_hooks():
     entries = hooks.setdefault(event, [])
     entries[:] = [h for h in entries if not STALE.search(h.get("command", "") or "")]
@@ -375,7 +353,7 @@ if [[ -d "$HOME/.codex" ]]; then
 import json, os, shlex, sys
 # The helpers shared by every agent block, beside this script.
 sys.path.insert(0, os.environ["HOOK_HELPERS"])
-from hook_wiring import STALE, dropped_events, manifest_hooks, ours_exactly, record_applied
+from hook_wiring import STALE, manifest_hooks, prune_dropped, record_applied
 from pathlib import Path
 
 path = Path(sys.argv[1])
@@ -389,23 +367,7 @@ else:
 
 hooks = settings.setdefault("hooks", {})
 # Events an earlier version wired that this one no longer lists.
-for event in dropped_events():
-    groups = hooks.get(event)
-    if not isinstance(groups, list):
-        continue
-    # Entries of a shape we don't know are someone else's: kept as they are.
-    cleaned = []
-    for g in groups:
-        inner = g.get("hooks") if isinstance(g, dict) else None
-        if not isinstance(inner, list):
-            cleaned.append(g)
-            continue
-        kept = [h for h in inner if not (isinstance(h, dict) and ours_exactly(h.get("command")))]
-        if kept:
-            cleaned.append(g if kept == inner else {**g, "hooks": kept})
-    groups[:] = cleaned
-    if not groups:
-        del hooks[event]
+prune_dropped(hooks)
 # PermissionRequest blocks on a FIFO until the user approves via stack-nudge,
 # so it needs a longer timeout than the default.
 for event, arg, timeout in manifest_hooks():
@@ -443,7 +405,7 @@ if [[ -d "$HOME/.gemini" ]]; then
 import json, os, shlex, sys
 # The helpers shared by every agent block, beside this script.
 sys.path.insert(0, os.environ["HOOK_HELPERS"])
-from hook_wiring import STALE, dropped_events, manifest_hooks, ours_exactly, record_applied
+from hook_wiring import STALE, manifest_hooks, prune_dropped, record_applied
 from pathlib import Path
 
 path = Path(sys.argv[1])
@@ -457,23 +419,7 @@ else:
 
 hooks = settings.setdefault("hooks", {})
 # Events an earlier version wired that this one no longer lists.
-for event in dropped_events():
-    groups = hooks.get(event)
-    if not isinstance(groups, list):
-        continue
-    # Entries of a shape we don't know are someone else's: kept as they are.
-    cleaned = []
-    for g in groups:
-        inner = g.get("hooks") if isinstance(g, dict) else None
-        if not isinstance(inner, list):
-            cleaned.append(g)
-            continue
-        kept = [h for h in inner if not (isinstance(h, dict) and ours_exactly(h.get("command")))]
-        if kept:
-            cleaned.append(g if kept == inner else {**g, "hooks": kept})
-    groups[:] = cleaned
-    if not groups:
-        del hooks[event]
+prune_dropped(hooks)
 for event, arg, timeout in manifest_hooks():
     groups = hooks.setdefault(event, [])
 
@@ -509,7 +455,7 @@ if [[ -d "$HOME/.gemini/antigravity-cli" ]]; then
 import json, os, shlex, sys
 # The helpers shared by every agent block, beside this script.
 sys.path.insert(0, os.environ["HOOK_HELPERS"])
-from hook_wiring import STALE, dropped_events, manifest_hooks, ours_exactly, record_applied
+from hook_wiring import STALE, manifest_hooks, prune_dropped, record_applied
 from pathlib import Path
 
 path = Path(sys.argv[1])
@@ -523,23 +469,7 @@ else:
 
 hooks = settings.setdefault("hooks", {})
 # Events an earlier version wired that this one no longer lists.
-for event in dropped_events():
-    groups = hooks.get(event)
-    if not isinstance(groups, list):
-        continue
-    # Entries of a shape we don't know are someone else's: kept as they are.
-    cleaned = []
-    for g in groups:
-        inner = g.get("hooks") if isinstance(g, dict) else None
-        if not isinstance(inner, list):
-            cleaned.append(g)
-            continue
-        kept = [h for h in inner if not (isinstance(h, dict) and ours_exactly(h.get("command")))]
-        if kept:
-            cleaned.append(g if kept == inner else {**g, "hooks": kept})
-    groups[:] = cleaned
-    if not groups:
-        del hooks[event]
+prune_dropped(hooks)
 for event, arg, timeout in manifest_hooks():
     groups = hooks.setdefault(event, [])
 

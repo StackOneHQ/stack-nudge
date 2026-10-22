@@ -61,6 +61,7 @@ test:
 test-notify:
 	@python3 ./scripts/test-notify-subagents.py
 	@python3 ./scripts/test-notify-permission-blocking.py
+	@python3 ./scripts/test-hook-wiring.py
 
 # Compile-check the XCTest sources without Xcode. Catches the breakage `make
 # test` can't reach on a Command Line Tools-only machine — a production API

@@ -162,12 +162,21 @@ STOP_CASES = [
 # python3: prove suppress-and-fire still hold there.
 NO_JQ_STOP_CASES = [STOP_CASES[0], STOP_CASES[1]]
 
+# name, event arg as wired, expected "event" posted (None = no post at all).
+# A hook wired by hand with the agent's own event name still lands, and an
+# event this version doesn't handle is a no-op rather than a stop banner.
+EVENT_ARG_CASES = [
+    ("event arg Stop", "Stop", "stop"),
+    ("event arg PermissionRequest", "PermissionRequest", "permission"),
+    ("event arg unknown", "session-start", None),
+]
+
 # Written out rather than derived from the tables, which would fall with the
 # thing it guards: deleting a case would quietly lower the expectation too and
 # the run would stay green. Adding one means changing this number on purpose.
 #
-# 11 permission + 3 no-jq repeats + 6 stop + 2 no-jq stop repeats.
-EXPECTED_CASE_COUNT = 22
+# 11 permission + 3 no-jq repeats + 6 stop + 2 no-jq stop repeats + 3 event args.
+EXPECTED_CASE_COUNT = 25
 
 
 def build_nojq_path():
@@ -186,8 +195,8 @@ def build_nojq_path():
 
 
 def posted_title(agent, payload_fields, env_overrides, expect_event, without_jq,
-                 event="permission", transcript_lines=None):
-    """Run one hook invocation; return the title it posted, or None."""
+                 event="permission", transcript_lines=None, field="title"):
+    """Run one hook invocation; return the posted payload's `field`, or None."""
     home = tempfile.mkdtemp(prefix="stack-nudge-test-home-")
     os.makedirs(os.path.join(home, ".stack-nudge"))
 
@@ -221,7 +230,7 @@ def posted_title(agent, payload_fields, env_overrides, expect_event, without_jq,
             transcript_file.write("\n".join(transcript_lines) + "\n")
 
     payload = {
-        "hook_event_name": "PermissionRequest" if event == "permission" else "Stop",
+        "hook_event_name": "PermissionRequest" if event.lower() in ("permission", "permissionrequest") else "Stop",
         "session_id": "test-session",
         "transcript_path": transcript_path,
         "tool_name": "Bash",
@@ -253,7 +262,7 @@ def posted_title(agent, payload_fields, env_overrides, expect_event, without_jq,
     if "payload" not in received:
         return None
     try:
-        return json.loads(received["payload"]).get("title")
+        return json.loads(received["payload"]).get(field)
     except ValueError:
         return "<unparseable payload: %s>" % received["payload"][:120]
 
@@ -288,6 +297,12 @@ def main():
         results += [run_case(name, agent, {}, {}, expected, without_jq=True, event="stop",
                              transcript_lines=lines)
                     for (name, agent, lines, expected) in NO_JQ_STOP_CASES]
+        for (name, event, expected) in EVENT_ARG_CASES:
+            actual = posted_title("claude-code", {}, {}, expected is not None, False,
+                                  event=event, field="event")
+            results.append(actual == expected)
+            print("%-4s %-36s expected=%-34r actual=%r"
+                  % ("PASS" if actual == expected else "FAIL", name, expected, actual))
     finally:
         shutil.rmtree(NOJQ_BIN, ignore_errors=True)
 

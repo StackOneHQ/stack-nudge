@@ -751,7 +751,8 @@ enum Bootstrap {
         }
 
         progress("Removing hook entries…")
-        var rewriteFailure: Error?
+        let manifest = HookManifest.bundled()
+        var unwritable: [String] = []
         for agent in BootstrapAgent.allCases {
             let path = agent.hookConfigPath
             guard fm.fileExists(atPath: path) else { continue }
@@ -764,16 +765,17 @@ enum Bootstrap {
                 progress("Skipped \((path as NSString).abbreviatingWithTildeInPath): \(error.localizedDescription)")
                 continue
             }
-            // A readable config we failed to rewrite still points at notify.sh, so
-            // finish the other agents but stop before deleting the script.
+            // A readable config we failed to rewrite (root-owned after a sudo
+            // run, locked) still points at notify.sh, so finish the other agents
+            // but stop before deleting the script, and say how to get past it.
             do {
-                try unwireHooks(root, at: path)
+                try unwireHooks(root, at: path, agent: agent, spec: manifest?.agents[agent])
             } catch {
                 progress("Couldn't update \((path as NSString).abbreviatingWithTildeInPath): \(error.localizedDescription)")
-                rewriteFailure = rewriteFailure ?? error
+                unwritable.append((path as NSString).abbreviatingWithTildeInPath)
             }
         }
-        if let rewriteFailure { throw rewriteFailure }
+        if !unwritable.isEmpty { throw BootstrapError.hooksNotRemoved(unwritable) }
 
         progress("Removing \(installDir)…")
         try? fm.removeItem(atPath: installDir)
@@ -844,16 +846,19 @@ enum Bootstrap {
     // MARK: - Hook wiring (per-agent)
 
     // Put every hook the manifest lists for `agent` in place: the wizard and
-    // the Settings "Set up" action. Replaces any stale entries of ours (older
-    // paths, older timeouts) and leaves everyone else's alone.
+    // the Settings "Set up" action. Replaces our entries under the manifest's
+    // events (older paths, args, timeouts, matchers) with exactly the manifest's,
+    // removes ones it dropped, and leaves everyone else's alone.
     private static func wireHooks(for agent: BootstrapAgent) throws {
         guard let manifest = HookManifest.bundled() else { throw BootstrapError.bundleResourceMissing("hook-manifest.json") }
         try reconcileHooks(for: agent, manifest: manifest, everything: true)
     }
 
     // Launch-time pass over every agent that's already wired: adds hooks this
-    // version introduced, updates changed ones, drops ones it no longer lists,
-    // and writes nothing when the config already matches. An agent the user
+    // version introduced, drops ones it no longer lists, and rewrites our
+    // commands to the current path and arg. Timeouts and matchers stay as the
+    // user has them, so a manifest timeout change needs "Set up" to land. It
+    // writes nothing when the config already matches. An agent the user
     // never wired stays unwired (the Settings banner offers that), and a
     // config that doesn't parse is left untouched.
     // Returns the agents whose config it rewrote.
@@ -954,12 +959,25 @@ enum Bootstrap {
         return regex.firstMatch(in: command, options: [], range: range) != nil
     }
 
-    // Uninstall reverse: strip every entry of ours (the regex matches old and
-    // current paths) from every event, including ones a newer version wired.
-    private static func unwireHooks(_ root: [String: Any], at path: String) throws {
+    // The events uninstall always stripped broadly, for a build that somehow
+    // lacks its manifest.
+    private static let legacyHookEvents: Set<String> = ["Stop", "PermissionRequest", "AfterAgent", "Notification", "stop"]
+
+    // Uninstall reverse. Under the manifest's events, every entry the stale-path
+    // regex matches goes, as before; under any other event (one a newer version
+    // wired before a downgrade, say) only our exact form does.
+    private static func unwireHooks(_ root: [String: Any], at path: String,
+                                    agent: BootstrapAgent, spec: AgentHookSpec?) throws {
         var root = root
         guard let hooks = root["hooks"] as? [String: Any] else { return }
-        let cleaned = HookReconciler.pruned(hooks, isOurs: isStaleHook(command:))
+        let agentArg = spec?.agentArg ?? (agent == .claude ? "claude-code" : agent.rawValue)
+        let cleaned = HookReconciler.pruned(
+            hooks, broadEvents: spec.map { Set($0.hooks.map(\.event)) } ?? legacyHookEvents,
+            isBroadlyOurs: isStaleHook(command:),
+            isExactlyOurs: { HookReconciler.isExactlyOurs($0, agentArg: agentArg, ourScript: isOurScript) })
+        // Nothing of ours: not written, so a config we couldn't write anyway
+        // doesn't stop the uninstall.
+        if NSDictionary(dictionary: cleaned).isEqual(to: hooks) { return }
         if cleaned.isEmpty {
             root.removeValue(forKey: "hooks")
         } else {
@@ -1659,6 +1677,7 @@ struct UninstallView: View {
 enum BootstrapError: LocalizedError {
     case copyFailed(String, underlying: Error)
     case writeFailed(String, underlying: Error)
+    case hooksNotRemoved([String])
     case launchctlFailed(label: String, exitCode: Int32, stderr: String)
     case bundleResourceMissing(String)
 
@@ -1668,6 +1687,12 @@ enum BootstrapError: LocalizedError {
             return "Failed to copy \(what): \(err.localizedDescription)"
         case .writeFailed(let what, let err):
             return "Failed to write \(what): \(err.localizedDescription)"
+        case .hooksNotRemoved(let paths):
+            return "Couldn't remove StackNudge's hooks from \(paths.joined(separator: ", ")). StackNudge's "
+                + "background agents are stopped, but ~/.stack-nudge and the app are still here, since "
+                + "those hooks still run ~/.stack-nudge/notify.sh. Make the folder holding each file "
+                + "writable (it may be owned by root after a sudo run), or delete the hook lines that "
+                + "run .stack-nudge/notify.sh yourself, then run Uninstall again."
         case .launchctlFailed(let label, let code, let stderr):
             let msg = stderr.isEmpty ? "exit \(code)" : stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             return "launchctl failed for \(label): \(msg)"
