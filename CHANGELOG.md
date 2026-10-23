@@ -4,6 +4,19 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [2.2.0](https://github.com/StackOneHQ/stack-nudge/compare/v2.1.6...v2.2.0) (2026-10-23)
+
+
+### Features
+
+* **bootstrap:** reconcile agent hooks with a per-version manifest ([#219](https://github.com/StackOneHQ/stack-nudge/issues/219)) ([4342107](https://github.com/StackOneHQ/stack-nudge/commit/43421075cfe1f7c48879680b9e44ea2fa98e8a54))
+
+
+### Bug Fixes
+
+* **panel:** jump to an iTerm2 tab without a 5s wait ([#208](https://github.com/StackOneHQ/stack-nudge/issues/208)) ([4f921a3](https://github.com/StackOneHQ/stack-nudge/commit/4f921a37537dbf22d2d98bc18d61e41aa2d2ab14))
+* **panel:** release the hook when jumping to a prompt ([#217](https://github.com/StackOneHQ/stack-nudge/issues/217)) ([b6179fb](https://github.com/StackOneHQ/stack-nudge/commit/b6179fb937cb7ef8307715963cbac6c5b7f28518))
+
 ## [2.1.6](https://github.com/StackOneHQ/stack-nudge/compare/v2.1.5...v2.1.6) (2026-10-16)
 
 
