@@ -148,6 +148,29 @@ final class ClaudeUsageCacheTests: XCTestCase {
         XCTAssertFalse(ClaudeCliQuotaProbe.isAccountSwitch(from: "a", to: nil))
     }
 
+    func testReadsThePlanFromAuthStatus() {
+        let status = ClaudeCliQuotaProbe.parseAuthStatus(
+            #"{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"team"}"#)
+        XCTAssertTrue(status.answered)
+        XCTAssertEqual(status.plan, "team")
+    }
+
+    // An API-key login has no plan to find, so it counts as answered and the
+    // probe stops asking rather than spawning `auth status` every poll.
+    func testTreatsAReplyWithNoPlanAsAnswered() {
+        let status = ClaudeCliQuotaProbe.parseAuthStatus(#"{"loggedIn":true,"authMethod":"api_key"}"#)
+        XCTAssertTrue(status.answered)
+        XCTAssertNil(status.plan)
+    }
+
+    // A timed-out or broken spawn is not an answer, so the plan lookup retries
+    // instead of leaving a freshly switched account unlabelled until restart.
+    func testTreatsNoReplyAsUnanswered() {
+        XCTAssertFalse(ClaudeCliQuotaProbe.parseAuthStatus(nil).answered)
+        XCTAssertFalse(ClaudeCliQuotaProbe.parseAuthStatus("").answered)
+        XCTAssertFalse(ClaudeCliQuotaProbe.parseAuthStatus("not json").answered)
+    }
+
     // MARK: - Freshness
 
     private func writeFixture(_ data: Data, mtime: Date? = nil) throws -> String {

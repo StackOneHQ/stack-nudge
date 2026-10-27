@@ -88,18 +88,16 @@ final class ClaudeCliQuotaProbe {
         probeQueue.async { [weak self] in
             let account = ClaudeUsageCache.currentAccount()
             let switched = Self.isAccountSwitch(from: priorAccount, to: account)
-            // The plan is fetched once per process, so a switch has to refetch it
-            // or the new account is labelled with the old one's plan.
+            // The plan is fetched until the CLI answers and then not again, so a
+            // switch has to refetch it or the new account keeps the old one's plan.
             let needsSubscriptionFetch = !subscriptionWasFetched || switched
             var fetchedPlan: String? = switched ? nil : priorPlan
+            var subscriptionAnswered = false
             if needsSubscriptionFetch {
-                if let json = ProcessOutput.read(
-                    path, ["auth", "status", "--json"], timeout: 5, cwd: Self.probeCwd),
-                   let data = json.data(using: .utf8),
-                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let plan = obj["subscriptionType"] as? String {
-                    fetchedPlan = plan
-                }
+                let status = Self.parseAuthStatus(ProcessOutput.read(
+                    path, ["auth", "status", "--json"], timeout: 5, cwd: Self.probeCwd))
+                subscriptionAnswered = status.answered
+                if let plan = status.plan { fetchedPlan = plan }
             }
             // While a session is running the answer is already on disk and the
             // spawn below buys nothing. See ClaudeUsageCache.
@@ -149,7 +147,9 @@ final class ClaudeCliQuotaProbe {
             DispatchQueue.main.async {
                 guard let self else { return }
                 if strictRejected { self.strictMcpConfigSupported = false }
-                if needsSubscriptionFetch { self.subscriptionFetched = true }
+                // Latched only on an answer, so a spawn that timed out retries next
+                // poll rather than leaving the account unlabelled until restart.
+                if needsSubscriptionFetch { self.subscriptionFetched = subscriptionAnswered }
                 self.lastSubscriptionType = fetchedPlan
                 if let account { self.lastAccount = account }
                 if switched {
@@ -195,6 +195,15 @@ final class ClaudeCliQuotaProbe {
             sevenDayOpus:   usable.snapshot.sevenDayOpus,
             sevenDaySonnet: usable.snapshot.sevenDaySonnet,
             planType:       planType)
+    }
+
+    // `answered` means the CLI replied, with or without a plan: an API-key login
+    // has no subscriptionType and asking again won't produce one.
+    static func parseAuthStatus(_ raw: String?) -> (answered: Bool, plan: String?) {
+        guard let data = raw?.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return (false, nil) }
+        return (true, obj["subscriptionType"] as? String)
     }
 
     // Only a change between two known logins counts. The first read has nothing
