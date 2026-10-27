@@ -2026,15 +2026,27 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func runQuotaProbe() {
         guard quotaTrackingEnabled else { return }
         nav.quotaSyncing = true
-        // Claude quota comes solely from the `claude` CLI (`claude --print
-        // /usage`), which reads its own keychain — our process never touches
-        // the keychain or hits Anthropic's API directly. A soft-fail
-        // (rate-limited cold cache, no bucket lines) holds the prior snapshot
-        // untouched; a hard-fail (no `claude` on PATH, spawn/timeout, or
-        // unparseable envelope) surfaces an error in the Usage tab.
+        // Claude quota comes from the `claude` CLI (`claude --print /usage`),
+        // which reads its own keychain, or from Claude Code's cache of the same
+        // answer in ~/.claude.json — our process never touches the keychain or
+        // hits Anthropic's API directly. A soft-fail (no bucket lines, and no
+        // newer reading in the cache) holds the prior snapshot; a hard-fail (no
+        // `claude` on PATH, spawn/timeout, or unparseable envelope) surfaces an
+        // error in the Usage tab. A login switch drops the held snapshot first.
         claudeCliQuotaProbe.fetch { [weak self] snapshot in
             guard let self else { return }
             self.nav.quotaSyncing = false
+            if self.claudeCliQuotaProbe.accountChanged {
+                // Every branch below holds the last snapshot on a failed tick,
+                // which after a login switch would keep the previous account's
+                // numbers on screen indefinitely. Its alert peaks go with it, or
+                // the new account only alerts once it passes the old one's.
+                self.nav.quota = nil
+                self.nav.quotaClaudeLastUpdated = nil
+                self.nav.quotaUpdatedAt[.claude] = nil
+                self.nav.quotaErrors[.claude] = nil
+                self.quotaLastFired.removeAll()
+            }
             if let snapshot {
                 // When the numbers were measured, not when they arrived: a
                 // snapshot read from Claude Code's cache is older than this tick.
@@ -2066,11 +2078,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 }
             } else if self.claudeCliQuotaProbe.isRateLimited {
                 // Soft-fail: hold any prior snapshot. On a cold first probe
-                // (no snapshot yet) surface a rate-limit note so the tab shows
-                // that instead of sitting on a bare "Loading…" spinner until
-                // the backoff clears.
+                // (no snapshot yet) surface a note so the tab shows that instead
+                // of sitting on a bare "Loading…" spinner until the backoff
+                // clears. Not worded as a rate limit: the same output comes from
+                // accounts whose /usage never prints its limits at all.
                 if self.nav.quota == nil {
-                    self.nav.quotaErrors[.claude] = "Rate-limited — retrying shortly."
+                    self.nav.quotaErrors[.claude] =
+                        "Claude Code didn't report your limits — retrying shortly."
                 }
             } else {
                 // Hard-fail: the CLI ran but timed out or its output didn't

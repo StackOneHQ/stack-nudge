@@ -35,6 +35,20 @@ enum ClaudeUsageCache {
         return reading
     }
 
+    // The logged-in account, so the probe can tell when the user switches login
+    // and drop numbers that belong to the previous one. Read with no freshness
+    // gate: the login is current however old the usage cache beside it is.
+    static func currentAccount(path: String = ClaudeUsageCache.path) -> String? {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path), options: .mappedIfSafe),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return account(in: root)
+    }
+
+    private static func account(in root: [String: Any]) -> String? {
+        (root["oauthAccount"] as? [String: Any])?["accountUuid"] as? String
+    }
+
     // Split out so tests can push a verbatim fragment through the same decode.
     static func parse(_ data: Data) -> Reading? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -42,6 +56,12 @@ enum ClaudeUsageCache {
               let fetchedAtMs = (cached["fetchedAtMs"] as? NSNumber)?.doubleValue,
               let utilization = cached["utilization"] as? [String: Any]
         else { return nil }
+        // The cache survives a login switch until Claude Code next refreshes it,
+        // so right after one it still holds the previous account's numbers. It
+        // stamps the account it was fetched for; a cache without the stamp can't
+        // be checked and is served as before.
+        if let owner = cached["accountUuid"] as? String,
+           let current = account(in: root), owner != current { return nil }
 
         let snapshot = QuotaSnapshot(
             fiveHour:       tier(utilization["five_hour"], window: QuotaWindow.fiveHours),

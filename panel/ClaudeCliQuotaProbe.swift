@@ -12,8 +12,9 @@ import Foundation
 //   hardFail — `claude` not on PATH, spawn/timeout failure, or unparseable
 //              JSON envelope. PanelController falls back to the legacy probe.
 //   softFail — CLI ran fine but the server-side bucket lines are absent
-//              (rate-limited cold cache). We back off 60s locally without
-//              clearing the existing snapshot; next tick should populate.
+//              (rate-limited cold cache, or an account whose /usage never
+//              prints them). We back off 60s locally without clearing the
+//              existing snapshot; next tick should populate.
 //   ok      — at least one Current bucket line parsed.
 final class ClaudeCliQuotaProbe {
 
@@ -27,6 +28,13 @@ final class ClaudeCliQuotaProbe {
     private var retryAfterUntil: Date?
     private var lastSubscriptionType: String?
     private var subscriptionFetched = false
+    // The login the held snapshot and plan belong to. Only ever set to a real
+    // account, so logging out and back in as someone else still reads as a switch.
+    private var lastAccount: String?
+    // True when this fetch found a different login from the last one. The
+    // caller drops what it holds: the old account's numbers are wrong, not stale.
+    // Read after the completion fires, like cliMissing.
+    private(set) var accountChanged = false
     // `--strict-mcp-config` makes the /usage probe skip loading MCP servers it
     // never needs (see usageArgs). A `claude` predating the flag rejects it
     // (exit 1, empty stdout), which would read as a permanent hard-fail — the
@@ -59,6 +67,7 @@ final class ClaudeCliQuotaProbe {
         // Reset before the early-return gates so a rate-limited tick reports the
         // flag from its own run, not a stale value from an earlier missing-CLI one.
         cliMissing = false
+        accountChanged = false
         if isRateLimited {
             completion(nil)
             return
@@ -69,14 +78,20 @@ final class ClaudeCliQuotaProbe {
             completion(nil)
             return
         }
-        let needsSubscriptionFetch = !subscriptionFetched
+        let subscriptionWasFetched = subscriptionFetched
         let priorPlan = lastSubscriptionType
-        // Captured on main like the two above; the latch is written back on main
+        let priorAccount = lastAccount
+        // Captured on main like the ones above; the latch is written back on main
         // in the completion, matching this class's threading model.
         let strictSupported = strictMcpConfigSupported
 
         probeQueue.async { [weak self] in
-            var fetchedPlan: String? = priorPlan
+            let account = ClaudeUsageCache.currentAccount()
+            let switched = Self.isAccountSwitch(from: priorAccount, to: account)
+            // The plan is fetched once per process, so a switch has to refetch it
+            // or the new account is labelled with the old one's plan.
+            let needsSubscriptionFetch = !subscriptionWasFetched || switched
+            var fetchedPlan: String? = switched ? nil : priorPlan
             if needsSubscriptionFetch {
                 if let json = ProcessOutput.read(
                     path, ["auth", "status", "--json"], timeout: 5, cwd: Self.probeCwd),
@@ -120,12 +135,15 @@ final class ClaudeCliQuotaProbe {
                 }
             }
 
-            // CLI broke, but a reading may still be on disk — at any age, since
-            // the alternative is "Couldn't refresh" over nothing. Only parsed on
-            // the failing path, so the common case never reads the file twice.
+            // The CLI gave no numbers, but a reading may still be on disk — at
+            // any age, since the alternative is an error over nothing. A soft-fail
+            // counts: some accounts' /usage never prints the bucket lines, and for
+            // them Claude Code's cache is the only source there is. Only parsed on
+            // the failing paths, so the common case never reads the file twice.
             var fallback: ClaudeUsageCache.Reading?
-            if case .hardFail = result {
-                fallback = ClaudeUsageCache.read(maxAge: .infinity)
+            switch result {
+            case .ok: break
+            case .softFail, .hardFail: fallback = ClaudeUsageCache.read(maxAge: .infinity)
             }
 
             DispatchQueue.main.async {
@@ -133,6 +151,13 @@ final class ClaudeCliQuotaProbe {
                 if strictRejected { self.strictMcpConfigSupported = false }
                 if needsSubscriptionFetch { self.subscriptionFetched = true }
                 self.lastSubscriptionType = fetchedPlan
+                if let account { self.lastAccount = account }
+                if switched {
+                    self.accountChanged = true
+                    // What was reported belonged to the old login, so it can't
+                    // outrank a reading for the new one in fallbackReading.
+                    self.snapshotAsOf = nil
+                }
 
                 switch result {
                 case .ok(let snap):
@@ -148,24 +173,36 @@ final class ClaudeCliQuotaProbe {
                 case .softFail:
                     self.lastProbeFailed = false
                     self.retryAfterUntil = Date().addingTimeInterval(60)
-                    completion(nil)
+                    completion(self.adoptFallback(fallback, planType: fetchedPlan))
                 case .hardFail:
                     self.lastProbeFailed = true
-                    guard let usable = Self.fallbackReading(
-                        fallback, lastReportedAt: self.snapshotAsOf) else {
-                        completion(nil)
-                        return
-                    }
-                    self.snapshotAsOf = usable.fetchedAt
-                    completion(QuotaSnapshot(
-                        fiveHour:       usable.snapshot.fiveHour,
-                        sevenDay:       usable.snapshot.sevenDay,
-                        sevenDayOpus:   usable.snapshot.sevenDayOpus,
-                        sevenDaySonnet: usable.snapshot.sevenDaySonnet,
-                        planType:       fetchedPlan))
+                    completion(self.adoptFallback(fallback, planType: fetchedPlan))
                 }
             }
         }
+    }
+
+    // Main queue only. Nil when the disk has nothing newer than what was last
+    // reported, leaving the caller to hold or report as it would with no reading.
+    private func adoptFallback(_ reading: ClaudeUsageCache.Reading?,
+                               planType: String?) -> QuotaSnapshot? {
+        guard let usable = Self.fallbackReading(reading, lastReportedAt: snapshotAsOf)
+        else { return nil }
+        snapshotAsOf = usable.fetchedAt
+        return QuotaSnapshot(
+            fiveHour:       usable.snapshot.fiveHour,
+            sevenDay:       usable.snapshot.sevenDay,
+            sevenDayOpus:   usable.snapshot.sevenDayOpus,
+            sevenDaySonnet: usable.snapshot.sevenDaySonnet,
+            planType:       planType)
+    }
+
+    // Only a change between two known logins counts. The first read has nothing
+    // to compare against, and an unreadable ~/.claude.json says nothing about
+    // who is logged in.
+    static func isAccountSwitch(from prior: String?, to current: String?) -> Bool {
+        guard let prior, let current else { return false }
+        return prior != current
     }
 
     // A disk reading has to beat what we last reported, or a file left from an

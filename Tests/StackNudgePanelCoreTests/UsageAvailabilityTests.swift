@@ -32,7 +32,7 @@ final class UsageAvailabilityTests: XCTestCase {
     // to the tab's cold-load empty state.
     func test_claudeWithErrorButNoSnapshot_isListed() {
         let nav = PanelNav()
-        nav.quotaErrors[.claude] = "Rate-limited — retrying shortly."
+        nav.quotaErrors[.claude] = "Claude Code didn't report your limits — retrying shortly."
         XCTAssertEqual(nav.availableUsageClients, [.claude])
     }
 

@@ -21,11 +21,15 @@ final class ClaudeUsageCacheTests: XCTestCase {
                       fiveHour: String = #"{"utilization":31,"resets_at":"2026-09-17T11:20:00.147737+00:00","limit_dollars":null,"locked_reason":null}"#,
                       sevenDay: String = #"{"utilization":51,"resets_at":"2026-09-21T05:00:00.147757+00:00","limit_dollars":null,"locked_reason":null}"#,
                       opus: String = "null",
-                      sonnet: String = "null") -> Data {
-        Data("""
-        {"numStartups":412,"oauthAccount":{"emailAddress":"a@b.c"},\
+                      sonnet: String = "null",
+                      loggedIn: String? = nil,
+                      cacheOwner: String? = "1f83e482-708d-4ba5-a85a-46745729aa9a") -> Data {
+        let accountField = loggedIn.map { #","accountUuid":"\#($0)""# } ?? ""
+        let ownerField = cacheOwner.map { #""accountUuid":"\#($0)","# } ?? ""
+        return Data("""
+        {"numStartups":412,"oauthAccount":{"emailAddress":"a@b.c"\(accountField)},\
         "cachedUsageUtilization":{"fetchedAtMs":\(fetchedAtMs),\
-        "accountUuid":"1f83e482-708d-4ba5-a85a-46745729aa9a","utilization":{\
+        \(ownerField)"utilization":{\
         "five_hour":\(fiveHour),"seven_day":\(sevenDay),\
         "seven_day_opus":\(opus),"seven_day_sonnet":\(sonnet),\
         "seven_day_oauth_apps":null,"seven_day_cowork":null,"nimbus_quill":null,\
@@ -96,6 +100,52 @@ final class ClaudeUsageCacheTests: XCTestCase {
 
     func testRejectsAFileWithoutTheCacheKey() {
         XCTAssertNil(ClaudeUsageCache.parse(Data(#"{"numStartups":412}"#.utf8)))
+    }
+
+    // MARK: - Account
+
+    private let owner = "1f83e482-708d-4ba5-a85a-46745729aa9a"
+
+    // The bug this guards: after `claude /login` as someone else the cache keeps
+    // the previous account's numbers until Claude Code next refreshes it, and
+    // serving it would show them under the new login.
+    func testRejectsACacheFetchedForAnotherAccount() {
+        XCTAssertNil(ClaudeUsageCache.parse(json(loggedIn: "someone-else")))
+    }
+
+    func testServesACacheFetchedForTheLoggedInAccount() {
+        XCTAssertEqual(ClaudeUsageCache.parse(json(loggedIn: owner))?.snapshot.fiveHour?.utilization, 31)
+    }
+
+    // Neither side can be compared, so the cache is served as it was before the
+    // check existed rather than dropped.
+    func testServesACacheWhenEitherAccountIsUnknown() {
+        XCTAssertNotNil(ClaudeUsageCache.parse(json(loggedIn: nil)))
+        XCTAssertNotNil(ClaudeUsageCache.parse(json(loggedIn: owner, cacheOwner: nil)))
+    }
+
+    func testReadsTheLoggedInAccount() throws {
+        let path = try writeFixture(json(loggedIn: owner))
+        XCTAssertEqual(ClaudeUsageCache.currentAccount(path: path), owner)
+    }
+
+    func testReadsNoAccountWhenLoggedOutOrTheFileIsAbsent() throws {
+        let path = try writeFixture(json(loggedIn: nil))
+        XCTAssertNil(ClaudeUsageCache.currentAccount(path: path))
+        XCTAssertNil(ClaudeUsageCache.currentAccount(
+            path: NSTemporaryDirectory() + "definitely-not-here.json"))
+    }
+
+    func testDetectsASwitchBetweenTwoKnownAccounts() {
+        XCTAssertTrue(ClaudeCliQuotaProbe.isAccountSwitch(from: "a", to: "b"))
+        XCTAssertFalse(ClaudeCliQuotaProbe.isAccountSwitch(from: "a", to: "a"))
+    }
+
+    // The first poll of a process has no prior account, and a missing or
+    // unreadable file is not a login change; neither may drop a good snapshot.
+    func testIgnoresAnUnknownAccountOnEitherSide() {
+        XCTAssertFalse(ClaudeCliQuotaProbe.isAccountSwitch(from: nil, to: "b"))
+        XCTAssertFalse(ClaudeCliQuotaProbe.isAccountSwitch(from: "a", to: nil))
     }
 
     // MARK: - Freshness

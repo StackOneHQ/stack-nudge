@@ -65,7 +65,8 @@ final class ClaudeCliQuotaProbeTests: XCTestCase {
 
     func testParseResultTextSoftFailWhenBucketsAbsent() {
         // Rate-limited / cold-cache shape — the "What's contributing" section
-        // still renders but the server-fetched Current lines are missing.
+        // still renders but the server-fetched Current lines are missing. Some
+        // accounts get it on every run (seen on a Team plan).
         let text = """
         You are currently using your subscription to power your Claude Code usage
 
