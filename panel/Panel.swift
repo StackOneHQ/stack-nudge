@@ -1350,6 +1350,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private var listener: EventListener?
     private var menuBar: MenuBarController?
     private var companion: CompanionController?
+    private var githubFeed: GitHubFeedPoller?
     private var updateChecker: UpdateChecker?
     private var updater: Updater?
     private var extensionCheckTimer: Timer?
@@ -1669,6 +1670,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             guard let self, self.panel.isVisible, !self.nav.compactMode else { return }
             self.positionPanel()
         }
+        let feed = GitHubFeedPoller(run: { body, token in Self.graphQLPOST(body, token: token) },
+                                    deliver: { [weak self] events in events.forEach { self?.store.append($0) } })
+        githubFeed = feed
+        nav.$githubActivityEnabled
+            .removeDuplicates()
+            .sink { feed.setEnabled($0) }
+            .store(in: &cancellables)
 
         nav.actions = SettingsActions(
             checkPermissions: { [weak self] in self?.showPermissions() },

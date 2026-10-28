@@ -212,7 +212,7 @@ enum SettingsRow: Hashable {
     case quotaTracking, quotaAlerts, alertThreshold, pollFrequency, contextAlert, showRemaining
     case piApiBudget, piLocalBudget
     case awayLock
-    case githubLinks, hideShipped, connectGithub, disconnectGithub
+    case githubLinks, githubActivity, hideShipped, connectGithub, disconnectGithub
     case historyPerSession
     case editPhrases, checkPermissions, openConfig, releaseNotes, checkUpdates, uninstall, quit
     case browseExtensions, extensionSources
@@ -267,7 +267,7 @@ extension SettingsRow: CaseIterable {
         .quotaTracking, .quotaAlerts, .alertThreshold, .pollFrequency,
         .contextAlert, .showRemaining, .piApiBudget, .piLocalBudget,
         .awayLock,
-        .githubLinks, .hideShipped, .connectGithub, .disconnectGithub,
+        .githubLinks, .githubActivity, .hideShipped, .connectGithub, .disconnectGithub,
         .historyPerSession,
         .editPhrases, .checkPermissions, .openConfig, .releaseNotes,
         .checkUpdates, .uninstall, .quit,
@@ -619,6 +619,9 @@ final class PanelNav: ObservableObject {
     // Mirror of STACKNUDGE_GITHUB; gates the PR fetch. Off by default — local
     // git tracking stays fully functional without a GitHub token.
     @Published var githubLinkingEnabled: Bool = false
+    // Activity on your PRs and requests for your review, as feed events
+    // (STACKNUDGE_GITHUB_ACTIVITY). Needs the same GitHub sign-in.
+    @Published var githubActivityEnabled: Bool = false
     // STACKNUDGE_HIDE_SHIPPED — drop groups whose PR reads merged so the tab
     // focuses on in-flight work. Needs GitHub linking to know "merged".
     @Published var hideShippedTickets: Bool = false
@@ -1634,7 +1637,11 @@ final class PanelNav: ObservableObject {
         // Connect while signed out, Disconnect once signed in: the page is
         // somewhere to sign in from, not only to sign out.
         case .integrationPage(.github):
-            return [.githubLinks, .hideShipped, githubSignedIn ? .disconnectGithub : .connectGithub]
+            return [.githubLinks, .githubActivity, .hideShipped, githubSignedIn ? .disconnectGithub : .connectGithub]
+        // Its own category once activity joined the PR links: Integrations
+        // would otherwise pass the ten-row cap (SettingsCategoryTests).
+        case .github:
+            return [.githubLinks, .githubActivity, .hideShipped, .disconnectGithub]
         // Its own category rather than a row under Actions: extensions declare
         // STACKNUDGE_EXT_ keys, so per-extension configuration needs somewhere
         // to live, and it should not arrive by growing an unrelated category.
@@ -1885,6 +1892,7 @@ final class PanelNav: ObservableObject {
         voice           = config["STACKNUDGE_VOICE_NAME"]       ?? "af_aoede"
         voiceSpeed      = Double(config["STACKNUDGE_VOICE_SPEED"] ?? "") ?? 1.1
         githubLinkingEnabled = ConfigFile.bool(config, "STACKNUDGE_GITHUB", default: false)
+        githubActivityEnabled = ConfigFile.bool(config, "STACKNUDGE_GITHUB_ACTIVITY", default: false)
         hideShippedTickets = ConfigFile.bool(config, "STACKNUDGE_HIDE_SHIPPED", default: false)
         githubSignedIn = GitHubAuth.token() != nil
         quotaTrackingEnabled = ConfigFile.bool(config, "STACKNUDGE_QUOTA_TRACKING", default: true)
@@ -2261,7 +2269,7 @@ final class PanelNav: ObservableObject {
              .keepOpenWhenEmpty, .launchAtLogin, .snapToCorners, .companionBadge,
              .soundEnabled, .voiceEnabled,
              .quotaTracking, .quotaAlerts, .showRemaining,
-             .githubLinks, .hideShipped, .eventHistory,
+             .githubLinks, .githubActivity, .hideShipped, .eventHistory,
              .slackEnabled, .slackDetail, .slackStop, .awayLock:
             return false
         case .permissions, .update, .extensionUpdates, .hotkey, .speakHotkey, .downloadVoiceModel:
@@ -2533,6 +2541,9 @@ final class PanelNav: ObservableObject {
             ConfigFile.write(key: "STACKNUDGE_AWAY_LOCK", value: awayLock ? "true" : "false")
         case .githubLinks:
             toggleGithubLinking()
+        case .githubActivity:
+            githubActivityEnabled.toggle()
+            ConfigFile.write(key: "STACKNUDGE_GITHUB_ACTIVITY", value: githubActivityEnabled ? "true" : "false")
         case .hideShipped:
             toggleHideShipped()
         case .slackEnabled:
@@ -2825,7 +2836,7 @@ struct ExtensionTab: Equatable, Identifiable {
 // one, in install order, and are listed by PanelNav.settingsCategories, since
 // only nav knows what is installed. `allCases` is the built-in ones alone.
 enum SettingsCategory: Hashable, CaseIterable {
-    case notifications, voice, appearance, companion, usage, integrations, extensions, panel, events,
+    case notifications, voice, appearance, companion, usage, integrations, github, extensions, panel, events,
          actions, about
     // One extension's page, a level below Extensions. Not in the sidebar.
     case extensionPage(String)
@@ -2833,7 +2844,7 @@ enum SettingsCategory: Hashable, CaseIterable {
     case integrationPage(Integration)
 
     static let allCases: [SettingsCategory] = [
-        .notifications, .voice, .appearance, .companion, .usage, .integrations, .extensions,
+        .notifications, .voice, .appearance, .companion, .usage, .integrations, .github, .extensions,
         .panel, .events, .actions, .about,
     ]
 
@@ -2847,6 +2858,7 @@ enum SettingsCategory: Hashable, CaseIterable {
         case .companion:     return "Companion"
         case .usage:         return "Usage"
         case .integrations:  return "Integrations"
+        case .github:        return "GitHub"
         case .extensions:    return "Extensions"
         case .panel:         return "Panel"
         case .events:        return "Events"
