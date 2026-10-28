@@ -802,12 +802,18 @@ final class PanelNav: ObservableObject {
         }
     }
 
-    // Settings "Connect GitHub": the Tickets card's sign-in, started from the
-    // GitHub page. While a code waits, ⏎ copies it and opens GitHub's page for
+    // Set while a sign-in started from Settings or the PRs tab is waiting for
+    // its code, so the code is copied and GitHub's page opened the moment it
+    // arrives and all that is left is to paste. The Tickets card leaves it off.
+    var githubSignInOpensBrowser = false
+
+    // Settings "Connect GitHub" and the PRs tab's button: the Tickets card's
+    // sign-in. While a code waits, ⏎ copies it and opens GitHub's page for
     // it, as the card's button does; while one is being asked for, nothing.
     func connectGithub() {
         switch githubSignIn {
         case .idle, .failed:
+            githubSignInOpensBrowser = true
             startGithubSignIn?()
         case .requesting:
             break
@@ -1668,7 +1674,7 @@ final class PanelNav: ObservableObject {
         // Its own category once activity joined the PR links: Integrations
         // would otherwise pass the ten-row cap (SettingsCategoryTests).
         case .github:
-            return [.githubLinks, .githubActivity, .hideShipped, .disconnectGithub]
+            return [.githubAccount, .githubLinks, .githubActivity, .hideShipped, .disconnectGithub]
         // Its own category rather than a row under Actions: extensions declare
         // STACKNUDGE_EXT_ keys, so per-extension configuration needs somewhere
         // to live, and it should not arrive by growing an unrelated category.

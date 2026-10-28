@@ -3436,6 +3436,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 }
                 self.nav.githubSignIn = .awaitingApproval(
                     userCode: response.userCode, verificationURI: response.verificationURI)
+                // Started from Settings or the PRs tab: hand over the code and
+                // GitHub's page at once, so all that's left is to paste.
+                if self.nav.githubSignInOpensBrowser {
+                    self.nav.githubSignInOpensBrowser = false
+                    PanelNav.copyAndOpen(code: response.userCode, url: response.verificationURI)
+                }
                 self.pollGithubSignIn(clientID: clientID,
                                       deviceCode: response.deviceCode,
                                       interval: response.interval,

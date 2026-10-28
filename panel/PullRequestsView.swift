@@ -83,8 +83,7 @@ struct PullRequestsView: View {
     private var content: some View {
         let rows = nav.pullRequestRows
         if !nav.githubSignedIn {
-            message("Sign in to GitHub first",
-                    "Settings → GitHub → GitHub PR links, then the sign-in card in Outcomes → Tickets.")
+            signIn
         } else if nav.pullRequestSnapshot == nil {
             message("Loading your pull requests…", "The first check runs a few seconds after GitHub activity is turned on.")
         } else if rows.isEmpty {
@@ -160,6 +159,28 @@ struct PullRequestsView: View {
         case .attention: return .orange
         case .bad:       return .red
         }
+    }
+
+    // Signing in from here: one click copies the code and opens GitHub.
+    private var signIn: some View {
+        VStack(spacing: 8) {
+            Text("Sign in to GitHub to see your pull requests").font(.subheadline.weight(.medium))
+            if case let .awaitingApproval(code, _) = nav.githubSignIn {
+                Text(code).font(.title3.monospaced().weight(.semibold))
+                Text("Copied. Paste it on the GitHub page that opened, then approve.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Copy and open GitHub again") { nav.githubAccountAction() }
+            } else {
+                Button("Sign in to GitHub") { nav.githubAccountAction() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(nav.githubSignIn == .requesting)
+                if case let .failed(message) = nav.githubSignIn {
+                    Text(message).font(.caption).foregroundStyle(.red)
+                }
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func message(_ title: String, _ detail: String) -> some View {
