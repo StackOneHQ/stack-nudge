@@ -253,7 +253,9 @@ final class SettingsCategoryTests: XCTestCase {
     func testTheCalendarCategoryFollowsIntegrationsAndHoldsItsRows() {
         let all = SettingsCategory.allCases
         XCTAssertEqual(SettingsCategory.calendar.label, "Calendar")
-        XCTAssertEqual(all.firstIndex(of: .calendar), all.firstIndex(of: .integrations).map { $0 + 1 })
+        // After Integrations, not necessarily next to it: other integration
+        // categories (GitHub) may sit between them.
+        XCTAssertGreaterThan(all.firstIndex(of: .calendar) ?? -1, all.firstIndex(of: .integrations) ?? Int.max)
         XCTAssertEqual(PanelNav().rows(in: .calendar),
                        [.calendarEnabled, .calendarLead, .calendarSummary, .calendarSummaryTime,
                         .calendarWeekdaysOnly, .calendarSummaryEmpty, .calendarDetectJoin])
