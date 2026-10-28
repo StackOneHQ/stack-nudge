@@ -1404,14 +1404,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // Re-apply window layout whenever compact-mode state flips. Covers
         // both the persistent toggle (Settings → "Compact widget") and the
         // transient expanded flag (widget click → expand).
+        //
+        // Deferred a turn: @Published sinks run in willSet, and the Widget
+        // toggle sets compactMode and then compactExpanded. Laid out inline,
+        // the second sink saw pill mode with the stale expanded flag and
+        // shrank the window to a pill around the full panel.
         nav.$compactMode
             .removeDuplicates()
             .dropFirst()  // initial value applied via applyCompactLayout on launch
-            .sink { [weak self] _ in self?.applyCompactLayout() }
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.applyCompactLayout() } }
             .store(in: &cancellables)
         nav.$compactExpanded
             .removeDuplicates()
-            .sink { [weak self] _ in self?.applyCompactLayout() }
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.applyCompactLayout() } }
             .store(in: &cancellables)
         // Cadence follows these flags wherever they flip, not just at the call
         // sites that remember to say so — Settings → "Pin panel" expands the pill
