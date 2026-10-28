@@ -1673,8 +1673,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             guard let self, self.panel.isVisible, !self.nav.compactMode else { return }
             self.positionPanel()
         }
-        let feed = GitHubFeedPoller(token: { [weak self] in GitHubAuth.activeToken(useGH: self?.nav.githubUseGH ?? true) },
-                                    run: { body, token in Self.graphQLPOST(body, token: token) },
+        let feed = GitHubFeedPoller(run: { [weak self] body in Self.githubGraphQL(body, useGH: self?.nav.githubUseGH ?? true) },
                                     deliver: { [weak self] events in events.forEach { self?.store.append($0) } },
                                     snapshot: { [weak self] snapshot, login in
                                         self?.nav.pullRequestSnapshot = snapshot
@@ -3354,7 +3353,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     func refreshPullRequestsNow() { pullRequestGate.force() }
 
     private func performRefreshPullRequests() {
-        guard nav.githubLinkingEnabled, let token = GitHubAuth.activeToken(useGH: nav.githubUseGH) else { return }
+        guard nav.githubLinkingEnabled, nav.githubSignedIn else { return }
+        let useGH = nav.githubUseGH
         // Ledger order is newest-first, so repoOrder puts the most recently active
         // repo first and its chips resolve first.
         var repoOrder: [String] = []
@@ -3375,7 +3375,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 let byBranch = GitHubAPI.pullRequests(
                     owner: slug.owner, repo: slug.repo, branches: branches
                 ) { body in
-                    Self.graphQLPOST(body, token: token)
+                    Self.githubGraphQL(body, useGH: useGH)
                 }
                 guard !byBranch.isEmpty else { continue }
                 let keyed = Dictionary(uniqueKeysWithValues: byBranch.map {
@@ -3398,6 +3398,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             }
         }
         return nil
+    }
+
+    // Every GitHub GraphQL request goes through here: the gh CLI when it is
+    // logged in (gh sends its own credential; the app never reads it), else
+    // the app's own sign-in token from the Keychain. nil when neither exists.
+    static func githubGraphQL(_ body: String, useGH: Bool) -> String? {
+        if useGH, GitHubCLI.isLoggedIn() { return GitHubCLI.graphQL(body: body) }
+        guard let token = GitHubAuth.token() else { return nil }
+        return graphQLPOST(body, token: token)
     }
 
     // Synchronous GraphQL POST (called from the off-main fetch loop) — blocks on

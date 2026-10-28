@@ -8,8 +8,9 @@ final class GitHubFeedPoller {
     static let statePath = ("~/.stack-nudge/github-feed.json" as NSString).expandingTildeInPath
     static let interval: TimeInterval = 3 * 60
 
-    private let token: () -> String?               // read each poll: a sign-in can change it
-    private let run: (String, String) -> String?   // (body, token) -> response
+    // body -> response; nil when there is no way to reach GitHub (no gh
+    // login and no sign-in), which skips the poll.
+    private let run: (String) -> String?
     private let deliver: ([NudgeEvent]) -> Void     // called on main
     // Every successful poll's lists, for the PRs tab; called on main.
     private let snapshot: (GitHubFeed.Snapshot, String) -> Void
@@ -18,9 +19,8 @@ final class GitHubFeedPoller {
     private var login: String?
     private var polling = false
 
-    init(token: @escaping () -> String?, run: @escaping (String, String) -> String?, deliver: @escaping ([NudgeEvent]) -> Void,
+    init(run: @escaping (String) -> String?, deliver: @escaping ([NudgeEvent]) -> Void,
          snapshot: @escaping (GitHubFeed.Snapshot, String) -> Void) {
-        self.token = token
         self.run = run
         self.deliver = deliver
         self.snapshot = snapshot
@@ -46,12 +46,12 @@ final class GitHubFeedPoller {
     func pollNow() { queue.async { [weak self] in self?.poll() } }
 
     private func poll() {
-        guard !polling, let token = token() else { return }
+        guard !polling else { return }
         polling = true
         defer { polling = false }
-        if login == nil { login = run(GitHubFeed.viewerQuery, token).flatMap(GitHubFeed.parseViewer) }
+        if login == nil { login = run(GitHubFeed.viewerQuery).flatMap(GitHubFeed.parseViewer) }
         guard let login,
-              let response = run(GitHubFeed.query(login: login), token),
+              let response = run(GitHubFeed.query(login: login)),
               let snapshot = GitHubFeed.parse(response)
         else { return }
         let result = GitHubFeed.diff(snapshot, previous: Self.loadState(), login: login, now: Date())

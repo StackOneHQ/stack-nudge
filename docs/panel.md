@@ -231,7 +231,7 @@ With **Settings → GitHub → GitHub activity** on (`STACKNUDGE_GITHUB_ACTIVITY
 - approved, changes requested, CI failing or passing again, merge conflicts, ready to merge, checks passed on a new commit
 - review requests made to you by name, and a re-request after you reviewed (requests to your teams are listed in the PRs tab, without a nudge)
 
-It searches by your login across GitHub, with no org filter. The first check records what is already there without announcing it, and its state lives in `~/.stack-nudge/github-feed.json`, so a relaunch announces nothing twice. `⏎` on one of these events opens it on GitHub.
+If the GitHub CLI (`gh`) is installed and logged in, these requests and PR links go through it (`gh api`), so gh sends its own credential and stack-nudge never reads it, and Settings → GitHub → GitHub account says so; otherwise it uses its own sign-in. That matters for an org that restricts third-party OAuth apps: until an owner approves stack-nudge's app, its own sign-in can't see the org's private repos, while a `gh` login usually can. `STACKNUDGE_GITHUB_USE_GH=false` always uses the sign-in. It searches by your login across GitHub, with no org filter. The first check records what is already there without announcing it, and its state lives in `~/.stack-nudge/github-feed.json`, so a relaunch announces nothing twice. `⏎` on one of these events opens it on GitHub.
 
 The same check fills a **PRs** tab, shown while GitHub activity is on: your open PRs (with draft, review, CI and conflict chips) and the PRs waiting on your review, asked of you by name first, then through your teams (marked with the team). `↑↓` select, `⏎` or a click opens the PR, `⌘↑` / `⌘↓` jump to the first / last row, `Esc` hides.
 

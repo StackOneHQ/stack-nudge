@@ -1932,7 +1932,7 @@ final class PanelNav: ObservableObject {
         githubActivityEnabled = ConfigFile.bool(config, "STACKNUDGE_GITHUB_ACTIVITY", default: false)
         hideShippedTickets = ConfigFile.bool(config, "STACKNUDGE_HIDE_SHIPPED", default: false)
         githubUseGH = ConfigFile.bool(config, "STACKNUDGE_GITHUB_USE_GH", default: true)
-        githubUsesCLILogin = githubUseGH && GitHubAuth.ghToken() != nil
+        githubUsesCLILogin = githubUseGH && GitHubCLI.isLoggedIn()
         githubSignedIn = githubUsesCLILogin || GitHubAuth.token() != nil
         quotaTrackingEnabled = ConfigFile.bool(config, "STACKNUDGE_QUOTA_TRACKING", default: true)
         quotaAlertsEnabled   = ConfigFile.bool(config, "STACKNUDGE_QUOTA_ALERTS",   default: true)

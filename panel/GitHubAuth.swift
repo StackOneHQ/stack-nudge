@@ -49,28 +49,6 @@ enum GitHubAuth {
         return defaultClientID.isEmpty ? nil : defaultClientID
     }
 
-    // MARK: - Which token
-
-    // The token GitHub calls use. The gh CLI's login comes first when it is
-    // installed and logged in: an org that restricts OAuth apps hides its
-    // private repos from the device-flow token until an owner approves the
-    // app, while the gh login is usually approved already.
-    static func activeToken(useGH: Bool) -> String? {
-        if useGH, let token = ghToken() { return token }
-        return token()
-    }
-
-    // The gh CLI's login, read each time and held in memory only. nil when gh
-    // isn't installed or isn't logged in.
-    static func ghToken() -> String? {
-        guard let gh = ProcessOutput.gh(),
-              let output = ProcessOutput.read(gh, ["auth", "token"], timeout: 10)?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-              !output.isEmpty, !output.contains(where: \.isWhitespace)
-        else { return nil }
-        return output
-    }
-
     // MARK: - Keychain
 
     static func token() -> String? {

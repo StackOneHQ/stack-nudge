@@ -267,3 +267,26 @@ final class GitHubFeedTests: XCTestCase {
         XCTAssertEqual(rows[1].chips.map(\.text), ["team: Platform", "by alice"])
     }
 }
+
+// Requests through the gh CLI: the body becomes `gh api graphql` arguments,
+// so gh sends its own credential and the app never handles a token.
+final class GitHubCLITests: XCTestCase {
+
+    func testABodyBecomesGraphQLArguments() {
+        let args = GitHubCLI.graphQLArguments(body: GitHubFeed.query(login: "octocat"))
+        XCTAssertEqual(args?.prefix(2), ["api", "graphql"])
+        XCTAssertTrue(args?.contains("mine=is:pr is:open author:octocat archived:false") == true)
+        XCTAssertTrue(args?.contains("requested=is:pr is:open review-requested:octocat archived:false") == true)
+        XCTAssertTrue(args?.contains { $0.hasPrefix("query=query(") } == true)
+    }
+
+    func testNumbersUseTypedFields() {
+        let args = GitHubCLI.graphQLArguments(body: #"{"query":"q","variables":{"n":3}}"#)
+        XCTAssertEqual(args, ["api", "graphql", "-f", "query=q", "-F", "n=3"])
+    }
+
+    func testAnythingElseIsRefused() {
+        XCTAssertNil(GitHubCLI.graphQLArguments(body: "not json"))
+        XCTAssertNil(GitHubCLI.graphQLArguments(body: #"{"query":"q","variables":{"x":[1]}}"#))
+    }
+}
