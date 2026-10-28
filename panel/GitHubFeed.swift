@@ -13,8 +13,9 @@ enum GitHubFeed {
 
     // Searches by login across GitHub, with no org filter: your PRs and the
     // reviews asked of you are yours wherever they live.
-    // `user-review-requested` matches direct requests only; team requests land
-    // on nearly every PR and would drown the rest.
+    // `review-requested` covers requests to you and to your teams. Only direct
+    // ones become events (team requests land on nearly every PR and would
+    // drown the rest); the PRs tab lists both, each marked.
     static func query(login: String) -> String {
         let pr = """
         number title url isDraft reviewDecision mergeable \
@@ -27,6 +28,7 @@ enum GitHubFeed {
         let requested = """
         number title url author{login} repository{nameWithOwner} \
         viewerLatestReview{submittedAt} \
+        reviewRequests(first:20){nodes{requestedReviewer{__typename ...on User{login} ...on Team{name slug}}}} \
         timelineItems(itemTypes:[REVIEW_REQUESTED_EVENT],last:20){nodes{...on ReviewRequestedEvent{createdAt actor{login} requestedReviewer{...on User{login}}}}}
         """
         let graphql = "query($mine:String!,$requested:String!){"
@@ -36,7 +38,7 @@ enum GitHubFeed {
             "query": graphql,
             "variables": [
                 "mine": "is:pr is:open author:\(login) archived:false",
-                "requested": "is:pr is:open user-review-requested:\(login) archived:false",
+                "requested": "is:pr is:open review-requested:\(login) archived:false",
             ],
         ]
         let data = (try? JSONSerialization.data(withJSONObject: body)) ?? Data()
@@ -116,6 +118,27 @@ enum GitHubFeed {
         let repository: Repo
         let viewerLatestReview: LatestReview?
         let timelineItems: Nodes<RequestEvent>?
+        let reviewRequests: Nodes<ReviewRequest>?
+
+        struct ReviewRequest: Decodable, Equatable {
+            struct Reviewer: Decodable, Equatable {
+                let __typename: String?
+                let login: String?
+                let name: String?
+                let slug: String?
+            }
+            let requestedReviewer: Reviewer?
+        }
+
+        // Asked of you by name, rather than only through a team.
+        func isDirect(login: String) -> Bool {
+            (reviewRequests?.nodes ?? []).contains { $0.requestedReviewer?.login == login }
+        }
+
+        // The teams this review is asked of, by name, for the PRs tab.
+        var teams: [String] {
+            (reviewRequests?.nodes ?? []).compactMap { $0.requestedReviewer?.__typename == "Team" ? ($0.requestedReviewer?.name ?? $0.requestedReviewer?.slug) : nil }
+        }
     }
 
     struct Snapshot: Equatable {
@@ -285,7 +308,9 @@ enum GitHubFeed {
             state.prs[key] = next
         }
 
-        for pr in snapshot.requested {
+        // Only requests made to you by name become events; a team request
+        // still shows in the PRs tab.
+        for pr in snapshot.requested where pr.isDirect(login: login) {
             let repo = pr.repository.nameWithOwner
             let label = "\(shortRepo(repo))#\(pr.number)"
             let request = latestRequest(pr, login: login, now: now)

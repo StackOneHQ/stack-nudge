@@ -42,13 +42,16 @@ final class GitHubFeedTests: XCTestCase {
     }
 
     private func requested(number: Int = 7, requestedAt: String = "2027-01-15T08:00:00Z",
-                           reviewedAt: String? = nil) -> [String: Any] {
-        [
+                           reviewedAt: String? = nil, team: String? = nil) -> [String: Any] {
+        let reviewer: [String: Any] = team.map { ["__typename": "Team", "name": $0, "slug": $0.lowercased()] }
+            ?? ["__typename": "User", "login": login]
+        return [
             "number": number, "title": "Fix the thing", "url": "https://github.com/acme/api/pull/\(number)",
             "author": ["login": "alice"], "repository": ["nameWithOwner": "acme/api"],
             "viewerLatestReview": reviewedAt.map { ["submittedAt": $0] as Any } ?? NSNull(),
             "timelineItems": ["nodes": [["createdAt": requestedAt, "actor": ["login": "bob"],
                                          "requestedReviewer": ["login": login]]]],
+            "reviewRequests": ["nodes": [["requestedReviewer": reviewer]]],
         ]
     }
 
@@ -69,7 +72,7 @@ final class GitHubFeedTests: XCTestCase {
     func testTheQuerySearchesByLoginWithNoOrgFilter() {
         let body = GitHubFeed.query(login: "octocat")
         XCTAssertTrue(body.contains("author:octocat"))
-        XCTAssertTrue(body.contains("user-review-requested:octocat"))
+        XCTAssertTrue(body.contains("review-requested:octocat"))
         XCTAssertFalse(body.contains("org:"))
     }
 
@@ -253,5 +256,14 @@ final class GitHubFeedTests: XCTestCase {
     func testAGreenApprovedPRReadsAsGood() {
         let rows = PRRows.rows(snapshot(mine: [pr(decision: "APPROVED", ci: "SUCCESS")]), login: login)
         XCTAssertEqual(rows.first?.chips.map(\.tone), [.good, .good])
+    }
+
+    // A request to one of your teams is listed, marked, but doesn't nudge.
+    func testATeamRequestIsListedButNotAnnounced() {
+        let got = events(from: snapshot(), to: snapshot(requested: [requested(team: "Platform")]))
+        XCTAssertTrue(got.isEmpty, "\(got.map(\.title))")
+        let rows = PRRows.rows(snapshot(requested: [requested(number: 8, team: "Platform"), requested(number: 7)]), login: login)
+        XCTAssertEqual(rows.map(\.label), ["api#7", "api#8"], "direct requests first")
+        XCTAssertEqual(rows[1].chips.map(\.text), ["team: Platform", "by alice"])
     }
 }

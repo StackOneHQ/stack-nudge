@@ -44,16 +44,24 @@ enum PRRows {
                          label: label(pr.repository.nameWithOwner, pr.number),
                          url: URL(string: pr.url), chips: chips)
         }
-        let review = snapshot.requested.map { pr -> PRRow in
-            let request = login.flatMap { GitHubFeed.latestRequest(pr, login: $0, now: now) }
-            let who = request?.requester ?? pr.author?.login
-            let chip: PRRow.Chip? = who.map {
-                .init(text: request?.again == true ? "asked again by \($0)" : "from \($0)",
-                      tone: request?.again == true ? .attention : .neutral)
+        // Asked of you by name first, then through a team.
+        let direct = snapshot.requested.filter { pr in login.map { pr.isDirect(login: $0) } ?? false }
+        let viaTeam = snapshot.requested.filter { pr in !(login.map { pr.isDirect(login: $0) } ?? false) }
+        let review = (direct + viaTeam).map { pr -> PRRow in
+            var chips: [PRRow.Chip] = []
+            if let login, pr.isDirect(login: login) {
+                let request = GitHubFeed.latestRequest(pr, login: login, now: now)
+                if let who = request?.requester ?? pr.author?.login {
+                    chips.append(.init(text: request?.again == true ? "asked again by \(who)" : "from \(who)",
+                                       tone: request?.again == true ? .attention : .neutral))
+                }
+            } else {
+                chips += pr.teams.map { .init(text: "team: \($0)", tone: .neutral) }
+                if let author = pr.author?.login { chips.append(.init(text: "by \(author)", tone: .neutral)) }
             }
             return PRRow(id: pr.url, section: .review, title: pr.title,
                          label: label(pr.repository.nameWithOwner, pr.number),
-                         url: URL(string: pr.url), chips: chip.map { [$0] } ?? [])
+                         url: URL(string: pr.url), chips: chips)
         }
         return mine + review
     }

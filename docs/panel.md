@@ -229,11 +229,11 @@ With **Settings → GitHub → GitHub activity** on (`STACKNUDGE_GITHUB_ACTIVITY
 
 - review comments and threads from others (one row per PR per check; link-back bots are skipped)
 - approved, changes requested, CI failing or passing again, merge conflicts, ready to merge, checks passed on a new commit
-- review requests, and a re-request after you reviewed
+- review requests made to you by name, and a re-request after you reviewed (requests to your teams are listed in the PRs tab, without a nudge)
 
 It searches by your login across GitHub, with no org filter. The first check records what is already there without announcing it, and its state lives in `~/.stack-nudge/github-feed.json`, so a relaunch announces nothing twice. `⏎` on one of these events opens it on GitHub.
 
-The same check fills a **PRs** tab, shown while GitHub activity is on: your open PRs (with draft, review, CI and conflict chips) and the PRs waiting on your review. `↑↓` select, `⏎` or a click opens the PR, `⌘↑` / `⌘↓` jump to the first / last row, `Esc` hides.
+The same check fills a **PRs** tab, shown while GitHub activity is on: your open PRs (with draft, review, CI and conflict chips) and the PRs waiting on your review, asked of you by name first, then through your teams (marked with the team). `↑↓` select, `⏎` or a click opens the PR, `⌘↑` / `⌘↓` jump to the first / last row, `Esc` hides.
 
 ## Extensions
 
