@@ -230,4 +230,28 @@ final class GitHubFeedTests: XCTestCase {
         XCTAssertEqual(GitHubFeed.snippet("Line one\n\n  line two"), "Line one line two")
         XCTAssertEqual(GitHubFeed.snippet(String(repeating: "x", count: 200)).count, 140)
     }
+
+    // MARK: - The PRs tab
+
+    func testRowsListMineThenToReviewWithStatusChips() {
+        let snap = snapshot(mine: [pr(decision: "CHANGES_REQUESTED", ci: "FAILURE", mergeable: "CONFLICTING", draft: true)],
+                            requested: [requested()])
+        let rows = PRRows.rows(snap, login: login)
+        XCTAssertEqual(rows.map(\.section), [.mine, .review])
+        XCTAssertEqual(rows[0].label, "app#1")
+        XCTAssertEqual(rows[0].chips.map(\.text), ["Draft", "Changes requested", "CI failing", "Conflict"])
+        XCTAssertEqual(rows[0].url?.absoluteString, "https://github.com/acme/app/pull/1")
+        XCTAssertEqual(rows[1].chips.map(\.text), ["from bob"])
+    }
+
+    func testAReRequestSaysSo() {
+        let now = GitHubFeed.isoDate("2027-01-15T09:00:00Z")!
+        let snap = snapshot(requested: [requested(requestedAt: "2027-01-15T08:00:00Z", reviewedAt: "2027-01-14T12:00:00Z")])
+        XCTAssertEqual(PRRows.rows(snap, login: login, now: now).first?.chips.first?.text, "asked again by bob")
+    }
+
+    func testAGreenApprovedPRReadsAsGood() {
+        let rows = PRRows.rows(snapshot(mine: [pr(decision: "APPROVED", ci: "SUCCESS")]), login: login)
+        XCTAssertEqual(rows.first?.chips.map(\.tone), [.good, .good])
+    }
 }

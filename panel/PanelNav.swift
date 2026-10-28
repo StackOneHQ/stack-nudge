@@ -40,6 +40,8 @@ enum PanelMode: Hashable {
     case sessions
     case usage
     case outcomes
+    // Your open PRs and reviews waiting on you; shown while GitHub activity is on.
+    case prs
     // A tab contributed by an installed extension, keyed by its id.
     case extensionTab(String)
     case settings
@@ -622,6 +624,30 @@ final class PanelNav: ObservableObject {
     // Activity on your PRs and requests for your review, as feed events
     // (STACKNUDGE_GITHUB_ACTIVITY). Needs the same GitHub sign-in.
     @Published var githubActivityEnabled: Bool = false
+    // The PRs tab's data: the latest poll's snapshot and whose it is.
+    @Published var pullRequestSnapshot: GitHubFeed.Snapshot?
+    @Published var pullRequestLogin: String?
+    @Published var prSelectedIndex = 0
+
+    var pullRequestRows: [PRRow] {
+        pullRequestSnapshot.map { PRRows.rows($0, login: pullRequestLogin) } ?? []
+    }
+
+    func movePullRequestSelection(_ delta: Int) {
+        let count = pullRequestRows.count
+        guard count > 0 else { return }
+        prSelectedIndex = max(0, min(count - 1, prSelectedIndex + delta))
+    }
+
+    func jumpPullRequestSelection(toLast: Bool) {
+        prSelectedIndex = toLast ? max(0, pullRequestRows.count - 1) : 0
+    }
+
+    func openSelectedPullRequest() {
+        let rows = pullRequestRows
+        guard rows.indices.contains(prSelectedIndex), let url = rows[prSelectedIndex].url else { return }
+        NSWorkspace.shared.open(url)
+    }
     // STACKNUDGE_HIDE_SHIPPED — drop groups whose PR reads merged so the tab
     // focuses on in-flight work. Needs GitHub linking to know "merged".
     @Published var hideShippedTickets: Bool = false
@@ -1382,6 +1408,7 @@ final class PanelNav: ObservableObject {
     // read this, so a tab can't be drawn fifth and answer to ⌘6.
     var orderedTabs: [PanelMode] {
         var tabs: [PanelMode] = [.events, .sessions, .usage, .outcomes]
+        if githubActivityEnabled { tabs.append(.prs) }
         // First id wins. Two tabs sharing one id are structurally equal, so
         // ForEach drops a row, firstIndex(of:) can never reach the second, and
         // the lookup returns the first one's label for both.

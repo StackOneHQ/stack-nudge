@@ -10,14 +10,18 @@ final class GitHubFeedPoller {
 
     private let run: (String, String) -> String?   // (body, token) -> response
     private let deliver: ([NudgeEvent]) -> Void     // called on main
+    // Every successful poll's lists, for the PRs tab; called on main.
+    private let snapshot: (GitHubFeed.Snapshot, String) -> Void
     private let queue = DispatchQueue(label: "stack-nudge.github-feed", qos: .utility)
     private var timer: DispatchSourceTimer?
     private var login: String?
     private var polling = false
 
-    init(run: @escaping (String, String) -> String?, deliver: @escaping ([NudgeEvent]) -> Void) {
+    init(run: @escaping (String, String) -> String?, deliver: @escaping ([NudgeEvent]) -> Void,
+         snapshot: @escaping (GitHubFeed.Snapshot, String) -> Void) {
         self.run = run
         self.deliver = deliver
+        self.snapshot = snapshot
     }
 
     // Idempotent: the settings sink calls it on every change.
@@ -50,6 +54,7 @@ final class GitHubFeedPoller {
         else { return }
         let result = GitHubFeed.diff(snapshot, previous: Self.loadState(), login: login, now: Date())
         Self.saveState(result.state)
+        DispatchQueue.main.async { [self] in self.snapshot(snapshot, login) }
         guard !result.events.isEmpty else { return }
         // Oldest first, so the newest ends up on top of the queue.
         let events = Array(result.events.reversed())
