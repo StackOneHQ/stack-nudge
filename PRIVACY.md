@@ -51,6 +51,16 @@ StackNudge identifier, because there isn't one.
   **whatever network calls it makes are its own**. What each of the app's own
   extensions reads and sends is in the marketplace's
   [PRIVACY.md](https://github.com/StackOneHQ/stack-nudge-extensions-marketplace/blob/main/PRIVACY.md).
+- **Calendar** (`STACKNUDGE_CALENDAR`). Reads your calendars on this Mac
+  through Apple's EventKit, after macOS has asked you for access. Meeting
+  titles, times, locations, organisers and notes are read locally and are never
+  sent anywhere: the feature makes no network calls. The last snapshot of the
+  next seven days is kept in `~/.stack-nudge/calendar.json`. **Join detection**
+  (`STACKNUDGE_CALENDAR_JOIN`) reads the tab addresses of browsers that are
+  already running (through `osascript`, after you grant Automation), the
+  process list for Zoom's helper, and, if you have granted Screen Recording,
+  Teams window titles. It compares them with the meeting link, stores none of
+  them, and writes only error lines to `~/.stack-nudge/join.log`.
 - **Voice** (`STACKNUDGE_VOICE`). Downloading a voice model runs `stackvox` in
   the bundled Python environment, which fetches the model over the network.
   That download is the only part that leaves your machine: synthesis runs

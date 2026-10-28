@@ -130,6 +130,37 @@ STACKNUDGE_FLOATING_WIDGET=companion
 #STACKNUDGE_PI_API_BUDGET=1500000
 #STACKNUDGE_PI_LOCAL_BUDGET=500000
 
+# Meetings from your calendar (Calendar.app, read locally through EventKit;
+# nothing is sent anywhere). Turning it on asks macOS for calendar access.
+# Also settable in Settings → Calendar, which writes back here.
+# Default: false
+#STACKNUDGE_CALENDAR=true
+
+# Minutes before a meeting for the heads-up. 5, 10 or 15.
+# Default: 10
+#STACKNUDGE_CALENDAR_LEAD_MIN=10
+
+# Morning summary of today's meetings: on/off, the time (08:00 to 10:00 in
+# half hours), weekdays only, and whether a day with no meetings gets one too.
+# A summary missed because the Mac was asleep is still sent until noon.
+# Defaults: true, 09:00, true, false
+#STACKNUDGE_CALENDAR_SUMMARY=true
+#STACKNUDGE_CALENDAR_SUMMARY_TIME=09:00
+#STACKNUDGE_CALENDAR_WEEKDAYS_ONLY=true
+#STACKNUDGE_CALENDAR_SUMMARY_EMPTY=false
+
+# Clear a meeting's reminder when you have joined it: an open Meet tab in a
+# running browser, Zoom's helper process, a Teams meeting window. Reading
+# browser tabs needs the Automation permission for each browser.
+# Default: true (when the calendar is on)
+#STACKNUDGE_CALENDAR_JOIN=true
+
+# Which calendars to watch, as comma-separated calendar identifiers. Empty
+# watches all of them. There is no picker: ~/.stack-nudge/calendar.log lists
+# every calendar's identifier the first time access is granted.
+# Default: empty
+#STACKNUDGE_CALENDARS=
+
 # Log a debug line (to the launchd log) explaining voice decisions — useful
 # when a notification played silently and you want to know why.
 # Default: false

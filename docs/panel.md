@@ -157,6 +157,7 @@ Reachable from the tab strip, `Cmd+,`, or the last `Cmd`-number. A sidebar of ca
 | **Companion** | Size, Count badge, Preview pose, Reset position; **Turn on companion** while it's off. See [Companion](#companion) |
 | **Usage** | Quota tracking, Quota alerts, Alert threshold, Poll frequency, Context alert, Show remaining, and the two pi budgets |
 | **Integrations** | A card each for Slack and GitHub, with where it stands on the right; `→` or `⏎` opens its page. Slack's: paste setup, detected user, test message, on/off, idle threshold, message text, finished turns. GitHub's: PR links, GitHub activity, Hide shipped, Connect GitHub (or Disconnect once signed in). Each page's first line says what it's doing or what's wrong |
+| **Calendar** | Calendar, Heads-up before meetings, Morning summary, Summary time, Weekdays only, Summary on empty days, Detect joining (see [notifications.md](notifications.md#calendar)) |
 | **Extensions** | What's installed, then **Browse extensions** (see [Extensions](#extensions)) |
 | **MCP** | **Set up for…**, whose page has a card each for Claude Code, Claude Desktop and Codex: `⏎` copies what adds stack-nudge to it, and a tick shows once its config has it. Then MCP clients can change settings. See [the local MCP server](design/local-mcp.md) |
 | **Panel** | Hotkey, Pin panel, Keep open when empty, Launch at login, Name from tab titles |

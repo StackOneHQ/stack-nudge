@@ -1358,6 +1358,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private var updateChecker: UpdateChecker?
     private var updater: Updater?
     private var extensionCheckTimer: Timer?
+    private var calendarWatcher: CalendarWatcher?
     private let claudeCliQuotaProbe = ClaudeCliQuotaProbe()
     // Claude logins other than the default one, by config dir. See
     // refreshOtherClaudeAccounts.
@@ -1814,6 +1815,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         extensions.load()
         startEventHistory()
         startSlack()
+        startCalendar()
         // The pill (CompactView) reads sessions.sessions for the busy/idle
         // headline and mascot state, so polling has to run as soon as the
         // app is up — not gated on the Sessions tab being visible. Sessions
@@ -4454,6 +4456,35 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         return true
     }
 
+
+    // MARK: - Calendar
+
+    // The watcher exists from launch but touches nothing until the setting is
+    // on: start() is what first reaches EventKit and asks for access.
+    private func startCalendar() {
+        let watcher = CalendarWatcher(
+            events: store,
+            settings: { [weak self] in self?.nav.calendarSettings ?? CalendarSettings() },
+            onToday: { [weak self] meetings in self?.nav.todaysMeetings = meetings },
+            onAccess: { [weak self] access in self?.nav.calendarAccess = access })
+        calendarWatcher = watcher
+        nav.$calendarEnabled
+            .removeDuplicates()
+            .sink { enabled in
+                if enabled { watcher.start() } else { watcher.stop() }
+            }
+            .store(in: &cancellables)
+        // objectWillChange fires before the value is stored, so the read is
+        // deferred a turn; duplicates drop out every change that is not ours.
+        nav.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .compactMap { [weak self] in self?.nav.calendarSettings }
+            .prepend(nav.calendarSettings)
+            .removeDuplicates()
+            .dropFirst()
+            .sink { _ in watcher.settingsChanged() }
+            .store(in: &cancellables)
+    }
 
     // MARK: - Config file watcher
 

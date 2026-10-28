@@ -222,6 +222,39 @@ final class FeedEventTests: XCTestCase {
         XCTAssertNil(event?.feedAction)
     }
 
+    func testRemovingByKeyDropsOnlyThatFeedEvent() {
+        let store = EventStore()
+        let waiting = prompt()
+        store.append(waiting)
+        store.append(feed("CI failing", key: "pr:1:ci"))
+        store.append(feed("other", key: "pr:2:ci"))
+        store.remove(key: "pr:1:ci")
+        XCTAssertEqual(store.events.map(\.message).sorted(), ["Bash(ls)", "other"])
+        store.remove(key: "pr:1:ci")
+        store.remove(key: "nobody")
+        XCTAssertEqual(store.events.count, 2, "an unknown key removes nothing")
+    }
+
+    func testRemovingByKeyMovesTheSelectionOffTheRemovedRow() {
+        let store = EventStore()
+        let event = feed("CI failing", key: "pr:1:ci")
+        store.append(event)
+        XCTAssertEqual(store.selectedID, event.id)
+        store.remove(key: "pr:1:ci")
+        XCTAssertNil(store.selectedID)
+    }
+
+    // Two meetings at the same time differ only in their title.
+    func testTwoFeedEventsWithTheSameBodyButDifferentTitlesBothLand() {
+        let store = EventStore()
+        func meeting(_ title: String) -> NudgeEvent {
+            .feed(source: .calendar, tag: "calendar", severity: .action, title: title, message: "10:00 to 10:30")
+        }
+        store.append(meeting("Standup starts in 10 min"))
+        store.append(meeting("Retro starts in 10 min"))
+        XCTAssertEqual(store.events.count, 2)
+    }
+
     func testUnkeyedFeedEventsStack() {
         let store = EventStore()
         store.append(feed("one", key: nil))

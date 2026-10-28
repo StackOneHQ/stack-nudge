@@ -381,6 +381,7 @@ final class EventStore: ObservableObject {
                 && existing.agent == event.agent
                 && existing.kind == event.kind
                 && existing.source == event.source
+                // Two meetings starting together differ only in their title.
                 && existing.title == event.title
                 && existing.message == event.message
                 && existing.claudeSessionID == event.claudeSessionID
@@ -633,6 +634,13 @@ final class EventStore: ObservableObject {
     // Feed tags in the list, in the order chips show them.
     var presentTags: [String] {
         FeedTagFilter.present(in: events)
+    }
+
+    // Drops a feed event by its key, for a feed that knows its own event is
+    // stale (a meeting reminder once the meeting is joined). Agent events have
+    // no key, so none can be removed this way.
+    func remove(key: String) {
+        for id in events.filter({ $0.isFeed && $0.key == key }).map(\.id) { remove(id: id) }
     }
 
     // Replace the event in-place with a new copy that has snoozedUntil set

@@ -27,6 +27,10 @@
     <key>NSBluetoothAlwaysUsageDescription</key>
     <string>StackNudge listens for your phone's Bluetooth signal to tell when you've stepped away from your Mac, if you install the Away extension.</string>
     <key>NSAppleEventsUsageDescription</key>
-    <string>StackNudge uses System Events to focus the correct window when you act on a notification.</string>
+    <string>StackNudge uses System Events to focus the correct window when you act on a notification, and, if you turn on calendar join detection, reads the open tab addresses of your browser to see whether you have joined a meeting.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>StackNudge reads your calendar on this Mac to remind you before meetings and to tell you when one is added, moved or cancelled. Nothing leaves your Mac.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>StackNudge reads your calendar on this Mac to remind you before meetings and to tell you when one is added, moved or cancelled. Nothing leaves your Mac.</string>
 </dict>
 </plist>

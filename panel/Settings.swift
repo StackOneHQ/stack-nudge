@@ -364,6 +364,13 @@ struct SettingsView: View {
         }
     }
 
+    // Access is asked for on the first enable, so a denial shows here rather
+    // than as a row that looks on but never reports anything.
+    private var calendarValue: String {
+        guard nav.calendarEnabled else { return "Off" }
+        return nav.calendarAccess == .denied ? "On, no access (System Settings > Privacy)" : "On"
+    }
+
     private var checkForUpdatesStatus: String {
         switch nav.updateCheckStatus {
         case .idle:             return ""
@@ -968,6 +975,15 @@ struct SettingsView: View {
                 Text(note).font(.caption).foregroundStyle(.orange)
                     .padding(.horizontal, 14).padding(.top, 2)
             }
+
+        // Calendar
+        case .calendarEnabled: row(.calendarEnabled, label: "Calendar", kind: .toggle, value: calendarValue)
+        case .calendarLead:    row(.calendarLead, label: "Heads-up before meetings", kind: .cycle, value: "\(nav.calendarLeadMinutes) min", enabled: nav.calendarEnabled)
+        case .calendarSummary: row(.calendarSummary, label: "Morning summary", kind: .toggle, value: nav.calendarSummaryEnabled ? "On" : "Off", enabled: nav.calendarEnabled)
+        case .calendarSummaryTime: row(.calendarSummaryTime, label: "Summary time", kind: .cycle, value: SummarySettings.label(nav.calendarSummaryMinutes), enabled: nav.calendarEnabled && nav.calendarSummaryEnabled)
+        case .calendarWeekdaysOnly: row(.calendarWeekdaysOnly, label: "Weekdays only", kind: .toggle, value: nav.calendarWeekdaysOnly ? "On" : "Off", enabled: nav.calendarEnabled && nav.calendarSummaryEnabled)
+        case .calendarSummaryEmpty: row(.calendarSummaryEmpty, label: "Summary on empty days", kind: .toggle, value: nav.calendarSummaryEmpty ? "On" : "Off", enabled: nav.calendarEnabled && nav.calendarSummaryEnabled)
+        case .calendarDetectJoin: row(.calendarDetectJoin, label: "Detect joining (Automation)", kind: .toggle, value: nav.calendarDetectJoin ? "On" : "Off", enabled: nav.calendarEnabled)
 
         // Panel
         case .hotkey:

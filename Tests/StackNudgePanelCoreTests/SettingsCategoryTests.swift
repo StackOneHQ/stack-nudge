@@ -250,6 +250,51 @@ final class SettingsCategoryTests: XCTestCase {
         XCTAssertEqual(nav.selectedRow, .browseExtensions)
     }
 
+    func testTheCalendarCategoryFollowsIntegrationsAndHoldsItsRows() {
+        let all = SettingsCategory.allCases
+        XCTAssertEqual(SettingsCategory.calendar.label, "Calendar")
+        XCTAssertEqual(all.firstIndex(of: .calendar), all.firstIndex(of: .integrations).map { $0 + 1 })
+        XCTAssertEqual(PanelNav().rows(in: .calendar),
+                       [.calendarEnabled, .calendarLead, .calendarSummary, .calendarSummaryTime,
+                        .calendarWeekdaysOnly, .calendarSummaryEmpty, .calendarDetectJoin])
+    }
+
+    // Every calendar row is a toggle or a cycle, so arrows act on it.
+    func testArrowsActOnEveryCalendarRow() {
+        let nav = PanelNav()
+        nav.settingsCategory = .calendar
+        for row in nav.rows(in: .calendar) {
+            nav.selectedSettingIndex = nav.index(of: row) ?? 0
+            XCTAssertEqual(nav.selectedRow, row)
+            XCTAssertTrue(nav.selectedRowRespondsToArrows, "\(row)")
+        }
+    }
+
+    func testCalendarDefaultsAreOffWithTheSummaryOnWeekdaysAtNine() {
+        let nav = PanelNav()
+        XCTAssertFalse(nav.calendarEnabled)
+        XCTAssertEqual(nav.calendarSettings, CalendarSettings())
+        XCTAssertEqual(nav.calendarSettings.leadMinutes, 10)
+        XCTAssertEqual(nav.calendarSettings.summary.minutes, 9 * 60)
+        XCTAssertTrue(nav.calendarSettings.summary.weekdaysOnly)
+        XCTAssertTrue(nav.calendarSettings.detectJoin)
+        XCTAssertTrue(nav.calendarSettings.calendarIds.isEmpty)
+    }
+
+    func testSummaryTimeSnapsToTheNearestOfferedTime() {
+        XCTAssertEqual(PanelNav.summaryMinutes("09:00"), 9 * 60)
+        XCTAssertEqual(PanelNav.summaryMinutes("8:30"), 8 * 60 + 30)
+        XCTAssertEqual(PanelNav.summaryMinutes("09:20"), 9 * 60 + 30)
+        XCTAssertEqual(PanelNav.summaryMinutes("noon"), 9 * 60)
+        XCTAssertEqual(PanelNav.summaryMinutes(nil), 9 * 60)
+    }
+
+    func testCalendarSelectionIsACommaSeparatedListWhereEmptyMeansAll() {
+        XCTAssertEqual(PanelNav.calendarIds("A1, B2 ,,C3"), ["A1", "B2", "C3"])
+        XCTAssertTrue(PanelNav.calendarIds("").isEmpty)
+        XCTAssertTrue(PanelNav.calendarIds(nil).isEmpty)
+    }
+
     private func row(_ id: String) -> ExtensionRow {
         ExtensionRow(id: id, name: id, description: "", installedVersion: "1.0.0",
                      availableVersion: nil, refusedReason: nil, requires: [], config: [])
