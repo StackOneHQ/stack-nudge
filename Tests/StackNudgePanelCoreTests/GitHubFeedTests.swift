@@ -242,15 +242,20 @@ final class GitHubFeedTests: XCTestCase {
         let rows = PRRows.rows(snap, login: login)
         XCTAssertEqual(rows.map(\.section), [.mine, .review])
         XCTAssertEqual(rows[0].label, "app#1")
-        XCTAssertEqual(rows[0].chips.map(\.text), ["Draft", "Changes requested", "CI failing", "Conflict"])
+        XCTAssertEqual(rows[0].chips.map(\.text), ["Changes requested", "CI failing", "Conflict"], "a decision outranks draft")
         XCTAssertEqual(rows[0].url?.absoluteString, "https://github.com/acme/app/pull/1")
-        XCTAssertEqual(rows[1].chips.map(\.text), ["from bob"])
+        XCTAssertEqual(rows[1].chips.map(\.text), ["Requested", "from bob"])
     }
 
     func testAReRequestSaysSo() {
         let now = GitHubFeed.isoDate("2027-01-15T09:00:00Z")!
         let snap = snapshot(requested: [requested(requestedAt: "2027-01-15T08:00:00Z", reviewedAt: "2027-01-14T12:00:00Z")])
-        XCTAssertEqual(PRRows.rows(snap, login: login, now: now).first?.chips.first?.text, "asked again by bob")
+        XCTAssertEqual(PRRows.rows(snap, login: login, now: now).first?.chips.map(\.text), ["Requested", "asked again by bob"])
+    }
+
+    func testAPRWithNoDecisionIsInReviewOrDraft() {
+        XCTAssertEqual(PRRows.rows(snapshot(mine: [pr()]), login: login).first?.chips.first?.text, "In review")
+        XCTAssertEqual(PRRows.rows(snapshot(mine: [pr(draft: true)]), login: login).first?.chips.first?.text, "Draft")
     }
 
     func testAGreenApprovedPRReadsAsGood() {
@@ -264,7 +269,7 @@ final class GitHubFeedTests: XCTestCase {
         XCTAssertTrue(got.isEmpty, "\(got.map(\.title))")
         let rows = PRRows.rows(snapshot(requested: [requested(number: 8, team: "Platform"), requested(number: 7)]), login: login)
         XCTAssertEqual(rows.map(\.label), ["api#7", "api#8"], "direct requests first")
-        XCTAssertEqual(rows[1].chips.map(\.text), ["team: Platform", "by alice"])
+        XCTAssertEqual(rows[1].chips.map(\.text), ["Requested", "team: Platform", "by alice"])
     }
 }
 

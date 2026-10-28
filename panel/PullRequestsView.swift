@@ -7,7 +7,8 @@ import SwiftUI
 struct PRRow: Identifiable, Equatable {
     enum Section: String { case mine = "Mine", review = "To review" }
     struct Chip: Equatable {
-        enum Tone { case neutral, good, attention, bad }
+        // Hounder's colours: review state and the request label read the same here.
+        enum Tone { case neutral, good, attention, bad, inReview, requested }
         let text: String
         let tone: Tone
     }
@@ -26,12 +27,12 @@ enum PRRows {
     // recently updated first).
     static func rows(_ snapshot: GitHubFeed.Snapshot, login: String?, now: Date = Date()) -> [PRRow] {
         let mine = snapshot.mine.map { pr -> PRRow in
+            // One review-state label, as in Hounder: a decision outranks draft.
             var chips: [PRRow.Chip] = []
-            if pr.isDraft { chips.append(.init(text: "Draft", tone: .neutral)) }
             switch pr.reviewDecision {
+            case "CHANGES_REQUESTED": chips.append(.init(text: "Changes requested", tone: .bad))
             case "APPROVED":          chips.append(.init(text: "Approved", tone: .good))
-            case "CHANGES_REQUESTED": chips.append(.init(text: "Changes requested", tone: .attention))
-            default: break
+            default: chips.append(pr.isDraft ? .init(text: "Draft", tone: .neutral) : .init(text: "In review", tone: .inReview))
             }
             switch pr.commits.nodes.first?.commit.statusCheckRollup?.state {
             case "SUCCESS":               chips.append(.init(text: "CI passing", tone: .good))
@@ -48,7 +49,7 @@ enum PRRows {
         let direct = snapshot.requested.filter { pr in login.map { pr.isDirect(login: $0) } ?? false }
         let viaTeam = snapshot.requested.filter { pr in !(login.map { pr.isDirect(login: $0) } ?? false) }
         let review = (direct + viaTeam).map { pr -> PRRow in
-            var chips: [PRRow.Chip] = []
+            var chips: [PRRow.Chip] = [.init(text: "Requested", tone: .requested)]
             if let login, pr.isDirect(login: login) {
                 let request = GitHubFeed.latestRequest(pr, login: login, now: now)
                 if let who = request?.requester ?? pr.author?.login {
@@ -166,6 +167,8 @@ struct PullRequestsView: View {
         case .good:      return .green
         case .attention: return .orange
         case .bad:       return .red
+        case .inReview:  return .blue
+        case .requested: return .purple
         }
     }
 
