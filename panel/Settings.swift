@@ -35,7 +35,7 @@ struct SettingsView: View {
             PageFooter {
                 if nav.recordingHotkey || nav.recordingSpeakHotkey {
                     FooterHint(label: "Press a combo with ⌘ / ⇧ / ⌥ / ⌃", keys: [], primary: true)
-                    FooterHint(label: "Cancel", keys: ["Esc"])
+                    FooterHint(label: "Cancel", keys: ["↑", "↓"])
                 } else {
                     if nav.settingsDetailFocused {
                         FooterHint(label: "Move", keys: ["↑", "↓"])
@@ -43,20 +43,20 @@ struct SettingsView: View {
                         // here — on the sidebar it duplicates plain ↑↓.
                         FooterHint(label: "Category", keys: ["⌘↑↓"])
                         // Always rendered so the footer doesn't reflow as
-                        // selection moves, dimmed on the rows where ←/→ do
-                        // nothing — the same treatment the events page gives
-                        // its Snooze hint. Enter acts on every row, so "Act"
-                        // never dims.
-                        FooterHint(label: "Cycle", keys: ["←", "→"])
+                        // selection moves, dimmed on the rows where the cycle
+                        // keys do nothing — the same treatment the events page
+                        // gives its Snooze hint. Space / Enter act on every
+                        // row, so "Act" never dims.
+                        FooterHint(label: "Cycle", keys: ["→", "⇧←"])
                             .opacity(nav.selectedRowRespondsToArrows ? 1.0 : 0.35)
-                        FooterHint(label: "Act", keys: ["⏎"])
+                        FooterHint(label: "Act", keys: ["␣", "⏎"])
                     } else {
                         FooterHint(label: "Category", keys: ["↑", "↓"])
                         FooterHint(label: "Open", keys: ["→"])
                     }
-                    // One Esc hint, naming where it actually goes from here.
-                    FooterHint(label: nav.settingsDetailFocused ? "Categories" : "Hide",
-                               keys: ["Esc"])
+                    if nav.settingsDetailFocused {
+                        FooterHint(label: "Categories", keys: ["←"])
+                    }
                 }
             }
         }
@@ -405,7 +405,7 @@ struct SettingsView: View {
     // Runtime-permission nudge pinned above the settings sections when one or
     // more grants (Accessibility / Automation / Notifications) aren't set.
     // Keyboard-navigable like the update row — selecting + Enter, or a click,
-    // opens the Permissions window. Orange (not accent) to read as "needs
+    // opens the Permissions page. Orange (not accent) to read as "needs
     // attention" rather than the update affordance.
     private func permissionsRow(_ missing: [SettingsPane]) -> some View {
         let selected = nav.selectedSettingIndex == nav.index(of: .permissions)

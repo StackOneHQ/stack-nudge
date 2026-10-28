@@ -186,106 +186,188 @@ enum SettingsPane {
     }
 }
 
-struct PermissionsView: View {
+// The grants on the Permissions page and which one is selected. The page is a
+// Settings sub-page rather than a window of its own, so the panel's key handler
+// drives it through here.
+final class PermissionsModel: ObservableObject {
 
-    @State private var accessibility: PermissionStatus = .unknown
-    @State private var automation:    PermissionStatus = .unknown
-    @State private var notifications: PermissionStatus = .unknown
-    @State private var iTerm:         PermissionStatus?
+    struct Row: Equatable {
+        let pane: SettingsPane
+        let status: PermissionStatus
+    }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Permissions")
-                    .font(.title3.weight(.semibold))
-                Text("StackNudge needs these grants to show banners, focus the right window, and send the Enter keystroke when you approve a permission nudge.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+    @Published private(set) var rows: [Row] = []
+    @Published var selected = 0
+
+    // Called after every probe, so the Settings tab dot and the "Permissions
+    // needed" banner clear as soon as this page sees a grant.
+    var onRefresh: (() -> Void)?
+
+    var selectedRow: Row? { rows.indices.contains(selected) ? rows[selected] : nil }
+
+    // Notifications answer asynchronously, so the other grants are probed in
+    // its callback and every row lands at once, in the order the page lists them.
+    func refresh() {
+        Permissions.notifications { [weak self] notifications in
+            guard let self else { return }
+            var rows = [Row(pane: .notifications, status: notifications),
+                        Row(pane: .accessibility, status: Permissions.accessibility()),
+                        Row(pane: .automation, status: Permissions.automation())]
+            if let iTerm = Permissions.iTermAutomation() {
+                rows.append(Row(pane: .automationITerm2, status: iTerm))
             }
-
-            row(title: "Notifications",
-                description: "Required for the macOS banner to appear when an agent finishes or pauses for approval.",
-                status: notifications,
-                pane: .notifications)
-
-            row(title: "Accessibility",
-                description: "Required for the Enter-to-approve keystroke. AXIsProcessTrusted() is false until you grant this.",
-                status: accessibility,
-                pane: .accessibility)
-
-            row(title: "Automation → System Events",
-                description: "Required for AppleScript to focus the right window when you act on a nudge.",
-                status: automation,
-                pane: .automation)
-
-            if let iTerm {
-                row(title: "Automation → iTerm2",
-                    description: "Required to bring the exact iTerm2 tab forward for a tmux-hosted agent.",
-                    status: iTerm,
-                    pane: .automationITerm2)
-            }
-
-            Spacer(minLength: 0)
-
-            HStack {
-                Spacer()
-                Button("Refresh") { refresh() }
-                    .keyboardShortcut("r", modifiers: .command)
-            }
-        }
-        .padding(20)
-        .frame(width: 480, height: 540)
-        .onAppear { refresh() }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
-            refresh()
+            if rows != self.rows { self.rows = rows }
+            self.selected = min(self.selected, rows.count - 1)
+            self.onRefresh?()
         }
     }
 
-    private func row(title: String, description: String,
-                     status: PermissionStatus, pane: SettingsPane) -> some View {
+    func selectPrevious() { selected = max(selected - 1, 0) }
+    func selectNext() { selected = min(selected + 1, max(rows.count - 1, 0)) }
+    func selectEdge(top: Bool) { selected = top ? 0 : max(rows.count - 1, 0) }
+
+    // A granted row has nothing to ask for; its ⏎ hint dims to match.
+    func promptSelected() {
+        guard let row = selectedRow, row.status != .granted else { return }
+        prompt(row.pane)
+    }
+
+    func prompt(_ pane: SettingsPane) {
+        if pane == .notifications {
+            Permissions.promptNotifications()
+        } else {
+            Permissions.resetAndPrompt(pane)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.refresh() }
+    }
+
+    func openSelectedInSettings() {
+        guard let row = selectedRow else { return }
+        Permissions.openSettings(row.pane)
+    }
+}
+
+struct PermissionsView: View {
+
+    @ObservedObject var model: PermissionsModel
+    // Settings, or the setup screen when it was opened from there.
+    let backLabel: String
+    let onBack: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Divider().opacity(0.4)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("StackNudge needs these grants to show banners, focus the right window, and send the Enter keystroke when you approve a permission nudge.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    ForEach(Array(model.rows.enumerated()), id: \.offset) { index, row in
+                        rowView(row, selected: index == model.selected)
+                            .contentShape(Rectangle())
+                            .onTapGesture { model.selected = index }
+                    }
+                }
+                .padding(14)
+                .background(ThinScrollers())
+            }
+            footer
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onAppear { model.refresh() }
+        // Coming back from System Settings or a system prompt makes the panel
+        // key again, which is when a new grant shows up.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            model.refresh()
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Button(action: onBack) {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.left")
+                        .font(.caption.weight(.semibold))
+                    Text(backLabel)
+                        .font(.caption)
+                }
+                .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+
+            Text("Permissions")
+                .font(.subheadline.weight(.medium))
+                .padding(.leading, 6)
+
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    private func rowView(_ row: PermissionsModel.Row, selected: Bool) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: glyph(for: status))
+            Image(systemName: glyph(for: row.status))
                 .font(.title3)
-                .foregroundStyle(color(for: status))
+                .foregroundStyle(color(for: row.status))
                 .frame(width: 22)
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.subheadline.weight(.medium))
-                Text(description).font(.caption).foregroundStyle(.secondary)
+                Text(title(row.pane)).font(.subheadline.weight(.medium))
+                Text(description(row.pane)).font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 6) {
-                if status != .granted {
-                    Button(pane == .notifications ? "Prompt" : "Reset & prompt") {
-                        if pane == .notifications {
-                            Permissions.promptNotifications()
-                        } else {
-                            Permissions.resetAndPrompt(pane)
-                        }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { refresh() }
+                if row.status != .granted {
+                    Button(row.pane == .notifications ? "Prompt" : "Reset & prompt") {
+                        model.prompt(row.pane)
                     }
                     .controlSize(.small)
                 }
-                Button("Settings") {
-                    Permissions.openSettings(pane)
-                }
-                .controlSize(.small)
+                Button("Settings") { Permissions.openSettings(row.pane) }
+                    .controlSize(.small)
             }
         }
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.primary.opacity(0.05))
+                .fill(Color.primary.opacity(selected ? 0.12 : 0.05))
         )
     }
 
-    private func refresh() {
-        accessibility = Permissions.accessibility()
-        automation    = Permissions.automation()
-        iTerm         = Permissions.iTermAutomation()
-        Permissions.notifications { notifications = $0 }
+    private var footer: some View {
+        let canPrompt = model.selectedRow.map { $0.status != .granted } ?? false
+        return PageFooter {
+            FooterHint(label: "Prompt", keys: ["⏎"], primary: true).opacity(canPrompt ? 1 : 0.35)
+            FooterHint(label: "System Settings", keys: ["⌘⏎"])
+            FooterHint(label: "Refresh", keys: ["⌘R"])
+            FooterHint(label: backLabel, keys: ["←"])
+        }
+    }
+
+    private func title(_ pane: SettingsPane) -> String {
+        switch pane {
+        case .notifications:    return "Notifications"
+        case .accessibility:    return "Accessibility"
+        case .automation:       return "Automation → System Events"
+        case .automationITerm2: return "Automation → iTerm2"
+        }
+    }
+
+    private func description(_ pane: SettingsPane) -> String {
+        switch pane {
+        case .notifications:
+            return "Required for the macOS banner to appear when an agent finishes or pauses for approval."
+        case .accessibility:
+            return "Required for the Enter-to-approve keystroke. AXIsProcessTrusted() is false until you grant this."
+        case .automation:
+            return "Required for AppleScript to focus the right window when you act on a nudge."
+        case .automationITerm2:
+            return "Required to bring the exact iTerm2 tab forward for a tmux-hosted agent."
+        }
     }
 
     private func glyph(for status: PermissionStatus) -> String {
@@ -302,44 +384,5 @@ struct PermissionsView: View {
         case .denied:  return .red
         case .unknown: return .orange
         }
-    }
-
-}
-
-// NSWindow doesn't handle Esc out of the box; cancelOperation is the
-// standard selector AppKit sends when the user hits Escape (or ⌘. ) in
-// a window that has no default text-field cancel target. Override to
-// close, so the permissions sheet feels like every other macOS modal.
-private final class EscClosesWindow: NSWindow {
-    override func cancelOperation(_ sender: Any?) {
-        performClose(sender)
-    }
-}
-
-final class PermissionsWindowController: NSWindowController {
-
-    convenience init() {
-        let window = EscClosesWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 540),
-            styleMask: [.titled, .closable],
-            backing: .buffered, defer: false)
-        window.title = "StackNudge — Permissions"
-        window.isReleasedWhenClosed = false
-        window.center()
-        // .moveToActiveSpace follows the user to whatever Space they're on,
-        // which is what we want for an on-demand permissions window. We do
-        // NOT raise the window's level — when the user clicks a button that
-        // triggers a system dialog (Accessibility prompt) or opens System
-        // Settings, those should be the focused, frontmost window. With
-        // .modalPanel level, our window stayed on top and clipped them.
-        window.collectionBehavior = [.moveToActiveSpace]
-        window.contentView = NSHostingView(rootView: PermissionsView())
-        self.init(window: window)
-    }
-
-    func showAndRaise() {
-        NSApp.activate(ignoringOtherApps: true)
-        showWindow(nil)
-        window?.orderFrontRegardless()
     }
 }

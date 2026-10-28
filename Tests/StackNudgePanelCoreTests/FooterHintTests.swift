@@ -123,14 +123,13 @@ final class EventsFooterHintsTests: XCTestCase {
 
     private func hints(pane: EventsPane = .live,
                        filterFocused: Bool = false,
-                       filterQuery: String = "",
                        liveQueueEmpty: Bool = false,
                        primaryAction: String? = "Open editor",
                        dismissLabel: String = "Dismiss",
                        snoozeEnabled: Bool = false,
                        muted: Bool = false) -> [FooterHintSpec] {
         PanelContentView.eventsFooterHints(
-            pane: pane, filterFocused: filterFocused, filterQuery: filterQuery,
+            pane: pane, filterFocused: filterFocused,
             liveQueueEmpty: liveQueueEmpty, primaryAction: primaryAction,
             dismissLabel: dismissLabel, snoozeEnabled: snoozeEnabled, muted: muted)
     }
@@ -157,7 +156,7 @@ final class EventsFooterHintsTests: XCTestCase {
 
     func test_actionsAndShortcutsAreNeverSheddable() {
         let unsheddable = hints().filter { $0.shedOrder == nil }.map(\.label)
-        XCTAssertEqual(unsheddable, ["Open editor", "Select", "Dismiss", "Mute", "History", "Hide"])
+        XCTAssertEqual(unsheddable, ["Open editor", "Select", "Dismiss", "Mute", "History"])
     }
 
     func test_primaryActionIsFirstAndMarkedPrimary() {
@@ -184,31 +183,35 @@ final class EventsFooterHintsTests: XCTestCase {
 
     func test_emptyQueue_keepsMuteAndHistory() {
         let actual = hints(liveQueueEmpty: true).map(\.label)
-        XCTAssertEqual(actual, ["Mute", "History", "Hide"])
+        XCTAssertEqual(actual, ["Mute", "History"])
     }
 
-    func test_historyUnfocused_advertisesRowNavigationFilterAndOneExit() {
-        // One exit, not two. Esc steps back to the live queue from here; it
-        // doesn't hide the panel, so a "Hide Esc" hint alongside "Back" was a lie.
+    // PageFooter adds "Hide Esc" to every bar itself, so no page lists it.
+    func test_noPaneListsEscape() {
+        for pane in [EventsPane.live, .history] {
+            for focused in [false, true] {
+                XCTAssertFalse(hints(pane: pane, filterFocused: focused)
+                    .contains { $0.keys.contains("Esc") })
+            }
+        }
+        XCTAssertFalse(hints(liveQueueEmpty: true).contains { $0.keys.contains("Esc") })
+    }
+
+    func test_historyUnfocused_advertisesRowNavigationFilterAndBack() {
         let actual = hints(pane: .history)
         XCTAssertEqual(actual.map(\.label), ["Select", "Filter", "Back"])
         XCTAssertEqual(actual[0].keys, ["↑↓", "⌘↑↓"])
         XCTAssertEqual(actual[1].keys, ["/"])
-        XCTAssertEqual(actual[2].keys, ["Esc"])
-        XCTAssertFalse(actual.contains { $0.label == "Hide" })
+        XCTAssertEqual(actual[2].keys, ["←"])
     }
 
-    func test_historyFocused_offersReturnToTheRowsAndEscape() {
+    func test_historyFocused_offersReturnToTheRows() {
         // The field editor consumes ← and ↑↓ as caret moves once it has focus,
         // so advertising them there would be a lie. ⏎ hands the keyboard back to
-        // the rows without clearing the filter; Esc clears it, then steps back.
-        let empty = hints(pane: .history, filterFocused: true)
-        XCTAssertEqual(empty.map(\.label), ["Rows", "Back"])
-        XCTAssertEqual(empty[0].keys, ["⏎"])
-        XCTAssertEqual(empty[1].keys, ["Esc"])
-
-        let filtered = hints(pane: .history, filterFocused: true, filterQuery: "eng")
-        XCTAssertEqual(filtered.map(\.label), ["Rows", "Clear filter"])
+        // the rows without clearing the filter.
+        let actual = hints(pane: .history, filterFocused: true)
+        XCTAssertEqual(actual.map(\.label), ["Rows"])
+        XCTAssertEqual(actual[0].keys, ["⏎"])
     }
 }
 
@@ -217,35 +220,27 @@ final class EventsFooterHintsTests: XCTestCase {
 final class HistoryKeyActionTests: XCTestCase {
 
     private func action(_ keyCode: UInt16,
-                        _ characters: String? = nil,
-                        filterIsEmpty: Bool = true) -> PanelController.HistoryKeyAction {
-        PanelController.historyKeyAction(keyCode: keyCode,
-                                         characters: characters,
-                                         filterIsEmpty: filterIsEmpty)
+                        _ characters: String? = nil) -> PanelController.HistoryKeyAction {
+        PanelController.historyKeyAction(keyCode: keyCode, characters: characters)
     }
 
-    func test_horizontalArrowsDoNothing() {
-        // ←/→ no longer move between panes: Esc is the single way out, so the
-        // footer doesn't have to advertise both a Back and a Hide. They must
-        // still be swallowed rather than reach the filter (their private-use
-        // codepoints once got seeded into it as invisible junk).
-        XCTAssertEqual(action(123, "\u{F702}"), .swallow)
-        XCTAssertEqual(action(123, "\u{F702}", filterIsEmpty: false), .swallow)
+    // ← is the way back to the live queue, as on every page with a level
+    // above it. → is swallowed rather than reaching the filter: the arrows'
+    // private-use codepoints once got seeded into it as invisible junk.
+    func test_leftStepsBackAndRightIsSwallowed() {
+        XCTAssertEqual(action(123, "\u{F702}"), .back)
         XCTAssertEqual(action(124, "\u{F703}"), .swallow)
     }
 
-    func test_escapeIsTheOnlyWayOut() {
-        XCTAssertEqual(action(53, "\u{1B}", filterIsEmpty: true), .back)
+    // Esc hides the panel before this table is consulted (globalKeyAction), so
+    // it never reaches here; if it did, it must not seed the filter.
+    func test_escapeIsNotTheWayBack() {
+        XCTAssertEqual(action(53, "\u{1B}"), .swallow)
     }
 
     func test_verticalArrowsMoveTheRowSelection() {
         XCTAssertEqual(action(126, "\u{F700}"), .moveSelection(-1))
         XCTAssertEqual(action(125, "\u{F701}"), .moveSelection(1))
-    }
-
-    func test_escapeClearsTheFilterThenStepsBack() {
-        XCTAssertEqual(action(53, "\u{1B}", filterIsEmpty: false), .clearFilter)
-        XCTAssertEqual(action(53, "\u{1B}", filterIsEmpty: true), .back)
     }
 
     func test_slashFocusesTheFilterWithoutTypingIntoIt() {
@@ -445,22 +440,19 @@ final class ExtensionTabForceRefreshTests: XCTestCase {
 // "reach SwiftUI" — but a focused field is first responder, and
 // FloatingPanel.keyDown only fires for what the first responder declines, so
 // letters never reached the handler at all. Nothing needed releasing; all that
-// changed was that Esc, ↑↓ and ⏎ stopped working while the footer went on
+// changed was that ↑↓ and ⏎ stopped working while the footer went on
 // advertising them.
 final class ExtensionsKeyActionTests: XCTestCase {
 
     private func action(_ keyCode: UInt16,
-                        _ characters: String? = nil,
-                        queryIsEmpty: Bool = true) -> PanelController.ExtensionsKeyAction {
-        PanelController.extensionsKeyAction(keyCode: keyCode,
-                                            characters: characters,
-                                            queryIsEmpty: queryIsEmpty)
+                        _ characters: String? = nil) -> PanelController.ExtensionsKeyAction {
+        PanelController.extensionsKeyAction(keyCode: keyCode, characters: characters)
     }
 
-    // Two steps, like the history filter: clear what you typed, then leave.
-    func test_escapeClearsTheQueryBeforeItStepsBack() {
-        XCTAssertEqual(action(53, "\u{1B}", queryIsEmpty: true), .back)
-        XCTAssertEqual(action(53, "\u{1B}", queryIsEmpty: false), .clearQuery)
+    // ← leaves; Esc hides the panel before this table is consulted.
+    func test_leftStepsBack() {
+        XCTAssertEqual(action(123, "\u{F702}"), .back)
+        XCTAssertEqual(action(53, "\u{1B}"), .swallow)
     }
 
     func test_slashHandsOverToTheField() {
@@ -488,9 +480,8 @@ final class ExtensionsKeyActionTests: XCTestCase {
     // AppKit reports arrows and function keys as private-use scalars, which are
     // neither control characters nor illegal ones — a "not a control character"
     // test seeds the query with invisible junk and hands the field focus off
-    // the back of it.
+    // the back of it. (← is the way back, covered above.)
     func test_arrowsAndFunctionKeysAreSwallowedRatherThanTyped() {
-        XCTAssertEqual(action(123, "\u{F702}"), .swallow)
         XCTAssertEqual(action(124, "\u{F703}"), .swallow)
         XCTAssertEqual(action(122, "\u{F704}"), .swallow)
         XCTAssertEqual(action(48, "\t"), .swallow)
@@ -522,8 +513,10 @@ final class ExtensionConfigKeyActionTests: XCTestCase {
         PanelController.extensionConfigKeyAction(keyCode: keyCode)
     }
 
-    func test_escapeStepsBackOffThePage() {
-        XCTAssertEqual(action(53), .back)
+    // ← leaves; Esc hides the panel before this table is consulted.
+    func test_leftStepsBackOffThePage() {
+        XCTAssertEqual(action(123), .back)
+        XCTAssertEqual(action(53), .swallow)
     }
 
     func test_verticalArrowsMoveBetweenFields() {
@@ -540,8 +533,7 @@ final class ExtensionConfigKeyActionTests: XCTestCase {
         XCTAssertEqual(action(48), .activateSelection)
     }
 
-    func test_horizontalArrowsDoNothingOnAForm() {
-        XCTAssertEqual(action(123), .swallow)
+    func test_rightDoesNothingOnAForm() {
         XCTAssertEqual(action(124), .swallow)
     }
 
@@ -578,7 +570,7 @@ final class ExtensionConfigFooterTests: XCTestCase {
 
     // One hint per action. A separate primary hint naming the selected target
     // printed the bar's own labels twice the moment the ring reached the
-    // chevron: "Back ⏎ · Move · Back Esc".
+    // chevron: "Back ⏎ · Move · Back ←".
     func test_noLabelIsAdvertisedTwice() {
         for selection: ExtensionConfigModel.Target in [.back, .field("A"), .save, .remove] {
             let names = labels(hints(keyCount: 2, editing: false, selection: selection))
@@ -604,14 +596,14 @@ final class ExtensionConfigFooterTests: XCTestCase {
         XCTAssertEqual(keys(.field("A"), "Edit"), ["⏎"])
         XCTAssertEqual(keys(.save, "Save"), ["⏎", "⌘S"])
         XCTAssertEqual(keys(.remove, "Remove"), ["⏎", "⌘⌫"])
-        XCTAssertEqual(keys(.back, "Back"), ["⏎", "Esc"])
+        XCTAssertEqual(keys(.back, "Back"), ["⏎", "←"])
     }
 
     // And only there. A hint the ring is not on keeps its own key alone.
     func test_returnIsNotAdvertisedOnUnselectedTargets() {
         let specs = hints(keyCount: 2, editing: false, selection: .field("A"))
         XCTAssertEqual(specs.first { $0.label == "Save" }?.keys, ["⌘S"])
-        XCTAssertEqual(specs.first { $0.label == "Back" }?.keys, ["Esc"])
+        XCTAssertEqual(specs.first { $0.label == "Back" }?.keys, ["←"])
         XCTAssertEqual(specs.first { $0.label == "Remove" }?.keys, ["⌘⌫"])
     }
 
@@ -622,15 +614,16 @@ final class ExtensionConfigFooterTests: XCTestCase {
         XCTAssertTrue(labels(hints(keyCount: 2, editing: false, selection: .field("A"))).contains("Edit"))
     }
 
-    // Inside a field the page has given the keyboard away: Return saves,
-    // Esc hands it back rather than leaving the page.
+    // Inside a field the page has given the keyboard away: Return saves, and
+    // ⌫ on an emptied field puts the saved value back and hands it back.
     func test_editing_namesWhatTheKeysDoFromInsideAField() {
         XCTAssertEqual(labels(hints(keyCount: 2, editing: true)),
-                       ["Save", "Next field", "Done", "Remove"])
+                       ["Save", "Next field", "Clear to revert", "Remove"])
     }
 
     func test_editing_dropsTabWithOnlyOneField() {
-        XCTAssertEqual(labels(hints(keyCount: 1, editing: true)), ["Save", "Done", "Remove"])
+        XCTAssertEqual(labels(hints(keyCount: 1, editing: true)),
+                       ["Save", "Clear to revert", "Remove"])
     }
 
     // ⌘⌫ is a field-editor binding (deleteToBeginningOfLine), so a focused
@@ -665,7 +658,7 @@ final class ExtensionConfigFooterTests: XCTestCase {
     func test_backAndRemoveAreNeverSheddable() {
         for editing in [true, false] {
             for spec in hints(keyCount: 2, editing: editing, selection: .field("A"))
-            where ["Back", "Done", "Remove"].contains(spec.label) {
+            where ["Back", "Clear to revert", "Remove"].contains(spec.label) {
                 XCTAssertNil(spec.shedOrder, "\(spec.label) must not shed")
             }
         }
@@ -680,11 +673,9 @@ final class ExtensionsBrowserFooterTests: XCTestCase {
     private func hints(selection: ExtensionCatalog.Target?,
                        activation: String = "Install",
                        updateSelected: Bool = false,
-                       queryIsEmpty: Bool = true,
                        hasRows: Bool = true) -> [FooterHintSpec] {
         ExtensionsView.footerHints(selection: selection, activation: activation,
-                                   updateSelected: updateSelected,
-                                   queryIsEmpty: queryIsEmpty, hasRows: hasRows)
+                                   updateSelected: updateSelected, hasRows: hasRows)
     }
 
     private func labels(_ specs: [FooterHintSpec]) -> [String] { specs.map(\.label) }
@@ -705,7 +696,7 @@ final class ExtensionsBrowserFooterTests: XCTestCase {
     func test_onTheChevron_returnRidesOnBackAndTheRowVerbGoes() {
         let specs = hints(selection: .back, activation: "Install")
         XCTAssertEqual(labels(specs), ["Back", "Search", "Select", "Reload"])
-        XCTAssertEqual(keys(specs, "Back"), ["⏎", "Esc"])
+        XCTAssertEqual(keys(specs, "Back"), ["⏎", "←"])
     }
 
     // Try again and Reload are one action, so the button being selected adds ⏎
@@ -714,14 +705,6 @@ final class ExtensionsBrowserFooterTests: XCTestCase {
         let specs = hints(selection: .retry)
         XCTAssertEqual(labels(specs), ["Back", "Search", "Select", "Reload"])
         XCTAssertEqual(keys(specs, "Reload"), ["⏎", "⌘R"])
-    }
-
-    // With a query typed, Esc clears it rather than leaving, so ⏎ on the chevron
-    // must not be advertised on a hint that now means something else.
-    func test_withAQueryTypedEscapeClearsAndKeepsReturnOffIt() {
-        let specs = hints(selection: .back, queryIsEmpty: false)
-        XCTAssertEqual(keys(specs, "Clear"), ["Esc"])
-        XCTAssertFalse(labels(specs).contains("Back"))
     }
 
     func test_noLabelIsAdvertisedTwice() {

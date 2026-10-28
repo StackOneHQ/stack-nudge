@@ -237,16 +237,38 @@ struct ShedToFitLayout: Layout {
 
 // MARK: - Page-level layout
 
+// Mirrors PanelNav.editingText for views that don't hold the nav. Set once at
+// the root of the panel's content.
+private struct EditingTextKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var editingText: Bool {
+        get { self[EditingTextKey.self] }
+        set { self[EditingTextKey.self] = newValue }
+    }
+}
+
 // Bottom strip every panel page shares: hint pills on the right, hairline
 // divider above, subtle tint behind. Pages just fill the hints slot. (The
 // brand mark lives once in the top tab strip; the footer stays icon-free.)
+//
+// Esc works on every page, so the bar adds that hint itself, last and outside
+// the shedding layout: it is always the rightmost hint and is never the one a
+// narrow panel gives up. Pages don't list it. It reads "Cancel" while a text
+// field has focus, since Esc cancels the field there, and "Hide" otherwise.
 struct PageFooter<Hints: View>: View {
 
     @ViewBuilder var hints: () -> Hints
+    @Environment(\.editingText) private var editingText
 
     var body: some View {
-        ShedToFitLayout {
-            hints()
+        HStack(spacing: 0) {
+            ShedToFitLayout {
+                hints()
+            }
+            FooterHint(label: editingText ? "Cancel" : "Hide", keys: ["Esc"])
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)

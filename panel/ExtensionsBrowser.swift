@@ -29,7 +29,7 @@ final class ExtensionCatalog: ObservableObject {
     // Everything on the page the keyboard can land on, in the order it is drawn.
     // Not just the rows: the page has a back chevron above them and, when the
     // catalogue fetch failed, a Try again beside the reason. Both had a key
-    // already (Esc and ⌘R) and neither had a ring, so the page looked half
+    // already (← and ⌘R) and neither had a ring, so the page looked half
     // wired next to an extension's own, which walks its buttons.
     //
     // The search field is deliberately not a target. Every other control here
@@ -446,7 +446,6 @@ struct ExtensionsView: View {
                     selection: catalog.selection,
                     activation: activationLabel(in: rows),
                     updateSelected: selectedRow(in: rows)?.updateAvailable == true,
-                    queryIsEmpty: catalog.query.isEmpty,
                     hasRows: !rows.isEmpty)
                 ForEach(hints.indices, id: \.self) { FooterHintRow(spec: hints[$0]) }
             }
@@ -460,10 +459,10 @@ struct ExtensionsView: View {
             catalog.reconcileSelection(among: rows)
             // Deliberately NOT focused. A focused field is first responder, and
             // FloatingPanel.keyDown only fires for what the first responder
-            // declines — so focusing on arrival handed the field Esc, ↑↓ and ⏎
+            // declines — so focusing on arrival handed the field ←, ↑↓ and ⏎
             // and left every hint in the footer describing a key that no longer
-            // did anything. Same contract the history pane states at
-            // Panel.swift:4042, reached the same way: typing hands over.
+            // did anything. Same contract the history pane states in
+            // panelHandlesKey, reached the same way: typing hands over.
             searchFocused = false
         }
         .onChange(of: catalog.searchFocusRequests) { _ in searchFocused = true }
@@ -495,19 +494,14 @@ struct ExtensionsView: View {
     static func footerHints(selection: ExtensionCatalog.Target?,
                             activation: String,
                             updateSelected: Bool,
-                            queryIsEmpty: Bool,
                             hasRows: Bool) -> [FooterHintSpec] {
         var hints: [FooterHintSpec] = []
-        // Named for what Esc does from here, which depends on whether there is a
-        // query to clear first. ⏎ joins it only when the chevron is selected
-        // *and* Esc would leave rather than clear, or the one key would be
-        // advertised for two different things.
+        // ⏎ joins ← when the chevron is selected, since both then leave.
         let backSelected = selection == .back
-        let escapeLeaves = queryIsEmpty
         hints.append(FooterHintSpec(
-            label: escapeLeaves ? "Back" : "Clear",
-            keys: backSelected && escapeLeaves ? ["⏎", "Esc"] : ["Esc"],
-            primary: backSelected && escapeLeaves))
+            label: "Back",
+            keys: backSelected ? ["⏎", "←"] : ["←"],
+            primary: backSelected))
         hints.append(FooterHintSpec(label: "Search", keys: ["/"]))
         // Dimmed rather than dropped when a query, or an empty catalogue, leaves
         // nothing to walk: the bar must not reflow as the list filters, and an
@@ -575,13 +569,9 @@ struct ExtensionsView: View {
                 .font(.caption)
                 .focused($searchFocused)
                 // Once the field *is* first responder it consumes keys before
-                // NSWindow.keyDown, so Esc and Enter have to be handled here or
-                // not at all. Esc clears the query, then steps out of the field
-                // — the same two-step the history filter uses; Enter releases
-                // focus so ↑↓ and ⏎ go back to acting on the list.
-                .onExitCommand {
-                    if catalog.query.isEmpty { searchFocused = false } else { catalog.query = "" }
-                }
+                // NSWindow.keyDown, so Enter has to be handled here or not at
+                // all. It releases focus so ↑↓ and ⏎ go back to acting on the
+                // list.
                 .onSubmit { searchFocused = false }
             if !catalog.query.isEmpty {
                 Button { catalog.query = "" } label: {

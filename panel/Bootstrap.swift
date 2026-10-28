@@ -1664,7 +1664,7 @@ struct UninstallView: View {
             if nav.uninstallPhase == .confirm {
                 FooterHint(label: "Uninstall", keys: ["⏎"], primary: true)
                 FooterDivider()
-                FooterHint(label: "Cancel", keys: ["Esc"])
+                FooterHint(label: "Cancel", keys: ["←"])
             } else {
                 FooterHint(label: "Don't quit StackNudge during uninstall", keys: [])
             }

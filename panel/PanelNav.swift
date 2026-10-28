@@ -12,6 +12,9 @@ enum PanelMode: Hashable {
     case extensionTab(String)
     case settings
     case phrases
+    // Which grants StackNudge has. A sub-page of Settings, also opened from the
+    // setup screen; permissionsReturnMode says which one ← goes back to.
+    case permissions
     // The extension browser. Absent from orderedTabs like .phrases: it is a
     // sub-page of Settings, not a tab.
     case extensions
@@ -702,7 +705,7 @@ final class PanelNav: ObservableObject {
     // so a client losing its data can't strand the selection out of range.
     @Published var usageClientIndex: Int = 0 { didSet { widgetQuotaCache = nil } }
     // When true, keyboard focus is inside the Usage detail pane: ↑/↓ scroll it
-    // rather than switching client. →/Enter steps in; ←/Esc steps back out.
+    // rather than switching client. →/Enter steps in; ← steps back out.
     @Published var usageDetailFocused: Bool = false
     // Which pane of the detail carousel is showing. While the detail holds
     // focus, → steps forward through the panes and ← steps back — stepping back
@@ -934,6 +937,13 @@ final class PanelNav: ObservableObject {
     // ⏎ and ⌫ mean different things depending on the row.
     @Published var eventsPane: EventsPane = .live
     @Published var historyQuery: String = ""
+    // True while any text field in the panel has focus, when Esc cancels the
+    // field rather than hiding the panel. Kept by PanelController from the
+    // panel's first responder; PageFooter relabels its Esc hint from it.
+    @Published var editingText = false
+    // Where ← leaves the Permissions page for: .settings, or .bootstrap when
+    // setup opened it. Setup has no tab strip, so the page keeps that look too.
+    @Published var permissionsReturnMode: PanelMode = .settings
     // Bumped when the panel's key handler wants the history filter field to take
     // the keyboard (the user pressed / or started typing). A counter rather than
     // a Bool because @FocusState can't be driven from an ObservableObject
@@ -1058,7 +1068,7 @@ final class PanelNav: ObservableObject {
     // That view resets to the category sidebar on every appearance, which is
     // right for a fresh visit and wrong for a return: the Extensions category
     // now holds a card per installed extension, so opening the third one and
-    // pressing Esc put the keyboard back on the sidebar, four keystrokes from
+    // stepping back put the keyboard back on the sidebar, four keystrokes from
     // where it had just been. Configuring two extensions in a row is exactly
     // the flow that happens in.
     var settingsResumeRow: SettingsRow?
@@ -1597,7 +1607,7 @@ final class PanelNav: ObservableObject {
 
     // Probe the runtime grants and record which aren't set yet.
     // Notifications is async, so the ordered list is assembled in its callback
-    // (same order the Permissions window renders them). denied and
+    // (same order the Permissions page renders them). denied and
     // not-yet-determined both count as missing — the panel can't fully
     // function without the grant either way. iTerm2 is the exception: only a
     // denial counts, because an undecided grant is asked for on first focus.
@@ -1741,18 +1751,26 @@ final class PanelNav: ObservableObject {
         case .uninstall:        actions?.beginUninstall()
         case .quit:             actions?.quit()
         case .openRepo:         openRepository()
-        // Toggles + cycles flip/step on Enter, same as left/right.
+        // Toggles flip and cycles step forward on Enter / Space.
         default: applyCycle(forward: true)
         }
     }
 
-    func cycleForward()  { applyCycle(forward: true) }
-    func cycleBackward() { applyCycle(forward: false) }
+    func cycleForward() {
+        guard selectedRowRespondsToArrows else { return }
+        applyCycle(forward: true)
+    }
 
-    // Whether ←/→ do anything on the selected row — mirrors applyCycle's no-op
-    // branch so the Settings footer can dim the Cycle hint instead of
-    // advertising a key the row ignores. Exhaustive over SettingsRow for the
-    // same reason applyCycle is: a new row can't silently inherit a wrong hint.
+    func cycleBackward() {
+        guard selectedRowRespondsToArrows else { return }
+        applyCycle(forward: false)
+    }
+
+    // Whether → / ⇧← do anything on the selected row. cycleForward/cycleBackward
+    // gate on it, and the Settings footer dims its Cycle hint from it.
+    // On/off rows are Space / Enter only, so → grazing one on the way into a
+    // category can't flip it. Exhaustive over SettingsRow so a new row can't
+    // silently inherit the wrong answer.
     var selectedRowRespondsToArrows: Bool {
         switch selectedRow {
         case .wireAgents, .dismissAgents,
@@ -1761,18 +1779,22 @@ final class PanelNav: ObservableObject {
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
              .slackPaste, .slackIdentity, .slackTest, .openRepo, .none:
             return false
+        case .banner, .muteWhenFocused, .mute, .tabTitleNames, .pinPanel,
+             .keepOpenWhenEmpty, .launchAtLogin, .widget, .snapToCorners,
+             .soundEnabled, .voiceEnabled,
+             .quotaTracking, .quotaAlerts, .showRemaining,
+             .githubLinks, .hideShipped, .eventHistory,
+             .slackEnabled, .slackDetail, .slackStop:
+            return false
         case .permissions, .update, .hotkey, .speakHotkey,
-             .banner, .muteWhenFocused, .mute, .muteDuration,
-             .remindUnanswered, .stalledSessions, .tabTitleNames, .pinPanel,
-             .keepOpenWhenEmpty, .launchAtLogin,
-             .widget, .snapToCorners, .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme,
-             .soundEnabled, .agentDoneSound, .permissionSound,
-             .voiceEnabled, .voice, .voiceSpeed, .downloadVoiceModel,
-             .quotaTracking, .quotaAlerts, .alertThreshold, .pollFrequency,
-             .contextAlert, .showRemaining, .piApiBudget, .piLocalBudget,
-             .githubLinks, .hideShipped,
-             .historyPerSession, .eventHistory,
-             .slackEnabled, .slackIdle, .slackDetail, .slackStop:
+             .muteDuration, .remindUnanswered, .stalledSessions,
+             .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme,
+             .agentDoneSound, .permissionSound,
+             .voice, .voiceSpeed, .downloadVoiceModel,
+             .alertThreshold, .pollFrequency,
+             .contextAlert, .piApiBudget, .piLocalBudget,
+             .historyPerSession,
+             .slackIdle:
             return true
         }
     }
@@ -1827,7 +1849,7 @@ final class PanelNav: ObservableObject {
     private func applyCycle(forward: Bool) {
         switch selectedRow {
         case .permissions:
-            // Nothing to cycle — arrows open the Permissions window, like Enter.
+            // Nothing to cycle — → opens the Permissions page, like Enter.
             actions?.checkPermissions()
         case .update:
             // Nothing to cycle — arrows behave like Enter.
@@ -1847,7 +1869,7 @@ final class PanelNav: ObservableObject {
             tabTitleNames.toggle()
             ConfigFile.write(key: "STACKNUDGE_TAB_TITLE_NAMES", value: tabTitleNames ? "true" : "false")
         case .mute:
-            // Action row: Enter and ←/→ both toggle the timed global mute.
+            // Action row: Enter / Space toggle the timed global mute.
             // Nothing persists — the controller owns the expiry timer + the
             // menu-bar badge (muteFor / resumeNotifications). Uses the current
             // default duration, same as the header bell and the M shortcut.

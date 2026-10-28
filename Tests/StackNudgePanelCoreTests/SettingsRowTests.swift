@@ -133,12 +133,46 @@ final class SettingsRowTests: XCTestCase {
             XCTAssertFalse(nav.selectedRowRespondsToArrows, "\(row) should ignore arrows")
         }
 
-        for row in [SettingsRow.banner, .muteDuration, .theme, .historyPerSession,
+        // On/off rows flip on Space / Enter only.
+        for row in [SettingsRow.banner, .voiceEnabled, .soundEnabled, .widget,
+                    .quotaTracking, .githubLinks, .eventHistory, .pinPanel, .mute] {
+            select(row)
+            XCTAssertEqual(nav.selectedRow, row)
+            XCTAssertFalse(nav.selectedRowRespondsToArrows, "\(row) should ignore arrows")
+        }
+
+        for row in [SettingsRow.muteDuration, .theme, .historyPerSession,
                     .permissions, .hotkey] {
             select(row)
             XCTAssertEqual(nav.selectedRow, row)
             XCTAssertTrue(nav.selectedRowRespondsToArrows, "\(row) should act on arrows")
         }
+    }
+
+    // Drives the arrows rather than reading the predicate, on the one on/off
+    // row whose effect goes through SettingsActions instead of the real config
+    // file. ←/→ used to mute here; only Space / Enter (activate) should.
+    func test_muteRow_ignoresArrows_actsOnActivate() {
+        let nav = PanelNav()
+        var mutes: [Int] = []
+        nav.actions = SettingsActions(
+            checkPermissions: {}, openConfig: {}, editPhrases: {},
+            browseExtensions: {}, openExtension: { _ in },
+            openReleaseNotes: {}, checkForUpdates: {}, beginUpdate: {}, runUpdate: {},
+            beginUninstall: {}, runUninstall: {}, runBootstrap: {}, quit: {},
+            expandFromCompact: {}, exitCompactMode: {},
+            muteFor: { mutes.append($0) }, resumeNotifications: {},
+            applyEventHistorySetting: {}, clearEventHistory: {},
+            pasteSlackSetup: {}, detectSlackUser: {}, sendSlackTest: {})
+        nav.selectedSettingIndex = nav.index(of: .mute)
+        XCTAssertEqual(nav.selectedRow, .mute)
+
+        nav.cycleForward()
+        nav.cycleBackward()
+        XCTAssertTrue(mutes.isEmpty, "arrows must not mute")
+
+        nav.activate()
+        XCTAssertEqual(mutes, [nav.muteDurationMinutes])
     }
 
     // Round-trips every row in every category, not just the one that happens

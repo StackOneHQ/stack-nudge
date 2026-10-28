@@ -28,6 +28,9 @@ final class ExtensionConfigModel: ObservableObject {
     var keys: [ExtensionManifest.ConfigKey] { row.configurableKeys }
 
     @Published var values: [String: String]
+    // What the config file holds for each key, as of the last read or save:
+    // what ⌫ in an emptied field puts back.
+    private var persisted: [String: String]
     // Cleared by the next edit, so the confirmation belongs to what is on
     // screen rather than to whatever was saved a minute ago.
     @Published private(set) var saved = false
@@ -53,7 +56,7 @@ final class ExtensionConfigModel: ObservableObject {
     @Published var selection: Target?
     // Bumped to hand the selected field first-responder status, mirroring
     // ExtensionCatalog.searchFocusRequests. The page deliberately opens
-    // *unfocused* so ⌘⌫, ↑↓ and Esc all work on arrival; ⏎ hands over.
+    // *unfocused* so ⌘⌫, ↑↓ and ← all work on arrival; ⏎ hands over.
     @Published private(set) var fieldFocusRequests = 0
 
     // Drawing order, which is also the order ↑↓ walk. Save is absent on an
@@ -99,6 +102,7 @@ final class ExtensionConfigModel: ObservableObject {
         var seeded: [String: String] = [:]
         for key in row.configurableKeys { seeded[key.key] = existing[key.key] ?? "" }
         values = seeded
+        persisted = seeded
         // The first field where there is one, so ⏎ on arrival starts editing
         // rather than walking back out of the page.
         selection = row.configurableKeys.first.map { .field($0.key) } ?? .back
@@ -151,6 +155,13 @@ final class ExtensionConfigModel: ObservableObject {
                     self.values[key.key] = newValue
                     self.saved = false
                 })
+    }
+
+    // Drops an unsaved edit to one key, through the binding's setter so the
+    // "Saved" state follows the same rule as typing.
+    func revert(_ key: String) {
+        guard let field = keys.first(where: { $0.key == key }) else { return }
+        binding(for: field).wrappedValue = persisted[key] ?? ""
     }
 
     // MARK: - Validation
@@ -208,6 +219,7 @@ final class ExtensionConfigModel: ObservableObject {
         for key in keys {
             let value = (values[key.key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             persist(key.key, value.isEmpty ? nil : value)
+            persisted[key.key] = value
         }
         saved = true
         // Re-running the extension is the whole point: a new organisation
@@ -289,14 +301,14 @@ struct ExtensionConfigView: View {
             // Deliberately NOT focused, for the reason the browser states on its
             // own search field: a focused field is first responder and
             // FloatingPanel.keyDown only fires for what the first responder
-            // declines, so focusing on arrival hands the field Esc and ⌘⌫ and
+            // declines, so focusing on arrival hands the field ← and ⌘⌫ and
             // leaves both hints describing keys that no longer do anything. ⏎
             // hands over.
             focusedKey = nil
             model.reconcileSelection()
         }
         .onChange(of: model.fieldFocusRequests) { _ in focusedKey = model.selectedKey }
-        // A click into a field is a selection too, or ↑/↓ after Esc would resume
+        // A click into a field is a selection too, or ↑/↓ after ⏎ would resume
         // from wherever the keyboard last was rather than from the field in
         // front of you; the same disagreement between mouse and keyboard the
         // Settings cards fixed by moving the index on tap.
@@ -339,12 +351,12 @@ struct ExtensionConfigView: View {
             if keyCount > 1 {
                 hints.append(FooterHintSpec(label: "Next field", keys: ["⇥"], shedOrder: 0))
             }
-            hints.append(FooterHintSpec(label: "Done", keys: ["Esc"]))
+            hints.append(FooterHintSpec(label: "Clear to revert", keys: ["⌫"]))
         } else {
             // One hint per action, with ⏎ added to whichever the ring is on.
             // The alternative, a separate primary hint naming the selected
             // target, prints the bar's own labels twice: "Back ⏎ · Move · Back
-            // Esc" the moment the selection reaches the chevron.
+            // ←" the moment the selection reaches the chevron.
             //
             // Only a field has no key of its own, so it is the only one that
             // needs a hint conjured for it.
@@ -354,8 +366,7 @@ struct ExtensionConfigView: View {
             // Always more than one target: back and Remove are on every page,
             // whatever the extension declares.
             hints.append(FooterHintSpec(label: "Move", keys: ["↑↓", "⌘↑↓"]))
-            // The only way to commit an edit backed out of with Esc, and the
-            // only Save at all once the field has given focus back. Level one
+            // The only Save at all once the field has given focus back. Level one
             // only: a focused field swallows ⌘S the way it swallows ⌘⌫, which
             // is why the editing bar names ⏎ instead.
             if keyCount > 0 {
@@ -366,7 +377,7 @@ struct ExtensionConfigView: View {
                                             shedOrder: selection == .save ? nil : 1))
             }
             hints.append(FooterHintSpec(label: "Back",
-                                        keys: selection == .back ? ["⏎", "Esc"] : ["Esc"],
+                                        keys: selection == .back ? ["⏎", "←"] : ["←"],
                                         primary: selection == .back))
         }
         let removeSelected = selection == .remove && !editing
@@ -447,12 +458,6 @@ struct ExtensionConfigView: View {
                     model.save()
                     focusedKey = nil
                 }
-                // A focused field is first responder, and FloatingPanel.keyDown
-                // only fires for what the first responder declines, so without
-                // this, Esc did nothing at all from inside a field. It steps out
-                // to the page rather than off it: two levels, two Escs, exactly
-                // as the browser's search field and the history filter behave.
-                .onExitCommand { focusedKey = nil }
             if let problem = model.problem(for: key) {
                 Text(problem).font(.caption2).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)

@@ -73,8 +73,7 @@ struct SessionsView: View {
                             isStalled: SessionPersistence.key(for: session)
                                 .map(nav.stalledSessionKeys.contains) ?? false,
                             allowTabTitle: nav.tabTitleNames,
-                            onCommit: { store.commitRename() },
-                            onCancel: { store.cancelRename() }
+                            onCommit: { store.commitRename() }
                         )
                         .id(session.pid)
                         .contentShape(Rectangle())
@@ -98,7 +97,7 @@ struct SessionsView: View {
         PageFooter {
             if store.renamingPID != nil {
                 FooterHint(label: "Save",   keys: ["⏎"])
-                FooterHint(label: "Cancel", keys: ["Esc"])
+                FooterHint(label: "Clear to cancel", keys: ["⌫"])
             } else {
                 FooterHint(label: "Select",  keys: ["↑", "↓"])
                 FooterHint(label: "Top/Bottom", keys: ["⌘↑↓"])
@@ -106,7 +105,6 @@ struct SessionsView: View {
                 FooterHint(label: "Rename",  keys: ["N"])
                 FooterHint(label: "Mute",    keys: ["M"])
                 FooterHint(label: "Kill",    keys: ["⌫"])
-                FooterHint(label: "Back",    keys: ["Esc"])
             }
         }
     }
@@ -207,7 +205,6 @@ private struct SessionRow: View {
     // means SwiftUI re-renders the row when the setting flips.
     let allowTabTitle: Bool
     let onCommit: () -> Void
-    let onCancel: () -> Void
 
     @FocusState private var nameFieldFocused: Bool
 
@@ -280,7 +277,6 @@ private struct SessionRow: View {
                     )
                     .focused($nameFieldFocused)
                     .onSubmit(onCommit)
-                    .onExitCommand(perform: onCancel)
                     .onAppear {
                         DispatchQueue.main.async { nameFieldFocused = true }
                     }

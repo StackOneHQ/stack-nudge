@@ -26,6 +26,24 @@ final class ExtensionConfigTests: XCTestCase {
                                     onRemove: onRemove)
     }
 
+    // MARK: - Revert
+
+    // ⌫ in an emptied field. It goes back to what the file holds, and after a
+    // save that is the saved value, not the one the page opened with.
+    func testRevertPutsBackWhatIsInTheConfigFile() {
+        let name = "STACKNUDGE_EXT_DERBY_ORG"
+        let m = model(keys: [key(name)], existing: [name: "stackone"])
+        m.values[name] = ""
+        m.revert(name)
+        XCTAssertEqual(m.values[name], "stackone")
+
+        m.values[name] = "acme"
+        m.save()
+        m.values[name] = ""
+        m.revert(name)
+        XCTAssertEqual(m.values[name], "acme")
+    }
+
     // MARK: - Seeding
 
     func testTheFormStartsFromWhatIsAlreadyInTheConfigFile() {

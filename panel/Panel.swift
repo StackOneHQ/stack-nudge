@@ -5,6 +5,9 @@ import UserNotifications
 
 protocol PanelKeyDelegate: AnyObject {
     func panelHandlesKey(_ event: NSEvent) -> Bool
+    // Keys that mean the same thing on every page, offered before the first
+    // responder sees them. `fieldEditor` is set while a text field has focus.
+    func panelHandlesGlobalKey(_ event: NSEvent, fieldEditor: NSTextView?) -> Bool
 }
 
 private enum KeyCode {
@@ -76,6 +79,22 @@ final class FloatingPanel: NSPanel {
         }
         super.keyDown(with: event)
     }
+
+    // keyDown only gets what the first responder declines, so a focused text
+    // field would otherwise take Esc and ⌘←/→ for itself. sendEvent runs before
+    // the field editor does, which is what lets those keys mean one thing
+    // whether or not a field has focus.
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown, let delegate = keyDelegate {
+            if delegate.panelHandlesGlobalKey(event, fieldEditor: fieldEditor) { return }
+        }
+        super.sendEvent(event)
+    }
+
+    // The editor of whichever text field has focus, or nil when none does.
+    var fieldEditor: NSTextView? {
+        (firstResponder as? NSTextView).flatMap { $0.isFieldEditor ? $0 : nil }
+    }
 }
 
 // Widths of the tab strip's scroller and of the tabs inside it. Two keys rather
@@ -97,6 +116,7 @@ struct PanelContentView: View {
     @ObservedObject var sessions: SessionStore
     @ObservedObject var nav: PanelNav
     @ObservedObject var phrases: PhrasesViewModel
+    let permissions: PermissionsModel
     @ObservedObject var extensions: ExtensionHost
     @ObservedObject var extensionCatalog: ExtensionCatalog
     // Navigating into an extension's own configuration builds a model that
@@ -105,7 +125,7 @@ struct PanelContentView: View {
     let onConfigureExtension: (ExtensionRow) -> Void
     // Leaving one of the Settings sub-pages. Owned by the controller for the
     // same reason: both exits leave Settings a note about which row to resume
-    // the keyboard on, and the chevron here and Esc in the key handler have to
+    // the keyboard on, and the chevron here and ← in the key handler have to
     // do the identical thing.
     let onCloseExtensionsBrowser: () -> Void
     let onCloseExtensionConfig: () -> Void
@@ -167,6 +187,10 @@ struct PanelContentView: View {
                     nav.postUpdateNotes = nil
                     nav.mode = .events
                 })
+            } else if nav.mode == .permissions, nav.permissionsReturnMode == .bootstrap {
+                // Opened from setup, which has no tab strip: without one here
+                // too, the only way on is back to setup.
+                permissionsPage
             } else {
                 tabStrip
                 Divider().opacity(0.4)
@@ -191,6 +215,7 @@ struct PanelContentView: View {
                     SettingsView(nav: nav)
                         .onAppear { extensionCatalog.loadIfNeeded() }
                 case .phrases:  PhrasesView(model: phrases) { nav.mode = .settings }
+                case .permissions: permissionsPage
                 case .extensions:
                     ExtensionsView(catalog: extensionCatalog,
                                    host: extensions,
@@ -231,6 +256,13 @@ struct PanelContentView: View {
                 }
             }
         }
+        .environment(\.editingText, nav.editingText)
+    }
+
+    private var permissionsPage: some View {
+        PermissionsView(model: permissions,
+                        backLabel: nav.permissionsReturnMode == .bootstrap ? "Setup" : "Settings",
+                        onBack: { nav.mode = nav.permissionsReturnMode })
     }
 
     // The badge on the Tickets tab. Counts exactly the groups that tab renders,
@@ -254,7 +286,7 @@ struct PanelContentView: View {
         case .extensionTab(let id): return nav.extensionTab(id: id)?.label ?? id
         // Listed, not defaulted: a new tab should fail to compile here rather
         // than render an unlabelled one.
-        case .phrases, .extensions, .extensionConfig, .updateConfirm, .updating,
+        case .phrases, .permissions, .extensions, .extensionConfig, .updateConfirm, .updating,
              .postUpdate, .bootstrap, .uninstall:
             return ""
         }
@@ -398,7 +430,7 @@ struct PanelContentView: View {
     static func tabStripAnchor(for mode: PanelMode, in tabs: [PanelMode]) -> PanelMode? {
         if tabs.contains(mode) { return mode }
         switch mode {
-        case .phrases, .extensions, .extensionConfig, .updateConfirm, .uninstall:
+        case .phrases, .permissions, .extensions, .extensionConfig, .updateConfirm, .uninstall:
             return tabs.contains(.settings) ? .settings : nil
         // No strip is drawn in these, so there is nothing to bring into view.
         case .updating, .postUpdate, .bootstrap:
@@ -505,8 +537,7 @@ struct PanelContentView: View {
         // Keyed off focus actually becoming true rather than a scheduled hop —
         // see FieldEditor.collapseSelectionToEnd for why a miss here doesn't
         // fail safe. It also makes / on an existing filter extend it rather
-        // than replace it, the more useful default for a box Esc already
-        // clears.
+        // than replace it.
         .onChange(of: historyFieldFocused) { focused in
             if focused { FieldEditor.collapseSelectionToEnd() }
         }
@@ -525,18 +556,6 @@ struct PanelContentView: View {
                     .textFieldStyle(.plain)
                     .font(.callout)
                     .focused($historyFieldFocused)
-                    // The field editor is first responder here, so it swallows
-                    // keys before NSWindow.keyDown ever sees them — the panel's
-                    // own Esc handling can't fire. Same reason the rename field
-                    // uses this (Sessions.swift), and the same contract the
-                    // footer advertises: clear the filter, then step back.
-                    .onExitCommand {
-                        if nav.historyQuery.isEmpty {
-                            nav.eventsPane = .live
-                        } else {
-                            nav.historyQuery = ""
-                        }
-                    }
                     // Releases the field without clearing it, so you can type a
                     // filter and then walk the results with ↑↓ / ⌘↑↓ — which the
                     // field would otherwise swallow as caret moves.
@@ -680,7 +699,6 @@ struct PanelContentView: View {
         let hints = Self.eventsFooterHints(
             pane: nav.eventsPane,
             filterFocused: historyFieldFocused,
-            filterQuery: nav.historyQuery,
             liveQueueEmpty: store.events.isEmpty,
             primaryAction: primaryActionLabel,
             dismissLabel: dismissLabel,
@@ -701,7 +719,6 @@ struct PanelContentView: View {
     // action off the leading edge. Order here is left-to-right.
     static func eventsFooterHints(pane: EventsPane,
                                   filterFocused: Bool,
-                                  filterQuery: String,
                                   liveQueueEmpty: Bool,
                                   primaryAction: String?,
                                   dismissLabel: String,
@@ -713,26 +730,20 @@ struct PanelContentView: View {
 
         switch pane {
         case .history:
-            // Esc is the only way out of the pane, and it means one thing:
-            // clear the filter if there is one, else step back to the live queue
-            // (where Esc then hides, as everywhere else). Advertising a separate
-            // Hide here was wrong - Esc never hid the panel from this pane.
+            // ← steps back to the live queue; Esc hides, from here as from
+            // everywhere, and PageFooter adds that hint itself.
             //
             // Focused, the field editor owns the keyboard and ↑↓ are caret
             // moves, so ⏎ hands it back to the rows without clearing what's been
             // typed. Unfocused, which is how the pane opens, the rows have the
             // keyboard and / claims the field.
             guard !filterFocused else {
-                return [
-                    FooterHintSpec(label: "Rows", keys: ["⏎"]),
-                    FooterHintSpec(label: filterQuery.isEmpty ? "Back" : "Clear filter",
-                                   keys: ["Esc"]),
-                ]
+                return [FooterHintSpec(label: "Rows", keys: ["⏎"])]
             }
             return [
                 FooterHintSpec(label: "Select", keys: ["↑↓", "⌘↑↓"]),
                 FooterHintSpec(label: "Filter", keys: ["/"]),
-                FooterHintSpec(label: "Back",   keys: ["Esc"]),
+                FooterHintSpec(label: "Back",   keys: ["←"]),
             ]
 
         case .live where liveQueueEmpty:
@@ -742,7 +753,6 @@ struct PanelContentView: View {
             return [
                 FooterHintSpec(label: muteLabel,  keys: ["M"]),
                 FooterHintSpec(label: "History",  keys: ["H"]),
-                FooterHintSpec(label: "Hide",     keys: ["Esc"]),
             ]
 
         case .live:
@@ -766,7 +776,6 @@ struct PanelContentView: View {
             hints.append(FooterHintSpec(label: dismissLabel, keys: ["⌫"]))
             hints.append(FooterHintSpec(label: muteLabel, keys: ["M"]))
             hints.append(FooterHintSpec(label: "History", keys: ["H"]))
-            hints.append(FooterHintSpec(label: "Hide", keys: ["Esc"]))
             return hints
         }
     }
@@ -1032,6 +1041,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private let sessions = SessionStore()
     let nav = PanelNav()
     private let phrases = PhrasesViewModel()
+    private let permissions = PermissionsModel()
     // Into one extension's own page. The model is built here rather than in the
     // view because it needs the config file and the host, and because its
     // unsaved edits have to survive a re-render.
@@ -1057,7 +1067,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         configureExtension(row, from: .settings)
     }
 
-    // The two ways back out, in one place each so Esc and the chevron cannot
+    // The two ways back out, in one place each so ← and the chevron cannot
     // disagree. Both leave Settings a note about where the keyboard was, which
     // it consumes on the way in.
     func closeExtensionsBrowser() {
@@ -1113,7 +1123,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     })
     private var listener: EventListener?
     private var menuBar: MenuBarController?
-    private var permissionsWC: PermissionsWindowController?
     private var updateChecker: UpdateChecker?
     private var updater: Updater?
     private let claudeCliQuotaProbe = ClaudeCliQuotaProbe()
@@ -1237,7 +1246,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         contentBlurView = blur
 
         let host = NSHostingView(rootView: PanelContentView(
-            store: store, sessions: sessions, nav: nav, phrases: phrases,
+            store: store, sessions: sessions, nav: nav, phrases: phrases, permissions: permissions,
             extensions: extensions, extensionCatalog: extensionCatalog,
             onConfigureExtension: { [weak self] row in self?.configureExtension(row) },
             onCloseExtensionsBrowser: { [weak self] in self?.closeExtensionsBrowser() },
@@ -1351,6 +1360,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // banner reflect reality from first launch, not just after the user
         // opens Settings.
         nav.refreshPermissions()
+        permissions.onRefresh = { [weak self] in self?.nav.refreshPermissions() }
 
         updateChecker = UpdateChecker(nav: nav)
         updateChecker?.start()
@@ -1476,6 +1486,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             object: panel
         )
 
+        // Footers relabel Esc from "Hide" to "Cancel" while a field has focus.
+        firstResponderObservation = panel.observe(\.firstResponder) { [weak self] panel, _ in
+            let editing = panel.fieldEditor != nil
+            if self?.nav.editingText != editing { self?.nav.editingText = editing }
+        }
+
         // Compact-mode drag handling: explicit mouse-up signal beats the
         // ambiguous time-based debounce. mouseDown resets the "moved"
         // flag; didMoveNotification sets it; mouseUp consults it to
@@ -1509,7 +1525,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     }
 
     // Triggered from the welcome screen's "Grant permissions" button. Opens
-    // the in-app Permissions window — it shows live status for Notifications,
+    // the Permissions page — it shows live status for Notifications,
     // Accessibility, and Automation, with per-row "Prompt" and "Settings"
     // buttons so the user can drive each grant without surprise modal dialogs
     // covering anything.
@@ -1740,6 +1756,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // decide whether a snap is warranted (a plain click shouldn't snap).
     private var compactMovedSinceMouseDown = false
     private var compactMouseEventMonitor: Any?
+    private var firstResponderObservation: NSKeyValueObservation?
 
     private func snapCompactToNearestCorner() {
         guard nav.compactMode, !nav.compactExpanded else { return }
@@ -3701,19 +3718,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
     }
 
+    // Opened from Settings, the menu bar and the setup screen. ← goes back to
+    // setup when that's where it came from, and to Settings from anywhere else.
     func showPermissions() {
-        // Defer to next runloop tick so we're not constructing a new
-        // NSHostingView in the middle of the current SwiftUI/event-handling
-        // pass — re-entrant construction surfaced as a deadlock.
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            if self.permissionsWC == nil {
-                self.permissionsWC = PermissionsWindowController()
-            }
-            self.permissionsWC?.showAndRaise()
-            self.panel.orderOut(nil)
-            self.nav.mode = .events
+        if nav.mode != .permissions {
+            nav.permissionsReturnMode = nav.mode == .bootstrap ? .bootstrap : .settings
+            permissions.selected = 0
         }
+        nav.mode = .permissions
+        if !panel.isVisible || (nav.compactMode && !nav.compactExpanded) { showPanel() }
     }
 
     // Fired when the user re-opens the app while it's already running —
@@ -3774,6 +3787,84 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     static func eventsOwnsKeyboard(_ mode: PanelMode) -> Bool { mode == .events }
 
+    // The keys that mean one thing on every page (see AGENTS.md, Keyboard
+    // navigation): Esc cancels a text field or, outside one, hides the panel,
+    // ⌘←/→ step through the tabs, and ⌫ in an empty text field cancels it too.
+    func panelHandlesGlobalKey(_ event: NSEvent, fieldEditor: NSTextView?) -> Bool {
+        // An input method composing text owns Esc and ⌫ until it commits.
+        if fieldEditor?.hasMarkedText() == true { return false }
+        let mods = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        let recording = nav.recordingHotkey || nav.recordingSpeakHotkey
+
+        switch Self.globalKeyAction(keyCode: event.keyCode, modifiers: mods,
+                                    recording: recording,
+                                    inEmptyField: fieldEditor?.string.isEmpty) {
+        case .hide:
+            if nav.recordingSpeakHotkey { nav.cancelRecordingSpeakHotkey() }
+            if nav.recordingHotkey { nav.cancelRecordingHotkey() }
+            hidePanel()
+        case .stepTab(let delta):
+            let tabs = nav.orderedTabs
+            guard let index = tabs.firstIndex(of: nav.mode) else { return false }
+            if tabs.indices.contains(index + delta) { nav.mode = tabs[index + delta] }
+        case .cancelField:
+            cancelField()
+        case nil:
+            return false
+        }
+        return true
+    }
+
+    enum GlobalKeyAction: Equatable {
+        case hide
+        case stepTab(Int)
+        case cancelField
+    }
+
+    // Pure so the table is testable. `inEmptyField` is nil when no text field
+    // has focus. ⌘←/→ are left alone while recording a hotkey, so either can
+    // still be recorded as one.
+    static func globalKeyAction(keyCode: UInt16,
+                                modifiers: NSEvent.ModifierFlags,
+                                recording: Bool,
+                                inEmptyField: Bool?) -> GlobalKeyAction? {
+        switch keyCode {
+        case KeyCode.escape:
+            return inEmptyField == nil ? .hide : .cancelField
+        case KeyCode.leftArrow where modifiers == .command && !recording:
+            return .stepTab(-1)
+        case KeyCode.rightArrow where modifiers == .command && !recording:
+            return .stepTab(1)
+        case KeyCode.delete where modifiers.isEmpty && inEmptyField == true:
+            return .cancelField
+        default:
+            return nil
+        }
+    }
+
+    // Esc in a text field, or ⌫ in one that's already empty: put the field back
+    // the way it was and give the keyboard back to the page. A search, filter or
+    // new-phrase field empties; the rename keeps the old name, a config field
+    // its saved value. Focus goes first, because a field writes its text back
+    // through its binding as it ends editing, and that would undo the revert.
+    private func cancelField() {
+        panel.makeFirstResponder(nil)
+        switch nav.mode {
+        case .events:
+            nav.historyQuery = ""
+        case .sessions where sessions.renamingPID != nil:
+            sessions.cancelRename()
+        case .extensions:
+            extensionCatalog.query = ""
+        case .extensionConfig:
+            if let model = nav.extensionConfig, let key = model.selectedKey { model.revert(key) }
+        case .phrases:
+            phrases.draft = ""
+        default:
+            break
+        }
+    }
+
     func panelHandlesKey(_ event: NSEvent) -> Bool {
         let mods = event.modifierFlags
         let blockingMods: NSEvent.ModifierFlags = [.control, .option]
@@ -3793,14 +3884,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // While recording a hotkey, capture the next combo. Arrow keys / Tab
         // bail out gracefully — otherwise users who entered record mode by
         // mistake would be stuck on row 0 with all their keypresses swallowed.
+        // Esc never reaches here: it hides the panel, and cancels recording on
+        // the way (panelHandlesGlobalKey).
         if nav.recordingHotkey || nav.recordingSpeakHotkey {
             let recordingSpeak = nav.recordingSpeakHotkey
             let plainNav = mods.intersection([.command, .control, .option, .shift]).isEmpty
             if plainNav {
                 switch event.keyCode {
-                case KeyCode.escape:
-                    if recordingSpeak { nav.cancelRecordingSpeakHotkey() } else { nav.cancelRecordingHotkey() }
-                    return true
                 case KeyCode.upArrow:
                     if recordingSpeak { nav.cancelRecordingSpeakHotkey() } else { nav.cancelRecordingHotkey() }
                     nav.selectPrevRow()
@@ -3823,9 +3913,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return true
         }
 
-        // Cmd+1/2/3/4 jump directly between modes; the in-panel tab strip is
+        // Cmd+1…9 jump directly between modes; the in-panel tab strip is
         // the discoverable mouse equivalent. Cmd+←/→ steps through the same
-        // ordered tab list without wrapping.
+        // ordered tab list in panelHandlesGlobalKey, so it works from a text
+        // field too.
         if cmdOnly {
             switch event.keyCode {
             case KeyCode.one, KeyCode.two, KeyCode.three, KeyCode.four,
@@ -3834,15 +3925,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                       nav.orderedTabs.indices.contains(digit) else { return false }
                 nav.mode = nav.orderedTabs[digit]
                 return true
-            case KeyCode.leftArrow, KeyCode.rightArrow:
-                let tabs = nav.orderedTabs
-                if let idx = tabs.firstIndex(of: nav.mode) {
-                    let next = event.keyCode == KeyCode.leftArrow ? idx - 1 : idx + 1
-                    if tabs.indices.contains(next) {
-                        nav.mode = tabs[next]
-                    }
-                    return true
-                }
             case KeyCode.upArrow, KeyCode.downArrow:
                 // Cmd+↑/↓ jump the current page to its first / last item (the
                 // scroll follows selection). Returns false for screens with
@@ -3853,26 +3935,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             }
         }
 
-        // Bootstrap experience:
-        //   .idle:       Enter → install, Esc → quit (user opting out)
-        //   .installing: Enter/Esc both no-op (install is running)
-        //   .done:       Enter → continue to events, Esc also → continue
-        //                (the install already happened; Esc shouldn't quit)
-        //   .failed:     Enter no-op, Esc → quit (user gives up)
+        // Bootstrap experience (Esc hides, as everywhere):
+        //   .idle:       Enter → install
+        //   .installing: Enter no-op (install is running)
+        //   .done:       Enter → continue to events
+        //   .failed:     Enter no-op
         if nav.mode == .bootstrap {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain else { return false }
             switch event.keyCode {
-            case KeyCode.escape:
-                switch nav.bootstrapPhase {
-                case .done:
-                    nav.mode = .events
-                case .idle, .failed:
-                    NSApp.terminate(nil)
-                case .installing:
-                    break  // ignore while running
-                }
-                return true
             case KeyCode.returnKey, KeyCode.numpadEnter:
                 switch nav.bootstrapPhase {
                 case .idle:
@@ -3889,12 +3960,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
 
         // Uninstall flow: Enter confirms (when on the confirm step),
-        // Esc cancels back to settings (only when not mid-run).
+        // ← cancels back to settings (only when not mid-run).
         if nav.mode == .uninstall {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain else { return false }
             switch event.keyCode {
-            case KeyCode.escape:
+            case KeyCode.leftArrow:
                 if nav.uninstallPhase == .confirm {
                     nav.mode = .settings
                 }
@@ -3909,14 +3980,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             }
         }
 
-        // Post-update view: Enter or Esc both dismiss to the events tab.
-        // Mirrors WelcomeView's keyboard contract — single-purpose screen, two
-        // keys to exit, no other navigation allowed while it's up.
+        // Post-update view: Enter dismisses to the events tab. Single-purpose
+        // screen, no other navigation allowed while it's up.
         if nav.mode == .postUpdate {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain else { return true }
             switch event.keyCode {
-            case KeyCode.escape, KeyCode.returnKey, KeyCode.numpadEnter:
+            case KeyCode.returnKey, KeyCode.numpadEnter:
                 nav.postUpdateVersion = nil
                 nav.postUpdateNotes = nil
                 nav.mode = .events
@@ -3926,12 +3996,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             }
         }
 
-        // Update-confirm: Enter triggers install, Esc cancels back to Settings.
+        // Update-confirm: Enter triggers install, ← cancels back to Settings.
         if nav.mode == .updateConfirm {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain else { return false }
             switch event.keyCode {
-            case KeyCode.escape:
+            case KeyCode.leftArrow:
                 nav.mode = .settings
                 return true
             case KeyCode.returnKey, KeyCode.numpadEnter:
@@ -3942,13 +4012,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             }
         }
 
-        // Updating: only Esc, and only after a failure (so the user can't
-        // accidentally abandon a live install). Space toggles the log.
+        // Updating: ← back to Settings, and only after a failure (so the user
+        // can't accidentally abandon a live install). Space toggles the log.
         if nav.mode == .updating {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain else { return false }
             switch event.keyCode {
-            case KeyCode.escape where nav.updaterPhase == .failed:
+            case KeyCode.leftArrow where nav.updaterPhase == .failed:
                 nav.mode = .settings
                 return true
             case KeyCode.space:
@@ -3961,14 +4031,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
         // Sessions mode: ↑/↓ select, Enter focus, ⌫/R kill, N rename.
         // While the rename TextField is active, every key flows through to
-        // SwiftUI; the field handles Enter via .onSubmit and Esc via
-        // .onExitCommand.
+        // SwiftUI; the field handles Enter via .onSubmit, and ⌫ on an empty
+        // name cancels (panelHandlesGlobalKey).
         if nav.mode == .sessions {
             if sessions.renamingPID != nil { return false }
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             switch event.keyCode {
-            case KeyCode.escape where plain:
-                hidePanel()
             case KeyCode.upArrow where plain:
                 selectPrevSession()
             case KeyCode.downArrow where plain:
@@ -3995,9 +4063,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // An extension's configuration form. Two levels, like the browser below
         // and the Usage tab: the page opens with no field focused, so this
         // branch owns ↑↓ (move between fields), ⏎ (hand the selected field
-        // focus), ⌘S (save) and ⌘⌫ (remove). Once a field *is* first
-        // responder it consumes keys before NSWindow.keyDown, and the field's
-        // own .onSubmit and .onExitCommand save and step back out.
+        // focus), ← (back), ⌘S (save) and ⌘⌫ (remove). Once a field *is* first
+        // responder it consumes keys before NSWindow.keyDown: its own .onSubmit
+        // saves and steps back out, and ⌫ on an empty field reverts it.
         //
         // It used to own Esc and ⌘⌫ and nothing else, which left the form
         // reachable only with the mouse or with Tab: ⏎ was advertised in the
@@ -4013,9 +4081,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 case KeyCode.delete, KeyCode.forwardDelete:
                     nav.extensionConfig?.onRemove()
                     return true
-                // The only way to commit an edit the user stepped out of with
-                // Esc, and the only Save at all on a page where ⏎ has handed
-                // focus back.
+                // The only Save at all on a page where ⏎ has handed focus back.
                 //
                 // Level one only, verified in the app rather than assumed: a
                 // focused field swallows this exactly as it swallows ⌘⌫, so
@@ -4052,20 +4118,20 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
 
         // Extensions browser. The page opens with its search field unfocused, so
-        // this branch owns the keyboard: Esc steps back (clearing the query
-        // first if there is one), / hands over to the field, and any printable
-        // character seeds the query and hands over — so type-to-search costs no
-        // extra keystroke despite the field not grabbing focus. Once the field
-        // *is* first responder it consumes keys before NSWindow.keyDown, and its
-        // own .onExitCommand and .onSubmit handle Esc and Enter.
+        // this branch owns the keyboard: ← steps back, / hands over to the
+        // field, and any printable character seeds the query and hands over —
+        // so type-to-search costs no extra keystroke despite the field not
+        // grabbing focus. Once the field *is* first responder it consumes keys
+        // before NSWindow.keyDown: its own .onSubmit hands the list back, and
+        // ⌫ on an empty query does the same.
         //
         // Exactly the history pane's contract, and for the same reason. The
         // first attempt at this focused the field on arrival and changed the
         // default branch to `return false` so letters could "reach SwiftUI" —
         // which had it backwards. A focused field already takes every key before
         // this function runs, so nothing needed releasing; all that changed was
-        // that Esc, ↑↓ and ⏎ stopped working while the footer went on
-        // advertising them.
+        // that ↑↓ and ⏎ stopped working while the footer went on advertising
+        // them.
         //
         // Reload keeps ⌘R and configure takes ⌘⏎, since a plain letter is a
         // search term.
@@ -4103,10 +4169,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             guard mods.intersection([.command, .control, .option]).isEmpty else { return false }
 
             switch Self.extensionsKeyAction(keyCode: event.keyCode,
-                                            characters: event.charactersIgnoringModifiers,
-                                            queryIsEmpty: extensionCatalog.query.isEmpty) {
+                                            characters: event.charactersIgnoringModifiers) {
             case .back:         closeExtensionsBrowser()
-            case .clearQuery:   extensionCatalog.query = ""
             case .focusSearch:  extensionCatalog.focusSearch()
             case .appendToQuery(let typed):
                 extensionCatalog.query += typed
@@ -4141,15 +4205,31 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return true
         }
 
+        // Permissions: see permissionsKeyAction.
+        if nav.mode == .permissions {
+            let flags = mods.intersection([.command, .control, .option, .shift])
+            switch Self.permissionsKeyAction(keyCode: event.keyCode, modifiers: flags) {
+            case .back:             nav.mode = nav.permissionsReturnMode
+            case .moveSelection(let delta):
+                delta < 0 ? permissions.selectPrevious() : permissions.selectNext()
+            case .prompt:           permissions.promptSelected()
+            case .openInSettings:   permissions.openSelectedInSettings()
+            case .refresh:          if !event.isARepeat { permissions.refresh() }
+            case .swallow:          break
+            case nil:               return false
+            }
+            return true
+        }
+
         // Phrases mode: ↑/↓ navigate every row (defaults + custom),
         // Space toggles the selected default, ⌫ removes the selected
-        // custom, Esc returns to Settings. Typing / Tab / Enter for
+        // custom, ← returns to Settings. Typing / Tab / Enter for
         // adding still fall through to SwiftUI's TextField.
         if nav.mode == .phrases {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain else { return false }
             switch event.keyCode {
-            case KeyCode.escape:
+            case KeyCode.leftArrow:
                 nav.mode = .settings
                 return true
             case KeyCode.upArrow:
@@ -4180,8 +4260,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             // Sidebar level: ↑↓ walk categories, →/Enter step into the rows.
             if !nav.settingsDetailFocused {
                 switch event.keyCode {
-                case KeyCode.escape where plain:
-                    hidePanel()
                 case KeyCode.upArrow where plain:
                     nav.selectPrevCategory()
                 case KeyCode.downArrow where plain:
@@ -4199,9 +4277,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             }
 
             switch event.keyCode {
-            case KeyCode.escape where plain:
-                // Steps back to the categories first. ←/→ cycle values here, so
-                // they can't double as the way out the Usage tab uses.
+            case KeyCode.leftArrow where plain:
+                // Back out to the categories, the same ← the Usage tab uses.
                 nav.settingsDetailFocused = false
             case KeyCode.upArrow where plain:
                 nav.selectPrevRow()
@@ -4211,7 +4288,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 nav.selectNextRow()
             case KeyCode.tab where shiftOnly:
                 nav.selectPrevRow()
-            case KeyCode.leftArrow where plain:
+            case KeyCode.leftArrow where shiftOnly:
+                // Plain ← is the way out, so stepping a value back needs ⇧.
                 nav.cycleBackward()
             case KeyCode.rightArrow where plain:
                 nav.cycleForward()
@@ -4244,8 +4322,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             }
             guard plain else { return false }
             switch event.keyCode {
-            case KeyCode.escape:
-                hidePanel()
             case KeyCode.upArrow:
                 extensions.moveSelection(on: id, by: -1)
             case KeyCode.downArrow:
@@ -4263,15 +4339,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
         // Usage tab: two focus levels. In the client list, ↑/↓ switch the
         // connected client and →/Enter steps into the detail pane. Inside the
-        // detail, ↑/↓ scroll it and ←/Esc step back out. Other keys are
+        // detail, ↑/↓ scroll it and ← steps back out. Other keys are
         // swallowed so they don't leak through to the events store.
         if nav.mode == .usage {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain else { return false }
             if nav.usageDetailFocused {
                 switch event.keyCode {
-                case KeyCode.escape:
-                    hidePanel()
                 case KeyCode.rightArrow:
                     // Step forward through the carousel; a no-op on the last
                     // pane rather than wrapping, so → is a safe key to lean on.
@@ -4304,8 +4378,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 return true
             }
             switch event.keyCode {
-            case KeyCode.escape:
-                hidePanel()
             case KeyCode.upArrow:
                 nav.selectPrevUsageClient()
             case KeyCode.downArrow:
@@ -4340,8 +4412,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             guard plain else { return false }
             if nav.outcomesPane == .overview {
                 switch event.keyCode {
-                case KeyCode.escape:
-                    hidePanel()
                 case KeyCode.upArrow:
                     scrollDetailBy(-40)
                 case KeyCode.downArrow:
@@ -4356,8 +4426,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 return true
             }
             switch event.keyCode {
-            case KeyCode.escape:
-                hidePanel()
             case KeyCode.leftArrow:
                 nav.outcomesPane = .overview
             case KeyCode.upArrow:
@@ -4387,22 +4455,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         let shifted = mods.contains(.shift)
 
         // History pane. The pane opens with the filter field unfocused, so this
-        // branch owns the keyboard: ↑↓ move the row selection, Esc steps back
-        // out (clearing the filter first if there is one), / hands over to the
-        // field, and any printable character seeds the filter and hands over —
-        // so type-to-filter costs no extra keystroke despite the field not
-        // grabbing focus. Once the field *is* first responder it consumes keys
-        // before NSWindow.keyDown, and its own .onExitCommand handles Esc.
+        // branch owns the keyboard: ↑↓ move the row selection, ← steps back to
+        // the live queue, / hands over to the field, and any printable
+        // character seeds the filter and hands over — so type-to-filter costs
+        // no extra keystroke despite the field not grabbing focus. Once the
+        // field *is* first responder it consumes keys before NSWindow.keyDown;
+        // ⏎ hands the rows back, and so does ⌫ on an empty filter.
         // Everything else is swallowed so live-queue shortcuts can't fire
         // against a pane they don't apply to.
         if nav.eventsPane == .history {
             switch Self.historyKeyAction(keyCode: event.keyCode,
-                                         characters: event.charactersIgnoringModifiers,
-                                         filterIsEmpty: nav.historyQuery.isEmpty) {
+                                         characters: event.charactersIgnoringModifiers) {
             case .back:
                 nav.eventsPane = .live
-            case .clearFilter:
-                nav.historyQuery = ""
             case .focusFilter:
                 nav.focusHistoryFilter()
             case .appendToFilter(let typed):
@@ -4425,8 +4490,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         guard !shifted else { return false }
 
         switch event.keyCode {
-        case KeyCode.escape:
-            hidePanel()
         case KeyCode.upArrow:
             store.selectPrevious()
         case KeyCode.downArrow:
@@ -4452,7 +4515,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // routing bug, and nothing about the layout or the footer would have caught it.
     enum HistoryKeyAction: Equatable {
         case back
-        case clearFilter
         case focusFilter
         case appendToFilter(String)
         // ↑↓ by one row. ⌘↑↓ never reaches here — it's dispatched earlier via
@@ -4486,7 +4548,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // there was nothing to test.
     enum ExtensionsKeyAction: Equatable {
         case back
-        case clearQuery
         case focusSearch
         case appendToQuery(String)
         case moveSelection(Int)
@@ -4494,6 +4555,33 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // Never falls through to the tab shortcuts below — they act on a list
         // this page isn't showing.
         case swallow
+    }
+
+    enum PermissionsKeyAction: Equatable {
+        case back
+        case moveSelection(Int)
+        case prompt
+        case openInSettings
+        case refresh
+        case swallow
+    }
+
+    // ↑↓ pick a grant, ⏎ prompts for it, ⌘⏎ opens its pane in System Settings,
+    // ⌘R probes again, ← goes back to Settings or setup. Other plain keys are
+    // swallowed so none reaches Events; other ⌘ combos go on to the app.
+    static func permissionsKeyAction(keyCode: UInt16,
+                                     modifiers: NSEvent.ModifierFlags) -> PermissionsKeyAction? {
+        switch (keyCode, modifiers) {
+        case (KeyCode.leftArrow, []):                          return .back
+        case (KeyCode.upArrow, []):                            return .moveSelection(-1)
+        case (KeyCode.downArrow, []):                          return .moveSelection(1)
+        case (KeyCode.returnKey, []), (KeyCode.numpadEnter, []): return .prompt
+        case (KeyCode.returnKey, .command), (KeyCode.numpadEnter, .command):
+            return .openInSettings
+        case (KeyCode.rKey, .command):                         return .refresh
+        default:
+            return modifiers.contains(.command) ? nil : .swallow
+        }
     }
 
     // The config form's level one, where no field has focus. A page of text
@@ -4519,7 +4607,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // rather than to a key table.
     static func extensionConfigKeyAction(keyCode: UInt16) -> ExtensionConfigKeyAction {
         switch keyCode {
-        case KeyCode.escape:
+        case KeyCode.leftArrow:
             return .back
         case KeyCode.upArrow:
             return .moveSelection(-1)
@@ -4533,11 +4621,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     }
 
     static func extensionsKeyAction(keyCode: UInt16,
-                                    characters: String?,
-                                    queryIsEmpty: Bool) -> ExtensionsKeyAction {
+                                    characters: String?) -> ExtensionsKeyAction {
         switch keyCode {
-        case KeyCode.escape:
-            return queryIsEmpty ? .back : .clearQuery
+        case KeyCode.leftArrow:
+            return .back
         case KeyCode.slash:
             return .focusSearch
         case KeyCode.upArrow:
@@ -4558,11 +4645,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     }
 
     static func historyKeyAction(keyCode: UInt16,
-                                 characters: String?,
-                                 filterIsEmpty: Bool) -> HistoryKeyAction {
+                                 characters: String?) -> HistoryKeyAction {
         switch keyCode {
-        case KeyCode.escape:
-            return filterIsEmpty ? .back : .clearFilter
+        case KeyCode.leftArrow:
+            return .back
         case KeyCode.slash:
             return .focusFilter
         case KeyCode.upArrow:
@@ -4744,6 +4830,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             top ? nav.selectPrevCategory() : nav.selectNextCategory()
         case .phrases:
             top ? phrases.selectFirst() : phrases.selectLast()
+        case .permissions:
+            permissions.selectEdge(top: top)
         case .extensions:
             extensionCatalog.selectEdge(
                 among: ExtensionCatalog.matching(

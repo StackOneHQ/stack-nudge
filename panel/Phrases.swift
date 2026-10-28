@@ -496,7 +496,7 @@ struct PhrasesView: View {
             FooterHint(label: "Toggle", keys: ["␣"])
             FooterHint(label: "Remove", keys: ["⌫"])
             FooterHint(label: "Top/Bottom", keys: ["⌘↑↓"])
-            FooterHint(label: "Back",   keys: ["Esc"])
+            FooterHint(label: "Back",   keys: ["←"])
         }
     }
 

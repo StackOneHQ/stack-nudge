@@ -22,7 +22,7 @@ final class PanelKeyRoutingTests: XCTestCase {
     // checks, which is how extensionTab slipped through the first version.
     private let allModes: [PanelMode] = [
         .events, .sessions, .usage, .outcomes, .extensionTab("any"),
-        .settings, .phrases, .extensions, .extensionConfig("any"),
+        .settings, .phrases, .permissions, .extensions, .extensionConfig("any"),
         .updateConfirm, .updating, .postUpdate,
         .bootstrap, .uninstall,
     ]
@@ -71,7 +71,7 @@ final class TabStripAnchorTests: XCTestCase {
     // is an id nothing renders. Its tab is what should stay on screen while you
     // are a level inside it.
     func testSettingsSubPagesAnchorOnTheSettingsTab() {
-        for mode: PanelMode in [.phrases, .extensions, .extensionConfig("derby"),
+        for mode: PanelMode in [.phrases, .permissions, .extensions, .extensionConfig("derby"),
                                 .updateConfirm, .uninstall] {
             XCTAssertEqual(PanelContentView.tabStripAnchor(for: mode, in: tabs), .settings)
         }

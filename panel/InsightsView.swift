@@ -58,7 +58,6 @@ struct InsightsView: View {
                 FooterHint(label: "Scroll", keys: ["↑↓"])
                 FooterHint(label: "Window", keys: ["W"])
                 FooterHint(label: "Tickets", keys: ["→"])
-                FooterHint(label: "Hide", keys: ["Esc"])
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

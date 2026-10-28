@@ -178,7 +178,6 @@ struct OutcomesView: View {
                     FooterHint(label: "Remove", keys: ["⌫"])
                 }
                 FooterHint(label: "Overview", keys: ["←"])
-                FooterHint(label: "Hide", keys: ["Esc"])
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

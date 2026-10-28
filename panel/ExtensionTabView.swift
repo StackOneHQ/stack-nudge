@@ -324,7 +324,6 @@ struct ExtensionTabView: View {
 
     private var footer: some View {
         PageFooter {
-            FooterHint(label: "Hide", keys: ["Esc"])
             // Advertised because it is the only refresh an extension that
             // declares no actions has, now that coming on screen is floored to
             // the manifest's own interval.
