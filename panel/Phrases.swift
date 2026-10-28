@@ -263,6 +263,7 @@ struct PhrasesView: View {
 
     @ObservedObject var model: PhrasesViewModel
     let onBack: () -> Void
+    @Environment(\.editingText) private var editingText
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -493,10 +494,12 @@ struct PhrasesView: View {
     private var footer: some View {
         PageFooter {
             FooterHint(label: "Add",    keys: ["⏎"], primary: true)
-            FooterHint(label: "Toggle", keys: ["␣"])
-            FooterHint(label: "Remove", keys: ["⌫"])
+            // While the add field has focus these keys type or move its caret
+            // instead; Esc leaves the field.
+            FooterHint(label: "Toggle", keys: ["␣"]).opacity(editingText ? 0.35 : 1)
+            FooterHint(label: "Remove", keys: ["⌘⌫"]).opacity(editingText ? 0.35 : 1)
             FooterHint(label: "Top/Bottom", keys: ["⌘↑↓"])
-            FooterHint(label: "Back",   keys: ["←"])
+            FooterHint(label: "Back",   keys: ["←"]).opacity(editingText ? 0.35 : 1)
         }
     }
 

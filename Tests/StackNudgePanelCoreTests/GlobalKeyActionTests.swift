@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 
 @testable import StackNudgePanelCore
@@ -11,19 +12,39 @@ final class GlobalKeyActionTests: XCTestCase {
     private func action(_ keyCode: UInt16,
                         _ modifiers: NSEvent.ModifierFlags = [],
                         recording: Bool = false,
-                        inEmptyField: Bool? = nil) -> PanelController.GlobalKeyAction? {
+                        inEmptyField: Bool? = nil,
+                        isRepeat: Bool = false) -> PanelController.GlobalKeyAction? {
         PanelController.globalKeyAction(keyCode: keyCode, modifiers: modifiers,
-                                        recording: recording, inEmptyField: inEmptyField)
+                                        recording: recording, inEmptyField: inEmptyField,
+                                        isRepeat: isRepeat)
+    }
+
+    // Holding ⌫ to clear a field stops at empty. A repeat that cancelled
+    // would hand the rest of the held key to the page, and on Sessions the
+    // page's ⌫ kills the selected agent.
+    func test_heldDeleteDoesNotCancel() {
+        XCTAssertNil(action(51, inEmptyField: true, isRepeat: true))
     }
 
     func test_escapeHidesOutsideAField() {
         XCTAssertEqual(action(53), .hide)
-        XCTAssertEqual(action(53, recording: true), .hide)
     }
 
     func test_escapeCancelsAField() {
         XCTAssertEqual(action(53, inEmptyField: false), .cancelField)
         XCTAssertEqual(action(53, inEmptyField: true), .cancelField)
+    }
+
+    // Recording a shortcut is editing one: Esc keeps the old shortcut and the
+    // panel stays up.
+    func test_escapeCancelsARecording() {
+        XCTAssertEqual(action(53, recording: true), .cancelField)
+    }
+
+    // The footer's last hint says which of the two Esc will do.
+    func test_footerNamesWhatEscapeDoes() {
+        XCTAssertEqual(PageFooter<EmptyView>.escapeLabel(cancels: false), "Hide")
+        XCTAssertEqual(PageFooter<EmptyView>.escapeLabel(cancels: true), "Cancel")
     }
 
     func test_commandArrowsStepTheTabsEvenFromAField() {
@@ -52,6 +73,28 @@ final class GlobalKeyActionTests: XCTestCase {
         XCTAssertNil(action(51, inEmptyField: false))
         XCTAssertNil(action(51))
         XCTAssertNil(action(51, .command, inEmptyField: true))
+    }
+
+    // A sub-page steps from the tab it belongs to.
+    func test_commandArrowsStepFromASubPagesTab() {
+        let tabs: [PanelMode] = [.events, .sessions, .settings]
+        XCTAssertEqual(PanelController.stepTabTarget(from: .phrases, by: -1, in: tabs), .sessions)
+        XCTAssertEqual(PanelController.stepTabTarget(from: .permissions, by: -1, in: tabs), .sessions)
+        XCTAssertEqual(PanelController.stepTabTarget(from: .sessions, by: 1, in: tabs), .settings)
+    }
+
+    // At either end of the strip the key is used up and nothing moves.
+    func test_commandArrowsStopAtTheEnds() {
+        let tabs: [PanelMode] = [.events, .sessions, .settings]
+        XCTAssertEqual(PanelController.stepTabTarget(from: .events, by: -1, in: tabs), .events)
+        XCTAssertEqual(PanelController.stepTabTarget(from: .phrases, by: 1, in: tabs), .phrases)
+    }
+
+    // Setup and the update screens draw no strip.
+    func test_commandArrowsHaveNowhereToGoFromATakeover() {
+        let tabs: [PanelMode] = [.events, .sessions, .settings]
+        XCTAssertNil(PanelController.stepTabTarget(from: .bootstrap, by: 1, in: tabs))
+        XCTAssertNil(PanelController.stepTabTarget(from: .updating, by: -1, in: tabs))
     }
 
     func test_ordinaryKeysPassThrough() {

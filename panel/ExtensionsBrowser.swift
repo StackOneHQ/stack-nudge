@@ -402,9 +402,9 @@ struct ExtensionsView: View {
     let onConfigure: (ExtensionRow) -> Void
     let onBack: () -> Void
 
-    // Focused on arrival, so the page is type-to-find rather than
+    // Typing focuses it, so the page is type-to-find rather than
     // click-then-type. It is why R lost its bare binding — see the key routing
-    // in Panel.
+    // in Panel. Not focused on arrival: see onAppear.
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -446,7 +446,8 @@ struct ExtensionsView: View {
                     selection: catalog.selection,
                     activation: activationLabel(in: rows),
                     updateSelected: selectedRow(in: rows)?.updateAvailable == true,
-                    hasRows: !rows.isEmpty)
+                    hasRows: !rows.isEmpty,
+                    searching: searchFocused)
                 ForEach(hints.indices, id: \.self) { FooterHintRow(spec: hints[$0]) }
             }
         }
@@ -494,14 +495,17 @@ struct ExtensionsView: View {
     static func footerHints(selection: ExtensionCatalog.Target?,
                             activation: String,
                             updateSelected: Bool,
-                            hasRows: Bool) -> [FooterHintSpec] {
+                            hasRows: Bool,
+                            searching: Bool = false) -> [FooterHintSpec] {
         var hints: [FooterHintSpec] = []
         // ⏎ joins ← when the chevron is selected, since both then leave.
+        // Dimmed while the search field has focus, where ← moves the caret.
         let backSelected = selection == .back
         hints.append(FooterHintSpec(
             label: "Back",
             keys: backSelected ? ["⏎", "←"] : ["←"],
-            primary: backSelected))
+            primary: backSelected,
+            dimmed: searching))
         hints.append(FooterHintSpec(label: "Search", keys: ["/"]))
         // Dimmed rather than dropped when a query, or an empty catalogue, leaves
         // nothing to walk: the bar must not reflow as the list filters, and an

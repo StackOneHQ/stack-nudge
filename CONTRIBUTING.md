@@ -63,7 +63,7 @@ CI runs the suite on every push and PR — `swift test` is one of the required c
 ## Source layout
 
 - `notifier/` — the transient banner-renderer that fires per nudge and exits
-- `panel/` — the persistent floating-panel daemon (hotkey, NSPanel, socket listener, menu bar, sessions list, settings, permissions window)
+- `panel/` — the persistent floating-panel daemon (hotkey, NSPanel, socket listener, menu bar, sessions list, settings and its Permissions page)
 - `shared/` — code shared by both binaries (currently `AppActivator.swift`)
 - `phrases/` — per-language voice phrase pools sourced by `notify.sh` at hook time
 - `notify.sh` — the shell entry-point CC/Cursor/Gemini hooks invoke; routes events to banner / panel / voice surfaces

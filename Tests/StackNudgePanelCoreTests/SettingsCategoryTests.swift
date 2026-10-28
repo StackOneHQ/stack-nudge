@@ -134,7 +134,7 @@ final class SettingsCategoryTests: XCTestCase {
         nav.settingsCategory = .extensions
         nav.selectedSettingIndex = nav.index(of: .installedExtension("derby")) ?? 0
 
-        XCTAssertFalse(nav.selectedRowRespondsToArrows)
+        XCTAssertFalse(nav.selectedRowIsPicker)
         nav.cycleForward()
         nav.cycleBackward()
         XCTAssertTrue(opened.isEmpty, "arrows must not open an extension")

@@ -257,6 +257,7 @@ struct PanelContentView: View {
             }
         }
         .environment(\.editingText, nav.editingText)
+        .environment(\.escapeCancels, nav.escapeCancels)
     }
 
     private var permissionsPage: some View {
@@ -1611,6 +1612,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return
         }
         guard !nav.panelPinned, panel.isVisible else { return }
+        // Every action on the Permissions page sends focus elsewhere: a grant
+        // prompt, System Settings. Hiding then would make you summon the panel
+        // back after each grant.
+        if nav.mode == .permissions { return }
         hidePanel()
     }
 
@@ -1757,6 +1762,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private var compactMovedSinceMouseDown = false
     private var compactMouseEventMonitor: Any?
     private var firstResponderObservation: NSKeyValueObservation?
+    // Set when ⌫ cancels a field; see panelHandlesGlobalKey.
+    private var swallowingDeleteRepeats = false
 
     private func snapCompactToNearestCorner() {
         guard nav.compactMode, !nav.compactExpanded else { return }
@@ -3723,10 +3730,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     func showPermissions() {
         if nav.mode != .permissions {
             nav.permissionsReturnMode = nav.mode == .bootstrap ? .bootstrap : .settings
-            permissions.selected = 0
+            permissions.selected = .notifications
         }
         nav.mode = .permissions
-        if !panel.isVisible || (nav.compactMode && !nav.compactExpanded) { showPanel() }
+        // Also when visible but not key: a pinned panel the user clicked away
+        // from would show the page without taking its keys.
+        if !panel.isKeyWindow || (nav.compactMode && !nav.compactExpanded) { showPanel() }
     }
 
     // Fired when the user re-opens the app while it's already running —
@@ -3791,28 +3800,53 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // navigation): Esc cancels a text field or, outside one, hides the panel,
     // ⌘←/→ step through the tabs, and ⌫ in an empty text field cancels it too.
     func panelHandlesGlobalKey(_ event: NSEvent, fieldEditor: NSTextView?) -> Bool {
-        // An input method composing text owns Esc and ⌫ until it commits.
-        if fieldEditor?.hasMarkedText() == true { return false }
         let mods = event.modifierFlags.intersection([.command, .control, .option, .shift])
         let recording = nav.recordingHotkey || nav.recordingSpeakHotkey
+        // The ⌫ that cancelled a field may still be held. Once the field lets
+        // go, its repeats would reach the page's own ⌫, which on Sessions kills
+        // the selected agent, so they're swallowed until a fresh press.
+        if event.keyCode == KeyCode.delete {
+            if event.isARepeat, swallowingDeleteRepeats { return true }
+            if !event.isARepeat { swallowingDeleteRepeats = false }
+        }
+        let action = Self.globalKeyAction(keyCode: event.keyCode, modifiers: mods,
+                                          recording: recording,
+                                          inEmptyField: fieldEditor?.string.isEmpty,
+                                          isRepeat: event.isARepeat)
+        // An input method composing text owns Esc and ⌫ until it commits.
+        // ⌘←/→ still switch tabs.
+        if fieldEditor?.hasMarkedText() == true, action != nil {
+            if case .stepTab = action {} else { return false }
+        }
 
-        switch Self.globalKeyAction(keyCode: event.keyCode, modifiers: mods,
-                                    recording: recording,
-                                    inEmptyField: fieldEditor?.string.isEmpty) {
+        switch action {
         case .hide:
-            if nav.recordingSpeakHotkey { nav.cancelRecordingSpeakHotkey() }
-            if nav.recordingHotkey { nav.cancelRecordingHotkey() }
             hidePanel()
         case .stepTab(let delta):
-            let tabs = nav.orderedTabs
-            guard let index = tabs.firstIndex(of: nav.mode) else { return false }
-            if tabs.indices.contains(index + delta) { nav.mode = tabs[index + delta] }
+            // Setup opened this page and has no tab strip to step along.
+            if nav.mode == .permissions, nav.permissionsReturnMode == .bootstrap { return false }
+            guard let target = Self.stepTabTarget(from: nav.mode, by: delta, in: nav.orderedTabs)
+            else { return false }
+            if target != nav.mode { nav.mode = target }
         case .cancelField:
+            if event.keyCode == KeyCode.delete { swallowingDeleteRepeats = true }
             cancelField()
         case nil:
             return false
         }
         return true
+    }
+
+    // The tab ⌘←/→ lands on. A sub-page steps from the tab it belongs to, so
+    // ⌘← on Phrases goes to the tab before Settings. The mode itself comes
+    // back at either end of the strip, so the key is still used up there; nil
+    // where there is no strip to step along (setup, update and the like).
+    static func stepTabTarget(from mode: PanelMode, by delta: Int,
+                              in tabs: [PanelMode]) -> PanelMode? {
+        guard let anchor = PanelContentView.tabStripAnchor(for: mode, in: tabs),
+              let index = tabs.firstIndex(of: anchor)
+        else { return nil }
+        return tabs.indices.contains(index + delta) ? tabs[index + delta] : mode
     }
 
     enum GlobalKeyAction: Equatable {
@@ -3823,19 +3857,21 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     // Pure so the table is testable. `inEmptyField` is nil when no text field
     // has focus. ⌘←/→ are left alone while recording a hotkey, so either can
-    // still be recorded as one.
+    // still be recorded as one. ⌫ cancels only on a fresh press: holding it to
+    // clear a field stops at empty rather than running on out of the field.
     static func globalKeyAction(keyCode: UInt16,
                                 modifiers: NSEvent.ModifierFlags,
                                 recording: Bool,
-                                inEmptyField: Bool?) -> GlobalKeyAction? {
+                                inEmptyField: Bool?,
+                                isRepeat: Bool = false) -> GlobalKeyAction? {
         switch keyCode {
         case KeyCode.escape:
-            return inEmptyField == nil ? .hide : .cancelField
+            return inEmptyField == nil && !recording ? .hide : .cancelField
         case KeyCode.leftArrow where modifiers == .command && !recording:
             return .stepTab(-1)
         case KeyCode.rightArrow where modifiers == .command && !recording:
             return .stepTab(1)
-        case KeyCode.delete where modifiers.isEmpty && inEmptyField == true:
+        case KeyCode.delete where modifiers.isEmpty && inEmptyField == true && !isRepeat:
             return .cancelField
         default:
             return nil
@@ -3847,7 +3883,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // new-phrase field empties; the rename keeps the old name, a config field
     // its saved value. Focus goes first, because a field writes its text back
     // through its binding as it ends editing, and that would undo the revert.
+    // A shortcut being recorded is cancelled the same way, keeping the old one.
     private func cancelField() {
+        if nav.recordingSpeakHotkey { nav.cancelRecordingSpeakHotkey() }
+        if nav.recordingHotkey { nav.cancelRecordingHotkey() }
         panel.makeFirstResponder(nil)
         switch nav.mode {
         case .events:
@@ -3884,8 +3923,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // While recording a hotkey, capture the next combo. Arrow keys / Tab
         // bail out gracefully — otherwise users who entered record mode by
         // mistake would be stuck on row 0 with all their keypresses swallowed.
-        // Esc never reaches here: it hides the panel, and cancels recording on
-        // the way (panelHandlesGlobalKey).
+        // Esc never reaches here: panelHandlesGlobalKey cancels the recording,
+        // as it cancels a text field.
         if nav.recordingHotkey || nav.recordingSpeakHotkey {
             let recordingSpeak = nav.recordingSpeakHotkey
             let plainNav = mods.intersection([.command, .control, .option, .shift]).isEmpty
@@ -4044,8 +4083,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             case KeyCode.returnKey, KeyCode.numpadEnter:
                 guard plain else { return false }
                 focusSelectedSession()
-            case KeyCode.delete, KeyCode.forwardDelete, KeyCode.rKey:
-                guard plain else { return false }
+            // ⌘⌫, never a bare ⌫ or R: there's no confirmation, and a bare ⌫
+            // is also the key that clears and cancels the rename field just
+            // above, so one press too many would SIGTERM the agent.
+            case KeyCode.delete where mods.intersection([.command, .control, .option, .shift]) == .command,
+                 KeyCode.forwardDelete where mods.intersection([.command, .control, .option, .shift]) == .command:
                 killSelectedSession()
             case KeyCode.nKey:
                 // Accept N regardless of shift (same physical key for n / N).
@@ -4212,8 +4254,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             case .back:             nav.mode = nav.permissionsReturnMode
             case .moveSelection(let delta):
                 delta < 0 ? permissions.selectPrevious() : permissions.selectNext()
-            case .prompt:           permissions.promptSelected()
-            case .openInSettings:   permissions.openSelectedInSettings()
+            // Each of these starts work (tccutil, a prompt, System Settings),
+            // so a held key mustn't queue one per repeat.
+            case .prompt:           if !event.isARepeat { permissions.promptSelected() }
+            case .openInSettings:   if !event.isARepeat { permissions.openSelectedInSettings() }
             case .refresh:          if !event.isARepeat { permissions.refresh() }
             case .swallow:          break
             case nil:               return false
@@ -4222,12 +4266,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
 
         // Phrases mode: ↑/↓ navigate every row (defaults + custom),
-        // Space toggles the selected default, ⌫ removes the selected
+        // Space toggles the selected default, ⌘⌫ removes the selected
         // custom, ← returns to Settings. Typing / Tab / Enter for
-        // adding still fall through to SwiftUI's TextField.
+        // adding still fall through to SwiftUI's TextField. Remove is ⌘⌫
+        // rather than ⌫ because ⌫ is also what empties and cancels that field.
         if nav.mode == .phrases {
-            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
-            guard plain else { return false }
+            let flags = mods.intersection([.command, .control, .option, .shift])
+            if flags == .command, event.keyCode == KeyCode.delete || event.keyCode == KeyCode.forwardDelete {
+                guard let row = phrases.selectedRow, !row.isDefault else { return false }
+                phrases.removeSelected()
+                return true
+            }
+            guard flags.isEmpty else { return false }
             switch event.keyCode {
             case KeyCode.leftArrow:
                 nav.mode = .settings
@@ -4242,10 +4292,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 guard let row = phrases.selectedRow, row.isDefault else { return false }
                 phrases.toggleSelected()
                 return true
-            case KeyCode.delete, KeyCode.forwardDelete:
-                guard let row = phrases.selectedRow, !row.isDefault else { return false }
-                phrases.removeSelected()
-                return true
             default:
                 return false
             }
@@ -4254,8 +4300,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // In settings mode, the controller drives row selection and value
         // cycling on PanelNav so the SettingsView stays a pure renderer.
         if nav.mode == .settings {
-            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
-            let shiftOnly = mods.intersection([.command, .control, .option, .shift]) == .shift
+            let flags = mods.intersection([.command, .control, .option, .shift])
+            let plain = flags.isEmpty
 
             // Sidebar level: ↑↓ walk categories, →/Enter step into the rows.
             if !nav.settingsDetailFocused {
@@ -4276,27 +4322,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 return true
             }
 
-            switch event.keyCode {
-            case KeyCode.leftArrow where plain:
-                // Back out to the categories, the same ← the Usage tab uses.
+            switch Self.settingsDetailKeyAction(keyCode: event.keyCode, modifiers: flags,
+                                                picking: nav.pickingValue) {
+            case .back:
                 nav.settingsDetailFocused = false
-            case KeyCode.upArrow where plain:
-                nav.selectPrevRow()
-            case KeyCode.downArrow where plain:
-                nav.selectNextRow()
-            case KeyCode.tab where plain:
-                nav.selectNextRow()
-            case KeyCode.tab where shiftOnly:
-                nav.selectPrevRow()
-            case KeyCode.leftArrow where shiftOnly:
-                // Plain ← is the way out, so stepping a value back needs ⇧.
-                nav.cycleBackward()
-            case KeyCode.rightArrow where plain:
-                nav.cycleForward()
-            case KeyCode.returnKey, KeyCode.numpadEnter, KeyCode.space:
-                guard plain else { return false }
+            case .step(let delta):
+                delta < 0 ? nav.cycleBackward() : nav.cycleForward()
+            case .moveRow(let delta):
+                // Moving to another row settles a pick where it stands.
+                nav.pickingValue = false
+                delta < 0 ? nav.selectPrevRow() : nav.selectNextRow()
+            case .activate:
                 nav.activate()
-            default:
+            case nil:
                 return false
             }
             return true
@@ -4313,7 +4351,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             // comment that it came before — so the key did nothing while the
             // footer advertised it, which is the one failure an untestable
             // switch buried in a method is good at hiding. The ordering lives
-            // in extensionTabKeyAction now, where a test can see it.
+            // in isForceRefresh now, where a test can see it.
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             if Self.isForceRefresh(keyCode: event.keyCode, modifiers: mods,
                                    isRepeat: event.isARepeat) {
@@ -4555,6 +4593,33 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // Never falls through to the tab shortcuts below — they act on a list
         // this page isn't showing.
         case swallow
+    }
+
+    enum SettingsDetailKeyAction: Equatable {
+        case back
+        case step(Int)
+        case moveRow(Int)
+        case activate
+    }
+
+    // Settings' rows, once a category is open. While a value row is being
+    // picked ←/→ step its value. Otherwise ← backs out to the categories, the
+    // same ← the Usage tab uses, and → steps nothing (cycleForward only acts
+    // mid-pick), so no row acts on an arrow. Space / ⏎ act on the row, and on
+    // a value row start or settle a pick.
+    static func settingsDetailKeyAction(keyCode: UInt16,
+                                        modifiers: NSEvent.ModifierFlags,
+                                        picking: Bool) -> SettingsDetailKeyAction? {
+        switch (keyCode, modifiers) {
+        case (KeyCode.leftArrow, []):                return picking ? .step(-1) : .back
+        case (KeyCode.rightArrow, []):               return .step(1)
+        case (KeyCode.upArrow, []), (KeyCode.tab, .shift):  return .moveRow(-1)
+        case (KeyCode.downArrow, []), (KeyCode.tab, []):    return .moveRow(1)
+        case (KeyCode.returnKey, []), (KeyCode.numpadEnter, []), (KeyCode.space, []):
+            return .activate
+        default:
+            return nil
+        }
     }
 
     enum PermissionsKeyAction: Equatable {
@@ -5003,6 +5068,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // resetting to its overview pane on each open.
         nav.eventsPane = .live
         nav.historyQuery = ""
+        // A value being picked settles where it stands, and a shortcut being
+        // recorded keeps the old one.
+        nav.pickingValue = false
+        if nav.recordingSpeakHotkey { nav.cancelRecordingSpeakHotkey() }
+        if nav.recordingHotkey { nav.cancelRecordingHotkey() }
         // Compact mode: "hide" means "collapse back to the pill," never
         // make the user lose their widget entirely. Esc / hotkey / focus
         // loss all funnel through here.

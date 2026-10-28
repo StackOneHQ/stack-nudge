@@ -104,7 +104,7 @@ struct SessionsView: View {
                 FooterHint(label: "Focus",   keys: ["⏎"])
                 FooterHint(label: "Rename",  keys: ["N"])
                 FooterHint(label: "Mute",    keys: ["M"])
-                FooterHint(label: "Kill",    keys: ["⌫"])
+                FooterHint(label: "Kill",    keys: ["⌘⌫"])
             }
         }
     }

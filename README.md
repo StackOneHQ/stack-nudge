@@ -142,10 +142,11 @@ These keys work the same on every page, including while a text field has focus:
 
 | Key | Action |
 |-----|--------|
-| `Esc` | Hide the panel. In a text field it cancels the field instead: a filter, search or new phrase empties and hands the keyboard back to the page, a rename or config field keeps its saved value. The footer's last hint shows which. |
-| `⌘←` / `⌘→` | Previous / next tab |
-| `←` | Back a level (out of a detail pane or a sub-page) |
+| `Esc` | Hide the panel. In a text field it cancels the field instead: a filter, search or new phrase empties and hands the keyboard back to the page, a rename or config field keeps its saved value. While a shortcut is being recorded it cancels that and keeps the old one. The footer's last hint shows which. |
+| `⌘←` / `⌘→` | Previous / next tab. From a sub-page, the tabs either side of the one it belongs to. Not while recording a hotkey, so either can be recorded. |
 | `⌫` in an empty text field | Cancel the field, as `Esc` does |
+
+Outside a text field, `←` is always back a level: out of a detail pane, or from a sub-page to where you opened it.
 
 #### Events tab
 
@@ -251,7 +252,7 @@ Rows are ordered busy-first, then by most-recent activity. Status label reads `b
 | `↑ ↓` | Move selection |
 | `⏎` | Focus the session's source terminal |
 | `n` | Rename the selected session inline |
-| `⌫` | Send SIGTERM to the agent process |
+| `⌘⌫` | Send SIGTERM to the agent process |
 | `Esc` | Hide the panel |
 
 #### Usage tab
@@ -303,8 +304,9 @@ Reachable from the tab strip or `Cmd+5`. Keyboard-driven rows for hotkey, behavi
 | Key | Action |
 |-----|--------|
 | `↑ ↓` / `Tab` | Move selection |
-| `→` / `⇧←` | Cycle the selected row's value forward / back (sounds/voices step; on/off rows ignore them) |
-| `Space` / `⏎` | Activate (toggles flip, action rows fire, hotkey row records a new combo) |
+| `Space` / `⏎` | Activate (toggles flip, action rows fire, hotkey row records a new combo). On a value row (sound, voice, duration, threshold) it starts picking. |
+| `←` / `→` while picking | Step through the values (sounds and voices preview as you go) |
+| `Space` / `⏎` while picking | Settle on the value. Moving to another row settles it too. |
 | `←` | Back to the category list |
 | `Esc` | Hide the panel |
 
@@ -380,12 +382,12 @@ The Permissions page shows each grant's live status. It's a Settings sub-page: o
 | Key | Action |
 |-----|--------|
 | `↑ ↓` | Move selection |
-| `⏎` | Prompt for the selected grant (**Reset & prompt**: clears the existing TCC entry, then triggers macOS's standard grant dialog) |
+| `⏎` | Prompt for the selected grant. For Accessibility and Automation that's **Reset & prompt**, which clears the existing TCC entry and then triggers macOS's grant dialog. Notifications only asks, and once you've answered, the switch is in System Settings. |
 | `⌘⏎` | Open System Settings at the right pane |
 | `⌘R` | Check every grant again |
 | `←` | Back to Settings, or to setup if you came from there |
 
-The page checks again whenever the panel comes back, so a grant made in System Settings shows up when you return.
+The panel stays up on this page even when a grant prompt or System Settings takes focus, so you can work through every grant in one pass; drag it aside if it covers System Settings. The page checks again whenever the panel becomes key, so a grant made in System Settings shows up when you click back.
 
 #### The rebuild gotcha
 
@@ -416,7 +418,7 @@ The phrase pools that power [Voice notifications](#voice-notifications) can be c
 
 - Toggle individual built-in phrases on or off (`Space`)
 - Add your own custom phrases (typed inline, `Enter` to commit)
-- Remove custom phrases (`⌫`)
+- Remove custom phrases (`⌘⌫`)
 
 Per-pool customisations are stored in `~/.stack-nudge/phrases.user.json` and merged with the built-in pools at notification time. Disable a built-in phrase you find too cheery, add ones in your own voice — the same random-selection logic still applies.
 

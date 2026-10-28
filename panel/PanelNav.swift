@@ -277,7 +277,11 @@ final class PanelNav: ObservableObject {
         }
     }
     @Published var selectedSettingIndex: Int = 0 {
-        didSet { anchoredSettingRow = selectedRow }
+        didSet {
+            // A re-anchor can move the index without moving off the row.
+            if selectedRow != anchoredSettingRow { pickingValue = false }
+            anchoredSettingRow = selectedRow
+        }
     }
 
     // What the selection is actually *on*, remembered so it can survive the row
@@ -939,8 +943,11 @@ final class PanelNav: ObservableObject {
     @Published var historyQuery: String = ""
     // True while any text field in the panel has focus, when Esc cancels the
     // field rather than hiding the panel. Kept by PanelController from the
-    // panel's first responder; PageFooter relabels its Esc hint from it.
+    // panel's first responder.
     @Published var editingText = false
+    // Whether Esc cancels something rather than hiding the panel: a focused
+    // text field, or a shortcut being recorded.
+    var escapeCancels: Bool { editingText || recordingHotkey || recordingSpeakHotkey }
     // Where ← leaves the Permissions page for: .settings, or .bootstrap when
     // setup opened it. Setup has no tab strip, so the page keeps that look too.
     @Published var permissionsReturnMode: PanelMode = .settings
@@ -1021,7 +1028,13 @@ final class PanelNav: ObservableObject {
     @Published var settingsCategory: SettingsCategory = .notifications {
         didSet { if oldValue != settingsCategory { selectFirstCategoryRow() } }
     }
-    @Published var settingsDetailFocused = false
+    @Published var settingsDetailFocused = false {
+        didSet { if !settingsDetailFocused { pickingValue = false } }
+    }
+    // True while a value row is being picked: Space or ⏎ on the row starts it,
+    // ←/→ then step the value, and Space or ⏎ again settles it. Moving off the
+    // row or out of the category list settles it too.
+    @Published var pickingValue = false
 
     // ⌘1…⌘9. Tabs past this are reachable by ←/→ only.
     static let maxNumberedTabs = 9
@@ -1722,6 +1735,10 @@ final class PanelNav: ObservableObject {
     // Enter: toggles flip, cycle rows step forward, actions fire, hotkey
     // row enters record mode.
     func activate() {
+        if selectedRowIsPicker {
+            pickingValue.toggle()
+            return
+        }
         switch selectedRow {
         case .wireAgents:    wireAllUnwiredAgents()
         case .dismissAgents: dismissAllUnwiredAgents()
@@ -1751,27 +1768,28 @@ final class PanelNav: ObservableObject {
         case .uninstall:        actions?.beginUninstall()
         case .quit:             actions?.quit()
         case .openRepo:         openRepository()
-        // Toggles flip and cycles step forward on Enter / Space.
+        // Toggles flip on Enter / Space. Value rows never get here: they pick.
         default: applyCycle(forward: true)
         }
     }
 
     func cycleForward() {
-        guard selectedRowRespondsToArrows else { return }
+        guard pickingValue, selectedRowIsPicker else { return }
         applyCycle(forward: true)
     }
 
     func cycleBackward() {
-        guard selectedRowRespondsToArrows else { return }
+        guard pickingValue, selectedRowIsPicker else { return }
         applyCycle(forward: false)
     }
 
-    // Whether → / ⇧← do anything on the selected row. cycleForward/cycleBackward
-    // gate on it, and the Settings footer dims its Cycle hint from it.
-    // On/off rows are Space / Enter only, so → grazing one on the way into a
-    // category can't flip it. Exhaustive over SettingsRow so a new row can't
-    // silently inherit the wrong answer.
-    var selectedRowRespondsToArrows: Bool {
+    // Whether the selected row is a value picker: Space / ⏎ start and settle
+    // picking, and ←/→ step the value in between (cycleForward/cycleBackward
+    // gate on both). Every other row acts on Space / ⏎ and ignores the arrows,
+    // so → grazing a row on the way into a category can't change anything.
+    // Exhaustive over SettingsRow so a new row can't silently inherit the wrong
+    // answer.
+    var selectedRowIsPicker: Bool {
         switch selectedRow {
         case .wireAgents, .dismissAgents,
              .disconnectGithub, .editPhrases, .browseExtensions, .installedExtension,
@@ -1786,11 +1804,12 @@ final class PanelNav: ObservableObject {
              .githubLinks, .hideShipped, .eventHistory,
              .slackEnabled, .slackDetail, .slackStop:
             return false
-        case .permissions, .update, .hotkey, .speakHotkey,
-             .muteDuration, .remindUnanswered, .stalledSessions,
+        case .permissions, .update, .hotkey, .speakHotkey, .downloadVoiceModel:
+            return false
+        case .muteDuration, .remindUnanswered, .stalledSessions,
              .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme,
              .agentDoneSound, .permissionSound,
-             .voice, .voiceSpeed, .downloadVoiceModel,
+             .voice, .voiceSpeed,
              .alertThreshold, .pollFrequency,
              .contextAlert, .piApiBudget, .piLocalBudget,
              .historyPerSession,
@@ -1848,17 +1867,6 @@ final class PanelNav: ObservableObject {
 
     private func applyCycle(forward: Bool) {
         switch selectedRow {
-        case .permissions:
-            // Nothing to cycle — → opens the Permissions page, like Enter.
-            actions?.checkPermissions()
-        case .update:
-            // Nothing to cycle — arrows behave like Enter.
-            actions?.beginUpdate()
-        case .hotkey:
-            // Cycle on the hotkey row also enters record mode.
-            startRecordingHotkey()
-        case .speakHotkey:
-            startRecordingSpeakHotkey()
         case .banner:
             bannerEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_BANNER", value: bannerEnabled ? "true" : "false")
@@ -1982,9 +1990,6 @@ final class PanelNav: ObservableObject {
             let next = forward ? voiceSpeed + Self.speedStep : voiceSpeed - Self.speedStep
             voiceSpeed = max(Self.speedMin, min(Self.speedMax, (next * 100).rounded() / 100))
             ConfigFile.write(key: "STACKNUDGE_VOICE_SPEED", value: String(format: "%.2f", voiceSpeed))
-        case .downloadVoiceModel:
-            // Arrow on the pre-download row triggers the download too.
-            if !voiceModelDownloading { startVoiceModelDownload() }
         case .quotaTracking:
             toggleQuotaTracking()
         case .quotaAlerts:
@@ -2051,11 +2056,10 @@ final class PanelNav: ObservableObject {
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
             eventsPerSession = list[next]
             ConfigFile.write(key: "STACKNUDGE_EVENTS_PER_SESSION", value: String(eventsPerSession))
-        // Action rows have nothing to cycle. The two banner rows deliberately
-        // ignore arrows even though .permissions/.update act on them: Set up
-        // rewrites agent hook configs and Not now persists a dismissal, so
-        // neither should fire on an arrow-key graze. Enter/Space only.
-        case .wireAgents, .dismissAgents,
+        // Action rows have nothing to cycle, and activate() handles each of
+        // them before it gets here.
+        case .wireAgents, .dismissAgents, .permissions, .update,
+             .hotkey, .speakHotkey, .downloadVoiceModel,
              .disconnectGithub, .editPhrases, .browseExtensions, .installedExtension,
              .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,

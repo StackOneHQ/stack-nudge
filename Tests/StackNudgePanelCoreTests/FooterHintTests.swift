@@ -673,9 +673,18 @@ final class ExtensionsBrowserFooterTests: XCTestCase {
     private func hints(selection: ExtensionCatalog.Target?,
                        activation: String = "Install",
                        updateSelected: Bool = false,
-                       hasRows: Bool = true) -> [FooterHintSpec] {
+                       hasRows: Bool = true,
+                       searching: Bool = false) -> [FooterHintSpec] {
         ExtensionsView.footerHints(selection: selection, activation: activation,
-                                   updateSelected: updateSelected, hasRows: hasRows)
+                                   updateSelected: updateSelected, hasRows: hasRows,
+                                   searching: searching)
+    }
+
+    // A focused search field takes ← for its caret, so Back can't be reached
+    // from there until Esc hands the keyboard back.
+    func testBackDimsWhileSearching() {
+        XCTAssertEqual(hints(selection: nil).first { $0.label == "Back" }?.dimmed, false)
+        XCTAssertEqual(hints(selection: nil, searching: true).first { $0.label == "Back" }?.dimmed, true)
     }
 
     private func labels(_ specs: [FooterHintSpec]) -> [String] { specs.map(\.label) }

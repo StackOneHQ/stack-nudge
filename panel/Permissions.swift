@@ -197,13 +197,16 @@ final class PermissionsModel: ObservableObject {
     }
 
     @Published private(set) var rows: [Row] = []
-    @Published var selected = 0
+    // Held by pane rather than position: the iTerm2 row comes and goes with
+    // iTerm2, and an index would quietly slide onto a different grant, which
+    // ⏎ would then reset.
+    @Published var selected: SettingsPane = .notifications
 
     // Called after every probe, so the Settings tab dot and the "Permissions
     // needed" banner clear as soon as this page sees a grant.
     var onRefresh: (() -> Void)?
 
-    var selectedRow: Row? { rows.indices.contains(selected) ? rows[selected] : nil }
+    var selectedRow: Row? { rows.first { $0.pane == selected } }
 
     // Notifications answer asynchronously, so the other grants are probed in
     // its callback and every row lands at once, in the order the page lists them.
@@ -217,14 +220,25 @@ final class PermissionsModel: ObservableObject {
                 rows.append(Row(pane: .automationITerm2, status: iTerm))
             }
             if rows != self.rows { self.rows = rows }
-            self.selected = min(self.selected, rows.count - 1)
+            // Only iTerm2's row can go, and System Events sits above it.
+            if !rows.contains(where: { $0.pane == self.selected }) { self.selected = .automation }
             self.onRefresh?()
         }
     }
 
-    func selectPrevious() { selected = max(selected - 1, 0) }
-    func selectNext() { selected = min(selected + 1, max(rows.count - 1, 0)) }
-    func selectEdge(top: Bool) { selected = top ? 0 : max(rows.count - 1, 0) }
+    func selectPrevious() { step(-1) }
+    func selectNext() { step(1) }
+
+    func selectEdge(top: Bool) {
+        if let row = top ? rows.first : rows.last { selected = row.pane }
+    }
+
+    private func step(_ delta: Int) {
+        guard let index = rows.firstIndex(where: { $0.pane == selected }),
+              rows.indices.contains(index + delta)
+        else { return }
+        selected = rows[index + delta].pane
+    }
 
     // A granted row has nothing to ask for; its ⏎ hint dims to match.
     func promptSelected() {
@@ -258,20 +272,30 @@ struct PermissionsView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider().opacity(0.4)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("StackNudge needs these grants to show banners, focus the right window, and send the Enter keystroke when you approve a permission nudge.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    ForEach(Array(model.rows.enumerated()), id: \.offset) { index, row in
-                        rowView(row, selected: index == model.selected)
-                            .contentShape(Rectangle())
-                            .onTapGesture { model.selected = index }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("StackNudge needs these grants to show banners, focus the right window, and send the Enter keystroke when you approve a permission nudge.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        ForEach(model.rows, id: \.pane) { row in
+                            rowView(row, selected: row.pane == model.selected)
+                                .id(row.pane)
+                                .contentShape(Rectangle())
+                                .onTapGesture { model.selected = row.pane }
+                        }
+                    }
+                    .padding(14)
+                    .background(ThinScrollers())
+                }
+                // A short panel shows only a row or two, and ⏎ acts on the
+                // selection, so the selection has to stay where it can be seen.
+                .onChange(of: model.selected) { pane in
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        proxy.scrollTo(pane, anchor: .center)
                     }
                 }
-                .padding(14)
-                .background(ThinScrollers())
             }
             footer
         }

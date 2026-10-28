@@ -104,9 +104,9 @@ final class SettingsRowTests: XCTestCase {
         XCTAssertTrue(nav.dismissedAgents.isEmpty)
     }
 
-    // The footer dims its Cycle hint from this, so it has to agree with
-    // applyCycle's no-op branch row for row.
-    func test_selectedRowRespondsToArrows_matchesCycleBehaviour() {
+    // Only value rows pick; every other row acts on Space / Enter and ignores
+    // the arrows.
+    func test_selectedRowIsPicker_onlyForValueRows() {
         let nav = PanelNav()
         // Both conditional rows present so index(of:) resolves them for real
         // rather than falling back to 0.
@@ -127,10 +127,10 @@ final class SettingsRowTests: XCTestCase {
         for row in [SettingsRow.wireAgents, .dismissAgents, .quit, .editPhrases,
                     .openConfig, .releaseNotes, .checkUpdates, .checkPermissions,
                     .uninstall, .disconnectGithub, .openRepo, .browseExtensions,
-                    .installedExtension("derby")] {
+                    .installedExtension("derby"), .permissions, .hotkey] {
             select(row)
             XCTAssertEqual(nav.selectedRow, row)
-            XCTAssertFalse(nav.selectedRowRespondsToArrows, "\(row) should ignore arrows")
+            XCTAssertFalse(nav.selectedRowIsPicker, "\(row) should ignore arrows")
         }
 
         // On/off rows flip on Space / Enter only.
@@ -138,15 +138,52 @@ final class SettingsRowTests: XCTestCase {
                     .quotaTracking, .githubLinks, .eventHistory, .pinPanel, .mute] {
             select(row)
             XCTAssertEqual(nav.selectedRow, row)
-            XCTAssertFalse(nav.selectedRowRespondsToArrows, "\(row) should ignore arrows")
+            XCTAssertFalse(nav.selectedRowIsPicker, "\(row) should ignore arrows")
         }
 
-        for row in [SettingsRow.muteDuration, .theme, .historyPerSession,
-                    .permissions, .hotkey] {
+        for row in [SettingsRow.muteDuration, .theme, .historyPerSession, .agentDoneSound] {
             select(row)
             XCTAssertEqual(nav.selectedRow, row)
-            XCTAssertTrue(nav.selectedRowRespondsToArrows, "\(row) should act on arrows")
+            XCTAssertTrue(nav.selectedRowIsPicker, "\(row) should pick")
         }
+    }
+
+    // Space starts a pick and Space again settles it. Arrows outside a pick
+    // leave the value alone. Stepping the value itself writes the real config
+    // file, so the tests stop short of it.
+    func test_valueRow_arrowsDoNothingUntilSpaceStartsAPick() {
+        let nav = PanelNav()
+        nav.settingsCategory = .events
+        nav.selectedSettingIndex = nav.index(of: .historyPerSession)
+        let before = nav.eventsPerSession
+
+        nav.cycleForward()
+        nav.cycleBackward()
+        XCTAssertEqual(nav.eventsPerSession, before, "arrows must not step a value nobody picked")
+        XCTAssertFalse(nav.pickingValue)
+
+        nav.activate()
+        XCTAssertTrue(nav.pickingValue)
+        XCTAssertEqual(nav.eventsPerSession, before, "starting a pick doesn't step it")
+        nav.activate()
+        XCTAssertFalse(nav.pickingValue)
+    }
+
+    func test_movingOffTheRowSettlesAPick() {
+        let nav = PanelNav()
+        nav.settingsCategory = .events
+        nav.settingsDetailFocused = true
+        nav.selectedSettingIndex = nav.index(of: .historyPerSession)
+        nav.activate()
+        XCTAssertTrue(nav.pickingValue)
+
+        nav.selectedSettingIndex = nav.index(of: .eventHistory)
+        XCTAssertFalse(nav.pickingValue)
+
+        nav.selectedSettingIndex = nav.index(of: .historyPerSession)
+        nav.activate()
+        nav.settingsDetailFocused = false
+        XCTAssertFalse(nav.pickingValue, "backing out to the categories settles it too")
     }
 
     // Drives the arrows rather than reading the predicate, on the one on/off
