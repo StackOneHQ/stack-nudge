@@ -1684,6 +1684,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             .removeDuplicates()
             .sink { feed.setEnabled($0) }
             .store(in: &cancellables)
+        // A fresh sign-in polls at once rather than at the next 3-minute tick.
+        nav.$githubSignedIn
+            .removeDuplicates()
+            .dropFirst()
+            .filter { $0 }
+            .sink { [weak self] _ in if self?.nav.githubActivityEnabled == true { feed.pollNow() } }
+            .store(in: &cancellables)
 
         nav.actions = SettingsActions(
             checkPermissions: { [weak self] in self?.showPermissions() },
