@@ -1041,6 +1041,29 @@ play_windows() {
     || powershell -c "[console]::beep(${freq},${dur})" 2>/dev/null
 }
 
+# A headless run (`claude -p` / `--print`, `codex exec`) is a script driving
+# the agent, with nobody at a terminal: a prompt from it can't be answered by a
+# person, and holding its hook for the 550s FIFO wait stalls the script. Leave
+# it alone and let the agent's own permission setting decide. Its turns ending
+# aren't news either. STACKNUDGE_HEADLESS_NUDGES=on brings both back.
+agent_is_headless() {
+  local pid="${NUDGE_AGENT_PID:-}"
+  if [[ -z "$pid" ]]; then
+    walk_session_chain
+    pid="$AGENT_PID"
+  fi
+  [[ -z "$pid" ]] && return 1
+  local args
+  args=" $(ps -p "$pid" -o args= 2>/dev/null) "
+  [[ "$args" =~ \ (-p|--print)(\ |=) ]] && return 0
+  [[ "$AGENT" == codex* && "$args" =~ \ exec\  ]] && return 0
+  return 1
+}
+if [[ "${STACKNUDGE_HEADLESS_NUDGES:-off}" != "on" ]] && agent_is_headless; then
+  nudge_debug "nudge skipped: the agent is a headless run"
+  exit 0
+fi
+
 TITLE="$(agent_label "$AGENT")"
 
 # Say which subagent a nudge came from, so "I didn't ask for that" has an
