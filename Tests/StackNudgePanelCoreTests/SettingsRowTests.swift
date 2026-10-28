@@ -184,6 +184,12 @@ final class SettingsRowTests: XCTestCase {
         nav.activate()
         nav.settingsDetailFocused = false
         XCTAssertFalse(nav.pickingValue, "backing out to the categories settles it too")
+
+        nav.settingsDetailFocused = true
+        nav.selectedSettingIndex = nav.index(of: .historyPerSession)
+        nav.activate()
+        nav.settingsCategory = .notifications
+        XCTAssertFalse(nav.pickingValue, "so does switching category")
     }
 
     // Drives the arrows rather than reading the predicate, on the one on/off

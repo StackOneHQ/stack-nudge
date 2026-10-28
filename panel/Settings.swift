@@ -40,6 +40,8 @@ struct SettingsView: View {
                 } else if nav.pickingValue {
                     FooterHint(label: "Choose", keys: ["←", "→"], primary: true)
                     FooterHint(label: "Done", keys: ["␣", "⏎"])
+                    // Also settles the pick where it stands.
+                    FooterHint(label: "Move", keys: ["↑", "↓"])
                 } else {
                     if nav.settingsDetailFocused {
                         FooterHint(label: "Move", keys: ["↑", "↓"])

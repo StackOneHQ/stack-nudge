@@ -1762,8 +1762,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private var compactMovedSinceMouseDown = false
     private var compactMouseEventMonitor: Any?
     private var firstResponderObservation: NSKeyValueObservation?
-    // Set when ⌫ cancels a field; see panelHandlesGlobalKey.
-    private var swallowingDeleteRepeats = false
+    // The key (⌫ or Esc) that just cancelled a field; see panelHandlesGlobalKey.
+    private var swallowingRepeatsOf: UInt16?
 
     private func snapCompactToNearestCorner() {
         guard nav.compactMode, !nav.compactExpanded else { return }
@@ -3802,13 +3802,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     func panelHandlesGlobalKey(_ event: NSEvent, fieldEditor: NSTextView?) -> Bool {
         let mods = event.modifierFlags.intersection([.command, .control, .option, .shift])
         let recording = nav.recordingHotkey || nav.recordingSpeakHotkey
-        // The ⌫ that cancelled a field may still be held. Once the field lets
-        // go, its repeats would reach the page's own ⌫, which on Sessions kills
-        // the selected agent, so they're swallowed until a fresh press.
-        if event.keyCode == KeyCode.delete {
-            if event.isARepeat, swallowingDeleteRepeats { return true }
-            if !event.isARepeat { swallowingDeleteRepeats = false }
-        }
+        // The ⌫ or Esc that cancelled a field may still be held. Once the field
+        // lets go, a repeat of Esc would hide the panel and a repeat of ⌫ would
+        // reach the page's own ⌫, so they're swallowed until a fresh press.
+        if event.isARepeat, event.keyCode == swallowingRepeatsOf { return true }
+        if !event.isARepeat { swallowingRepeatsOf = nil }
         let action = Self.globalKeyAction(keyCode: event.keyCode, modifiers: mods,
                                           recording: recording,
                                           inEmptyField: fieldEditor?.string.isEmpty,
@@ -3829,7 +3827,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             else { return false }
             if target != nav.mode { nav.mode = target }
         case .cancelField:
-            if event.keyCode == KeyCode.delete { swallowingDeleteRepeats = true }
+            swallowingRepeatsOf = event.keyCode
             cancelField()
         case nil:
             return false
@@ -4086,9 +4084,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             // ⌘⌫, never a bare ⌫ or R: there's no confirmation, and a bare ⌫
             // is also the key that clears and cancels the rename field just
             // above, so one press too many would SIGTERM the agent.
+            // Never on a repeat: the selection moves on after a kill, so a held
+            // ⌘⌫ would take out the next agent too.
             case KeyCode.delete where mods.intersection([.command, .control, .option, .shift]) == .command,
                  KeyCode.forwardDelete where mods.intersection([.command, .control, .option, .shift]) == .command:
-                killSelectedSession()
+                if !event.isARepeat { killSelectedSession() }
             case KeyCode.nKey:
                 // Accept N regardless of shift (same physical key for n / N).
                 guard mods.intersection([.command, .control, .option]).isEmpty else { return false }
@@ -4274,7 +4274,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             let flags = mods.intersection([.command, .control, .option, .shift])
             if flags == .command, event.keyCode == KeyCode.delete || event.keyCode == KeyCode.forwardDelete {
                 guard let row = phrases.selectedRow, !row.isDefault else { return false }
-                phrases.removeSelected()
+                // Not on a repeat, or a held key removes the next phrase too.
+                if !event.isARepeat { phrases.removeSelected() }
                 return true
             }
             guard flags.isEmpty else { return false }

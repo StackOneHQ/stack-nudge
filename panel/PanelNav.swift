@@ -1026,7 +1026,11 @@ final class PanelNav: ObservableObject {
     // stepped into its rows. Changing category resets the row selection, or the
     // index would point into the previous category's list.
     @Published var settingsCategory: SettingsCategory = .notifications {
-        didSet { if oldValue != settingsCategory { selectFirstCategoryRow() } }
+        didSet {
+            guard oldValue != settingsCategory else { return }
+            pickingValue = false
+            selectFirstCategoryRow()
+        }
     }
     @Published var settingsDetailFocused = false {
         didSet { if !settingsDetailFocused { pickingValue = false } }
