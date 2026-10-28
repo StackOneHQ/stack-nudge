@@ -239,6 +239,15 @@ If the GitHub CLI (`gh`) is installed and logged in, these requests and PR links
 
 The same check fills a **PRs** tab, shown while GitHub activity is on: your open PRs (with draft, review, CI and conflict chips) and the PRs waiting on your review, asked of you by name first, then through your teams (marked with the team). `↑↓` select, `⏎` or a click opens the PR, `⌘↑` / `⌘↓` jump to the first / last row, `Esc` hides.
 
+## Today
+
+With Calendar on (see [notifications.md](notifications.md#calendar)), a **Today** tab lists the day's meetings in order: times, title, where or who, and a notes snippet. Past meetings are dimmed, the one in progress is marked Now, and the tab opens on it (or the next).
+
+| Key | Action |
+|-----|--------|
+| `↑ ↓` | Move selection |
+| `⏎` | Join through the meeting link, or open the event in Calendar when it has none |
+
 ## Extensions
 
 **Settings → Extensions** lists what's installed: name, a one-line description, and a status (Update x.y, Running, Present / Away, Broken, Tab ⌘N…). `→` or `⏎` opens an extension's page: its status, its settings, what it's allowed, where it appears, and **Update** / **Remove**. The catalogues are checked for updates in the background, a minute after launch and then hourly, so an extension update shows without opening Settings: an **Extension update** row above every category names each one and the version it would get, and `⏎` on it opens the browser. Nothing installs from there without the browser's two presses. **Browse extensions**, below them, says how many are available and opens the catalogue: updates first, then what you haven't installed, ten at a time until you search, which matches names and descriptions.

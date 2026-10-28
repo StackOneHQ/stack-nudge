@@ -42,6 +42,8 @@ enum PanelMode: Hashable {
     case outcomes
     // Your open PRs and reviews waiting on you; shown while GitHub activity is on.
     case prs
+    // Today's meetings; shown while Calendar is on.
+    case today
     // A tab contributed by an installed extension, keyed by its id.
     case extensionTab(String)
     case settings
@@ -1204,6 +1206,23 @@ final class PanelNav: ObservableObject {
     // Today's meetings, finished ones included, in start order. Written by the
     // CalendarWatcher on every refresh; a view of the day reads it.
     @Published var todaysMeetings: [Meeting] = []
+    @Published var todaySelectedIndex = 0
+
+    func moveTodaySelection(_ delta: Int) {
+        guard !todaysMeetings.isEmpty else { return }
+        todaySelectedIndex = max(0, min(todaysMeetings.count - 1, todaySelectedIndex + delta))
+    }
+
+    func jumpTodaySelection(toLast: Bool) {
+        todaySelectedIndex = toLast ? max(0, todaysMeetings.count - 1) : 0
+    }
+
+    // The meeting link when there is one, else the event in Calendar.app.
+    func openSelectedMeeting() {
+        guard todaysMeetings.indices.contains(todaySelectedIndex),
+              let url = URL(string: todaysMeetings[todaySelectedIndex].link) else { return }
+        NSWorkspace.shared.open(url)
+    }
 
     var calendarSettings: CalendarSettings {
         CalendarSettings(
@@ -1490,6 +1509,7 @@ final class PanelNav: ObservableObject {
     var orderedTabs: [PanelMode] {
         var tabs: [PanelMode] = [.events, .sessions, .usage, .outcomes]
         if githubActivityEnabled { tabs.append(.prs) }
+        if calendarEnabled { tabs.append(.today) }
         // First id wins. Two tabs sharing one id are structurally equal, so
         // ForEach drops a row, firstIndex(of:) can never reach the second, and
         // the lookup returns the first one's label for both.

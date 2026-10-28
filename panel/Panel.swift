@@ -207,6 +207,7 @@ struct PanelContentView: View {
                 case .usage:    UsageView(nav: nav)
                 case .outcomes: OutcomesTabView(nav: nav)
                 case .prs:      PullRequestsView(nav: nav)
+                case .today:    TodayView(nav: nav)
                 // .id(id) or the two extension tabs share one view identity: a
                 // ViewBuilder switch case is a single branch, and the associated
                 // value isn't part of identity, so switching between them reused
@@ -278,6 +279,7 @@ struct PanelContentView: View {
         case .usage:    return "Usage"
         case .outcomes: return "Outcomes"
         case .prs:      return "PRs"
+        case .today:    return "Today"
         case .settings: return "Settings"
         case .extensionTab(let id): return nav.extensionTab(id: id)?.label ?? id
         // Listed, not defaulted: a new tab should fail to compile here rather
@@ -294,6 +296,7 @@ struct PanelContentView: View {
         case .sessions: return sessions.liveSessions.count
         case .outcomes: return ticketGroupCount
         case .prs:      return nav.pullRequestRows.count
+        case .today:    return nav.todaysMeetings.filter { $0.end > Date() }.count
         default:        return 0
         }
     }
@@ -5426,6 +5429,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return true
         }
 
+        if nav.mode == .today {
+            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            guard plain else { return false }
+            switch event.keyCode {
+            case KeyCode.upArrow:                        nav.moveTodaySelection(-1)
+            case KeyCode.downArrow:                      nav.moveTodaySelection(1)
+            case KeyCode.returnKey, KeyCode.numpadEnter: nav.openSelectedMeeting()
+            default: break
+            }
+            return true
+        }
+
         // Only Events gets what follows. Without this, a mode that declined a
         // key fell through to bindings that include Return → approve.
         guard Self.eventsOwnsKeyboard(nav.mode) else { return false }
@@ -6199,6 +6214,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             }
         case .prs:
             nav.jumpPullRequestSelection(toLast: !top)
+        case .today:
+            nav.jumpTodaySelection(toLast: !top)
         case .outcomes:
             // Overview pane scrolls; the tickets list jumps its selection.
             if nav.outcomesPane == .overview { scrollDetailToEdge(top: top) }
