@@ -1673,7 +1673,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             guard let self, self.panel.isVisible, !self.nav.compactMode else { return }
             self.positionPanel()
         }
-        let feed = GitHubFeedPoller(run: { body, token in Self.graphQLPOST(body, token: token) },
+        let feed = GitHubFeedPoller(token: { [weak self] in GitHubAuth.activeToken(useGH: self?.nav.githubUseGH ?? true) },
+                                    run: { body, token in Self.graphQLPOST(body, token: token) },
                                     deliver: { [weak self] events in events.forEach { self?.store.append($0) } },
                                     snapshot: { [weak self] snapshot, login in
                                         self?.nav.pullRequestSnapshot = snapshot
@@ -3353,7 +3354,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     func refreshPullRequestsNow() { pullRequestGate.force() }
 
     private func performRefreshPullRequests() {
-        guard nav.githubLinkingEnabled, let token = GitHubAuth.token() else { return }
+        guard nav.githubLinkingEnabled, let token = GitHubAuth.activeToken(useGH: nav.githubUseGH) else { return }
         // Ledger order is newest-first, so repoOrder puts the most recently active
         // repo first and its chips resolve first.
         var repoOrder: [String] = []
@@ -3440,7 +3441,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 // GitHub's page at once, so all that's left is to paste.
                 if self.nav.githubSignInOpensBrowser {
                     self.nav.githubSignInOpensBrowser = false
-                    PanelNav.copyAndOpen(code: response.userCode, url: response.verificationURI)
+                    PanelNav.copyGithubCodeAndOpen(code: response.userCode, url: response.verificationURI)
                 }
                 self.pollGithubSignIn(clientID: clientID,
                                       deviceCode: response.deviceCode,

@@ -624,6 +624,9 @@ final class PanelNav: ObservableObject {
     // Activity on your PRs and requests for your review, as feed events
     // (STACKNUDGE_GITHUB_ACTIVITY). Needs the same GitHub sign-in.
     @Published var githubActivityEnabled: Bool = false
+    // STACKNUDGE_GITHUB_USE_GH, and whether the gh login is what's in use.
+    @Published var githubUseGH = true
+    @Published var githubUsesCLILogin = false
     // The PRs tab's data: the latest poll's snapshot and whose it is.
     @Published var pullRequestSnapshot: GitHubFeed.Snapshot?
     @Published var pullRequestLogin: String?
@@ -833,7 +836,8 @@ final class PanelNav: ObservableObject {
     // (clearing locally stops us using it but doesn't revoke server-side).
     func disconnectGithub() {
         GitHubAuth.clearToken()
-        githubSignedIn = false
+        // The gh login stays usable; only the app's own token goes.
+        githubSignedIn = githubUsesCLILogin
         githubSignIn = .idle
         githubSignInNote = nil
         pullRequestByBranch = [:]
@@ -1674,7 +1678,7 @@ final class PanelNav: ObservableObject {
         // Its own category once activity joined the PR links: Integrations
         // would otherwise pass the ten-row cap (SettingsCategoryTests).
         case .github:
-            return [.githubAccount, .githubLinks, .githubActivity, .hideShipped, .disconnectGithub]
+            return [.githubLinks, .githubActivity, .hideShipped, .disconnectGithub]
         // Its own category rather than a row under Actions: extensions declare
         // STACKNUDGE_EXT_ keys, so per-extension configuration needs somewhere
         // to live, and it should not arrive by growing an unrelated category.
@@ -1927,7 +1931,9 @@ final class PanelNav: ObservableObject {
         githubLinkingEnabled = ConfigFile.bool(config, "STACKNUDGE_GITHUB", default: false)
         githubActivityEnabled = ConfigFile.bool(config, "STACKNUDGE_GITHUB_ACTIVITY", default: false)
         hideShippedTickets = ConfigFile.bool(config, "STACKNUDGE_HIDE_SHIPPED", default: false)
-        githubSignedIn = GitHubAuth.token() != nil
+        githubUseGH = ConfigFile.bool(config, "STACKNUDGE_GITHUB_USE_GH", default: true)
+        githubUsesCLILogin = githubUseGH && GitHubAuth.ghToken() != nil
+        githubSignedIn = githubUsesCLILogin || GitHubAuth.token() != nil
         quotaTrackingEnabled = ConfigFile.bool(config, "STACKNUDGE_QUOTA_TRACKING", default: true)
         quotaAlertsEnabled   = ConfigFile.bool(config, "STACKNUDGE_QUOTA_ALERTS",   default: true)
         quotaShowRemaining   = ConfigFile.bool(config, "STACKNUDGE_QUOTA_SHOW_REMAINING", default: false)

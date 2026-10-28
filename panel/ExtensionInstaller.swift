@@ -689,21 +689,12 @@ enum ExtensionInstaller {
     // the config names an extra source, so a Mac without one never touches
     // either.
     static func githubTokens(signIn: () -> String? = GitHubAuth.token,
-                             gh: () -> String? = ghToken) -> [String] {
+                             gh: () -> String? = GitHubAuth.ghToken) -> [String] {
         var tokens: [String] = []
         for token in [signIn(), gh()].compactMap({ $0 }) where !tokens.contains(token) {
             tokens.append(token)
         }
         return tokens
-    }
-
-    static func ghToken() -> String? {
-        guard let gh = ProcessOutput.gh(),
-              let output = ProcessOutput.read(gh, ["auth", "token"], timeout: 10)?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-              !output.isEmpty, !output.contains(where: \.isWhitespace)
-        else { return nil }
-        return output
     }
 
     // The anonymous GitHub API is rate-limited per IP — sixty an hour, shared

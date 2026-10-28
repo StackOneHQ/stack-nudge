@@ -8,6 +8,7 @@ final class GitHubFeedPoller {
     static let statePath = ("~/.stack-nudge/github-feed.json" as NSString).expandingTildeInPath
     static let interval: TimeInterval = 3 * 60
 
+    private let token: () -> String?               // read each poll: a sign-in can change it
     private let run: (String, String) -> String?   // (body, token) -> response
     private let deliver: ([NudgeEvent]) -> Void     // called on main
     // Every successful poll's lists, for the PRs tab; called on main.
@@ -17,8 +18,9 @@ final class GitHubFeedPoller {
     private var login: String?
     private var polling = false
 
-    init(run: @escaping (String, String) -> String?, deliver: @escaping ([NudgeEvent]) -> Void,
+    init(token: @escaping () -> String?, run: @escaping (String, String) -> String?, deliver: @escaping ([NudgeEvent]) -> Void,
          snapshot: @escaping (GitHubFeed.Snapshot, String) -> Void) {
+        self.token = token
         self.run = run
         self.deliver = deliver
         self.snapshot = snapshot
@@ -44,7 +46,7 @@ final class GitHubFeedPoller {
     func pollNow() { queue.async { [weak self] in self?.poll() } }
 
     private func poll() {
-        guard !polling, let token = GitHubAuth.token() else { return }
+        guard !polling, let token = token() else { return }
         polling = true
         defer { polling = false }
         if login == nil { login = run(GitHubFeed.viewerQuery, token).flatMap(GitHubFeed.parseViewer) }

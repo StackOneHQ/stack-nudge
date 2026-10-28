@@ -169,9 +169,9 @@ struct PullRequestsView: View {
                 Text(code).font(.title3.monospaced().weight(.semibold))
                 Text("Copied. Paste it on the GitHub page that opened, then approve.")
                     .font(.caption).foregroundStyle(.secondary)
-                Button("Copy and open GitHub again") { nav.githubAccountAction() }
+                Button("Copy and open GitHub again") { nav.connectGithub() }
             } else {
-                Button("Sign in to GitHub") { nav.githubAccountAction() }
+                Button("Sign in to GitHub") { nav.connectGithub() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(nav.githubSignIn == .requesting)
                 if case let .failed(message) = nav.githubSignIn {

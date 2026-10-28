@@ -102,7 +102,8 @@ extension PanelNav {
                                                                     : "Not signed in",
                                          problem: githubLinkingEnabled)
             }
-            return IntegrationStatus(text: githubLinkingEnabled ? "Signed in, PR links on" : "Signed in, PR links off")
+            let who = githubUsesCLILogin ? "Signed in with your gh login" : "Signed in"
+            return IntegrationStatus(text: who + (githubLinkingEnabled ? ", PR links on" : ", PR links off"))
         }
     }
 }
