@@ -1040,8 +1040,8 @@ struct UpdateConfirmView: View {
 
 // Welcome-style screen shown automatically on the first launch after a
 // successful update. Mirrors WelcomeView's layout (scrollable body + action
-// bar) so the visual language stays consistent. Closes by Enter or "Got it"
-// click, both of which set nav.mode = .events.
+// bar) so the visual language stays consistent. Enter presses the focused
+// button (Got it until Tab moves to Turn on); Got it sets nav.mode = .events.
 struct PostUpdateView: View {
 
     @ObservedObject var nav: PanelNav
@@ -1092,14 +1092,19 @@ struct PostUpdateView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
-            Button("Turn on") {
-                nav.markCompanionOffered()
-                nav.setCompanionEnabled(true)
-            }
+            Button("Turn on") { nav.acceptCompanionOffer() }
+                .padding(2)
+                .overlay(focusRing(nav.postUpdateFocus == .turnOn, radius: 7))
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
         .onDisappear { nav.markCompanionOffered() }
+    }
+
+    // The ring Settings rows use for the selection.
+    private func focusRing(_ focused: Bool, radius: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
+            .strokeBorder(Color.accentColor.opacity(focused ? 0.6 : 0), lineWidth: 1.5)
     }
 
     private var header: some View {
@@ -1120,6 +1125,9 @@ struct PostUpdateView: View {
 
     private var actionBar: some View {
         HStack(spacing: 10) {
+            if nav.showCompanionOffer {
+                FooterHint(label: "Move", keys: ["Tab"])
+            }
             Spacer()
             Button {
                 onDismiss()
@@ -1136,6 +1144,7 @@ struct PostUpdateView: View {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color.accentColor.opacity(0.25))
             )
+            .overlay(focusRing(!nav.showCompanionOffer || nav.postUpdateFocus == .gotIt, radius: 6))
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
