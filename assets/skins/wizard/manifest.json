@@ -1,0 +1,2584 @@
+{
+ "skin": "wizard",
+ "scale": 3,
+ "viewBox": [
+  -20,
+  -30,
+  240,
+  240
+ ],
+ "states": {
+  "idle": [
+   {
+    "type": "layer",
+    "x": 45.333,
+    "y": 183.333,
+    "w": 125.333,
+    "h": 25.333,
+    "src": "shared/shadow.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "glow"
+    ],
+    "pivot": [
+     157,
+     26
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 135,
+      "y": 4,
+      "w": 44,
+      "h": 44,
+      "src": "shared/halo.png"
+     }
+    ]
+   },
+   {
+    "type": "layer",
+    "x": 143.667,
+    "y": 12.333,
+    "w": 26,
+    "h": 193.667,
+    "src": "shared/prongb-stick.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "glow"
+    ],
+    "pivot": [
+     157,
+     26
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 148,
+      "y": 17,
+      "w": 20.333,
+      "h": 21.667,
+      "src": "shared/crystal.png"
+     }
+    ]
+   },
+   {
+    "type": "layer",
+    "x": 155,
+    "y": 14,
+    "w": 14.667,
+    "h": 36,
+    "src": "shared/prongf.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "body"
+    ],
+    "pivot": [
+     100,
+     196
+    ],
+    "children": [
+     {
+      "type": "node",
+      "classes": [
+       "robe"
+      ],
+      "pivot": [
+       100,
+       112
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 46,
+        "y": 106.667,
+        "w": 110.333,
+        "h": 95.333,
+        "src": "shared/shoes-robe.png"
+       }
+      ]
+     },
+     {
+      "type": "layer",
+      "x": 118,
+      "y": 105.667,
+      "w": 51.333,
+      "h": 31.667,
+      "src": "shared/hand-thumb+1.png"
+     },
+     {
+      "type": "node",
+      "classes": [
+       "armL"
+      ],
+      "pivot": [
+       66,
+       116
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 42.667,
+        "y": 108.667,
+        "w": 34,
+        "h": 53.333,
+        "src": "shared/sleeveL.png"
+       }
+      ]
+     },
+     {
+      "type": "node",
+      "classes": [
+       "head"
+      ],
+      "pivot": [
+       100,
+       114
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 55,
+        "y": 73.667,
+        "w": 93.667,
+        "h": 57,
+        "src": "idle/hair-face+7.png"
+       },
+       {
+        "type": "layer",
+        "blink": true,
+        "x": 80,
+        "y": 82,
+        "w": 42.333,
+        "h": 27,
+        "src": "shared/blink.png"
+       },
+       {
+        "type": "node",
+        "classes": [
+         "beard"
+        ],
+        "pivot": [
+         100,
+         108
+        ],
+        "children": [
+         {
+          "type": "layer",
+          "x": 57.667,
+          "y": 99,
+          "w": 86.667,
+          "h": 88,
+          "src": "idle/beardp-mouth+1.png"
+         }
+        ]
+       },
+       {
+        "type": "layer",
+        "x": 88,
+        "y": 93.333,
+        "w": 26.333,
+        "h": 25,
+        "src": "shared/nose.png"
+       },
+       {
+        "type": "node",
+        "classes": [
+         "hat"
+        ],
+        "pivot": [
+         100,
+         72
+        ],
+        "children": [
+         {
+          "type": "node",
+          "classes": [
+           "tip"
+          ],
+          "pivot": [
+           100,
+           38
+          ],
+          "children": [
+           {
+            "type": "layer",
+            "x": 82.333,
+            "y": -3.667,
+            "w": 60.333,
+            "h": 57,
+            "src": "shared/hattip.png"
+           }
+          ]
+         },
+         {
+          "type": "layer",
+          "x": 42,
+          "y": 30,
+          "w": 117.667,
+          "h": 58.333,
+          "src": "shared/hatcone-band+2.png"
+         }
+        ]
+       },
+       {
+        "type": "layer",
+        "x": 55,
+        "y": 71,
+        "w": 91.333,
+        "h": 21,
+        "src": "shared/browp_l-browp_r.png"
+       }
+      ]
+     },
+     {
+      "type": "node",
+      "classes": [
+       "armL"
+      ],
+      "pivot": [
+       66,
+       116
+      ],
+      "children": [
+       {
+        "type": "node",
+        "classes": [
+         "handL"
+        ],
+        "pivot": [
+         58,
+         157
+        ],
+        "children": [
+         {
+          "type": "layer",
+          "x": 47.333,
+          "y": 143,
+          "w": 22.667,
+          "h": 21,
+          "src": "shared/hand.png"
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "polling": [
+   {
+    "type": "layer",
+    "x": 45.333,
+    "y": 183.333,
+    "w": 125.333,
+    "h": 25.333,
+    "src": "shared/shadow.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "glow"
+    ],
+    "pivot": [
+     157,
+     26
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 135,
+      "y": 4,
+      "w": 44,
+      "h": 44,
+      "src": "shared/halo.png"
+     }
+    ]
+   },
+   {
+    "type": "layer",
+    "x": 143.667,
+    "y": 12.333,
+    "w": 26,
+    "h": 193.667,
+    "src": "shared/prongb-stick.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "glow"
+    ],
+    "pivot": [
+     157,
+     26
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 148,
+      "y": 17,
+      "w": 20.333,
+      "h": 21.667,
+      "src": "shared/crystal.png"
+     }
+    ]
+   },
+   {
+    "type": "layer",
+    "x": 155,
+    "y": 14,
+    "w": 14.667,
+    "h": 36,
+    "src": "shared/prongf.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "body"
+    ],
+    "pivot": [
+     100,
+     196
+    ],
+    "children": [
+     {
+      "type": "node",
+      "classes": [
+       "robe"
+      ],
+      "pivot": [
+       100,
+       112
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 46,
+        "y": 106.667,
+        "w": 110.333,
+        "h": 95.333,
+        "src": "shared/shoes-robe.png"
+       }
+      ]
+     },
+     {
+      "type": "layer",
+      "x": 118,
+      "y": 105.667,
+      "w": 51.333,
+      "h": 31.667,
+      "src": "shared/hand-thumb+1.png"
+     },
+     {
+      "type": "node",
+      "classes": [
+       "armL"
+      ],
+      "pivot": [
+       66,
+       116
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 41.667,
+        "y": 108.333,
+        "w": 34.667,
+        "h": 55,
+        "src": "polling/sleeveL.png"
+       }
+      ]
+     },
+     {
+      "type": "node",
+      "classes": [
+       "head"
+      ],
+      "pivot": [
+       98.095,
+       115.171
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 52,
+        "y": 74.333,
+        "w": 93.667,
+        "h": 60,
+        "src": "polling/hair-face+7.png"
+       },
+       {
+        "type": "layer",
+        "blink": true,
+        "x": 76.333,
+        "y": 82.333,
+        "w": 42.667,
+        "h": 28.667,
+        "src": "polling/blink.png"
+       },
+       {
+        "type": "node",
+        "classes": [
+         "beard"
+        ],
+        "pivot": [
+         97.572,
+         109.193
+        ],
+        "children": [
+         {
+          "type": "layer",
+          "x": 57,
+          "y": 99.333,
+          "w": 87,
+          "h": 88.333,
+          "src": "polling/beardp-moustache.png"
+         }
+        ]
+       },
+       {
+        "type": "layer",
+        "x": 85.333,
+        "y": 94.667,
+        "w": 26,
+        "h": 24.667,
+        "src": "polling/nose.png"
+       },
+       {
+        "type": "node",
+        "classes": [
+         "hat"
+        ],
+        "pivot": [
+         94.434,
+         73.33
+        ],
+        "children": [
+         {
+          "type": "node",
+          "classes": [
+           "tip"
+          ],
+          "pivot": [
+           91.471,
+           39.46
+          ],
+          "children": [
+           {
+            "type": "layer",
+            "x": 74,
+            "y": -3.667,
+            "w": 57.667,
+            "h": 58,
+            "src": "polling/hattip.png"
+           }
+          ]
+         },
+         {
+          "type": "layer",
+          "x": 37,
+          "y": 31.667,
+          "w": 117,
+          "h": 60.667,
+          "src": "polling/hatcone-band+2.png"
+         }
+        ]
+       },
+       {
+        "type": "layer",
+        "x": 51.333,
+        "y": 70.667,
+        "w": 90.667,
+        "h": 26,
+        "src": "polling/browp_l-browp_r.png"
+       }
+      ]
+     },
+     {
+      "type": "node",
+      "classes": [
+       "armL"
+      ],
+      "pivot": [
+       66,
+       116
+      ],
+      "children": [
+       {
+        "type": "node",
+        "classes": [
+         "orbglow"
+        ],
+        "pivot": [
+         62,
+         137.5
+        ],
+        "children": [
+         {
+          "type": "layer",
+          "x": 24,
+          "y": 99.667,
+          "w": 76,
+          "h": 75.667,
+          "src": "polling/halo.png"
+         }
+        ]
+       },
+       {
+        "type": "node",
+        "classes": [
+         "handL"
+        ],
+        "pivot": [
+         62,
+         161
+        ],
+        "children": [
+         {
+          "type": "layer",
+          "x": 51.333,
+          "y": 149,
+          "w": 22.667,
+          "h": 18.667,
+          "src": "polling/hand.png"
+         }
+        ]
+       },
+       {
+        "type": "layer",
+        "x": 44.333,
+        "y": 121,
+        "w": 37.333,
+        "h": 37,
+        "src": "polling/orb.png"
+       },
+       {
+        "type": "node",
+        "classes": [
+         "swirl"
+        ],
+        "pivot": [
+         62,
+         137.5
+        ],
+        "children": [
+         {
+          "type": "layer",
+          "x": 53,
+          "y": 127.333,
+          "w": 18.667,
+          "h": 15.667,
+          "src": "polling/path.png"
+         }
+        ]
+       },
+       {
+        "type": "layer",
+        "x": 52.667,
+        "y": 127.667,
+        "w": 17.667,
+        "h": 19,
+        "src": "polling/blush-halo.png"
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "thinking": [
+   {
+    "type": "layer",
+    "x": 45.333,
+    "y": 183.333,
+    "w": 125.333,
+    "h": 25.333,
+    "src": "shared/shadow.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "glow"
+    ],
+    "pivot": [
+     157,
+     26
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 135,
+      "y": 4,
+      "w": 44,
+      "h": 44,
+      "src": "shared/halo.png"
+     }
+    ]
+   },
+   {
+    "type": "layer",
+    "x": 143.667,
+    "y": 12.333,
+    "w": 26,
+    "h": 193.667,
+    "src": "shared/prongb-stick.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "glow"
+    ],
+    "pivot": [
+     157,
+     26
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 148,
+      "y": 17,
+      "w": 20.333,
+      "h": 21.667,
+      "src": "shared/crystal.png"
+     }
+    ]
+   },
+   {
+    "type": "layer",
+    "x": 155,
+    "y": 14,
+    "w": 14.667,
+    "h": 36,
+    "src": "shared/prongf.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "body"
+    ],
+    "pivot": [
+     100,
+     196
+    ],
+    "children": [
+     {
+      "type": "node",
+      "classes": [
+       "robe"
+      ],
+      "pivot": [
+       100,
+       112
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 46,
+        "y": 106.667,
+        "w": 110.333,
+        "h": 95.333,
+        "src": "shared/shoes-robe.png"
+       }
+      ]
+     },
+     {
+      "type": "layer",
+      "x": 118,
+      "y": 105.667,
+      "w": 51.333,
+      "h": 31.667,
+      "src": "shared/hand-thumb+1.png"
+     },
+     {
+      "type": "node",
+      "classes": [
+       "armL"
+      ],
+      "pivot": [
+       66,
+       116
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 51,
+        "y": 108.667,
+        "w": 34.667,
+        "h": 47.333,
+        "src": "thinking/sleeveL.png"
+       }
+      ]
+     },
+     {
+      "type": "node",
+      "classes": [
+       "head"
+      ],
+      "pivot": [
+       100,
+       114
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 55,
+        "y": 73.667,
+        "w": 93.667,
+        "h": 57,
+        "src": "thinking/hair-face+7.png"
+       },
+       {
+        "type": "layer",
+        "blink": true,
+        "x": 80,
+        "y": 82,
+        "w": 42.333,
+        "h": 27,
+        "src": "shared/blink.png"
+       },
+       {
+        "type": "node",
+        "classes": [
+         "beard"
+        ],
+        "pivot": [
+         100,
+         108
+        ],
+        "children": [
+         {
+          "type": "layer",
+          "x": 57.667,
+          "y": 99,
+          "w": 86.667,
+          "h": 88,
+          "src": "thinking/beardp-moustache.png"
+         }
+        ]
+       },
+       {
+        "type": "layer",
+        "x": 88,
+        "y": 93.333,
+        "w": 26.333,
+        "h": 25,
+        "src": "shared/nose.png"
+       },
+       {
+        "type": "node",
+        "classes": [
+         "hat"
+        ],
+        "pivot": [
+         100,
+         72
+        ],
+        "children": [
+         {
+          "type": "node",
+          "classes": [
+           "tip"
+          ],
+          "pivot": [
+           100,
+           38
+          ],
+          "children": [
+           {
+            "type": "layer",
+            "x": 82.333,
+            "y": -3.667,
+            "w": 60.333,
+            "h": 57,
+            "src": "shared/hattip.png"
+           }
+          ]
+         },
+         {
+          "type": "layer",
+          "x": 42,
+          "y": 30,
+          "w": 117.667,
+          "h": 58.333,
+          "src": "shared/hatcone-band+2.png"
+         }
+        ]
+       },
+       {
+        "type": "layer",
+        "x": 55,
+        "y": 69.333,
+        "w": 91.333,
+        "h": 21,
+        "src": "thinking/browp_l-browp_r.png"
+       }
+      ]
+     },
+     {
+      "type": "node",
+      "classes": [
+       "armL"
+      ],
+      "pivot": [
+       66,
+       116
+      ],
+      "children": [
+       {
+        "type": "node",
+        "classes": [
+         "handL"
+        ],
+        "pivot": [
+         83,
+         143
+        ],
+        "children": [
+         {
+          "type": "layer",
+          "x": 72.333,
+          "y": 132,
+          "w": 22.667,
+          "h": 21,
+          "src": "thinking/hand.png"
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "type": "node",
+    "classes": [
+     "fx",
+     "bubble"
+    ],
+    "pivot": [
+     0,
+     0
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 19,
+      "y": 7,
+      "w": 53,
+      "h": 55,
+      "src": "thinking/bubble_tb3-tb2+1.png"
+     },
+     {
+      "type": "node",
+      "classes": [
+       "d1"
+      ],
+      "pivot": [
+       0,
+       0
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 26.333,
+        "y": 19,
+        "w": 8.333,
+        "h": 7.667,
+        "src": "thinking/bubble_tdot.png"
+       }
+      ]
+     },
+     {
+      "type": "node",
+      "classes": [
+       "d2"
+      ],
+      "pivot": [
+       0,
+       0
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 39.333,
+        "y": 19,
+        "w": 8.333,
+        "h": 7.333,
+        "src": "thinking/bubble_tdot-2.png"
+       }
+      ]
+     },
+     {
+      "type": "node",
+      "classes": [
+       "d3"
+      ],
+      "pivot": [
+       0,
+       0
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 52.333,
+        "y": 19,
+        "w": 8.333,
+        "h": 7.667,
+        "src": "thinking/bubble_tdot-3.png"
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "pending": [
+   {
+    "type": "layer",
+    "x": 45.333,
+    "y": 183.333,
+    "w": 125.333,
+    "h": 25.333,
+    "src": "shared/shadow.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "glow"
+    ],
+    "pivot": [
+     157,
+     26
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 129,
+      "y": -2,
+      "w": 56,
+      "h": 56,
+      "src": "pending/halo.png"
+     }
+    ]
+   },
+   {
+    "type": "layer",
+    "x": 143.667,
+    "y": 12.333,
+    "w": 26,
+    "h": 193.667,
+    "src": "shared/prongb-stick.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "glow"
+    ],
+    "pivot": [
+     157,
+     26
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 148,
+      "y": 17,
+      "w": 20.333,
+      "h": 21.667,
+      "src": "pending/crystal.png"
+     }
+    ]
+   },
+   {
+    "type": "layer",
+    "x": 155,
+    "y": 14,
+    "w": 14.667,
+    "h": 36,
+    "src": "shared/prongf.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "fx",
+     "tw"
+    ],
+    "pivot": [
+     157,
+     26
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 143,
+      "y": 12,
+      "w": 28,
+      "h": 28,
+      "src": "pending/tw_halo.png"
+     }
+    ]
+   },
+   {
+    "type": "node",
+    "classes": [
+     "body"
+    ],
+    "pivot": [
+     100,
+     196
+    ],
+    "children": [
+     {
+      "type": "node",
+      "classes": [
+       "robe"
+      ],
+      "pivot": [
+       100,
+       112
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 46,
+        "y": 106.667,
+        "w": 110.333,
+        "h": 95.333,
+        "src": "shared/shoes-robe.png"
+       }
+      ]
+     },
+     {
+      "type": "layer",
+      "x": 118,
+      "y": 105.667,
+      "w": 51.333,
+      "h": 31.667,
+      "src": "shared/hand-thumb+1.png"
+     },
+     {
+      "type": "node",
+      "classes": [
+       "armL"
+      ],
+      "pivot": [
+       66,
+       116
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 32,
+        "y": 87.667,
+        "w": 44.333,
+        "h": 40,
+        "src": "pending/sleeveL.png"
+       }
+      ]
+     },
+     {
+      "type": "node",
+      "classes": [
+       "head"
+      ],
+      "pivot": [
+       100,
+       114
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 55,
+        "y": 73.667,
+        "w": 93.667,
+        "h": 57,
+        "src": "pending/hair-face+7.png"
+       },
+       {
+        "type": "layer",
+        "blink": true,
+        "x": 80,
+        "y": 82,
+        "w": 42.333,
+        "h": 27,
+        "src": "shared/blink.png"
+       },
+       {
+        "type": "node",
+        "classes": [
+         "beard"
+        ],
+        "pivot": [
+         100,
+         108
+        ],
+        "children": [
+         {
+          "type": "layer",
+          "x": 57.667,
+          "y": 99,
+          "w": 86.667,
+          "h": 88,
+          "src": "pending/beardp-moustache.png"
+         }
+        ]
+       },
+       {
+        "type": "layer",
+        "x": 88,
+        "y": 93.333,
+        "w": 26.333,
+        "h": 25,
+        "src": "shared/nose.png"
+       },
+       {
+        "type": "node",
+        "classes": [
+         "hat"
+        ],
+        "pivot": [
+         100,
+         72
+        ],
+        "children": [
+         {
+          "type": "node",
+          "classes": [
+           "tip"
+          ],
+          "pivot": [
+           100,
+           38
+          ],
+          "children": [
+           {
+            "type": "layer",
+            "x": 82.333,
+            "y": -3.667,
+            "w": 60.333,
+            "h": 57,
+            "src": "shared/hattip.png"
+           }
+          ]
+         },
+         {
+          "type": "layer",
+          "x": 42,
+          "y": 30,
+          "w": 117.667,
+          "h": 58.333,
+          "src": "shared/hatcone-band+2.png"
+         }
+        ]
+       },
+       {
+        "type": "layer",
+        "x": 55,
+        "y": 68,
+        "w": 91.333,
+        "h": 21,
+        "src": "shared/browp_l-browp_r.png"
+       }
+      ]
+     },
+     {
+      "type": "node",
+      "classes": [
+       "armL"
+      ],
+      "pivot": [
+       66,
+       116
+      ],
+      "children": [
+       {
+        "type": "node",
+        "classes": [
+         "handL"
+        ],
+        "pivot": [
+         41,
+         92
+        ],
+        "children": [
+         {
+          "type": "layer",
+          "x": 30.333,
+          "y": 68.333,
+          "w": 23.333,
+          "h": 30.333,
+          "src": "pending/finger-hand+1.png"
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "alert": [
+   {
+    "type": "layer",
+    "x": 45.333,
+    "y": 183.333,
+    "w": 125.333,
+    "h": 25.333,
+    "src": "shared/shadow.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "glow"
+    ],
+    "pivot": [
+     157,
+     26
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 123,
+      "y": -8,
+      "w": 68,
+      "h": 68,
+      "src": "alert/halo.png"
+     }
+    ]
+   },
+   {
+    "type": "layer",
+    "x": 143.667,
+    "y": 12.333,
+    "w": 26,
+    "h": 193.667,
+    "src": "shared/prongb-stick.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "glow"
+    ],
+    "pivot": [
+     157,
+     26
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 148,
+      "y": 17,
+      "w": 20.333,
+      "h": 21.667,
+      "src": "alert/crystal.png"
+     }
+    ]
+   },
+   {
+    "type": "layer",
+    "x": 155,
+    "y": 14,
+    "w": 14.667,
+    "h": 36,
+    "src": "shared/prongf.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "fx",
+     "sp"
+    ],
+    "pivot": [
+     157,
+     26
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 173,
+      "y": 30,
+      "w": 12.667,
+      "h": 6.333,
+      "src": "alert/sp_spark.png"
+     }
+    ]
+   },
+   {
+    "type": "node",
+    "classes": [
+     "fx",
+     "sp",
+     "b"
+    ],
+    "pivot": [
+     157,
+     26
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 159.333,
+      "y": 43,
+      "w": 6,
+      "h": 12,
+      "src": "alert/sp-b_spark.png"
+     }
+    ]
+   },
+   {
+    "type": "node",
+    "classes": [
+     "fx",
+     "sp"
+    ],
+    "pivot": [
+     157,
+     26
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 136,
+      "y": 37,
+      "w": 10.667,
+      "h": 10,
+      "src": "alert/sp_spark-2.png"
+     }
+    ]
+   },
+   {
+    "type": "node",
+    "classes": [
+     "fx",
+     "sp",
+     "b"
+    ],
+    "pivot": [
+     157,
+     26
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 130,
+      "y": 17.333,
+      "w": 13,
+      "h": 5.667,
+      "src": "alert/sp-b_spark-2.png"
+     }
+    ]
+   },
+   {
+    "type": "node",
+    "classes": [
+     "fx",
+     "sp"
+    ],
+    "pivot": [
+     157,
+     26
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 149.667,
+      "y": -0.667,
+      "w": 6,
+      "h": 12,
+      "src": "alert/sp_spark-3.png"
+     }
+    ]
+   },
+   {
+    "type": "node",
+    "classes": [
+     "fx",
+     "sp",
+     "b"
+    ],
+    "pivot": [
+     157,
+     26
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 168.667,
+      "y": 6.667,
+      "w": 10.667,
+      "h": 10,
+      "src": "alert/sp-b_spark-3.png"
+     }
+    ]
+   },
+   {
+    "type": "node",
+    "classes": [
+     "body"
+    ],
+    "pivot": [
+     100,
+     196
+    ],
+    "children": [
+     {
+      "type": "node",
+      "classes": [
+       "robe"
+      ],
+      "pivot": [
+       100,
+       112
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 46,
+        "y": 106.667,
+        "w": 110.333,
+        "h": 95.333,
+        "src": "shared/shoes-robe.png"
+       }
+      ]
+     },
+     {
+      "type": "layer",
+      "x": 118,
+      "y": 105.667,
+      "w": 51.333,
+      "h": 31.667,
+      "src": "shared/hand-thumb+1.png"
+     },
+     {
+      "type": "node",
+      "classes": [
+       "armL"
+      ],
+      "pivot": [
+       66,
+       116
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 34,
+        "y": 108,
+        "w": 42.333,
+        "h": 36.333,
+        "src": "alert/sleeveL.png"
+       }
+      ]
+     },
+     {
+      "type": "node",
+      "classes": [
+       "head"
+      ],
+      "pivot": [
+       100,
+       114
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 55,
+        "y": 73.667,
+        "w": 93.667,
+        "h": 57,
+        "src": "alert/hair-face+7.png"
+       },
+       {
+        "type": "layer",
+        "blink": true,
+        "x": 80,
+        "y": 82,
+        "w": 42.333,
+        "h": 27,
+        "src": "shared/blink.png"
+       },
+       {
+        "type": "node",
+        "classes": [
+         "beard"
+        ],
+        "pivot": [
+         100,
+         108
+        ],
+        "children": [
+         {
+          "type": "layer",
+          "x": 57.667,
+          "y": 99,
+          "w": 86.667,
+          "h": 88,
+          "src": "alert/beardp-mouth+1.png"
+         }
+        ]
+       },
+       {
+        "type": "layer",
+        "x": 88,
+        "y": 93.333,
+        "w": 26.333,
+        "h": 25,
+        "src": "shared/nose.png"
+       },
+       {
+        "type": "node",
+        "classes": [
+         "hat"
+        ],
+        "pivot": [
+         100,
+         72
+        ],
+        "children": [
+         {
+          "type": "node",
+          "classes": [
+           "tip"
+          ],
+          "pivot": [
+           100,
+           38
+          ],
+          "children": [
+           {
+            "type": "layer",
+            "x": 82.333,
+            "y": -3.667,
+            "w": 60.333,
+            "h": 57,
+            "src": "shared/hattip.png"
+           }
+          ]
+         },
+         {
+          "type": "layer",
+          "x": 42,
+          "y": 30,
+          "w": 117.667,
+          "h": 58.333,
+          "src": "shared/hatcone-band+2.png"
+         }
+        ]
+       },
+       {
+        "type": "layer",
+        "x": 54.333,
+        "y": 73,
+        "w": 92.667,
+        "h": 24.333,
+        "src": "alert/browp_l-browp_r.png"
+       }
+      ]
+     },
+     {
+      "type": "node",
+      "classes": [
+       "armL"
+      ],
+      "pivot": [
+       66,
+       116
+      ],
+      "children": [
+       {
+        "type": "node",
+        "classes": [
+         "handL"
+        ],
+        "pivot": [
+         38,
+         135
+        ],
+        "children": [
+         {
+          "type": "layer",
+          "x": 27.333,
+          "y": 121,
+          "w": 22.667,
+          "h": 21,
+          "src": "alert/hand.png"
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "error": [
+   {
+    "type": "layer",
+    "x": 45.333,
+    "y": 158.667,
+    "w": 174.667,
+    "h": 50,
+    "src": "error/shadow-fhat+3.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "body"
+    ],
+    "pivot": [
+     100,
+     196
+    ],
+    "children": [
+     {
+      "type": "node",
+      "classes": [
+       "robe"
+      ],
+      "pivot": [
+       97.655,
+       112.033
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 46,
+        "y": 106.667,
+        "w": 110.333,
+        "h": 95.333,
+        "src": "shared/shoes-robe.png"
+       }
+      ]
+     },
+     {
+      "type": "layer",
+      "x": 117.333,
+      "y": 70,
+      "w": 38,
+      "h": 56.333,
+      "src": "error/sleeveR.png"
+     },
+     {
+      "type": "node",
+      "classes": [
+       "armL"
+      ],
+      "pivot": [
+       63.78,
+       116.981
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 42.667,
+        "y": 108.667,
+        "w": 34,
+        "h": 53.333,
+        "src": "shared/sleeveL.png"
+       }
+      ]
+     },
+     {
+      "type": "node",
+      "classes": [
+       "head"
+      ],
+      "pivot": [
+       97.71,
+       114.032
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 44.667,
+        "y": 46.333,
+        "w": 111.667,
+        "h": 76.333,
+        "src": "error/tuft_l-tuft_r+7.png"
+       },
+       {
+        "type": "node",
+        "classes": [
+         "beard"
+        ],
+        "pivot": [
+         97.229,
+         108.051
+        ],
+        "children": [
+         {
+          "type": "layer",
+          "x": 58.333,
+          "y": 98.667,
+          "w": 87,
+          "h": 88,
+          "src": "error/beardp-mouth+1.png"
+         }
+        ]
+       },
+       {
+        "type": "layer",
+        "x": 53.667,
+        "y": 68,
+        "w": 91,
+        "h": 50.333,
+        "src": "error/nose-browp_l+1.png"
+       }
+      ]
+     },
+     {
+      "type": "layer",
+      "x": 116.667,
+      "y": 61.333,
+      "w": 21.667,
+      "h": 21.333,
+      "src": "error/hand.png"
+     },
+     {
+      "type": "node",
+      "classes": [
+       "armL"
+      ],
+      "pivot": [
+       63.78,
+       116.981
+      ],
+      "children": [
+       {
+        "type": "node",
+        "classes": [
+         "handL"
+        ],
+        "pivot": [
+         56.927,
+         158.188
+        ],
+        "children": [
+         {
+          "type": "layer",
+          "x": 47.333,
+          "y": 143,
+          "w": 22.667,
+          "h": 21,
+          "src": "shared/hand.png"
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "type": "layer",
+    "x": -17.667,
+    "y": 189.667,
+    "w": 193.667,
+    "h": 20.333,
+    "src": "error/prongb-stick.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "glow"
+    ],
+    "pivot": [
+     -4.106,
+     198.063
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": -13,
+      "y": 186.667,
+      "w": 21.667,
+      "h": 20.333,
+      "src": "error/crystal.png"
+     }
+    ]
+   },
+   {
+    "type": "layer",
+    "x": -15.667,
+    "y": 185.333,
+    "w": 35.667,
+    "h": 15.333,
+    "src": "error/prongf.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "fx",
+     "smoke"
+    ],
+    "pivot": [
+     200,
+     162
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 187,
+      "y": 152.667,
+      "w": 28,
+      "h": 20,
+      "src": "error/smoke_puff.png"
+     }
+    ],
+    "vars": {
+     "dx": 2,
+     "dy": -16
+    }
+   },
+   {
+    "type": "node",
+    "classes": [
+     "fx",
+     "smoke",
+     "b"
+    ],
+    "pivot": [
+     207.465,
+     147.163
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 195,
+      "y": 146.333,
+      "w": 24,
+      "h": 17,
+      "src": "error/smoke-b_puff.png"
+     }
+    ],
+    "vars": {
+     "dx": 3,
+     "dy": -14
+    }
+   },
+   {
+    "type": "node",
+    "classes": [
+     "fx",
+     "smoke",
+     "c"
+    ],
+    "pivot": [
+     190.468,
+     140.186
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 180.667,
+      "y": 143.667,
+      "w": 26.333,
+      "h": 18,
+      "src": "error/smoke-c_puff.png"
+     }
+    ],
+    "vars": {
+     "dx": -3,
+     "dy": -14
+    }
+   },
+   {
+    "type": "node",
+    "classes": [
+     "fx",
+     "estar",
+     "es1"
+    ],
+    "pivot": [
+     0,
+     0
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 119.333,
+      "y": 42.667,
+      "w": 17.667,
+      "h": 17.333,
+      "src": "error/estar-es1_dizzy.png"
+     }
+    ]
+   },
+   {
+    "type": "node",
+    "classes": [
+     "fx",
+     "estar",
+     "es2"
+    ],
+    "pivot": [
+     0,
+     0
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 79,
+      "y": 48.333,
+      "w": 17.333,
+      "h": 17.667,
+      "src": "error/estar-es2_dizzy.png"
+     }
+    ]
+   },
+   {
+    "type": "node",
+    "classes": [
+     "fx",
+     "estar",
+     "es3"
+    ],
+    "pivot": [
+     0,
+     0
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 78.667,
+      "y": 36.333,
+      "w": 17.667,
+      "h": 17,
+      "src": "error/estar-es3_dizzy.png"
+     }
+    ]
+   }
+  ],
+  "sleeping": [
+   {
+    "type": "layer",
+    "x": 45.333,
+    "y": 183.333,
+    "w": 125.333,
+    "h": 25.333,
+    "src": "shared/shadow.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "glow"
+    ],
+    "pivot": [
+     130.48,
+     29.032
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 115.667,
+      "y": 14,
+      "w": 29.667,
+      "h": 30,
+      "src": "sleeping/halo.png"
+     }
+    ]
+   },
+   {
+    "type": "layer",
+    "x": 117,
+    "y": 16.333,
+    "w": 53.667,
+    "h": 189.667,
+    "src": "sleeping/prongb-stick.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "glow"
+    ],
+    "pivot": [
+     130.48,
+     29.032
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 121.667,
+      "y": 20,
+      "w": 20.667,
+      "h": 22,
+      "src": "sleeping/crystal.png"
+     }
+    ]
+   },
+   {
+    "type": "layer",
+    "x": 130.333,
+    "y": 16,
+    "w": 15,
+    "h": 36.333,
+    "src": "sleeping/prongf.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "body"
+    ],
+    "pivot": [
+     100,
+     196
+    ],
+    "children": [
+     {
+      "type": "node",
+      "classes": [
+       "robe"
+      ],
+      "pivot": [
+       100,
+       112
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 46,
+        "y": 106.667,
+        "w": 110.333,
+        "h": 95.333,
+        "src": "shared/shoes-robe.png"
+       }
+      ]
+     },
+     {
+      "type": "layer",
+      "x": 111,
+      "y": 108.667,
+      "w": 37.667,
+      "h": 52,
+      "src": "sleeping/sleeveR.png"
+     },
+     {
+      "type": "node",
+      "classes": [
+       "armL"
+      ],
+      "pivot": [
+       66,
+       116
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 52.667,
+        "y": 108.667,
+        "w": 38.667,
+        "h": 52.333,
+        "src": "sleeping/sleeveL.png"
+       }
+      ]
+     },
+     {
+      "type": "node",
+      "classes": [
+       "head"
+      ],
+      "pivot": [
+       100,
+       114
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 55.667,
+        "y": 73.333,
+        "w": 93.667,
+        "h": 57.667,
+        "src": "sleeping/hair-face+5.png"
+       },
+       {
+        "type": "node",
+        "classes": [
+         "beard"
+        ],
+        "pivot": [
+         100.314,
+         108.008
+        ],
+        "children": [
+         {
+          "type": "layer",
+          "x": 57.333,
+          "y": 98.667,
+          "w": 86,
+          "h": 88.333,
+          "src": "sleeping/beardp-moustache.png"
+         }
+        ]
+       },
+       {
+        "type": "layer",
+        "x": 56.667,
+        "y": 71.667,
+        "w": 90.667,
+        "h": 47,
+        "src": "sleeping/nose-browp_l+1.png"
+       },
+       {
+        "type": "node",
+        "classes": [
+         "hat"
+        ],
+        "pivot": [
+         101.57,
+         84.041
+        ],
+        "children": [
+         {
+          "type": "node",
+          "classes": [
+           "tip"
+          ],
+          "pivot": [
+           106.302,
+           50.372
+          ],
+          "children": [
+           {
+            "type": "layer",
+            "x": 88.333,
+            "y": 11.333,
+            "w": 64,
+            "h": 54.667,
+            "src": "sleeping/hattip.png"
+           }
+          ]
+         },
+         {
+          "type": "layer",
+          "x": 43.667,
+          "y": 42.333,
+          "w": 117,
+          "h": 60.333,
+          "src": "sleeping/hatcone-band+2.png"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "type": "layer",
+      "x": 101.667,
+      "y": 138.333,
+      "w": 21.667,
+      "h": 21.333,
+      "src": "sleeping/hand.png"
+     },
+     {
+      "type": "node",
+      "classes": [
+       "armL"
+      ],
+      "pivot": [
+       66,
+       116
+      ],
+      "children": [
+       {
+        "type": "node",
+        "classes": [
+         "handL"
+        ],
+        "pivot": [
+         88,
+         152
+        ],
+        "children": [
+         {
+          "type": "layer",
+          "x": 77.333,
+          "y": 138,
+          "w": 22.667,
+          "h": 21,
+          "src": "sleeping/hand-2.png"
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "type": "node",
+    "classes": [
+     "fx",
+     "zz"
+    ],
+    "pivot": [
+     52,
+     64
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 51,
+      "y": 54,
+      "w": 13.333,
+      "h": 14.333,
+      "src": "sleeping/zz_z.png"
+     }
+    ]
+   },
+   {
+    "type": "node",
+    "classes": [
+     "fx",
+     "zz",
+     "b"
+    ],
+    "pivot": [
+     26.415,
+     28.199
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 35,
+      "y": 28,
+      "w": 19.333,
+      "h": 22.333,
+      "src": "sleeping/zz-b_z.png"
+     }
+    ]
+   }
+  ],
+  "muted": [
+   {
+    "type": "layer",
+    "x": 45.333,
+    "y": 183.333,
+    "w": 125.333,
+    "h": 25.333,
+    "src": "muted/shadow.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "glow"
+    ],
+    "pivot": [
+     157,
+     26
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 142,
+      "y": 11,
+      "w": 30,
+      "h": 30,
+      "src": "muted/halo.png"
+     }
+    ]
+   },
+   {
+    "type": "layer",
+    "x": 143.667,
+    "y": 12.333,
+    "w": 26,
+    "h": 193.667,
+    "src": "muted/prongb-stick.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "glow"
+    ],
+    "pivot": [
+     157,
+     26
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 148,
+      "y": 17,
+      "w": 20.333,
+      "h": 21.667,
+      "src": "muted/crystal.png"
+     }
+    ]
+   },
+   {
+    "type": "layer",
+    "x": 155,
+    "y": 14,
+    "w": 14.667,
+    "h": 36,
+    "src": "muted/prongf.png"
+   },
+   {
+    "type": "node",
+    "classes": [
+     "body"
+    ],
+    "pivot": [
+     100,
+     196
+    ],
+    "children": [
+     {
+      "type": "node",
+      "classes": [
+       "robe"
+      ],
+      "pivot": [
+       100,
+       112
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 46,
+        "y": 106.667,
+        "w": 110.333,
+        "h": 95.333,
+        "src": "muted/shoes-robe.png"
+       }
+      ]
+     },
+     {
+      "type": "layer",
+      "x": 118,
+      "y": 105.667,
+      "w": 51.333,
+      "h": 31.667,
+      "src": "muted/hand-thumb+1.png"
+     },
+     {
+      "type": "node",
+      "classes": [
+       "armL"
+      ],
+      "pivot": [
+       66,
+       116
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 45.667,
+        "y": 108.333,
+        "w": 31,
+        "h": 46.333,
+        "src": "muted/sleeveL.png"
+       }
+      ]
+     },
+     {
+      "type": "node",
+      "classes": [
+       "head"
+      ],
+      "pivot": [
+       100,
+       114
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 55,
+        "y": 73.667,
+        "w": 93.667,
+        "h": 57,
+        "src": "muted/hair-face+7.png"
+       },
+       {
+        "type": "layer",
+        "blink": true,
+        "x": 80,
+        "y": 82,
+        "w": 42.333,
+        "h": 27,
+        "src": "muted/blink.png"
+       },
+       {
+        "type": "node",
+        "classes": [
+         "beard"
+        ],
+        "pivot": [
+         100,
+         108
+        ],
+        "children": [
+         {
+          "type": "layer",
+          "x": 57.667,
+          "y": 99,
+          "w": 86.667,
+          "h": 88,
+          "src": "muted/beardp-moustache.png"
+         }
+        ]
+       },
+       {
+        "type": "layer",
+        "x": 88,
+        "y": 93.333,
+        "w": 26.333,
+        "h": 25,
+        "src": "muted/nose.png"
+       },
+       {
+        "type": "node",
+        "classes": [
+         "hat"
+        ],
+        "pivot": [
+         100,
+         72
+        ],
+        "children": [
+         {
+          "type": "node",
+          "classes": [
+           "tip"
+          ],
+          "pivot": [
+           100,
+           38
+          ],
+          "children": [
+           {
+            "type": "layer",
+            "x": 82.333,
+            "y": -3.667,
+            "w": 60.333,
+            "h": 57,
+            "src": "muted/hattip.png"
+           }
+          ]
+         },
+         {
+          "type": "layer",
+          "x": 42,
+          "y": 30,
+          "w": 117.667,
+          "h": 58.333,
+          "src": "muted/hatcone-band+2.png"
+         }
+        ]
+       },
+       {
+        "type": "layer",
+        "x": 55,
+        "y": 71,
+        "w": 91.333,
+        "h": 21,
+        "src": "muted/browp_l-browp_r.png"
+       }
+      ]
+     },
+     {
+      "type": "node",
+      "classes": [
+       "armL"
+      ],
+      "pivot": [
+       66,
+       116
+      ],
+      "children": [
+       {
+        "type": "layer",
+        "x": 59.667,
+        "y": 107,
+        "w": 39.667,
+        "h": 23.333,
+        "src": "muted/pipe.png"
+       },
+       {
+        "type": "node",
+        "classes": [
+         "handL"
+        ],
+        "pivot": [
+         66,
+         136
+        ],
+        "children": [
+         {
+          "type": "layer",
+          "x": 55.333,
+          "y": 122,
+          "w": 22.667,
+          "h": 21,
+          "src": "muted/hand.png"
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "type": "node",
+    "classes": [
+     "fx",
+     "ring"
+    ],
+    "pivot": [
+     68,
+     104
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 60.333,
+      "y": 98.333,
+      "w": 17.667,
+      "h": 14.333,
+      "src": "muted/ring_ring.png"
+     }
+    ]
+   },
+   {
+    "type": "node",
+    "classes": [
+     "fx",
+     "ring",
+     "b"
+    ],
+    "pivot": [
+     61.163,
+     81.536
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 60.333,
+      "y": 98.333,
+      "w": 17.333,
+      "h": 14.333,
+      "src": "muted/ring-b_ring.png"
+     }
+    ]
+   },
+   {
+    "type": "node",
+    "classes": [
+     "fx",
+     "ring",
+     "c"
+    ],
+    "pivot": [
+     56.186,
+     65.184
+    ],
+    "children": [
+     {
+      "type": "layer",
+      "x": 60.333,
+      "y": 98.333,
+      "w": 17.667,
+      "h": 14.333,
+      "src": "muted/ring-c_ring.png"
+     }
+    ]
+   }
+  ]
+ }
+}

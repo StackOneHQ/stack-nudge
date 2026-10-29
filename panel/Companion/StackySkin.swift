@@ -5,6 +5,7 @@ import Foundation
 struct StackySkin: Skin {
     let id = "stacky"
     let displayName = "Stacky"
+    let family = "Stacky"
 }
 
 extension StackySkin: LayeredSkin {

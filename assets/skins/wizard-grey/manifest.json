@@ -1,0 +1,48 @@
+{
+ "skin": "wizard-grey",
+ "frameWidth": 64,
+ "frameHeight": 72,
+ "gutter": 1,
+ "states": {
+  "idle": {
+   "frames": 24,
+   "fps": 12,
+   "sheet": "idle.png"
+  },
+  "polling": {
+   "frames": 16,
+   "fps": 12,
+   "sheet": "polling.png"
+  },
+  "thinking": {
+   "frames": 12,
+   "fps": 12,
+   "sheet": "thinking.png"
+  },
+  "pending": {
+   "frames": 12,
+   "fps": 12,
+   "sheet": "pending.png"
+  },
+  "alert": {
+   "frames": 8,
+   "fps": 12,
+   "sheet": "alert.png"
+  },
+  "error": {
+   "frames": 24,
+   "fps": 12,
+   "sheet": "error.png"
+  },
+  "sleeping": {
+   "frames": 36,
+   "fps": 12,
+   "sheet": "sleeping.png"
+  },
+  "muted": {
+   "frames": 30,
+   "fps": 12,
+   "sheet": "muted.png"
+  }
+ }
+}

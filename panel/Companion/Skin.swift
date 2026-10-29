@@ -7,6 +7,13 @@ import Foundation
 protocol Skin: Sendable {
     var id: String { get }
     var displayName: String { get }
+    // Groups variants of one character (Wizard Clay and Pixel) in pickers.
+    var family: String { get }
+}
+
+extension Skin {
+    // A variant's name alone ("Clay") is ambiguous outside its family's group.
+    var fullName: String { displayName == family ? displayName : "\(family) \(displayName)" }
 }
 
 // The skins this build ships, in picker order. Any id not listed here falls
@@ -15,7 +22,7 @@ protocol Skin: Sendable {
 enum CompanionSkins {
     static let defaultID = "stacky"
 
-    static let all: [LayeredSkin] = [StackySkin()]
+    static let all: [LayeredSkin] = [StackySkin(), WizardSkin(), WizardSkin.pixel, PedroSkin()]
 
     static func skin(id: String?) -> LayeredSkin {
         all.first { $0.id == id } ?? all.first { $0.id == defaultID } ?? all[0]
