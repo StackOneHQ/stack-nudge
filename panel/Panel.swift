@@ -64,7 +64,7 @@ final class FloatingPanel: NSPanel {
         self.backgroundColor = .clear
         self.hidesOnDeactivate = false
         self.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
-        self.isMovableByWindowBackground = true
+        self.isMovableByWindowBackground = false
         self.isReleasedWhenClosed = false
         self.hasShadow = true
         // borderless + resizable: no visible chrome but mouse-drag on edges
@@ -330,6 +330,7 @@ struct PanelContentView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .background(WindowDragArea())
     }
 
     // The tabs themselves, which scroll sideways once they stop fitting.
@@ -665,13 +666,8 @@ struct PanelContentView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 2) {
-                    ForEach(EventListItem.items(store.visibleEvents, now: Date())) { item in
-                        switch item {
-                        case .day(let title):
-                            DaySeparator(title: title)
-                        case .event(let event):
-                            eventRow(event).id(event.id)
-                        }
+                    ForEach(store.visibleEvents) { event in
+                        eventRow(event).id(event.id)
                     }
                 }
                 .padding(.top, 4)
@@ -2113,7 +2109,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             panel.level = .floating
             panel.collectionBehavior = []
             panel.hasShadow = true
-            panel.isMovableByWindowBackground = true
+            panel.isMovableByWindowBackground = false
             panel.styleMask.insert(.resizable)
             positionPanel()
             if nav.compactExpanded {

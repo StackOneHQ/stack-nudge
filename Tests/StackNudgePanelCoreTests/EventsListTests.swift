@@ -195,7 +195,7 @@ final class EventsListTests: XCTestCase {
         XCTAssertTrue(agent.members.isEmpty)
     }
 
-    // MARK: Timestamps and day headings
+    // MARK: Timestamps
 
     private var calendar: Calendar {
         var c = Calendar(identifier: .gregorian)
@@ -217,27 +217,10 @@ final class EventsListTests: XCTestCase {
         XCTAssertTrue(EventTime.listTime(date(28, 18, 5), now: now, calendar: calendar).hasPrefix("Yesterday "))
     }
 
-    func testDayTitles() {
-        let now = date(29, 12)
-        XCTAssertEqual(EventTime.dayTitle(date(29, 1), now: now, calendar: calendar), "Today")
-        XCTAssertEqual(EventTime.dayTitle(date(28, 23), now: now, calendar: calendar), "Yesterday")
-        XCTAssertEqual(EventTime.dayTitle(date(26, 9), now: now, calendar: calendar), "Monday")
-        XCTAssertTrue(EventTime.dayTitle(date(10, 9), now: now, calendar: calendar).contains("10"))
-        XCTAssertFalse(EventTime.fullDate(date(10, 9, 30), calendar: calendar).isEmpty)
-    }
-
-    func testDayHeadingsOnlyAppearWithFeedEvents() {
-        let now = date(29, 12)
-        let agentOnly = EventListItem.items([prompt()], now: now, calendar: calendar)
-        XCTAssertEqual(agentOnly.count, 1)
-
-        let items = EventListItem.items([feed("a", at: date(29, 9)), feed("b", at: date(29, 8)),
-                                         feed("c", at: date(28, 9))], now: now, calendar: calendar)
-        let headings = items.compactMap { item -> String? in
-            if case .day(let title) = item { return title } else { return nil }
-        }
-        XCTAssertEqual(headings, ["Today", "Yesterday"])
-        XCTAssertEqual(items.count, 5)
+    func testFullDateIsNotEmptyAndStableAcrossCalls() {
+        let first = EventTime.fullDate(date(10, 9, 30), calendar: calendar)
+        XCTAssertFalse(first.isEmpty)
+        XCTAssertEqual(EventTime.fullDate(date(10, 9, 30), calendar: calendar), first)
     }
 
     // MARK: Footer

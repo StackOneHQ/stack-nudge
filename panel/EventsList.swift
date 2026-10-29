@@ -57,7 +57,7 @@ struct FeedTagFilter: Equatable {
     }
 }
 
-// Timestamps and day headings for the Events list. The calendar is a
+// Timestamps for the Events list. The calendar is a
 // parameter so tests can pin the time zone.
 enum EventTime {
 
@@ -88,77 +88,36 @@ enum EventTime {
         format(date, template: "EEEdMMMyHm", calendar: calendar)
     }
 
-    // "Today", "Yesterday", the weekday within the week, then "20 Oct" (with
-    // the year once it is not this one).
-    static func dayTitle(_ date: Date, now: Date, calendar: Calendar = .current) -> String {
-        if calendar.isDate(date, inSameDayAs: now) { return "Today" }
-        switch dayGap(date, now, calendar) {
-        case 1:      return "Yesterday"
-        case 2..<7:  return format(date, template: "EEEE", calendar: calendar)
-        default:
-            let sameYear = calendar.isDate(date, equalTo: now, toGranularity: .year)
-            return format(date, template: sameYear ? "dMMM" : "dMMMy", calendar: calendar)
-        }
-    }
-
     private static func dayGap(_ date: Date, _ now: Date, _ calendar: Calendar) -> Int {
         calendar.dateComponents([.day], from: calendar.startOfDay(for: date),
                                 to: calendar.startOfDay(for: now)).day ?? 99
     }
 
+    private struct FormatterKey: Hashable {
+        let template: String
+        let calendar: Calendar
+    }
+
+    // Building a DateFormatter is slow, and every visible row formats a date
+    // or two per render, so scrolling rebuilt dozens of them a frame.
+    private static let formatters = NSLock()
+    private static var cache: [FormatterKey: DateFormatter] = [:]
+
     private static func format(_ date: Date, template: String, calendar: Calendar) -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = calendar
-        formatter.timeZone = calendar.timeZone
-        formatter.setLocalizedDateFormatFromTemplate(template)
+        formatters.lock()
+        defer { formatters.unlock() }
+        let key = FormatterKey(template: template, calendar: calendar)
+        let formatter: DateFormatter
+        if let cached = cache[key] {
+            formatter = cached
+        } else {
+            formatter = DateFormatter()
+            formatter.calendar = calendar
+            formatter.timeZone = calendar.timeZone
+            formatter.setLocalizedDateFormatFromTemplate(template)
+            cache[key] = formatter
+        }
         return formatter.string(from: date)
-    }
-}
-
-// One entry of the rendered list: a day heading or an event.
-enum EventListItem: Identifiable, Equatable {
-    case day(String)
-    case event(NudgeEvent)
-
-    var id: String {
-        switch self {
-        case .day(let title): return "day:\(title)"
-        case .event(let event): return event.id.uuidString
-        }
-    }
-
-    // Headings only appear once there is a feed event on show, so a queue of
-    // nothing but agent prompts looks as it always has. The list is newest
-    // first, so a heading goes in wherever the day changes.
-    static func items(_ events: [NudgeEvent], now: Date, calendar: Calendar = .current) -> [EventListItem] {
-        guard events.contains(where: \.isFeed) else { return events.map(EventListItem.event) }
-        var out: [EventListItem] = []
-        var lastDay: Date?
-        for event in events {
-            let day = calendar.startOfDay(for: event.timestamp)
-            if day != lastDay {
-                out.append(.day(EventTime.dayTitle(event.timestamp, now: now, calendar: calendar)))
-                lastDay = day
-            }
-            out.append(.event(event))
-        }
-        return out
-    }
-}
-
-struct DaySeparator: View {
-    let title: String
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Text(title.uppercased())
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.tertiary)
-            Rectangle().fill(Color.primary.opacity(0.1)).frame(height: 1)
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 2)
     }
 }
 
