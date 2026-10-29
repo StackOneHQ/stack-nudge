@@ -43,18 +43,47 @@ struct FeedTagFilter: Equatable {
         hidden = allShown(among: present) ? Set(present) : []
     }
 
-    // Keyboard cycle: All, then each tag on its own, then back to All.
-    // Anything else (a hand-picked mix, or none) counts as All, so the first
-    // press always lands on the first tag.
-    mutating func cycle(among present: [String], forward: Bool) {
-        guard present.count > 1 else { return }
-        let shown = present.filter(shows)
-        let current = shown.count == 1 ? (present.firstIndex(of: shown[0]) ?? -1) : -1
-        var next = current + (forward ? 1 : -1)
-        if next >= present.count { next = -1 }
-        if next < -1 { next = present.count - 1 }
-        if next == -1 { hidden = [] } else { showOnly(present[next], among: present) }
+    // One chip's action, shared by the mouse and the keyboard so the two
+    // cannot drift: a plain press toggles, `only` shows just that tag. On the
+    // All/None chip `only` means nothing more than a plain press.
+    mutating func apply(_ chip: FeedChip, only: Bool, among present: [String]) {
+        switch chip {
+        case .all:           toggleAll(among: present)
+        case .tag(let tag):  if only { showOnly(tag, among: present) } else { toggle(tag) }
+        }
     }
+}
+
+// A stop in the chip row: the All/None chip first, then one per tag present.
+enum FeedChip: Hashable {
+    case all
+    case tag(String)
+
+    static func row(among present: [String]) -> [FeedChip] { [.all] + present.map(FeedChip.tag) }
+
+    // Where F lands: the chip last used, or the first one when there is none
+    // or its tag has gone.
+    static func focusTarget(last: FeedChip?, among present: [String]) -> FeedChip {
+        guard let last, row(among: present).contains(last) else { return .all }
+        return last
+    }
+
+    // ←→ stop at the ends rather than wrap, so the row's edges stay findable.
+    func moved(by delta: Int, among present: [String]) -> FeedChip {
+        let chips = FeedChip.row(among: present)
+        let index = chips.firstIndex(of: self) ?? 0
+        return chips[min(max(index + delta, 0), chips.count - 1)]
+    }
+}
+
+// What a keystroke does while the chip row has the keyboard.
+enum FeedChipKeyAction: Equatable {
+    case move(Int)
+    case toggle
+    case only
+    case back
+    // List keys must not act on a list the user is not looking at.
+    case swallow
 }
 
 // Timestamps for the Events list. The calendar is a
@@ -136,58 +165,77 @@ struct EventTimeLabel: View {
 }
 
 // One chip per feed tag present, plus All/None. Option-click shows that tag
-// only.
+// only. `focused` is the chip the keyboard is on, nil while the list has it.
 struct FeedTagChips: View {
     @ObservedObject var store: EventStore
+    var focused: FeedChip?
 
     var body: some View {
         let present = store.presentTags
         if !present.isEmpty {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    chip(label: store.tagFilter.allShown(among: present) ? "None" : "All",
-                         symbol: nil, count: 0, on: false) {
-                        store.tagFilter.toggleAll(among: present)
-                    }
-                    ForEach(present, id: \.self) { tag in
-                        chip(label: FeedTagFilter.label(tag),
-                             symbol: FeedStyle.symbol(tag: tag, source: sourceSymbolSource(tag)),
-                             count: store.unreadCount(forTag: tag),
-                             on: store.tagFilter.shows(tag)) {
-                            if NSEvent.modifierFlags.contains(.option) {
-                                store.tagFilter.showOnly(tag, among: present)
-                            } else {
-                                store.tagFilter.toggle(tag)
-                            }
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 5) {
+                        allChip(present: present)
+                        ForEach(present, id: \.self) { tag in
+                            tagChip(tag, present: present)
                         }
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
+                .onChange(of: focused) { chip in
+                    if let chip { withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(chip) } }
+                }
             }
             Divider().opacity(0.4)
         }
     }
 
-    // A tag the style table does not know gets its source's icon.
-    private func sourceSymbolSource(_ tag: String) -> EventSource {
+    private func allChip(present: [String]) -> some View {
+        chip(.all, label: store.tagFilter.allShown(among: present) ? "None" : "All",
+             symbol: nil, count: 0, color: nil, on: false, present: present)
+    }
+
+    private func tagChip(_ tag: String, present: [String]) -> some View {
+        let source = sourceForTag(tag)
+        return chip(.tag(tag), label: FeedTagFilter.label(tag),
+                    symbol: FeedStyle.symbol(tag: tag, source: source),
+                    count: store.unreadCount(forTag: tag),
+                    color: FeedStyle.color(tag: tag, source: source),
+                    on: store.tagFilter.shows(tag), present: present)
+    }
+
+    // A tag the style table does not know gets its source's icon and colour.
+    private func sourceForTag(_ tag: String) -> EventSource {
         store.events.first { $0.isFeed && FeedTagFilter.key(for: $0) == tag }?.source ?? .script
     }
 
-    private func chip(label: String, symbol: String?, count: Int, on: Bool,
-                      action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
+    // Included: the tag's colour, softly filled. Excluded: outlined in it with
+    // quiet text. All/None has no tag, so it stays neutral.
+    private func chip(_ target: FeedChip, label: String, symbol: String?, count: Int,
+                      color: Color?, on: Bool, present: [String]) -> some View {
+        let tint = color ?? .secondary
+        let lit = color != nil && on
+        return Button {
+            store.tagFilter.apply(target, only: NSEvent.modifierFlags.contains(.option), among: present)
+        } label: {
+            HStack(spacing: 3) {
                 if let symbol { Image(systemName: symbol).font(.caption2) }
-                Text(label).font(.caption.weight(.medium))
+                Text(label).font(.caption2.weight(.medium))
                 if count > 0 { Text("\(count)").font(.caption2.monospacedDigit()).opacity(0.7) }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .foregroundStyle(on ? Color.accentColor : Color.secondary)
-            .background(Capsule().fill(on ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.06)))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .foregroundStyle(lit ? tint : Color.secondary)
+            .background(Capsule().fill(lit ? tint.opacity(0.16)
+                                           : color == nil ? Color.primary.opacity(0.06) : Color.clear))
+            .overlay(Capsule().strokeBorder(tint.opacity(0.55), lineWidth: color != nil && !on ? 1 : 0))
+            .overlay(Capsule().inset(by: -2).strokeBorder(Color.accentColor,
+                                                          lineWidth: focused == target ? 1.5 : 0))
         }
         .buttonStyle(.plain)
+        .id(target)
         .help("Click to toggle, option-click to show only this")
     }
 }

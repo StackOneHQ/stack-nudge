@@ -514,7 +514,7 @@ struct PanelContentView: View {
                 if store.events.isEmpty {
                     emptyState
                 } else {
-                    FeedTagChips(store: store)
+                    FeedTagChips(store: store, focused: chipFocus)
                     if store.visibleEvents.isEmpty { filteredEmptyState } else { eventList }
                 }
             case .history:
@@ -724,6 +724,12 @@ struct PanelContentView: View {
         }
     }
 
+    // The chip the keyboard is on, nil when the list has it or there is no row.
+    private var chipFocus: FeedChip? {
+        nav.chipsFocused && !store.presentTags.isEmpty
+            ? FeedChip.focusTarget(last: nav.chipCursor, among: store.presentTags) : nil
+    }
+
     private var footer: some View {
         let hints = Self.eventsFooterHints(
             pane: nav.eventsPane,
@@ -739,7 +745,8 @@ struct PanelContentView: View {
                                   selectedIsRead: store.selectedEvent?.isRead == true,
                                   selectedExpandable: store.selectedEvent?.members.isEmpty == false,
                                   selectedExpanded: store.selectedID.map(store.expandedIDs.contains) == true,
-                                  confirmingClear: nav.confirmingClear)
+                                  confirmingClear: nav.confirmingClear,
+                                  chipsFocused: chipFocus != nil)
         )
         return PageFooter {
             ForEach(hints.indices, id: \.self) { FooterHintRow(spec: hints[$0]) }
@@ -788,6 +795,14 @@ struct PanelContentView: View {
                 FooterHintSpec(label: "Clear \(feed.feedCount) feed events", keys: ["C"], primary: true),
             ]
 
+        case .live where feed.chipsFocused:
+            return [
+                FooterHintSpec(label: "Move",   keys: ["←→"]),
+                FooterHintSpec(label: "Toggle", keys: ["⏎"]),
+                FooterHintSpec(label: "Only",   keys: ["⇧⏎"]),
+                FooterHintSpec(label: "List",   keys: ["F"]),
+            ]
+
         case .live where liveQueueEmpty:
             // Mute is still useful with an empty list — it pre-silences incoming
             // nudges (e.g. heading into a meeting), so keep the shortcut
@@ -821,7 +836,7 @@ struct PanelContentView: View {
             // Feed shortcuts only exist while there is a feed to act on, and
             // they shed before anything the bar already advertised.
             if feed.feedCount > 0 {
-                hints.append(FooterHintSpec(label: "Filter", keys: ["F"], shedOrder: -4))
+                hints.append(FooterHintSpec(label: "Filters", keys: ["F"], shedOrder: -4))
                 if feed.selectedExpandable {
                     hints.append(FooterHintSpec(label: feed.selectedExpanded ? "Collapse" : "Expand",
                                                 keys: ["Space"], shedOrder: -5))
@@ -920,6 +935,7 @@ struct FeedFooterState: Equatable {
     var selectedExpandable = false
     var selectedExpanded = false
     var confirmingClear = false
+    var chipsFocused = false
 }
 
 struct EventRow: View {
@@ -1140,7 +1156,7 @@ struct EventRow: View {
 
     private var glyphColor: Color {
         if isSnoozed { return .gray }
-        if event.isFeed { return FeedStyle.color(for: event.severity) }
+        if event.isFeed { return FeedStyle.color(tag: event.tag, source: event.source) }
         return event.kind == .permission ? .orange : .green
     }
 }
@@ -5290,10 +5306,32 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return true
         }
 
-        // F / Shift+F step the tag filter. Shift is part of the key here, so
-        // it is handled before the no-shift guard like S.
-        if event.keyCode == KeyCode.fKey {
-            store.tagFilter.cycle(among: store.presentTags, forward: !shifted)
+        // F hands the keyboard to the tag chips. While they have it, every key
+        // is theirs: list keys must not act on rows the user is not steering.
+        if nav.chipsFocused {
+            guard !store.presentTags.isEmpty else {
+                nav.chipsFocused = false
+                return true
+            }
+            let present = store.presentTags
+            let current = FeedChip.focusTarget(last: nav.chipCursor, among: present)
+            let action = Self.chipKeyAction(keyCode: event.keyCode, shifted: shifted)
+            switch action {
+            case .move(let delta):
+                nav.chipCursor = current.moved(by: delta, among: present)
+            case .toggle, .only:
+                nav.chipCursor = current
+                store.tagFilter.apply(current, only: action == .only, among: present)
+            case .back:
+                nav.chipsFocused = false
+            case .swallow:
+                break
+            }
+            return true
+        }
+        if event.keyCode == KeyCode.fKey, !shifted, !store.presentTags.isEmpty {
+            nav.chipCursor = FeedChip.focusTarget(last: nav.chipCursor, among: store.presentTags)
+            nav.chipsFocused = true
             return true
         }
 
@@ -5337,6 +5375,20 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return false
         }
         return true
+    }
+
+    // What a key does while the tag chips have the keyboard. Pure for the same
+    // reason historyKeyAction is: the leak this guards against, list keys
+    // acting behind the chips, is a routing bug nothing visible would show.
+    static func chipKeyAction(keyCode: UInt16, shifted: Bool) -> FeedChipKeyAction {
+        switch keyCode {
+        case KeyCode.leftArrow:                          return .move(-1)
+        case KeyCode.rightArrow:                         return .move(1)
+        case KeyCode.returnKey, KeyCode.numpadEnter:     return shifted ? .only : .toggle
+        case KeyCode.space:                              return .toggle
+        case KeyCode.downArrow, KeyCode.fKey:            return .back
+        default:                                         return .swallow
+        }
     }
 
     // What a keystroke does in the history pane, as a value. Pure so the routing
@@ -6022,6 +6074,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         if nav.recordingSpeakHotkey { nav.cancelRecordingSpeakHotkey() }
         if nav.recordingHotkey { nav.cancelRecordingHotkey() }
         nav.confirmingClear = false
+        nav.chipsFocused = false
         // Compact mode: "hide" means "collapse back to the pill," never
         // make the user lose their widget entirely. Esc / hotkey / focus
         // loss all funnel through here.

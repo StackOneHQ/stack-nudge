@@ -35,7 +35,8 @@ Recent nudges in chronological order. Each shows agent, message, project name, t
 | `M` | Mute all notifications for the configured duration (press again to resume) |
 | `⌫` / `⌦` / `R` | Dismiss the selected nudge locally |
 | `H` | Open the searchable history pane |
-| `F` / `⇧F` | Cycle the tag filter: All, then each tag on its own (feed events only) |
+| `F` | Focus the tag chips above the list (feed events only); `F` or `↓` returns to the list |
+| `← →` `⏎` `Space` `⇧⏎` | On the chips: move, toggle the chip (or All/None), show only that tag |
 | `U` | Mark the selected feed event read or unread |
 | `A` | Mark all feed events read |
 | `C` | Clear all feed events; press `C` again to confirm, any other key backs out. Permission prompts are never cleared |

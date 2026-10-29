@@ -38,17 +38,66 @@ final class EventsListTests: XCTestCase {
         XCTAssertTrue(filter.noneShown(among: present))
     }
 
-    func testCycleWalksEachTagThenWrapsToAll() {
-        let present = ["a", "b", "c"]
+    func testApplyTogglesOrShowsOnlyAndAllNoneIgnoresOnly() {
+        let present = ["ci", "review", "ready"]
         var filter = FeedTagFilter()
-        var seen: [[String]] = []
-        for _ in 0..<4 {
-            filter.cycle(among: present, forward: true)
-            seen.append(present.filter(filter.shows))
+        filter.apply(.tag("ci"), only: false, among: present)
+        XCTAssertEqual(present.filter(filter.shows), ["review", "ready"])
+        filter.apply(.tag("ci"), only: false, among: present)
+        XCTAssertTrue(filter.allShown(among: present))
+        filter.apply(.tag("review"), only: true, among: present)
+        XCTAssertEqual(present.filter(filter.shows), ["review"])
+        filter.apply(.all, only: true, among: present)
+        XCTAssertTrue(filter.allShown(among: present), "a partial selection goes to All")
+        filter.apply(.all, only: false, among: present)
+        XCTAssertTrue(filter.noneShown(among: present))
+    }
+
+    // MARK: Chip row focus
+
+    func testChipRowStartsWithAllAndFocusReturnsToTheLastChip() {
+        let present = ["ci", "review"]
+        XCTAssertEqual(FeedChip.row(among: present), [.all, .tag("ci"), .tag("review")])
+        XCTAssertEqual(FeedChip.focusTarget(last: nil, among: present), .all)
+        XCTAssertEqual(FeedChip.focusTarget(last: .tag("review"), among: present), .tag("review"))
+        XCTAssertEqual(FeedChip.focusTarget(last: .tag("gone"), among: present), .all)
+    }
+
+    func testChipMoveStopsAtTheEnds() {
+        let present = ["ci", "review"]
+        XCTAssertEqual(FeedChip.all.moved(by: -1, among: present), .all)
+        XCTAssertEqual(FeedChip.all.moved(by: 1, among: present), .tag("ci"))
+        XCTAssertEqual(FeedChip.tag("ci").moved(by: 1, among: present), .tag("review"))
+        XCTAssertEqual(FeedChip.tag("review").moved(by: 1, among: present), .tag("review"))
+        XCTAssertEqual(FeedChip.tag("gone").moved(by: 1, among: present), .tag("ci"))
+    }
+
+    // Raw virtual key codes, since the panel's KeyCode table is private.
+    func testChipKeyRouting() {
+        func action(_ code: UInt16, shifted: Bool = false) -> FeedChipKeyAction {
+            PanelController.chipKeyAction(keyCode: code, shifted: shifted)
         }
-        XCTAssertEqual(seen, [["a"], ["b"], ["c"], ["a", "b", "c"]])
-        filter.cycle(among: present, forward: false)
-        XCTAssertEqual(present.filter(filter.shows), ["c"])
+        XCTAssertEqual(action(123), .move(-1))
+        XCTAssertEqual(action(124), .move(1))
+        XCTAssertEqual(action(36), .toggle)
+        XCTAssertEqual(action(76), .toggle)
+        XCTAssertEqual(action(49), .toggle)
+        XCTAssertEqual(action(36, shifted: true), .only)
+        for back: UInt16 in [125, 3] {
+            XCTAssertEqual(action(back), .back, "Down and F leave the chips")
+        }
+        // Esc never reaches the chips: the panel hides on it everywhere.
+        // up, U, A, C, R, O, delete, forward delete, H, M, S
+        for key: UInt16 in [53, 126, 32, 0, 8, 15, 31, 51, 117, 4, 46, 1] {
+            XCTAssertEqual(action(key), .swallow)
+        }
+    }
+
+    func testTagColoursAreSharedByRowsAndChips() {
+        XCTAssertEqual(FeedStyle.color(tag: "ci", source: .github), .orange)
+        XCTAssertEqual(FeedStyle.color(tag: " ci ", source: .github), .orange)
+        XCTAssertEqual(FeedStyle.color(tag: "mystery", source: .calendar), FeedStyle.sourceColor(.calendar))
+        XCTAssertEqual(FeedStyle.color(tag: nil, source: .script), FeedStyle.sourceColor(.script))
     }
 
     func testStoreSelectionSkipsHiddenRowsAndNeverHidesPrompts() {
@@ -233,10 +282,20 @@ final class EventsListTests: XCTestCase {
                 muted: false, feed: feed)
         }
         XCTAssertFalse(hints(FeedFooterState()).contains { $0.keys == ["F"] })
+        XCTAssertEqual(hints(FeedFooterState(feedCount: 2)).first { $0.keys == ["F"] }?.label, "Filters")
         let withFeed = hints(FeedFooterState(unread: 1, feedCount: 2, selectedIsFeed: true))
         XCTAssertEqual(withFeed.filter { $0.shedOrder.map { $0 < 0 } == true }.map(\.keys),
                        [["F"], ["U"], ["A"], ["C"]])
         let confirm = hints(FeedFooterState(feedCount: 2, confirmingClear: true))
         XCTAssertEqual(confirm.map(\.keys), [["C"], ["Esc"]])
+    }
+
+    func testChipKeysReplaceTheNormalHintsWhileFocused() {
+        let focused = PanelContentView.eventsFooterHints(
+            pane: .live, filterFocused: false, filterQuery: "", liveQueueEmpty: false,
+            primaryAction: "Open", dismissLabel: "Dismiss", snoozeEnabled: false,
+            muted: false, feed: FeedFooterState(feedCount: 2, chipsFocused: true))
+        XCTAssertEqual(focused.map(\.label), ["Move", "Toggle", "Only", "Back"])
+        XCTAssertEqual(focused.map(\.keys), [["←→"], ["⏎"], ["⇧⏎"], ["Esc"]])
     }
 }
