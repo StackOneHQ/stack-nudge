@@ -261,6 +261,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
 
         menu.addItem(action("Show panel",         #selector(showPanelAction)))
+        menu.addItem(action("Settings…",          #selector(showSettingsAction), keyEquivalent: ","))
         menu.addItem(action("Check permissions…", #selector(showPermissionsAction)))
         menu.addItem(action("Open config file…",  #selector(openConfigAction)))
         menu.addItem(.separator())
@@ -388,6 +389,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     @objc private func showPanelAction() {
         panelController?.showPanel()
+    }
+
+    @objc private func showSettingsAction() {
+        panelController?.showSettings()
     }
 
     @objc private func showPermissionsAction() {

@@ -6,7 +6,7 @@ import XCTest
 
 // The keys that mean one thing on every page, text field or not. Raw virtual
 // key codes, since the panel's KeyCode table is private: 53 Esc, 123 ←,
-// 124 →, 51 delete, 0 "a".
+// 124 →, 43 comma, 51 delete, 0 "a".
 final class GlobalKeyActionTests: XCTestCase {
 
     private func action(_ keyCode: UInt16,
@@ -64,6 +64,17 @@ final class GlobalKeyActionTests: XCTestCase {
     func test_commandArrowsAreLeftToHotkeyRecording() {
         XCTAssertNil(action(123, .command, recording: true))
         XCTAssertNil(action(124, .command, recording: true))
+    }
+
+    // ⌘, is Settings from anywhere, a text field included. A recording may want
+    // it as a combo, and a held key shouldn't reopen Settings over and over.
+    func test_commandCommaOpensSettings() {
+        XCTAssertEqual(action(43, .command), .openSettings)
+        XCTAssertEqual(action(43, .command, inEmptyField: false), .openSettings)
+        XCTAssertNil(action(43, .command, recording: true))
+        XCTAssertNil(action(43, .command, isRepeat: true))
+        XCTAssertNil(action(43))
+        XCTAssertNil(action(43, [.command, .shift]))
     }
 
     // Plain arrows belong to the page, and ⇧⌘← to the field editor.

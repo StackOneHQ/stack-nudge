@@ -3799,7 +3799,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     // The keys that mean one thing on every page (see AGENTS.md, Keyboard
     // navigation): Esc cancels a text field or, outside one, hides the panel,
-    // ⌘←/→ step through the tabs, and ⌫ in an empty text field cancels it too.
+    // ⌘←/→ step through the tabs, ⌘, opens Settings, and ⌫ in an empty text field cancels it too.
     func panelHandlesGlobalKey(_ event: NSEvent, fieldEditor: NSTextView?) -> Bool {
         let mods = event.modifierFlags.intersection([.command, .control, .option, .shift])
         let recording = nav.recordingHotkey || nav.recordingSpeakHotkey
@@ -3829,6 +3829,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             guard let target = Self.stepTabTarget(from: nav.mode, by: delta, in: nav.orderedTabs)
             else { return false }
             if target != nav.mode { nav.mode = target }
+        case .openSettings:
+            // Same rule as ⌘←/→: setup and the update screens have no tab strip.
+            guard Self.stepTabTarget(from: nav.mode, by: 0, in: nav.orderedTabs) != nil,
+                  !(nav.mode == .permissions && nav.permissionsReturnMode == .bootstrap)
+            else { return false }
+            nav.mode = .settings
         case .cancelField:
             swallowingRepeatsOf = event.keyCode
             cancelField()
@@ -3879,6 +3885,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     enum GlobalKeyAction: Equatable {
         case hide
         case stepTab(Int)
+        case openSettings
         case cancelField
     }
 
@@ -3899,6 +3906,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return .stepTab(-1)
         case KeyCode.rightArrow where modifiers == .command && !recording:
             return .stepTab(1)
+        case KeyCode.comma where modifiers == .command && !recording && !isRepeat:
+            return .openSettings
         case KeyCode.delete where modifiers.isEmpty && inEmptyField == true && !isRepeat:
             return .cancelField
         default:
@@ -5060,6 +5069,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         } else {
             showPanel()
         }
+    }
+
+    // Straight to Settings from outside the panel (the menu bar menu),
+    // optionally on one category, rather than open-the-panel-then-find-the-tab.
+    func showSettings(category: SettingsCategory? = nil) {
+        nav.mode = .settings
+        if let category { nav.settingsCategory = category }
+        showPanel()
     }
 
     func showPanel() {
