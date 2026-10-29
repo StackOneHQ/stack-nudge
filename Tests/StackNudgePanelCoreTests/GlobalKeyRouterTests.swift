@@ -6,7 +6,7 @@ import XCTest
 // The global keys across a sequence of presses: what a held key does once the
 // field or recording it ended has let go. Driven with real NSEvents, so the
 // modifier masking and the repeat flag are the router's own. Raw virtual key
-// codes, since the panel's KeyCode table is private: 53 Esc, 51 delete,
+// codes, since the panel's KeyCode table is private: 53 Esc, 51 delete, 18 "1",
 // 123 ←, 0 "a".
 final class GlobalKeyRouterTests: XCTestCase {
 
@@ -80,6 +80,15 @@ final class GlobalKeyRouterTests: XCTestCase {
         var router = PanelController.GlobalKeyRouter()
         XCTAssertNil(router.route(key(0), recording: true, fieldEditor: nil))
         XCTAssertNil(router.swallowingRepeatsOf)
+    }
+
+    // Only a recording takes a combo. Outside one, a held ⌘1 has to keep
+    // reaching the page.
+    func test_aComboOutsideARecordingArmsNothing() {
+        var router = PanelController.GlobalKeyRouter()
+        XCTAssertNil(router.route(key(18, .command), recording: false, fieldEditor: nil))
+        XCTAssertNil(router.swallowingRepeatsOf)
+        XCTAssertNil(router.route(key(18, .command, isRepeat: true), recording: false, fieldEditor: nil))
     }
 
     // An input method composing text owns Esc and ⌫, and its held Esc isn't

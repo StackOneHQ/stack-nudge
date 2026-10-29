@@ -4,9 +4,8 @@ import XCTest
 @testable import StackNudgePanelCore
 
 // The guards that stop a stray ⌫ killing an agent or removing a phrase or an
-// extension. Raw
-// virtual key codes, since the panel's KeyCode table is private: 51 delete,
-// 117 forward delete, 53 Esc, 15 "r", 0 "a".
+// extension. Raw virtual key codes, since the panel's KeyCode table is
+// private: 51 delete, 117 forward delete, 53 Esc, 15 "r", 0 "a".
 final class DestructiveKeyTests: XCTestCase {
 
     private func destructive(_ keyCode: UInt16, _ modifiers: NSEvent.ModifierFlags = [],
