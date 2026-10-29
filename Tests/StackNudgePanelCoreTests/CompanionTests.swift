@@ -142,4 +142,18 @@ final class CompanionSettingsTests: XCTestCase {
         XCTAssertFalse(nav.rows(in: .appearance).contains(.companion),
                        "the companion is not one of the widget's settings")
     }
+
+    // Existing installs are offered the companion once; the offer goes away
+    // when it is on or has been seen.
+    func testTheOfferIsForInstallsThatHaveNeitherTurnedItOnNorSeenIt() {
+        let nav = PanelNav()
+        nav.companionEnabled = false
+        nav.companionOffered = false
+        XCTAssertTrue(nav.showCompanionOffer)
+        nav.companionOffered = true
+        XCTAssertFalse(nav.showCompanionOffer)
+        nav.companionOffered = false
+        nav.companionEnabled = true
+        XCTAssertFalse(nav.showCompanionOffer)
+    }
 }

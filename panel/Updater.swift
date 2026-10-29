@@ -1052,6 +1052,7 @@ struct PostUpdateView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     header
+                    if nav.showCompanionOffer { companionOffer }
                     if let notes = nav.postUpdateNotes, !notes.isEmpty {
                         Text("What's new")
                             .font(.caption.weight(.semibold))
@@ -1073,6 +1074,32 @@ struct PostUpdateView: View {
             actionBar
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    // Shown once: leaving the screen counts as having seen it, whichever way
+    // the user leaves.
+    private var companionOffer: some View {
+        HStack(alignment: .center, spacing: 12) {
+            CharacterLayerHost(skin: CompanionSkins.skin(id: CompanionSkins.defaultID), mode: .idle,
+                               still: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+                               size: CGSize(width: 54, height: 60), active: true)
+                .frame(width: 54, height: 60)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Meet the companion").font(.subheadline.weight(.semibold))
+                Text("A character that floats on your desktop in place of the widget. Click it for the panel, drag it anywhere. Change it any time in Settings → Companion.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button("Turn on") {
+                nav.markCompanionOffered()
+                nav.setCompanionEnabled(true)
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+        .onDisappear { nav.markCompanionOffered() }
     }
 
     private var header: some View {
