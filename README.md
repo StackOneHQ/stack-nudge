@@ -142,8 +142,8 @@ These keys work the same on every page, including while a text field has focus:
 
 | Key | Action |
 |-----|--------|
-| `Esc` | Hide the panel. In a text field it cancels the field instead: a filter, search or new phrase empties and hands the keyboard back to the page, a rename or config field keeps its saved value. While a shortcut is being recorded it cancels that and keeps the old one. The footer's last hint shows which. |
-| `⌘←` / `⌘→` | Previous / next tab. From a sub-page, the tabs either side of the one it belongs to. Not while recording a hotkey, so either can be recorded, and not on the setup screen or Permissions opened from it, which have no tabs. |
+| `Esc` | Hide the panel. In a text field it cancels the field instead: a filter, search or new phrase empties and hands the keyboard back to the page, a rename or config field keeps its saved value. While a shortcut is being recorded it cancels that and keeps the old one, and `Esc` with a modifier is recorded as the shortcut. The footer's last hint shows which. |
+| `⌘←` / `⌘→` | Previous / next tab. From a sub-page, the tabs either side of the one it belongs to. Not while recording a hotkey, where they do nothing (a shortcut can't use an arrow), and not on the setup screen or Permissions opened from it, which have no tabs. |
 | `⌫` in an empty text field | Cancel the field, as `Esc` does. A fresh press only: holding `⌫` to clear a field stops once it's empty. |
 
 Outside a text field, `←` is back a level on sub-pages and detail panes: out of a detail pane, or from a sub-page to the page it belongs under. The exception is picking a value in Settings, where `←` / `→` step the value.

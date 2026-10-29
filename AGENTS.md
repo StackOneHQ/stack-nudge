@@ -14,11 +14,11 @@ These are handled once, in `panelHandlesGlobalKey`, which `FloatingPanel.sendEve
 
 | Key | Meaning |
 |-----|---------|
-| `Esc` | In a text field, or while a shortcut is being recorded, cancel it. Everywhere else, hide the panel: on every page, in every state, including setup, update and uninstall screens. Nothing else. |
-| `⌘←` / `⌘→` | Previous / next top-level tab, without wrapping. Left alone only while recording a hotkey, so the combo can be recorded. |
+| `Esc` | In a text field, or while a shortcut is being recorded, cancel it (`Esc` with a modifier is recorded as the shortcut). Everywhere else, hide the panel: on every page, in every state, including setup, update and uninstall screens. Nothing else. |
+| `⌘←` / `⌘→` | Previous / next top-level tab, without wrapping. While recording a hotkey they go to the recorder, which can't bind an arrow, so they do nothing. |
 | `⌫` in an empty text field | Cancel the field, as `Esc` does. |
 
-Cancelling a field puts it back the way it was before you started and hands the keyboard back to its page. Recording a shortcut counts as editing one: cancelling keeps the old shortcut. A search, filter or new-entry field empties. A field holding a value goes back to that value: a rename keeps the old name, an extension config field its saved value. `cancelField` in `Panel.swift` does this per page, so a page that adds a text field adds its case there.
+Cancelling a field puts it back the way it was before you started and hands the keyboard back to its page. Recording a shortcut counts as editing one: cancelling keeps the old shortcut. A search, filter or new-entry field empties. A field holding a value goes back to that value: a rename keeps the old name, an extension config field its saved value. `cancelField` in `Panel.swift` does this per page, so a page that adds a text field adds its case there. The key that cancelled, or the combo a recording took, may still be held when the field lets go, so `GlobalKeyRouter` swallows its autorepeat until a fresh press.
 
 ### Moving through a page
 
@@ -59,7 +59,7 @@ Cancelling a field puts it back the way it was before you started and hands the 
 
 ### Testing
 
-Put the routing for a page in a pure static function that maps a key and modifiers to an action enum (`globalKeyAction`, `historyKeyAction`, `extensionsKeyAction`, `extensionConfigKeyAction`, `permissionsKeyAction`, `settingsDetailKeyAction`, plus `isForceRefresh` for the extension tab's ⌘R), and test that function. Bugs in key routing have mostly been ordering mistakes, like a branch sitting after a `guard plain` it needed to come before, and a pure function is the only place a test can see the order. For row behaviour on `PanelNav`, drive the real entry points (`cycleForward`, `cycleBackward`, `activate`) rather than only reading the predicate behind them.
+Put the routing for a page in a pure static function that maps a key and modifiers to an action enum (`globalKeyAction`, `historyKeyAction`, `extensionsKeyAction`, `extensionConfigKeyAction`, `permissionsKeyAction`, `settingsDetailKeyAction`, `destructiveKeyAction`, `resignKeyOutcome`, plus `isForceRefresh` for the extension tab's ⌘R), and test that function. Where a decision needs state across key presses, keep the state with it in a value type and drive it with real `NSEvent`s (`GlobalKeyRouter`). Prefer a function that takes the `NSEvent` itself to one each call site feeds masked modifiers and `isARepeat` (`destructiveKeyAction(for:)`): a test of the table can't see a call site that passes the wrong ones. Bugs in key routing have mostly been ordering mistakes, like a branch sitting after a `guard plain` it needed to come before, and a pure function is the only place a test can see the order. For row behaviour on `PanelNav`, drive the real entry points (`cycleForward`, `cycleBackward`, `activate`) rather than only reading the predicate behind them.
 
 ### Known exceptions
 

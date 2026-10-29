@@ -1595,29 +1595,47 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     }
 
     @objc private func panelDidResignKey(_ notification: Notification) {
+        switch Self.resignKeyOutcome(mode: nav.mode, compactMode: nav.compactMode,
+                                     pinned: nav.panelPinned, compactExpanded: nav.compactExpanded) {
+        case .stay:
+            return
+        case .collapse:
+            // Apply layout synchronously so the panel actually shrinks before
+            // SwiftUI re-evaluates body (otherwise the new CompactView renders
+            // at the still-large size).
+            nav.compactExpanded = false
+            applyCompactLayout()
+        case .hide:
+            guard panel.isVisible else { return }
+            hidePanel()
+        }
+    }
+
+    enum ResignKeyOutcome: Equatable {
+        case stay
+        case collapse
+        case hide
+    }
+
+    // What the panel does when something else takes focus.
+    static func resignKeyOutcome(mode: PanelMode, compactMode: Bool, pinned: Bool,
+                                 compactExpanded: Bool) -> ResignKeyOutcome {
         // Every action on the Permissions page sends focus elsewhere: a grant
         // prompt, System Settings. Hiding or collapsing then would make you
         // summon the panel back after each grant. First, so the widget's
         // collapse below doesn't get there before it.
-        if nav.mode == .permissions { return }
+        if mode == .permissions { return .stay }
         // Compact mode: don't hide on focus loss — the widget is meant to
         // stay visible. Collapse back from "expanded" if the user clicked
-        // away while in the full-panel render. Apply layout synchronously
-        // so the panel actually shrinks before SwiftUI re-evaluates body
-        // (otherwise the new CompactView renders at the still-large size).
-        if nav.compactMode {
+        // away while in the full-panel render.
+        if compactMode {
             // Pin panel + Widget: Pin wins. Stay full-size on focus loss;
             // the widget collapse still happens via Esc / hotkey / explicit
             // user gestures, but auto-collapse on focus loss is suppressed.
-            if nav.panelPinned { return }
-            if nav.compactExpanded {
-                nav.compactExpanded = false
-                applyCompactLayout()
-            }
-            return
+            if pinned { return .stay }
+            return compactExpanded ? .collapse : .stay
         }
-        guard !nav.panelPinned, panel.isVisible else { return }
-        hidePanel()
+        return pinned ? .stay : .hide
     }
 
     // MARK: - Compact widget layout
@@ -1763,8 +1781,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private var compactMovedSinceMouseDown = false
     private var compactMouseEventMonitor: Any?
     private var firstResponderObservation: NSKeyValueObservation?
-    // The key (⌫ or Esc) that just cancelled a field; see panelHandlesGlobalKey.
-    private var swallowingRepeatsOf: UInt16?
+    private var globalKeys = GlobalKeyRouter()
 
     private func snapCompactToNearestCorner() {
         guard nav.compactMode, !nav.compactExpanded else { return }
@@ -3801,26 +3818,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // navigation): Esc cancels a text field or, outside one, hides the panel,
     // ⌘←/→ step through the tabs, and ⌫ in an empty text field cancels it too.
     func panelHandlesGlobalKey(_ event: NSEvent, fieldEditor: NSTextView?) -> Bool {
-        let mods = event.modifierFlags.intersection([.command, .control, .option, .shift])
         let recording = nav.recordingHotkey || nav.recordingSpeakHotkey
-        // The ⌫ or Esc that cancelled a field may still be held. Once the field
-        // lets go, a repeat of Esc would hide the panel and a repeat of ⌫ would
-        // reach the page's own ⌫, so they're swallowed until a fresh press.
-        let gate = Self.repeatGate(keyCode: event.keyCode, isRepeat: event.isARepeat,
-                                   armed: swallowingRepeatsOf)
-        swallowingRepeatsOf = gate.armed
-        if gate.swallow { return true }
-        let action = Self.globalKeyAction(keyCode: event.keyCode, modifiers: mods,
-                                          recording: recording,
-                                          inEmptyField: fieldEditor?.string.isEmpty,
-                                          isRepeat: event.isARepeat)
-        // An input method composing text owns Esc and ⌫ until it commits.
-        // ⌘←/→ still switch tabs.
-        if fieldEditor?.hasMarkedText() == true, action != nil {
-            if case .stepTab = action {} else { return false }
-        }
-
-        switch action {
+        switch globalKeys.route(event, recording: recording, fieldEditor: fieldEditor) {
+        case .swallowRepeat:
+            return true
         case .hide:
             hidePanel()
         case .stepTab(let delta):
@@ -3830,7 +3831,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             else { return false }
             if target != nav.mode { nav.mode = target }
         case .cancelField:
-            swallowingRepeatsOf = event.keyCode
             cancelField()
         case nil:
             return false
@@ -3838,9 +3838,44 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         return true
     }
 
-    // Whether to swallow a key held over from a cancel, and what stays armed.
-    // Only a repeat of the very key that cancelled is eaten; any fresh press,
-    // of that key or another, disarms.
+    // The keys panelHandlesGlobalKey owns, plus the one thing they remember:
+    // which key is still held from a press that ended something. Held so the
+    // decisions and the state they leave behind are tested together, not just
+    // the tables underneath.
+    struct GlobalKeyRouter {
+        private(set) var swallowingRepeatsOf: UInt16?
+
+        mutating func route(_ event: NSEvent, recording: Bool,
+                            fieldEditor: NSTextView?) -> GlobalKeyAction? {
+            let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+            // The ⌫ or Esc that cancelled a field, or the combo a recording just
+            // took, may still be held. Once the field or the recording lets go,
+            // a repeat would reach the page: Esc would hide the panel, ⌫ would
+            // reach the page's own ⌫. So they're swallowed until a fresh press.
+            let gate = PanelController.repeatGate(keyCode: event.keyCode, isRepeat: event.isARepeat,
+                                                  armed: swallowingRepeatsOf)
+            swallowingRepeatsOf = gate.armed
+            if gate.swallow { return .swallowRepeat }
+            let action = PanelController.globalKeyAction(keyCode: event.keyCode, modifiers: modifiers,
+                                                         recording: recording,
+                                                         inEmptyField: fieldEditor?.string.isEmpty,
+                                                         isRepeat: event.isARepeat)
+            // An input method composing text owns Esc and ⌫ until it commits.
+            // ⌘←/→ still switch tabs.
+            if fieldEditor?.hasMarkedText() == true, action != nil {
+                if case .stepTab = action {} else { return nil }
+            }
+            // A combo the recorder is about to take ends the recording, after
+            // which a held ⌘Esc would read as Esc and hide the panel.
+            let recorderTakesIt = recording && action == nil && !modifiers.isEmpty
+            if action == .cancelField || recorderTakesIt { swallowingRepeatsOf = event.keyCode }
+            return action
+        }
+    }
+
+    // Whether to swallow a key held over from a cancel or a recording, and
+    // what stays armed. Only a repeat of the very key that armed it is eaten;
+    // any fresh press, of that key or another, disarms.
     static func repeatGate(keyCode: UInt16, isRepeat: Bool,
                            armed: UInt16?) -> (swallow: Bool, armed: UInt16?) {
         guard isRepeat else { return (false, nil) }
@@ -3852,7 +3887,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         case ignoreRepeat
     }
 
-    // Killing a session and removing a phrase: ⌘⌫ or ⌘⌦, never a bare ⌫ (also
+    // Killing a session, removing a phrase or an extension: ⌘⌫ or ⌘⌦, never a bare ⌫ (also
     // the key that empties and cancels a text field, so one press too many
     // would act) and never a repeat (the selection moves on after each, so a
     // held key would take out the next one too). nil for every other key.
@@ -3862,6 +3897,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
               keyCode == KeyCode.delete || keyCode == KeyCode.forwardDelete
         else { return nil }
         return isRepeat ? .ignoreRepeat : .act
+    }
+
+    // What the pages call, so the modifier masking and the repeat flag can't be
+    // got wrong at each call site. ⌦ arrives with .function set, caps lock
+    // with .capsLock; neither counts.
+    static func destructiveKeyAction(for event: NSEvent) -> DestructiveKeyAction? {
+        destructiveKeyAction(keyCode: event.keyCode,
+                             modifiers: event.modifierFlags.intersection([.command, .control, .option, .shift]),
+                             isRepeat: event.isARepeat)
     }
 
     // The tab ⌘←/→ lands on. A sub-page steps from the tab it belongs to, so
@@ -3877,15 +3921,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     }
 
     enum GlobalKeyAction: Equatable {
+        // A repeat of a key that already ended something; see GlobalKeyRouter.
+        case swallowRepeat
         case hide
         case stepTab(Int)
         case cancelField
     }
 
     // Pure so the table is testable. `inEmptyField` is nil when no text field
-    // has focus. ⌘←/→ are left alone while recording a hotkey, so either can
-    // still be recorded as one. ⌫ cancels only on a fresh press: holding it to
-    // clear a field stops at empty rather than running on out of the field.
+    // has focus. While recording a hotkey, ⌘←/→ go to the recorder like any
+    // other combo. It can't bind an arrow, so they do nothing there; stepping
+    // tab instead would leave the recording running on a page you can't see.
+    // ⌫ cancels only on a fresh press: holding it to clear a field stops at
+    // empty rather than running on out of the field.
     static func globalKeyAction(keyCode: UInt16,
                                 modifiers: NSEvent.ModifierFlags,
                                 recording: Bool,
@@ -3951,8 +3999,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // While recording a hotkey, capture the next combo. Arrow keys / Tab
         // bail out gracefully — otherwise users who entered record mode by
         // mistake would be stuck on row 0 with all their keypresses swallowed.
-        // Esc never reaches here: panelHandlesGlobalKey cancels the recording,
-        // as it cancels a text field.
+        // A bare Esc never reaches here: panelHandlesGlobalKey cancels the
+        // recording, as it cancels a text field. Esc with a modifier does, to
+        // be recorded.
         if nav.recordingHotkey || nav.recordingSpeakHotkey {
             let recordingSpeak = nav.recordingSpeakHotkey
             let plainNav = mods.intersection([.command, .control, .option, .shift]).isEmpty
@@ -4096,7 +4145,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             }
         }
 
-        // Sessions mode: ↑/↓ select, Enter focus, ⌫/R kill, N rename.
+        // Sessions mode: ↑/↓ select, Enter focus, ⌘⌫ kill, N rename.
         // While the rename TextField is active, every key flows through to
         // SwiftUI; the field handles Enter via .onSubmit, and ⌫ on an empty
         // name cancels (panelHandlesGlobalKey).
@@ -4104,10 +4153,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             if sessions.renamingPID != nil { return false }
             let flags = mods.intersection([.command, .control, .option, .shift])
             // Kill: see destructiveKeyAction. No confirmation, so never R.
-            if let destructive = Self.destructiveKeyAction(keyCode: event.keyCode, modifiers: flags,
-                                                           isRepeat: event.isARepeat) {
-                if destructive == .act { killSelectedSession() }
-                return true
+            switch Self.destructiveKeyAction(for: event) {
+            case .act:          killSelectedSession(); return true
+            case .ignoreRepeat: return true
+            case nil:           break
             }
             let plain = flags.isEmpty
             switch event.keyCode {
@@ -4142,16 +4191,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // reachable only with the mouse or with Tab: ⏎ was advertised in the
         // footer and did nothing at all until something had been clicked.
         if case .extensionConfig = nav.mode {
+            // ⌘⌫ rather than a bare ⌫, which is what the field editor wants,
+            // and deliberately the macOS "move to trash" combination: this is
+            // the one destructive action on the page and it takes no
+            // confirmation.
+            switch Self.destructiveKeyAction(for: event) {
+            case .act:          nav.extensionConfig?.onRemove(); return true
+            case .ignoreRepeat: return true
+            case nil:           break
+            }
             let onlyCommand = mods.intersection([.command, .control, .option, .shift]) == [.command]
             if onlyCommand {
                 switch event.keyCode {
-                // ⌘⌫ rather than a bare ⌫, which is what the field editor
-                // wants, and deliberately the macOS "move to trash"
-                // combination: this is the one destructive action on the page
-                // and it takes no confirmation.
-                case KeyCode.delete, KeyCode.forwardDelete:
-                    nav.extensionConfig?.onRemove()
-                    return true
                 // The only Save at all on a page where ⏎ has handed focus back.
                 //
                 // Level one only, verified in the app rather than assumed: a
@@ -4301,10 +4352,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // rather than ⌫ because ⌫ is also what empties and cancels that field.
         if nav.mode == .phrases {
             let flags = mods.intersection([.command, .control, .option, .shift])
-            if let destructive = Self.destructiveKeyAction(keyCode: event.keyCode, modifiers: flags,
-                                                           isRepeat: event.isARepeat) {
+            if let destructive = Self.destructiveKeyAction(for: event) {
                 guard let row = phrases.selectedRow, !row.isDefault else { return false }
-                if destructive == .act { phrases.removeSelected() }
+                switch destructive {
+                case .act:          phrases.removeSelected()
+                case .ignoreRepeat: break
+                }
                 return true
             }
             guard flags.isEmpty else { return false }

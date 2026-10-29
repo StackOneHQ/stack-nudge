@@ -20,8 +20,8 @@ final class GlobalKeyActionTests: XCTestCase {
     }
 
     // Holding ⌫ to clear a field stops at empty. A repeat that cancelled
-    // would hand the rest of the held key to the page, and on Sessions the
-    // page's ⌫ kills the selected agent.
+    // would hand the rest of the held key to the page, which has its own ⌫
+    // (dismiss on Events).
     func test_heldDeleteDoesNotCancel() {
         XCTAssertNil(action(51, inEmptyField: true, isRepeat: true))
     }
