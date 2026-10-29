@@ -122,7 +122,7 @@ fi
 # panel/main.swift owns the app entry point, and the generated runner owns @main
 # here, so it is excluded. build.sh compiles it as part of the real build.
 sources=()
-for source in panel/*.swift shared/*.swift; do
+for source in panel/*.swift panel/Companion/*.swift shared/*.swift; do
   [[ "$source" == "panel/main.swift" ]] && continue
   sources+=("$source")
 done
