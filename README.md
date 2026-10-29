@@ -300,7 +300,7 @@ Independent of quota: stack-nudge can also fire a banner when an individual Clau
 
 #### Settings tab
 
-Reachable from the tab strip or `Cmd+5`. Keyboard-driven rows for hotkey, behavior toggles (banner, mute when focused, a Mute/Resume action row with mute duration, unanswered-prompt reminder interval, stalled-session threshold, pin panel, launch at login), widget (snap-to-corners toggle, corner, mascot picker, opacity), sound picks (with preview-on-cycle), voice notifications + picker + speed (with preview-on-cycle using a random conversational phrase), usage config (quota tracking + alerts + threshold + poll frequency + context alert threshold + show-remaining), event history (recording toggle + clear), Slack (paste setup, detected user, test message, notifications toggle, idle threshold, message detail, finished-turn toggle), and action rows (edit phrases, check permissions, open config file, view release notes, check for updates, uninstall, quit).
+Reachable from the tab strip or `Cmd+5`. Keyboard-driven rows for hotkey, behavior toggles (banner, mute when focused, a Mute/Resume action row with mute duration, unanswered-prompt reminder interval, stalled-session threshold, pin panel, launch at login), widget (snap-to-corners toggle, corner, mascot picker, opacity), companion (on/off, size), sound picks (with preview-on-cycle), voice notifications + picker + speed (with preview-on-cycle using a random conversational phrase), usage config (quota tracking + alerts + threshold + poll frequency + context alert threshold + show-remaining), event history (recording toggle + clear), Slack (paste setup, detected user, test message, notifications toggle, idle threshold, message detail, finished-turn toggle), and action rows (edit phrases, check permissions, open config file, view release notes, check for updates, uninstall, quit).
 
 | Key | Action |
 |-----|--------|
@@ -352,6 +352,23 @@ grep -c stack-nudge-version ~/.stack-nudge/notify.sh   # 0 means the script pred
 ./install.sh                                            # or reinstall from the app
 ```
 
+### Companion (macOS)
+
+The companion is a small animated character that floats on your desktop and takes the pill widget's place while it is on. New installs start with it; on an existing install you are offered it once after an update, or you can turn it on in **Settings → Companion** (`STACKNUDGE_COMPANION=true`). Turning it off brings the pill back with the settings you had.
+
+- **Click** the character to open the panel beside it. The hotkey opens it there too.
+- **Drag** it anywhere; it stays where you drop it, and comes back on screen if a display it was on goes away.
+- **Right-click** for the menu, including a **Companion** submenu with its size.
+
+Its pose follows what stack-nudge knows: thinking while an agent is busy, watching while agent sessions are live, waiting when an event or a permission prompt is queued, alert when a quota is past your alert threshold, muted while notifications are muted, and asleep after five quiet minutes. It animates on the render server and pauses while it is covered, the display sleeps or the screen is locked, so it stays near 0% CPU. With Reduce Motion on, it holds still.
+
+| Setting | Key | Values |
+|---------|-----|--------|
+| Companion | `STACKNUDGE_COMPANION` | `true` / `false` |
+| Size | `STACKNUDGE_COMPANION_SIZE` | `small`, `medium` (default), `large` |
+
+In Settings → Companion, `Space` or `⏎` flips Companion, and on Size starts picking, as on every other value row. The character's last spot is kept in `STACKNUDGE_COMPANION_POS`.
+
 ### Menu bar (macOS)
 
 When the panel daemon is running, a bell icon appears in your menu bar. The same items you can reach from the in-panel Settings tab are mirrored here for one-click access without summoning the panel:
@@ -362,6 +379,7 @@ When the panel daemon is running, a bell icon appears in your menu bar. The same
 | `Show banners` | Toggles macOS banner notifications. Enabling fires a confirmation banner. |
 | `Voice notifications` | Toggles spoken notifications. Enabling speaks *"Voice notifications enabled"*. |
 | `Mute notifications ▸` | Submenu (For 15m / 30m / 1h / 2h) to silence all nudges for a set time. While muted the item becomes `Resume notifications` and the menu-bar icon shows a `bell.slash` + countdown. |
+| `Companion ▸` | While the companion is on: its size |
 | `Show panel` | Brings the floating panel up (handy when no events are queued) |
 | `Settings…` (⌘,) | Opens the panel straight on Settings |
 | `Check permissions…` | Opens the Permissions page in the panel (see below) |
@@ -515,6 +533,7 @@ make test-notify # drive notify.sh against a fake panel socket (macOS, no Xcode)
 Source layout:
 
 - `panel/` — the single persistent `stack-nudge.app` binary: hotkey, floating NSPanel, socket listener for incoming events, macOS banner posting via `UNUserNotificationCenter`, sessions list, settings and its Permissions page, auto-updater, quota probe
+- `panel/Companion/`: the companion character and its skin engine. The art is baked PNG parts and a manifest per skin, committed under `assets/skins/` and copied into the app bundle by `build.sh`; building the app needs no extra tooling.
 - `shared/` — code shared with the standalone Linux/Windows surfaces (currently `AppActivator.swift`)
 - `phrases/` — per-language voice phrase pools sourced by `notify.sh` at hook time
 - `notify.sh` — the shell entry-point CC/Cursor/Gemini hooks invoke; on macOS posts events to the running app via Unix-domain socket, on Linux/Windows handles audio + libnotify directly
