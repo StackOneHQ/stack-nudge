@@ -57,6 +57,18 @@
 # Default: cyan
 #STACKNUDGE_THEME=violet
 
+# The companion: a floating character that takes the pill widget's place while
+# it is on. Click it to open the panel beside it, drag it anywhere, right-click
+# for its menu. Also settable in Settings → Companion. Set here, uncommented,
+# so new installs start with it; an install whose config predates it keeps the
+# pill until it is turned on.
+# Default when unset: false
+STACKNUDGE_COMPANION=true
+
+# Character size: small, medium or large.
+# Default: medium
+#STACKNUDGE_COMPANION_SIZE=large
+
 # Use the terminal tab's title as the session name when nothing stronger is set
 # (a rename in the Sessions pane, or a name set inside the agent, both still
 # win). Off by default: a tab title is whatever the program in the pane wrote,
