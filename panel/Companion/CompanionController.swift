@@ -89,6 +89,9 @@ final class CompanionController {
 
     private var quietSince = Date()
 
+    // A hovered skin shows over the saved one until the pointer leaves.
+    private var displayedSkinID: String { nav.companionPreviewSkin ?? nav.companionSkin }
+
     private func refreshModel(now: Date = Date()) {
         guard nav.companionEnabled else { return }
         let waiting = store.events.filter { ($0.snoozedUntil ?? .distantPast) <= now }
@@ -113,6 +116,7 @@ final class CompanionController {
         let badge = nav.companionBadge ? waiting.count : 0
         if model.badgeCount != badge { model.badgeCount = badge }
         if model.badgeMuted != nav.isMuted { model.badgeMuted = nav.isMuted }
+        if model.skinID != displayedSkinID { model.skinID = displayedSkinID }
         if model.size != nav.companionSize { model.size = nav.companionSize }
     }
 

@@ -786,6 +786,7 @@ struct SettingsView: View {
         // Companion
         case .companionTurnOn: row(.companionTurnOn, label: "Turn on companion", kind: .action, value: "")
         case .companionSize: row(.companionSize, label: "Size", kind: .cycle, value: nav.companionSize.label, enabled: nav.companionEnabled)
+        case .companionSkin: row(.companionSkin, label: "Character", kind: .cycle, value: CompanionSkins.skin(id: nav.companionSkin).fullName, enabled: nav.companionEnabled)
         case .companionBadge: row(.companionBadge, label: "Count badge", kind: .toggle, value: nav.companionBadge ? "On" : "Off", enabled: nav.companionEnabled)
         case .companionPreviewPose: row(.companionPreviewPose, label: "Preview pose", kind: .cycle, value: nav.companionPreviewPose?.label ?? "Live", enabled: nav.companionEnabled)
         case .companionResetPosition: row(.companionResetPosition, label: "Reset position", kind: .action, value: "", enabled: nav.companionEnabled)
@@ -1003,6 +1004,7 @@ struct SettingsView: View {
                             extensionPageHeader(id)
                         }
                         detailRows
+                        if nav.settingsCategory == .companion { CompanionSkinGrid(nav: nav) }
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 12)
