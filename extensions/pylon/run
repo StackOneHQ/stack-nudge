@@ -68,9 +68,14 @@ SNAPSHOT_FIELDS = ("id", "number", "title", "link", "state", "source", "account"
 BASES = ("https://api.usepylon.com", "https://api.eu.usepylon.com")
 
 # One budget across every hop, enforced here rather than by the socket — see
-# the derby extension for why urlopen's timeout is not a total one.
-TOTAL_BUDGET = 9
-MAX_PER_REQUEST = 6
+# the derby extension for why urlopen's timeout is not a total one. The
+# deadline is checked before each blocking read, and each read can block for up
+# to MAX_PER_REQUEST, so the worst case is the sum of the two. That sum is kept
+# under the host's 12-second kill, which would otherwise end a slow run before
+# it saved its state.
+TOTAL_BUDGET = 8
+MAX_PER_REQUEST = 3
+HOST_TIMEOUT = 12
 READ_CHUNK = 65536
 # Every issue carries its full body, so a page of them is not small.
 MAX_BODY_BYTES = 6 * 1024 * 1024
@@ -597,6 +602,14 @@ def load_users(api, state, now_ts):
         return cached.get("by_id") or {}
     try:
         payload = api.call("GET", "/users")
+    except Transient:
+        # A slow or rate-limited refresh keeps the last list, which is at worst
+        # a day old. With no list at all the sync waits for the next run:
+        # Pylon gives account owners as a bare id, so without users nothing
+        # resolves as "yours" and every owner's reminders would quietly stop.
+        if isinstance(cached, dict) and cached.get("by_id"):
+            return cached["by_id"]
+        raise
     except (urllib.error.HTTPError, Unauthorised):
         return {}
     by_id = {}

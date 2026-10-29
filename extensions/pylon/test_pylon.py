@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Tests for the Pylon extension.
 
-Run them with `python3 -m unittest discover extensions`, which is what CI does.
+Run them with `./scripts/test-extensions.sh` (or `make test-extensions`), which
+is what CI does. A bare `python3 -m unittest discover extensions` finds nothing:
+the extension directories aren't packages.
 
 Everything here is offline. Pylon is a fake that answers by route, and the two
 seams that reach outside the process — the banner and the browser — are
@@ -653,6 +655,27 @@ class EndToEnd(unittest.TestCase):
         for raw, minutes in (("", 3), ("abc", 3), ("2.5", 3), ("0", 1), ("999", 60), (" 7 ", 7)):
             with mock.patch.dict(os.environ, {pylon.SYNC_KEY: raw}, clear=True):
                 self.assertEqual(pylon.sync_minutes(), minutes, raw)
+
+    def test_a_failed_user_refresh_keeps_the_last_list(self):
+        routes = workspace()
+        fake = _FakePylon(routes)
+        self.run_once(fake)
+        routes[("GET", "/users")] = http_error(503)
+        with mock.patch.object(pylon, "USERS_TTL", 0):
+            status, doc = self.run_once(fake, argv=["--action", "refresh"])
+        self.assertEqual(status, 0)
+        self.assertNotIn("sync failed", doc["header"]["title"])
+        footnotes = {r["id"]: r["footnote"] for r in doc["rows"]}
+        self.assertTrue(footnotes["issue-1"].startswith("yours"))
+
+    def test_with_no_user_list_at_all_the_sync_waits_rather_than_guess(self):
+        routes = workspace()
+        routes[("GET", "/users")] = http_error(503)
+        status, doc = self.run_once(_FakePylon(routes))
+        self.assertEqual((status, doc), (1, None))
+
+    def test_a_blocked_read_cannot_outlast_the_host(self):
+        self.assertLess(pylon.TOTAL_BUDGET + pylon.MAX_PER_REQUEST, pylon.HOST_TIMEOUT)
 
     def test_a_new_token_forgets_what_the_old_one_learned(self):
         fake = _FakePylon(workspace())
