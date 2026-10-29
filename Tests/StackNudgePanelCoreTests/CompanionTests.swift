@@ -20,6 +20,13 @@ final class CompanionModeTests: XCTestCase {
 
     // Each signal must win over everything below it; a reordering of the ifs
     // would otherwise only show up as the wrong pose on someone's desktop.
+    // A preview shows over everything, mute included.
+    func testAPreviewOutranksEverything() {
+        let s = CompanionSignals(preview: .sleeping, muted: true, permissionWaiting: true, quotaStressed: true,
+                                 eventWaiting: true, sessionBusy: true, sessionsLive: true)
+        XCTAssertEqual(CompanionMode.mode(for: s), .sleeping)
+    }
+
     func testPriorityOrder() {
         var s = CompanionSignals(muted: true, permissionWaiting: true, quotaStressed: true,
                                  eventWaiting: true, sessionBusy: true, sessionsLive: true)
@@ -138,7 +145,8 @@ final class CompanionSettingsTests: XCTestCase {
 
     func testCompanionRowsLiveInTheirOwnCategory() {
         let nav = PanelNav()
-        XCTAssertEqual(nav.rows(in: .companion), [.companion, .companionSize])
+        XCTAssertEqual(nav.rows(in: .companion),
+                       [.companion, .companionBadge, .companionSize, .companionPreviewPose, .companionResetPosition])
         XCTAssertFalse(nav.rows(in: .appearance).contains(.companion),
                        "the companion is not one of the widget's settings")
     }
@@ -155,5 +163,14 @@ final class CompanionSettingsTests: XCTestCase {
         nav.companionOffered = false
         nav.companionEnabled = true
         XCTAssertFalse(nav.showCompanionOffer)
+    }
+}
+
+final class CompanionBadgeTests: XCTestCase {
+
+    func testCountsReadAsAnAppIconBadgeDoes() {
+        XCTAssertEqual(CompanionCountBadge.text(1), "1")
+        XCTAssertEqual(CompanionCountBadge.text(99), "99")
+        XCTAssertEqual(CompanionCountBadge.text(100), "99+")
     }
 }
