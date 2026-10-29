@@ -102,7 +102,6 @@ final class CompanionController {
             quotaStressed: nav.widgetQuota.peakUtilization >= Double(nav.quotaAlertThreshold),
             eventWaiting: !waiting.isEmpty,
             sessionBusy: live.contains { $0.liveStatus == "busy" },
-            sessionsLive: !live.isEmpty,
             quietFor: now.timeIntervalSince(quietSince))
         let mode = CompanionMode.mode(for: signals)
         judgeNod(before: model.mode, signals: &signals, waiting: waiting, now: now)

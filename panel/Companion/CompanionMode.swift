@@ -11,7 +11,6 @@ struct CompanionSignals: Equatable {
     var quotaStressed = false
     var eventWaiting = false
     var sessionBusy = false
-    var sessionsLive = false
     // Seconds since there was last anything to show; drives the nap.
     var quietFor: TimeInterval = 0
 }
@@ -30,7 +29,8 @@ enum CompanionMode {
         if s.quotaStressed { return .alert }
         if s.permissionWaiting || s.eventWaiting { return .pending }
         if s.sessionBusy { return .thinking }
-        if s.sessionsLive { return .polling }
+        // Live but idle sessions leave the character idle; they only keep it
+        // from napping (CompanionController resets the quiet clock for them).
         return s.quietFor >= sleepAfter ? .sleeping : .idle
     }
 }
