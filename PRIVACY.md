@@ -32,7 +32,7 @@ StackNudge identifier, because there isn't one.
   as you against your own GitHub account.
 
   An installed extension is a separate program that stack-nudge runs, and
-  **whatever network calls it makes are its own**. Two ship with the app:
+  **whatever network calls it makes are its own**. Three ship with the app:
 
   - `system` — CPU, memory and disk. Makes no network calls.
   - `derby` — the Token Derby, a shared horse race scored on tokens produced.
@@ -43,6 +43,16 @@ StackNudge identifier, because there isn't one.
     overridable in Settings and must be `https`. It is read-only: what leaves
     your machine is the organisation name you typed, your IP address and a
     `stack-nudge` user agent. Nothing about your sessions or usage is sent.
+  - `pylon` — customer issues in your Pylon workspace that are waiting on a
+    response. Off until you set a Pylon API token. When set, it asks
+    `api.usepylon.com` (or `api.eu.usepylon.com`) for changes every 3 minutes
+    by default (1 to 60, in its settings), including while the tab is hidden,
+    so it can post a banner before a first-response SLA runs out. It is read-only: it sends the token, your IP address and a
+    `stack-nudge` user agent, and reads issues, their messages, accounts and
+    users. Issue titles, account names and the first line of each issue's
+    latest message are kept on screen and in banners, and a cache of account
+    names, owners, issue links and those message previews is kept in the
+    extension's own directory. Nothing about your sessions or usage is sent.
 - **Voice** (`STACKNUDGE_VOICE`). Downloading a voice model runs `stackvox` in
   the bundled Python environment, which fetches the model over the network.
   That download is the only part that leaves your machine: synthesis runs
