@@ -60,11 +60,31 @@ enum GitHubAuth {
         return token
     }
 
-    static func store(token: String) {
+    // The Keychain's status, so a failed save is reported instead of the panel
+    // claiming a sign-in that left no token behind (a rebuilt app with a new
+    // signature can be refused an item an older build created).
+    @discardableResult
+    static func store(token: String) -> OSStatus {
         SecItemDelete(baseQuery(returningData: false) as CFDictionary)  // replace any existing
         var add = baseQuery(returningData: false)
         add[kSecValueData as String] = Data(token.utf8)
-        SecItemAdd(add as CFDictionary, nil)
+        let status = SecItemAdd(add as CFDictionary, nil)
+        if status != errSecSuccess {
+            FileHandle.standardError.write(Data("stack-nudge: saving the GitHub token failed (OSStatus \(status))\n".utf8))
+        }
+        return status
+    }
+
+    // nil when the token was saved and reads back as written; otherwise what
+    // to tell the user. Sign-in counts as done only on nil.
+    static func saveFailure(status: OSStatus, expected: String, readBack: String?) -> String? {
+        guard status == errSecSuccess else {
+            return "Couldn't save the token to the Keychain (OSStatus \(status)). Try again."
+        }
+        guard readBack == expected else {
+            return "Couldn't read the token back from the Keychain. Try again."
+        }
+        return nil
     }
 
     static func clearToken() {

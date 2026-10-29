@@ -344,6 +344,8 @@ Opt-in GitHub linking adds real **PR + CI status** (so even squash-merged work r
 | `STACKNUDGE_TICKET_URL` | Deep-link template for ticket rows, e.g. `https://linear.app/acme/issue/{key}`; `{key}` is replaced with the ticket |
 | `STACKNUDGE_HIDE_SHIPPED` | `true` to drop groups once their PR reads merged, keeping the list on in-flight work |
 
+The sign-in finishes only once the token is saved to the Keychain and reads back. If the Keychain refuses the write, the sign-in card says so (with the `OSStatus`) instead of showing you as signed in, and `~/.stack-nudge/app.log` gets a line.
+
 **Nothing showing up?** A session is recorded when an agent's turn ends *inside a git repo*, and only if the hook payload carries a session id. The Tickets empty state names which of those failed; `~/.stack-nudge/app.log` has a line per dropped turn. The usual cause is an installed hook script older than the app, since updates swap the `.app` alone: the app repairs that on launch, and Settings warns in the footer if the rewrite couldn't be applied. To fix it by hand:
 
 ```bash

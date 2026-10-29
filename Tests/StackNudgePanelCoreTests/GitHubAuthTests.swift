@@ -57,4 +57,19 @@ final class GitHubAuthTests: XCTestCase {
     func test_parsePoll_garbage_isFailed() {
         XCTAssertEqual(GitHubAuth.parsePoll(Data("???".utf8)), .failed("bad json"))
     }
+
+    func test_saveFailure_nilOnlyWhenSavedAndReadBack() {
+        XCTAssertNil(GitHubAuth.saveFailure(status: errSecSuccess, expected: "t", readBack: "t"))
+    }
+
+    func test_saveFailure_refusedWriteIsReportedWithItsStatus() {
+        let message = GitHubAuth.saveFailure(status: errSecAuthFailed, expected: "t", readBack: nil)
+        XCTAssertEqual(message?.contains("OSStatus \(errSecAuthFailed)"), true)
+    }
+
+    // A success status with nothing (or something else) behind it is not a sign-in.
+    func test_saveFailure_missingOrDifferentReadBackFails() {
+        XCTAssertNotNil(GitHubAuth.saveFailure(status: errSecSuccess, expected: "t", readBack: nil))
+        XCTAssertNotNil(GitHubAuth.saveFailure(status: errSecSuccess, expected: "t", readBack: "old"))
+    }
 }
