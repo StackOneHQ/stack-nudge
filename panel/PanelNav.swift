@@ -169,6 +169,7 @@ enum SettingsRow: Hashable {
     case banner, muteWhenFocused, mute, muteDuration, remindUnanswered, stalledSessions,
          tabTitleNames, pinPanel, keepOpenWhenEmpty, launchAtLogin
     case widget, snapToCorners, widgetCorner, widgetOpacity, widgetContent, mascot, theme
+    case companion, companionSize
     case eventHistory, clearHistory
     case slackPaste, slackIdentity, slackTest
     case slackEnabled, slackIdle, slackDetail, slackStop
@@ -209,6 +210,7 @@ extension SettingsRow: CaseIterable {
         .stalledSessions, .tabTitleNames, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin,
         .widget, .snapToCorners, .widgetCorner, .widgetOpacity, .widgetContent,
         .mascot, .theme,
+        .companion, .companionSize,
         .eventHistory, .clearHistory,
         .slackPaste, .slackIdentity, .slackTest,
         .slackEnabled, .slackIdle, .slackDetail, .slackStop,
@@ -1181,7 +1183,11 @@ final class PanelNav: ObservableObject {
     // panel is ordered out rather than torn down, so its view tree survives
     // hiding and onAppear never fires again — a real code path with real users
     // that "always-on" invites you to treat as dead.
+    // Whether the panel runs as the pill. It follows widgetPreferred, the
+    // Widget setting, except while the companion is on: the companion takes
+    // the pill's place, and the user's choice comes back when it is turned off.
     @Published var compactMode:   Bool = true
+    @Published var widgetPreferred = true
     @Published var compactCorner: CompactCorner = .topRight
     // When true (default), releasing a drag snaps the pill to the nearest
     // screen corner (STACKNUDGE_COMPACT_CORNER is the source of truth). When
@@ -1195,6 +1201,9 @@ final class PanelNav: ObservableObject {
     @Published private(set) var compactFreeOrigin: CGPoint?
     @Published var compactContent: CompactContent = .sessions
     @Published var mascot:        MascotKind = .robot
+    // The floating companion character, independent of the pill above.
+    @Published var companionEnabled = false
+    @Published var companionSize: CompanionSize = .medium
     @Published var theme:         AccentTheme = .cyan
     // Pill window alpha when at rest. 1.0 = fully opaque; lower values
     // let the desktop show through so the widget recedes. Applied
@@ -1325,6 +1334,8 @@ final class PanelNav: ObservableObject {
         case .appearance:
             return [.widget, .snapToCorners, .widgetCorner, .widgetOpacity,
                     .widgetContent, .mascot, .theme]
+        case .companion:
+            return [.companion, .companionSize]
         case .usage:
             return [.quotaTracking, .quotaAlerts, .alertThreshold,
                     .pollFrequency, .contextAlert, .showRemaining,
@@ -1515,7 +1526,7 @@ final class PanelNav: ObservableObject {
         remindMinutes = AttentionPolicy.reminderMinuteOptions.min(by: { abs($0 - rawRemind) < abs($1 - rawRemind) }) ?? 2
         let rawStalled = Int(config["STACKNUDGE_STALLED_MIN"] ?? "") ?? 0
         stalledMinutes = AttentionPolicy.stalledMinuteOptions.min(by: { abs($0 - rawStalled) < abs($1 - rawStalled) }) ?? 0
-        compactMode   = ConfigFile.bool(config, "STACKNUDGE_COMPACT_MODE", default: true)
+        widgetPreferred = ConfigFile.bool(config, "STACKNUDGE_COMPACT_MODE", default: true)
         compactCorner = CompactCorner(rawValue: config["STACKNUDGE_COMPACT_CORNER"] ?? "")
             ?? .topRight
         compactSnap   = ConfigFile.bool(config, "STACKNUDGE_COMPACT_SNAP", default: true)
@@ -1524,6 +1535,9 @@ final class PanelNav: ObservableObject {
             ?? .sessions
         mascot        = MascotKind(rawValue: config["STACKNUDGE_MASCOT"] ?? "") ?? .robot
         theme         = AccentTheme(rawValue: config["STACKNUDGE_THEME"] ?? "") ?? .cyan
+        companionEnabled = ConfigFile.bool(config, "STACKNUDGE_COMPANION", default: false)
+        companionSize = CompanionSize(rawValue: config["STACKNUDGE_COMPANION_SIZE"] ?? "") ?? .medium
+        compactMode   = widgetPreferred && !companionEnabled
         let rawAlpha = Double(config["STACKNUDGE_COMPACT_ALPHA"] ?? "") ?? 1.0
         compactAlpha = Self.compactAlphaOptions.min(by: { abs($0 - rawAlpha) < abs($1 - rawAlpha) }) ?? 1.0
         let rawPerSession = Int(config["STACKNUDGE_EVENTS_PER_SESSION"] ?? "") ?? 5
@@ -1821,7 +1835,7 @@ final class PanelNav: ObservableObject {
              .slackPaste, .slackIdentity, .slackTest, .openRepo, .none:
             return false
         case .banner, .muteWhenFocused, .mute, .tabTitleNames, .pinPanel,
-             .keepOpenWhenEmpty, .launchAtLogin, .widget, .snapToCorners,
+             .keepOpenWhenEmpty, .launchAtLogin, .widget, .snapToCorners, .companion,
              .soundEnabled, .voiceEnabled,
              .quotaTracking, .quotaAlerts, .showRemaining,
              .githubLinks, .hideShipped, .eventHistory,
@@ -1830,7 +1844,7 @@ final class PanelNav: ObservableObject {
         case .permissions, .update, .hotkey, .speakHotkey, .downloadVoiceModel:
             return false
         case .muteDuration, .remindUnanswered, .stalledSessions,
-             .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme,
+             .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme, .companionSize,
              .agentDoneSound, .permissionSound,
              .voice, .voiceSpeed,
              .alertThreshold, .pollFrequency,
@@ -1839,6 +1853,21 @@ final class PanelNav: ObservableObject {
              .slackIdle:
             return true
         }
+    }
+
+    // Settings rows and the companion's menu both land here, so each choice is
+    // saved one way. Called with the panel open (Settings), so the panel stays open as the pill expands back or gives way to
+    // the companion.
+    func setCompanionEnabled(_ on: Bool) {
+        companionEnabled = on
+        ConfigFile.write(key: "STACKNUDGE_COMPANION", value: on ? "true" : "false")
+        compactMode = widgetPreferred && !companionEnabled
+        compactExpanded = compactMode
+    }
+
+    func setCompanionSize(_ size: CompanionSize) {
+        companionSize = size
+        ConfigFile.write(key: "STACKNUDGE_COMPANION_SIZE", value: size.rawValue)
     }
 
     // Shared by Settings row 11 and the Usage tab's 'p' keystroke. On
@@ -1954,9 +1983,10 @@ final class PanelNav: ObservableObject {
             // stays open at full size; the pill only appears when the user
             // dismisses. On toggle-off we clear it so the next layout commits
             // the saved full-panel frame cleanly.
-            compactMode.toggle()
+            widgetPreferred.toggle()
             ConfigFile.write(key: "STACKNUDGE_COMPACT_MODE",
-                             value: compactMode ? "true" : "false")
+                             value: widgetPreferred ? "true" : "false")
+            compactMode = widgetPreferred && !companionEnabled
             compactExpanded = compactMode
         case .snapToCorners:
             compactSnap.toggle()
@@ -1986,6 +2016,13 @@ final class PanelNav: ObservableObject {
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
             mascot = list[next]
             ConfigFile.write(key: "STACKNUDGE_MASCOT", value: mascot.rawValue)
+        case .companion:
+            setCompanionEnabled(!companionEnabled)
+        case .companionSize:
+            let list = CompanionSize.allCases
+            let idx = list.firstIndex(of: companionSize) ?? 0
+            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+            setCompanionSize(list[next])
         case .theme:
             let list = AccentTheme.allCases
             let idx = list.firstIndex(of: theme) ?? 0
@@ -2160,7 +2197,7 @@ struct ExtensionTab: Equatable, Identifiable {
 // subjects — "Toggles" held ten rows spanning notifications, panel behaviour and
 // session naming, while "Hotkey" was a category of one.
 enum SettingsCategory: String, CaseIterable {
-    case notifications, voice, appearance, usage, integrations, extensions, panel, events, actions,
+    case notifications, voice, appearance, companion, usage, integrations, extensions, panel, events, actions,
          about
 
     // Kept short: the sidebar is ~120pt.
@@ -2169,6 +2206,7 @@ enum SettingsCategory: String, CaseIterable {
         case .notifications: return "Notifications"
         case .voice:         return "Voice"
         case .appearance:    return "Appearance"
+        case .companion:     return "Companion"
         case .usage:         return "Usage"
         case .integrations:  return "Integrations"
         case .extensions:    return "Extensions"

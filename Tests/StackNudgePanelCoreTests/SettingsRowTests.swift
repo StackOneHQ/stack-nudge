@@ -134,14 +134,14 @@ final class SettingsRowTests: XCTestCase {
         }
 
         // On/off rows flip on Space / Enter only.
-        for row in [SettingsRow.banner, .voiceEnabled, .soundEnabled, .widget,
+        for row in [SettingsRow.banner, .voiceEnabled, .soundEnabled, .widget, .companion,
                     .quotaTracking, .githubLinks, .eventHistory, .pinPanel, .mute] {
             select(row)
             XCTAssertEqual(nav.selectedRow, row)
             XCTAssertFalse(nav.selectedRowIsPicker, "\(row) should ignore arrows")
         }
 
-        for row in [SettingsRow.muteDuration, .theme, .historyPerSession, .agentDoneSound] {
+        for row in [SettingsRow.muteDuration, .theme, .companionSize, .historyPerSession, .agentDoneSound] {
             select(row)
             XCTAssertEqual(nav.selectedRow, row)
             XCTAssertTrue(nav.selectedRowIsPicker, "\(row) should pick")
