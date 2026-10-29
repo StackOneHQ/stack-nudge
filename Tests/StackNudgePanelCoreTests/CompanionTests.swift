@@ -13,9 +13,10 @@ final class CompanionModeTests: XCTestCase {
         XCTAssertEqual(CompanionMode.mode(for: quiet), .sleeping)
     }
 
-    func testSessionsKeepItAwake() {
-        XCTAssertEqual(CompanionMode.mode(for: CompanionSignals(sessionsLive: true, quietFor: 3600)), .polling)
-        XCTAssertEqual(CompanionMode.mode(for: CompanionSignals(sessionBusy: true, sessionsLive: true)), .thinking)
+    // An open session that isn't working leaves the character idle; only a busy one thinks.
+    func testOnlyABusySessionThinks() {
+        XCTAssertEqual(CompanionMode.mode(for: CompanionSignals(quietFor: 0)), .idle)
+        XCTAssertEqual(CompanionMode.mode(for: CompanionSignals(sessionBusy: true)), .thinking)
     }
 
     // Each signal must win over everything below it; a reordering of the ifs
@@ -23,13 +24,13 @@ final class CompanionModeTests: XCTestCase {
     // A preview shows over everything, mute included.
     func testAPreviewOutranksEverything() {
         let s = CompanionSignals(preview: .sleeping, muted: true, permissionWaiting: true, quotaStressed: true,
-                                 eventWaiting: true, sessionBusy: true, sessionsLive: true)
+                                 eventWaiting: true, sessionBusy: true)
         XCTAssertEqual(CompanionMode.mode(for: s), .sleeping)
     }
 
     func testPriorityOrder() {
         var s = CompanionSignals(muted: true, permissionWaiting: true, quotaStressed: true,
-                                 eventWaiting: true, sessionBusy: true, sessionsLive: true)
+                                 eventWaiting: true, sessionBusy: true)
         XCTAssertEqual(CompanionMode.mode(for: s), .muted)
         s.muted = false
         XCTAssertEqual(CompanionMode.mode(for: s), .alert, "quota stress is the alert")
