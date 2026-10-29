@@ -4,6 +4,8 @@ import Foundation
 // mascot reads. Kept as plain values so the mapping below is testable without
 // a running app.
 struct CompanionSignals: Equatable {
+    // A pose forced from Settings or the Option menu; shows over everything.
+    var preview: SkinMode?
     var muted = false
     var permissionWaiting = false
     var quotaStressed = false
@@ -18,10 +20,12 @@ enum CompanionMode {
     // Five quiet minutes before the companion naps.
     static let sleepAfter: TimeInterval = 5 * 60
 
-    // Highest priority first, and mute outranks the activity it is hiding.
+    // Highest priority first: a preview, then mute, which outranks the
+    // activity it is hiding.
     // Alert is for trouble (quota past the threshold); a permission prompt is
     // routine, so it waits like any other event instead of alarming.
     static func mode(for s: CompanionSignals) -> SkinMode {
+        if let preview = s.preview { return preview }
         if s.muted { return .muted }
         if s.quotaStressed { return .alert }
         if s.permissionWaiting || s.eventWaiting { return .pending }

@@ -104,6 +104,26 @@ final class SettingsRowTests: XCTestCase {
         XCTAssertTrue(nav.dismissedAgents.isEmpty)
     }
 
+    func test_resetPositionRow_actsOnActivate() {
+        let nav = PanelNav()
+        var resets = 0
+        nav.actions = SettingsActions(
+            checkPermissions: {}, openConfig: {}, editPhrases: {},
+            browseExtensions: {}, openExtension: { _ in },
+            openReleaseNotes: {}, checkForUpdates: {}, beginUpdate: {}, runUpdate: {},
+            beginUninstall: {}, runUninstall: {}, runBootstrap: {}, quit: {},
+            expandFromCompact: {}, exitCompactMode: {},
+            muteFor: { _ in }, resumeNotifications: {}, resetCompanionPosition: { resets += 1 },
+            applyEventHistorySetting: {}, clearEventHistory: {},
+            pasteSlackSetup: {}, detectSlackUser: {}, sendSlackTest: {})
+        nav.settingsCategory = .companion
+        nav.selectedSettingIndex = nav.index(of: .companionResetPosition)
+        nav.cycleForward()
+        XCTAssertEqual(resets, 0, "arrows must not reset the position")
+        nav.activate()
+        XCTAssertEqual(resets, 1)
+    }
+
     // Only value rows pick; every other row acts on Space / Enter and ignores
     // the arrows.
     func test_selectedRowIsPicker_onlyForValueRows() {
@@ -126,7 +146,7 @@ final class SettingsRowTests: XCTestCase {
 
         for row in [SettingsRow.wireAgents, .dismissAgents, .quit, .editPhrases,
                     .openConfig, .releaseNotes, .checkUpdates, .checkPermissions,
-                    .uninstall, .disconnectGithub, .openRepo, .browseExtensions,
+                    .uninstall, .disconnectGithub, .openRepo, .browseExtensions, .companionResetPosition,
                     .installedExtension("derby"), .permissions, .hotkey] {
             select(row)
             XCTAssertEqual(nav.selectedRow, row)
@@ -134,14 +154,14 @@ final class SettingsRowTests: XCTestCase {
         }
 
         // On/off rows flip on Space / Enter only.
-        for row in [SettingsRow.banner, .voiceEnabled, .soundEnabled, .widget, .companion,
+        for row in [SettingsRow.banner, .voiceEnabled, .soundEnabled, .widget, .companion, .companionBadge,
                     .quotaTracking, .githubLinks, .eventHistory, .pinPanel, .mute] {
             select(row)
             XCTAssertEqual(nav.selectedRow, row)
             XCTAssertFalse(nav.selectedRowIsPicker, "\(row) should ignore arrows")
         }
 
-        for row in [SettingsRow.muteDuration, .theme, .companionSize, .historyPerSession, .agentDoneSound] {
+        for row in [SettingsRow.muteDuration, .theme, .companionSize, .companionPreviewPose, .historyPerSession, .agentDoneSound] {
             select(row)
             XCTAssertEqual(nav.selectedRow, row)
             XCTAssertTrue(nav.selectedRowIsPicker, "\(row) should pick")
@@ -204,7 +224,7 @@ final class SettingsRowTests: XCTestCase {
             openReleaseNotes: {}, checkForUpdates: {}, beginUpdate: {}, runUpdate: {},
             beginUninstall: {}, runUninstall: {}, runBootstrap: {}, quit: {},
             expandFromCompact: {}, exitCompactMode: {},
-            muteFor: { mutes.append($0) }, resumeNotifications: {},
+            muteFor: { mutes.append($0) }, resumeNotifications: {}, resetCompanionPosition: {},
             applyEventHistorySetting: {}, clearEventHistory: {},
             pasteSlackSetup: {}, detectSlackUser: {}, sendSlackTest: {})
         nav.selectedSettingIndex = nav.index(of: .mute)

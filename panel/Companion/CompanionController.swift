@@ -36,7 +36,8 @@ final class CompanionController {
         // Any store change may change the mood. Recomputing is cheap; the model
         // only publishes when the result differs, so the view stays still.
         // objectWillChange fires before the new value lands, hence the hop.
-        Publishers.Merge3(store.objectWillChange, sessions.objectWillChange, nav.objectWillChange)
+        Publishers.Merge4(store.objectWillChange, sessions.objectWillChange, nav.objectWillChange,
+                          nav.companionInputs.objectWillChange)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.refreshModel() }
             .store(in: &cancellables)
@@ -94,16 +95,62 @@ final class CompanionController {
         let live = sessions.liveSessions
         // Anything to show resets the nap clock; only a quiet spell lets it doze.
         if !waiting.isEmpty || !live.isEmpty { quietSince = now }
-        let mode = CompanionMode.mode(for: CompanionSignals(
+        var signals = CompanionSignals(
+            preview: nav.companionPreviewPose,
             muted: nav.isMuted,
             permissionWaiting: waiting.contains { $0.kind == .permission },
             quotaStressed: nav.widgetQuota.peakUtilization >= Double(nav.quotaAlertThreshold),
             eventWaiting: !waiting.isEmpty,
             sessionBusy: live.contains { $0.liveStatus == "busy" },
             sessionsLive: !live.isEmpty,
-            quietFor: now.timeIntervalSince(quietSince)))
+            quietFor: now.timeIntervalSince(quietSince))
+        let mode = CompanionMode.mode(for: signals)
+        judgeNod(before: model.mode, signals: &signals, waiting: waiting, now: now)
         if model.mode != mode { model.mode = mode }
+        if nodRequestsSeen != nav.companionInputs.nodRequests {
+            nodRequestsSeen = nav.companionInputs.nodRequests
+            model.nods &+= 1
+        }
+        let badge = nav.companionBadge ? waiting.count : 0
+        if model.badgeCount != badge { model.badgeCount = badge }
+        if model.badgeMuted != nav.isMuted { model.badgeMuted = nav.isMuted }
         if model.size != nav.companionSize { model.size = nav.companionSize }
+    }
+
+    // MARK: - Nod
+
+    // Who may stir the character. PanelController narrows it to events whose
+    // session isn't muted; by default everything does.
+    var interrupts: (NudgeEvent) -> Bool = { _ in true }
+    private var arrived: [NudgeEvent] = []
+    private var lastNod: Date?
+    private var nodRequestsSeen = 0
+
+    // Called for each event that lands after launch. The pose is judged on the
+    // next refresh, once the event is in the store, so "before" is still the
+    // pose the character wore when it arrived.
+    func noteArrival(_ event: NudgeEvent) {
+        guard nav.companionEnabled else { return }
+        arrived.append(event)
+    }
+
+    // A finished turn is what the nod is for, so it must not count as the pose
+    // that rules the nod out: it waits to be read, which would otherwise always
+    // read as pending. The pose afterwards is still the waiting one: a
+    // finished turn waves.
+    private func judgeNod(before: SkinMode, signals: inout CompanionSignals, waiting: [NudgeEvent], now: Date) {
+        guard !arrived.isEmpty else { return }
+        let events = arrived
+        arrived = []
+        let judged = Set(events.filter(CompanionNod.isInfo).map(\.id))
+        signals.eventWaiting = waiting.contains { !judged.contains($0.id) }
+        let calmAfter = CompanionMode.mode(for: signals)
+        guard CompanionNod.shouldNod(arrivals: events, interrupts: interrupts, muted: nav.isMuted,
+                                     reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+                                     gateActive: CompanionGate.shared.active, before: before, after: calmAfter,
+                                     lastNod: lastNod, now: now) else { return }
+        lastNod = now
+        model.nods &+= 1
     }
 
     // The character's frame while it is on screen; nil when the companion is off.
@@ -119,6 +166,15 @@ final class CompanionController {
                                           size: size, screens: NSScreen.screens.map(\.frame))
         panel.setFrameOrigin(CompanionPlacement.origin(anchor: anchor, size: size))
         ConfigFile.write(key: Self.positionKey, value: CompactPlacement.formatPosition(anchor))
+        onMove?()
+    }
+
+    // The menu's and Settings' "Reset position": forget the saved spot and put
+    // the character back where a fresh install starts it.
+    func resetPosition() {
+        ConfigFile.remove(key: Self.positionKey)
+        anchor = Self.defaultAnchor()
+        apply()
         onMove?()
     }
 

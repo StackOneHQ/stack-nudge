@@ -1286,6 +1286,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             store: store, sessions: sessions, nav: nav,
             onClick: { [weak self] in self?.toggle() },
             onContextMenu: { [weak self] event, view in self?.menuBar?.popUpMenu(for: event, in: view) })
+        // A finished turn in a muted session does not nod the companion either.
+        companion?.interrupts = { [weak self] event in
+            guard let self else { return true }
+            return event.bypassMute || !self.nav.isSessionMuted(event: event, in: self.sessions.sessions)
+        }
         companion?.onMove = { [weak self] in
             guard let self, self.panel.isVisible, !self.nav.compactMode else { return }
             self.positionPanel()
@@ -1329,6 +1334,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             exitCompactMode:   { [weak self] in self?.exitCompactMode() },
             muteFor:             { [weak self] minutes in self?.muteFor(minutes: minutes) },
             resumeNotifications: { [weak self] in self?.resumeNotifications() },
+            resetCompanionPosition: { [weak self] in
+                MainActor.assumeIsolated { self?.companion?.resetPosition() }
+            },
             applyEventHistorySetting: { [weak self] in self?.applyEventHistorySetting() },
             clearEventHistory:        { [weak self] in self?.clearEventHistory() },
             pasteSlackSetup:  { [weak self] in self?.pasteSlackSetup() },
@@ -1360,6 +1368,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             self?.captureHandoff(for: event)
             self?.noteHistory(event)
             self?.nav.reactToEvent(event.kind)
+            // Only live arrivals reach onAppend, so events restored at launch never nod.
+            MainActor.assumeIsolated { self?.companion?.noteArrival(event) }
         }
         nav.loadFromConfig()  // populate panelPinned + other live values up-front
         // Scan agent configs for missing wires (post-update / post-install

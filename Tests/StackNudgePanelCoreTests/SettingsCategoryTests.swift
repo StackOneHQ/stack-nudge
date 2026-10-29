@@ -155,7 +155,7 @@ final class SettingsCategoryTests: XCTestCase {
             openReleaseNotes: {}, checkForUpdates: {}, beginUpdate: {}, runUpdate: {},
             beginUninstall: {}, runUninstall: {}, runBootstrap: {}, quit: {},
             expandFromCompact: {}, exitCompactMode: {},
-            muteFor: { _ in }, resumeNotifications: {},
+            muteFor: { _ in }, resumeNotifications: {}, resetCompanionPosition: {},
             applyEventHistorySetting: {}, clearEventHistory: {},
             pasteSlackSetup: {}, detectSlackUser: {}, sendSlackTest: {})
     }

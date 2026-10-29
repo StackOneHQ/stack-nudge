@@ -645,6 +645,9 @@ struct SettingsView: View {
         // Companion
         case .companion:     row(.companion, label: "Companion", kind: .toggle, value: nav.companionEnabled ? "On" : "Off")
         case .companionSize: row(.companionSize, label: "Size", kind: .cycle, value: nav.companionSize.label, enabled: nav.companionEnabled)
+        case .companionBadge: row(.companionBadge, label: "Count badge", kind: .toggle, value: nav.companionBadge ? "On" : "Off", enabled: nav.companionEnabled)
+        case .companionPreviewPose: row(.companionPreviewPose, label: "Preview pose", kind: .cycle, value: nav.companionPreviewPose?.label ?? "Live", enabled: nav.companionEnabled)
+        case .companionResetPosition: row(.companionResetPosition, label: "Reset position", kind: .action, value: "", enabled: nav.companionEnabled)
 
         // Usage
         case .quotaTracking:  row(.quotaTracking, label: "Quota tracking", kind: .toggle, value: nav.quotaTrackingEnabled ? "On" : "Off")
