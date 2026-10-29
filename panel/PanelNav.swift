@@ -1185,6 +1185,7 @@ final class PanelNav: ObservableObject {
     // The floating companion character, independent of the pill above.
     @Published var companionEnabled = false
     @Published var companionSize: CompanionSize = .medium
+    @Published var companionOffered = false
     @Published var theme:         AccentTheme = .cyan
     // Pill window alpha when at rest. 1.0 = fully opaque; lower values
     // let the desktop show through so the widget recedes. Applied
@@ -1518,6 +1519,7 @@ final class PanelNav: ObservableObject {
         theme         = AccentTheme(rawValue: config["STACKNUDGE_THEME"] ?? "") ?? .cyan
         companionEnabled = ConfigFile.bool(config, "STACKNUDGE_COMPANION", default: false)
         companionSize = CompanionSize(rawValue: config["STACKNUDGE_COMPANION_SIZE"] ?? "") ?? .medium
+        companionOffered = ConfigFile.bool(config, "STACKNUDGE_COMPANION_OFFERED", default: false)
         compactMode   = widgetPreferred && !companionEnabled
         let rawAlpha = Double(config["STACKNUDGE_COMPACT_ALPHA"] ?? "") ?? 1.0
         compactAlpha = Self.compactAlphaOptions.min(by: { abs($0 - rawAlpha) < abs($1 - rawAlpha) }) ?? 1.0
@@ -1837,13 +1839,24 @@ final class PanelNav: ObservableObject {
     }
 
     // Settings rows and the companion's menu both land here, so each choice is
-    // saved one way. Called with the panel open (Settings), so the panel stays open as the pill expands back or gives way to
+    // saved one way. Called with the panel open (Settings, the post-update
+    // offer), so the panel stays open as the pill expands back or gives way to
     // the companion.
     func setCompanionEnabled(_ on: Bool) {
         companionEnabled = on
         ConfigFile.write(key: "STACKNUDGE_COMPANION", value: on ? "true" : "false")
         compactMode = widgetPreferred && !companionEnabled
         compactExpanded = compactMode
+    }
+
+    // Existing installs see the companion offered once, after an update; new
+    // installs already start with it on.
+    var showCompanionOffer: Bool { !companionEnabled && !companionOffered }
+
+    func markCompanionOffered() {
+        guard !companionOffered else { return }
+        companionOffered = true
+        ConfigFile.write(key: "STACKNUDGE_COMPANION_OFFERED", value: "true")
     }
 
     func setCompanionSize(_ size: CompanionSize) {
