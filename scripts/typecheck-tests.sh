@@ -51,7 +51,7 @@ fi
 # doesn't clash with the test sources being compiled alongside it. build.sh
 # type-checks that file as part of the real build.
 sources=()
-for source in panel/*.swift shared/*.swift; do
+for source in panel/*.swift panel/Companion/*.swift shared/*.swift; do
   [[ "$source" == "panel/main.swift" ]] && continue
   sources+=("$source")
 done
