@@ -144,9 +144,9 @@ These keys work the same on every page, including while a text field has focus:
 |-----|--------|
 | `Esc` | Hide the panel. In a text field it cancels the field instead: a filter, search or new phrase empties and hands the keyboard back to the page, a rename or config field keeps its saved value. While a shortcut is being recorded it cancels that and keeps the old one. The footer's last hint shows which. |
 | `⌘←` / `⌘→` | Previous / next tab. From a sub-page, the tabs either side of the one it belongs to. Not while recording a hotkey, so either can be recorded, and not on the setup screen or Permissions opened from it, which have no tabs. |
-| `⌫` in an empty text field | Cancel the field, as `Esc` does |
+| `⌫` in an empty text field | Cancel the field, as `Esc` does. A fresh press only: holding `⌫` to clear a field stops once it's empty. |
 
-Outside a text field, `←` is always back a level: out of a detail pane, or from a sub-page to where you opened it.
+Outside a text field, `←` is back a level on sub-pages and detail panes: out of a detail pane, or from a sub-page to the page it belongs under. The exception is picking a value in Settings, where `←` / `→` step the value.
 
 #### Events tab
 
@@ -387,7 +387,7 @@ The Permissions page shows each grant's live status. It's a Settings sub-page: o
 | `⌘R` | Check every grant again |
 | `←` | Back to Settings, or to setup if you came from there |
 
-The panel stays up on this page even when a grant prompt or System Settings takes focus, so you can work through every grant in one pass; drag it aside if it covers System Settings. The page checks again whenever the panel becomes key, so a grant made in System Settings shows up when you click back.
+The panel (or the expanded widget) stays up on this page even when a grant prompt or System Settings takes focus, so you can work through every grant in one pass; drag it aside if it covers System Settings. The page checks again whenever the panel becomes key, so a grant made in System Settings shows up when you click back.
 
 #### The rebuild gotcha
 

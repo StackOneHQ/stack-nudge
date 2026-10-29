@@ -41,6 +41,13 @@ final class GlobalKeyActionTests: XCTestCase {
         XCTAssertEqual(action(53, recording: true), .cancelField)
     }
 
+    // ⌥Esc and the like are combos a shortcut can be, so a recording gets them.
+    func test_escapeWithAModifierIsLeftToARecording() {
+        XCTAssertNil(action(53, .option, recording: true))
+        XCTAssertNil(action(53, [.command, .shift], recording: true))
+        XCTAssertEqual(action(53, .option), .hide)
+    }
+
     // The footer's last hint says which of the two Esc will do.
     func test_footerNamesWhatEscapeDoes() {
         XCTAssertEqual(PageFooter<EmptyView>.escapeLabel(cancels: false), "Hide")
