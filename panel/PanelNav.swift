@@ -165,7 +165,7 @@ enum SettingsRow: Hashable {
     case banner, muteWhenFocused, mute, muteDuration, remindUnanswered, stalledSessions,
          tabTitleNames, pinPanel, keepOpenWhenEmpty, launchAtLogin
     case widget, snapToCorners, widgetCorner, widgetOpacity, widgetContent, mascot, theme
-    case companion, companionSize
+    case companion, companionSize, companionBadge, companionPreviewPose, companionResetPosition
     case eventHistory, clearHistory
     case slackPaste, slackIdentity, slackTest
     case slackEnabled, slackIdle, slackDetail, slackStop
@@ -217,7 +217,7 @@ extension SettingsRow: CaseIterable {
         .stalledSessions, .tabTitleNames, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin,
         .widget, .snapToCorners, .widgetCorner, .widgetOpacity, .widgetContent,
         .mascot, .theme,
-        .companion, .companionSize,
+        .companion, .companionSize, .companionBadge, .companionPreviewPose, .companionResetPosition,
         .eventHistory, .clearHistory,
         .slackPaste, .slackIdentity, .slackTest,
         .slackEnabled, .slackIdle, .slackDetail, .slackStop,
@@ -256,6 +256,8 @@ struct SettingsActions {
     // by PanelController, which owns the expiry timer and the menu-bar badge.
     let muteFor:             (Int) -> Void
     let resumeNotifications: () -> Void
+    // Companion: forget the saved position and re-place the character.
+    let resetCompanionPosition: () -> Void
     // Event history: attach/detach the durable log when the toggle flips, and
     // wipe the file from the Settings action row.
     let applyEventHistorySetting: () -> Void
@@ -1300,6 +1302,12 @@ final class PanelNav: ObservableObject {
     @Published var companionEnabled = false
     @Published var companionSize: CompanionSize = .medium
     @Published var companionOffered = false
+    // A count of events waiting on you at the character's corner.
+    @Published var companionBadge = true
+    // A pose forced from Settings or the Option menu, never saved.
+    @Published var companionPreviewPose: SkinMode?
+    // Values other parts of the app feed to the companion.
+    let companionInputs = CompanionInputs()
     @Published var theme:         AccentTheme = .cyan
     // Pill window alpha when at rest. 1.0 = fully opaque; lower values
     // let the desktop show through so the widget recedes. Applied
@@ -1431,7 +1439,7 @@ final class PanelNav: ObservableObject {
             return [.widget, .snapToCorners, .widgetCorner, .widgetOpacity,
                     .widgetContent, .mascot, .theme]
         case .companion:
-            return [.companion, .companionSize]
+            return [.companion, .companionBadge, .companionSize, .companionPreviewPose, .companionResetPosition]
         case .usage:
             return [.quotaTracking, .quotaAlerts, .alertThreshold,
                     .pollFrequency, .contextAlert, .showRemaining,
@@ -1727,6 +1735,7 @@ final class PanelNav: ObservableObject {
         companionEnabled = ConfigFile.bool(config, "STACKNUDGE_COMPANION", default: false)
         companionSize = CompanionSize(rawValue: config["STACKNUDGE_COMPANION_SIZE"] ?? "") ?? .medium
         companionOffered = ConfigFile.bool(config, "STACKNUDGE_COMPANION_OFFERED", default: false)
+        companionBadge = ConfigFile.bool(config, "STACKNUDGE_COMPANION_BADGE", default: true)
         compactMode   = widgetPreferred && !companionEnabled
         let rawAlpha = Double(config["STACKNUDGE_COMPACT_ALPHA"] ?? "") ?? 1.0
         compactAlpha = Self.compactAlphaOptions.min(by: { abs($0 - rawAlpha) < abs($1 - rawAlpha) }) ?? 1.0
@@ -2006,6 +2015,7 @@ final class PanelNav: ObservableObject {
         case .uninstall:        actions?.beginUninstall()
         case .quit:             actions?.quit()
         case .openRepo:         openRepository()
+        case .companionResetPosition: actions?.resetCompanionPosition()
         // Toggles flip on Enter / Space. Value rows never get here: they pick.
         default: applyCycle(forward: true)
         }
@@ -2033,14 +2043,14 @@ final class PanelNav: ObservableObject {
              .disconnectGithub, .editPhrases, .browseExtensions, .installedExtension,
              .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
-             .slackPaste, .slackIdentity, .slackTest, .openRepo, .none:
+             .slackPaste, .slackIdentity, .slackTest, .openRepo, .companionResetPosition, .none:
             return false
         case .extensionSetting(let id, let key):
             return extensionConfigKey(id, key)?.kind.isPicker ?? false
         case .extensionUpdate, .extensionRemove:
             return false
         case .banner, .muteWhenFocused, .mute, .tabTitleNames, .pinPanel,
-             .keepOpenWhenEmpty, .launchAtLogin, .widget, .snapToCorners, .companion,
+             .keepOpenWhenEmpty, .launchAtLogin, .widget, .snapToCorners, .companion, .companionBadge,
              .soundEnabled, .voiceEnabled,
              .quotaTracking, .quotaAlerts, .showRemaining,
              .githubLinks, .hideShipped, .eventHistory,
@@ -2049,7 +2059,7 @@ final class PanelNav: ObservableObject {
         case .permissions, .update, .hotkey, .speakHotkey, .downloadVoiceModel:
             return false
         case .muteDuration, .remindUnanswered, .stalledSessions,
-             .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme, .companionSize,
+             .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme, .companionSize, .companionPreviewPose,
              .agentDoneSound, .permissionSound,
              .voice, .voiceSpeed,
              .alertThreshold, .pollFrequency,
@@ -2234,6 +2244,13 @@ final class PanelNav: ObservableObject {
             ConfigFile.write(key: "STACKNUDGE_MASCOT", value: mascot.rawValue)
         case .companion:
             setCompanionEnabled(!companionEnabled)
+        case .companionBadge:
+            companionBadge.toggle()
+            ConfigFile.write(key: "STACKNUDGE_COMPANION_BADGE", value: companionBadge ? "true" : "false")
+        case .companionPreviewPose:
+            let list: [SkinMode?] = [nil] + SkinMode.allCases.map { Optional($0) }
+            let idx = list.firstIndex { $0 == companionPreviewPose } ?? 0
+            companionPreviewPose = list[forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count]
         case .companionSize:
             let list = CompanionSize.allCases
             let idx = list.firstIndex(of: companionSize) ?? 0
@@ -2342,7 +2359,7 @@ final class PanelNav: ObservableObject {
              .disconnectGithub, .editPhrases, .browseExtensions, .installedExtension,
              .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
-             .slackPaste, .slackIdentity, .slackTest, .openRepo, .none:
+             .slackPaste, .slackIdentity, .slackTest, .openRepo, .companionResetPosition, .none:
             break
         case .extensionSetting(let id, let key):
             stepExtensionPick(id, key, forward: forward)

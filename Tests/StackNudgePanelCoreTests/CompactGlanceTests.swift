@@ -43,7 +43,7 @@ final class CompactGlanceTests: XCTestCase {
             beginUninstall: {}, runUninstall: {}, runBootstrap: {}, quit: {},
             expandFromCompact: { modeWhenExpanded = nav.mode },
             exitCompactMode: { exitedCompact = true },
-            muteFor: { _ in }, resumeNotifications: {},
+            muteFor: { _ in }, resumeNotifications: {}, resetCompanionPosition: {},
             applyEventHistorySetting: {}, clearEventHistory: {},
             pasteSlackSetup: {}, detectSlackUser: {}, sendSlackTest: {})
         nav.mode = .events
