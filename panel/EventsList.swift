@@ -11,11 +11,15 @@ struct FeedTagFilter: Equatable {
         return tag.isEmpty ? "other" : tag
     }
 
-    // "review-request" reads as "Review request".
+    // "review-request" reads as "Review request"; acronyms stay in capitals ("CI", "PR closed").
     static func label(_ tag: String) -> String {
-        let words = tag.replacingOccurrences(of: "-", with: " ")
+        let words = tag.split(separator: "-").map { word in
+            acronyms.contains(word.lowercased()) ? word.uppercased() : String(word)
+        }.joined(separator: " ")
         return words.prefix(1).uppercased() + words.dropFirst()
     }
+
+    private static let acronyms: Set<String> = ["ci", "pr", "ai", "ui", "api"]
 
     // Tags of the feed events in the list, in the order chips show them.
     static func present(in events: [NudgeEvent]) -> [String] {

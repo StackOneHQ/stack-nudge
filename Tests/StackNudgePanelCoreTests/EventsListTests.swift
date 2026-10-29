@@ -298,4 +298,10 @@ final class EventsListTests: XCTestCase {
         XCTAssertEqual(focused.map(\.label), ["Move", "Toggle", "Only", "Back"])
         XCTAssertEqual(focused.map(\.keys), [["←→"], ["⏎"], ["⇧⏎"], ["Esc"]])
     }
+
+    func testChipLabelsKeepAcronymsInCapitals() {
+        XCTAssertEqual(FeedTagFilter.label("ci"), "CI")
+        XCTAssertEqual(FeedTagFilter.label("pr-closed"), "PR closed")
+        XCTAssertEqual(FeedTagFilter.label("review-request"), "Review request")
+    }
 }
