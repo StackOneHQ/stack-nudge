@@ -27,18 +27,20 @@ it asks Pylon again, so an issue answered since the last sync doesn't ping.
 The reminders are the point of running while the tab is hidden — the banner
 that fires while you are looking at something else:
 
-    30 min left   the issue's owner: its assignee, or until somebody is
-                  assigned, the account's owner
-    20 min left   the owner again
-    10 min left   the owner again
-     5 min left   everyone
-    breached      everyone
+    when it opens      the issue's owner: its assignee, or until somebody
+                       is assigned, the account's owner
+    2/3 of SLA left    the owner again
+    1/3 of SLA left    the owner again
+    1/6 of SLA left    everyone
+    breached           everyone
 
-On a 30-minute SLA that is "instantly, then 10, 20 and 25 minutes in", the
-escalation this was built for. An issue with neither is "ours": it goes to
-everyone at every stage, because its owner is then the whole team. Keying the stages to
-time *left* rather than time elapsed is what keeps an issue that arrives at
-10pm quiet until half an hour before its SLA starts counting the next morning.
+The SLA is each issue's own window as Pylon sets it, from opening to its
+first-response deadline. On a 30-minute SLA that is "instantly, then 10, 20
+and 25 minutes in", the escalation this was built for. An issue with no owner
+is "ours": it goes to everyone at every stage, because its owner is then the
+whole team. Out of hours, Pylon pushes the deadline to the next business
+morning, so the window is long and its reminders are spread across it; a
+laptop that slept through some gets one banner for the latest, not one each.
 
 Read-only against Pylon. See docs/extensions.md for the schema this prints.
 """
@@ -63,7 +65,7 @@ DEFAULT_SYNC_MINUTES = 3
 
 # What a sync keeps of each issue: enough to draw its row, time its reminders
 # and open it. Never the body, which is the customer's whole first message.
-SNAPSHOT_FIELDS = ("id", "number", "title", "link", "state", "source", "account",
+SNAPSHOT_FIELDS = ("id", "number", "title", "link", "state", "source", "account", "created_at",
                    "assignee", "first_response_time", "first_response_breach_time",
                    "next_reply", "latest_message_time", "snoozed_until_time")
 
@@ -121,14 +123,22 @@ ME_TTL = 24 * 3600
 USERS_TTL = 24 * 3600
 ACCOUNTS_TTL = 6 * 3600
 
-# (minutes left, who hears about it). Ordered from first to last.
+# (share of the SLA window still left, who hears about it), first to last.
+# The window is each issue's own, as Pylon sets it: from when the issue was
+# opened to its first-response deadline. Pylon's API exposes the deadline but
+# not the SLA's length, so this is the only length there is to go on — and
+# nothing here assumes one. On a 30-minute SLA these land at 30, 20, 10 and 5
+# minutes left and at breach; on a 4-hour one, at 4h, 2h40, 1h20 and 40m.
 STAGES = [
-    (30, "owner"),
-    (20, "owner"),
-    (10, "owner"),
-    (5, "team"),
-    (0, "team"),
+    (1.0, "owner"),
+    (2 / 3, "owner"),
+    (1 / 3, "owner"),
+    (1 / 6, "team"),
+    (0.0, "team"),
 ]
+# Only for an issue with no usable opening time to measure a window from,
+# which Pylon's schema says can't happen: `created_at` is required.
+FALLBACK_WINDOW = 30 * 60
 SOUNDS = {1: "Glass", 2: "Ping", 3: "Ping", 4: "Sosumi", 5: "Basso"}
 # An issue first seen already this far past its SLA is shown but never
 # bannered. Without it the first run after install pings every stale issue in
@@ -244,9 +254,13 @@ def classify(issue):
     return None
 
 
-def stage_for(seconds_left):
-    """How many escalation stages an issue has crossed, 0..len(STAGES)."""
-    return sum(1 for minutes, _ in STAGES if seconds_left <= minutes * 60)
+def stage_for(seconds_left, window):
+    """How many escalation stages an issue has crossed, 0..len(STAGES).
+
+    Thresholds are rounded to the millisecond: 2/3 of 1800 is
+    1199.9999999999998 in floating point, which would put "20 minutes left"
+    a hair after 20 minutes left."""
+    return sum(1 for share, _ in STAGES if seconds_left <= round(share * window, 3))
 
 
 def due_banner(previous, crossed, owner):
@@ -284,7 +298,7 @@ def plan_banners(items, ledger, know_me=True):
     for item in items:
         if item["kind"] != "first":
             continue
-        crossed = stage_for(item["left"])
+        crossed = stage_for(item["left"], item["window"])
         previous = ledger.get(item["id"])
         previous = previous if isinstance(previous, int) else None
         if item["snoozed"]:
@@ -326,8 +340,8 @@ def row_for(item, now):
         left = item["left"]
         if left > 0:
             row["value"] = "%s left" % short_duration(left)
-            fill = 1 - left / (STAGES[0][0] * 60)
-            tint = GREEN if left > 10 * 60 else AMBER
+            fill = 1 - left / item["window"]
+            tint = GREEN if left > item["window"] / 3 else AMBER
             notes = ["first response due %s" % clock(item["due"], now)]
         else:
             row["value"] = "late %s" % short_duration(-left)
@@ -380,7 +394,7 @@ def header_for(items, mine_only, identity="ok", notes=()):
     if late:
         badge = {"text": "%d LATE" % len(late), "tone": "danger"}
     elif live:
-        urgent = any(i["left"] <= 10 * 60 for i in live)
+        urgent = any(i["left"] <= i["window"] / 3 for i in live)
         badge = {"text": "%d DUE" % len(live), "tone": "danger" if urgent else "warning"}
     elif owed:
         badge = {"text": "%d OWED" % len(owed), "tone": "neutral"}
@@ -829,6 +843,8 @@ def item_for(issue, waiting, now, accounts, users, me):
         who = first_name(owner_id, users)
     snoozed = parse_time(issue.get("snoozed_until_time"))
     due = waiting["due"]
+    opened = parse_time(issue.get("created_at"))
+    window = (due - opened).total_seconds() if (due and opened) else 0
     return {
         "id": str(issue["id"]),
         "number": issue.get("number"),
@@ -839,6 +855,7 @@ def item_for(issue, waiting, now, accounts, users, me):
         "kind": waiting["kind"],
         "due": due,
         "left": (due - now).total_seconds() if due else None,
+        "window": window if window > 0 else FALLBACK_WINDOW,
         "latest": issue.get("latest_message_time"),
         "preview": None,
         "mine": mine,

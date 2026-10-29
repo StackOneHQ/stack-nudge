@@ -21,7 +21,7 @@
       "key": "STACKNUDGE_EXT_PYLON_EMAIL",
       "label": "Your Pylon email",
       "help": "Only needed if the token doesn't act as you. Whose issues count as yours.",
-      "placeholder": "you@stackone.com"
+      "placeholder": "you@company.com"
     },
     {
       "key": "STACKNUDGE_EXT_PYLON_SYNC_MINUTES",

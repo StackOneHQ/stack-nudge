@@ -73,25 +73,27 @@ def issue(number=1, **overrides):
     return base
 
 
-def item(left_minutes=30, mine=True, unowned=False, number=1, snoozed=False, kind="first"):
+def item(left_minutes=30, mine=True, unowned=False, number=1, snoozed=False, kind="first",
+         window_minutes=30):
     due = NOW + timedelta(minutes=left_minutes)
     return {
         "id": "issue-%d" % number, "number": number, "title": "Workday sync failing",
         "account": "Acme", "link": None, "source": "slack", "kind": kind,
-        "due": due, "left": left_minutes * 60.0,
+        "due": due, "left": left_minutes * 60.0, "window": window_minutes * 60.0,
         "mine": mine, "unowned": unowned,
         "who": "yours" if mine else ("ours" if unowned else "Alex"),
         "snoozed": snoozed,
     }
 
 
-def timeline(mine, unowned=False, minutes=range(0, 40)):
-    """Poll once a minute from the moment an issue arrives on a 30-minute SLA;
-    return {minute: stage} for every banner this person gets."""
+def timeline(mine, unowned=False, sla_minutes=30):
+    """Poll once a minute from the moment an issue arrives on an SLA of this
+    length; return {minute: stage} for every banner this person gets."""
     ledger, heard = {}, {}
-    for minute in minutes:
+    for minute in range(0, sla_minutes + 10):
         banners, ledger = pylon.plan_banners(
-            [item(left_minutes=30 - minute, mine=mine, unowned=unowned)], ledger)
+            [item(left_minutes=sla_minutes - minute, mine=mine, unowned=unowned,
+                  window_minutes=sla_minutes)], ledger)
         for stage, _ in banners:
             heard[minute] = stage
     return heard
@@ -152,10 +154,34 @@ class Escalation(unittest.TestCase):
         banners, _ = pylon.plan_banners([item(left_minutes=4)], {"issue-1": 1})
         self.assertEqual([stage for stage, _ in banners], [4])
 
-    def test_an_overnight_issue_is_quiet_until_its_sla_window_opens(self):
-        banners, ledger = pylon.plan_banners([item(left_minutes=10 * 60)], {})
-        self.assertEqual(banners, [])
-        self.assertEqual(ledger, {"issue-1": 0})
+    def test_the_stages_scale_with_the_issues_own_sla(self):
+        # Nothing assumes 30 minutes: a 4-hour SLA is reminded at the same
+        # shares of its window — 80, 160 and 200 minutes in.
+        self.assertEqual(timeline(mine=True, sla_minutes=240),
+                         {0: 1, 80: 2, 160: 3, 200: 4, 240: 5})
+        self.assertEqual(timeline(mine=False, sla_minutes=240), {200: 4, 240: 5})
+
+    def test_twenty_minutes_left_is_the_twenty_minute_reminder_exactly(self):
+        # 2/3 of 1800 s is 1199.9999999999998 in floating point.
+        self.assertEqual(pylon.stage_for(20 * 60, 30 * 60), 2)
+        self.assertEqual(pylon.stage_for(20 * 60 + 1, 30 * 60), 1)
+
+    def test_an_out_of_hours_issue_is_reminded_across_its_stretched_window(self):
+        # Opened at 22:00, due 09:30: the owner hears when it opens, and the
+        # team only in the last sixth of the window, not overnight.
+        banners, _ = pylon.plan_banners([item(left_minutes=690, window_minutes=690)], {})
+        self.assertEqual([stage for stage, _ in banners], [1])
+        self.assertEqual(pylon.stage_for(116 * 60, 690 * 60), 3)
+        self.assertEqual(pylon.stage_for(115 * 60, 690 * 60), 4)
+
+    def test_the_window_is_measured_from_the_issue_opening_to_pylons_deadline(self):
+        opened = issue(created_at=stamp(NOW - timedelta(hours=1)),
+                       first_response_breach_time=stamp(NOW + timedelta(hours=3)))
+        made = pylon.item_for(opened, pylon.classify(opened), NOW, {}, {}, (None, None))
+        self.assertEqual(made["window"], 4 * 3600)
+        broken = issue(created_at=None)
+        made = pylon.item_for(broken, pylon.classify(broken), NOW, {}, {}, (None, None))
+        self.assertEqual(made["window"], pylon.FALLBACK_WINDOW)
 
     def test_first_sight_long_after_the_breach_is_shown_but_not_bannered(self):
         banners, ledger = pylon.plan_banners([item(left_minutes=-3 * 60)], {})
@@ -261,6 +287,13 @@ class Rows(unittest.TestCase):
         rows = pylon.document(items, NOW, False, True)["rows"]
         self.assertEqual([r["id"] for r in rows],
                          ["issue-3", "issue-1", "issue-4", "issue-2", "issue-5"])
+
+    def test_the_bar_and_its_colour_are_shares_of_the_window(self):
+        rows = {r["id"]: r for r in pylon.document(
+            [item(number=1, left_minutes=120, window_minutes=240),
+             item(number=2, left_minutes=60, window_minutes=240)], NOW, False, "ok")["rows"]}
+        self.assertEqual(rows["issue-1"]["track"], {"fill": 0.5, "tint": pylon.GREEN})
+        self.assertEqual(rows["issue-2"]["track"]["tint"], pylon.AMBER)
 
     def test_values_and_bars_follow_the_clock(self):
         rows = {r["id"]: r for r in pylon.document(
@@ -411,9 +444,9 @@ def workspace():
         ]},
         ("POST", "/issues/search"): {"data": [
             issue(1, account={"id": "acct-mine"}),
-            issue(2, account={"id": "acct-alex"},
+            issue(2, account={"id": "acct-alex"}, created_at=stamp(NOW - timedelta(minutes=26)),
                   first_response_breach_time=stamp(NOW + timedelta(minutes=4))),
-            issue(3, account=None,
+            issue(3, account=None, created_at=stamp(NOW - timedelta(days=3, minutes=30)),
                   first_response_breach_time=stamp(NOW - timedelta(days=3))),
             issue(4, first_response_breach_time=None, tags=["proactive-nudge"]),
             issue(7, account={"id": "acct-feedback"}),
