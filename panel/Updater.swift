@@ -1085,8 +1085,8 @@ struct PostUpdateView: View {
                                size: CGSize(width: 54, height: 60), active: true)
                 .frame(width: 54, height: 60)
             VStack(alignment: .leading, spacing: 3) {
-                Text("Meet the companion").font(.subheadline.weight(.semibold))
-                Text("A character that floats on your desktop in place of the widget. Click it for the panel, drag it anywhere. Change it any time in Settings → Companion.")
+                Text("Meet Stacky").font(.subheadline.weight(.semibold))
+                Text("Stacky floats on your desktop in place of the pill and reacts to your agents. Click Stacky for the panel, drag it anywhere. Change it any time in Settings → Companion.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
