@@ -196,7 +196,8 @@ final class SettingsCategoryTests: XCTestCase {
     ) -> SettingsActions {
         SettingsActions(
             checkPermissions: checkPermissions, openConfig: {}, editPhrases: {},
-            browseExtensions: {}, openExtensionSources: openExtensionSources, openExtension: openExtension,
+            browseExtensions: {}, openExtensionSources: openExtensionSources, editNotifyTags: {},
+            openExtension: openExtension,
             openReleaseNotes: {}, checkForUpdates: {}, beginUpdate: {}, runUpdate: {},
             beginUninstall: {}, runUninstall: {}, runBootstrap: {}, quit: {},
             expandFromCompact: {}, exitCompactMode: {},

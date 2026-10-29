@@ -223,6 +223,7 @@ struct PanelContentView: View {
                         .onAppear { if runsOnAppear { extensionCatalog.loadIfNeeded() } }
                 case .phrases:  PhrasesView(model: phrases) { nav.mode = .settings }
                 case .permissions: permissionsPage
+                case .notifyTags: NotifyTagsView(nav: nav) { nav.mode = .settings }
                 case .extensions:
                     ExtensionsView(catalog: extensionCatalog,
                                    host: extensions,
@@ -282,7 +283,7 @@ struct PanelContentView: View {
         case .extensionTab(let id): return nav.extensionTab(id: id)?.label ?? id
         // Listed, not defaulted: a new tab should fail to compile here rather
         // than render an unlabelled one.
-        case .phrases, .permissions, .extensions, .extensionSources, .updateConfirm, .updating,
+        case .phrases, .permissions, .notifyTags, .extensions, .extensionSources, .updateConfirm, .updating,
              .postUpdate, .bootstrap, .uninstall:
             return ""
         }
@@ -428,7 +429,7 @@ struct PanelContentView: View {
     static func tabStripAnchor(for mode: PanelMode, in tabs: [PanelMode]) -> PanelMode? {
         if tabs.contains(mode) { return mode }
         switch mode {
-        case .phrases, .permissions, .extensions, .extensionSources, .updateConfirm, .uninstall:
+        case .phrases, .permissions, .notifyTags, .extensions, .extensionSources, .updateConfirm, .uninstall:
             return tabs.contains(.settings) ? .settings : nil
         // No strip is drawn in these, so there is nothing to bring into view.
         case .updating, .postUpdate, .bootstrap:
@@ -1603,6 +1604,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // removed, our commands repointed to the current path and arg). Codex wants a re-trust after either: a changed
         // notify.sh, or a changed entry in its hooks.json.
         let scriptRefreshed = Bootstrap.refreshNotifyScriptIfNeeded() != nil
+        Bootstrap.installCLI(bundled: Bootstrap.bundledCLIScript())
         let rewired = Bootstrap.reconcileWiredAgents()
         if scriptRefreshed || rewired.contains(.codex),
            FileManager.default.fileExists(atPath: "\(NSHomeDirectory())/.codex/hooks.json") {
@@ -1711,6 +1713,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             },
             browseExtensions: { [weak self] in self?.nav.mode = .extensions },
             openExtensionSources: { [weak self] in self?.openExtensionSources() },
+            editNotifyTags:   { [weak self] in
+                self?.nav.notifyTagSelection = 0
+                self?.nav.mode = .notifyTags
+            },
             openExtension: { [weak self] id in self?.openExtension(id) },
             openReleaseNotes: {
                 // Versioned tag URL when we know the bundle version,
@@ -1760,6 +1766,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         setupNotificationCenter()
         store.onAppend = { [weak self] event in
             self?.lastEventArrivalAt = Date()
+            if let tag = event.tag, !tag.isEmpty { self?.nav.seenTags.insert(tag) }
             self?.postBannerIfNeeded(event)
             // Register the watch now rather than waiting up to 5s, so the
             // menu-bar count appears with the banner.
@@ -1767,12 +1774,16 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             self?.refreshTranscriptStats(for: event)
             self?.captureHandoff(for: event)
             self?.noteHistory(event)
-            self?.nav.reactToEvent(event.kind)
             if let (name, data) = MCPAppEvents.occurrence(for: event) {
                 self?.mcpServer?.emit(name, data: data, eventID: event.id.uuidString)
             }
-            // Only live arrivals reach onAppend, so events restored at launch never nod.
-            MainActor.assumeIsolated { self?.companion?.noteArrival(event) }
+            // Same rule as the banner, so a quiet tag or a Focus-held event
+            // does not move the companion either.
+            if self?.nav.interrupts(event) ?? true {
+                self?.nav.reactToEvent(event.kind)
+                // Only live arrivals reach onAppend, so events restored at launch never nod.
+                MainActor.assumeIsolated { self?.companion?.noteArrival(event) }
+            }
         }
         nav.loadFromConfig()  // populate panelPinned + other live values up-front
         // After the config, so the server's first view of the settings is the
@@ -3635,6 +3646,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // PanelNav.mutes).
         if nav.mutes(event) { return }
 
+        // Focus holds the banner, sound and voice but not the list entry, and
+        // remembers what it held for the summary when it ends.
+        if nav.focusPolicy.holds(event) {
+            nav.focus.hold(event)
+            return
+        }
+        if QuietTags.isQuiet(event, in: nav.quietTags) { return }
+
         let config = PanelConfig.load()
 
         // Mascot/ripple still fire — they're driven from onAppend, not here.
@@ -3868,6 +3887,57 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         nav.muteSparesPrompts = false
         nav.muteTick += 1
         refreshStatusBadge()
+    }
+
+    // MARK: - Focus
+
+    // Driven by the `focus` socket command. Turning it off posts one summary
+    // notice for what it held, instead of replaying every banner.
+    func setFocus(_ on: Bool) {
+        let released = nav.focus.set(on)
+        if on { UNUserNotificationCenter.current().removeAllDeliveredNotifications() }
+        refreshStatusBadge()
+        // Dismissed events are not worth reporting.
+        let live = Set(store.events.map(\.id))
+        guard let text = FocusDigest.text(for: released.filter { live.contains($0.id) }) else { return }
+        store.append(NudgeEvent(agent: "stack-nudge", kind: .other, title: text, message: "",
+                                source: .script, tag: "focus", key: "focus-digest"))
+    }
+
+    func focusStatus() -> [String: Any] {
+        [
+            "focus": nav.focus.active,
+            "respect": nav.respectFocus,
+            "meetings": nav.focusMeetings,
+            "holding": nav.focusHolding,
+            "held": nav.focus.held.count,
+            "lastChange": nav.focus.lastChange.map { ISO8601DateFormatter().string(from: $0) } ?? "",
+        ]
+    }
+
+    // MARK: - Command channel
+
+    private func makeCommandRouter() -> CommandRouter {
+        nav.busySources.register("sessions") { [weak self] in
+            (self?.sessions.sessions ?? []).filter { $0.liveStatus == "busy" }
+                .map { BusyItem(kind: "session", target: $0.projectName ?? $0.agent, since: nil) }
+        }
+        var hooks = CommandHooks()
+        hooks.post = { [weak self] event in self?.store.append(event) }
+        hooks.setFocus = { [weak self] on in self?.setFocus(on) }
+        hooks.focusStatus = { [weak self] in self?.focusStatus() ?? [:] }
+        hooks.poll = { [weak self] in self?.nav.pollNow }
+        hooks.setPose = { [weak self] override in
+            self?.nav.poseOverride = override
+            self?.nav.onPoseOverride?(override)
+        }
+        hooks.busy = { [weak self] in self?.nav.busySources.items() ?? [] }
+        hooks.openSettings = { [weak self] category in
+            guard let self else { return category ?? .notifications }
+            self.showSettings(category: category)
+            return self.nav.settingsCategory
+        }
+        return CommandRouter(hooks: hooks)
     }
 
     // MARK: - Slack
@@ -4227,7 +4297,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // reminder too made the two inconsistent: muted users got the opening
         // Slack DM and then silence. Local cues are still gated, below.
         // Reminders are all for prompts, which an MCP client's mute spares.
-        let localEligible = !nav.isMuted || nav.muteSparesPrompts
+        let localEligible = (!nav.isMuted || nav.muteSparesPrompts) && !nav.focusHolding
         let slackEligible = nav.slackEnabled && nav.slackTokenPresent && nav.slackMemberID != nil
         // Nothing can be delivered, so don't spend a reminder from the budget —
         // the prompt should still get its nudges once the mute lifts.
@@ -4301,7 +4371,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // icon when muted, and the pending-prompt count rides alongside either way.
     private func refreshStatusBadge() {
         menuBar?.refreshStatusBadge(muteUntil: nav.muteUntil,
-                                    pendingPrompts: nav.pendingPromptCount)
+                                    pendingPrompts: nav.pendingPromptCount,
+                                    focusHolding: nav.focusHolding)
     }
 
     // Snooze: mark the event, schedule a Timer to clear the snooze flag and
@@ -4322,7 +4393,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             // directly, bypassing postBannerIfNeeded's mute gate, so guard it
             // here too. The snooze flag is already cleared, so the event stays
             // visible in the panel — only the banner interruption is dropped.
-            guard !self.nav.mutes(current) else { return }
+            guard !self.nav.mutes(current), !self.nav.focusHolding else { return }
             self.postBanner(for: current.with(snoozedUntil: nil))
         }
     }
@@ -5130,6 +5201,27 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             case .refresh:          if !event.isARepeat { permissions.refresh() }
             case .swallow:          break
             case nil:               return false
+            }
+            return true
+        }
+
+        // Notify me about: ↑/↓ move, Space or Enter toggles the tag, ← returns.
+        if nav.mode == .notifyTags {
+            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            guard plain else { return false }
+            switch event.keyCode {
+            case KeyCode.leftArrow:
+                nav.mode = .settings
+            case KeyCode.upArrow:
+                nav.moveNotifyTagSelection(by: -1)
+            case KeyCode.downArrow:
+                nav.moveNotifyTagSelection(by: 1)
+            case KeyCode.space, KeyCode.returnKey, KeyCode.numpadEnter:
+                let tags = nav.notifyTagList
+                guard tags.indices.contains(nav.notifyTagSelection) else { return true }
+                nav.toggleQuietTag(tags[nav.notifyTagSelection])
+            default:
+                return false
             }
             return true
         }
@@ -6178,6 +6270,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             top ? nav.selectPrevCategory() : nav.selectNextCategory()
         case .phrases:
             top ? phrases.selectFirst() : phrases.selectLast()
+        case .notifyTags:
+            nav.notifyTagSelection = top ? 0 : max(0, nav.notifyTagList.count - 1)
         case .extensionSources:
             extensionSources.jump(toLast: !top)
         case .permissions:
@@ -6552,7 +6646,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             atPath: installDir, withIntermediateDirectories: true)
         let socketPath = (installDir as NSString)
             .appendingPathComponent("panel.sock")
-        listener = EventListener(store: store, socketPath: socketPath)
+        listener = EventListener(store: store, socketPath: socketPath,
+                                 commands: makeCommandRouter())
         do {
             try listener?.start()
             nav.listenerError = nil

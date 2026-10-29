@@ -51,6 +51,23 @@
 # Default: 30
 #STACKNUDGE_MUTE_DURATION_MIN=30
 
+# Hold banners, sound and voice while a macOS Focus is on. The Focus state is
+# pushed in by a Shortcuts automation running `~/.stack-nudge/stack-nudge focus
+# on|off` (see the README). Set to false to ignore it.
+# Default: true
+#STACKNUDGE_RESPECT_FOCUS=false
+
+# Let meeting reminders through while a Focus is on. Only applies when
+# STACKNUDGE_RESPECT_FOCUS is true.
+# Default: true
+#STACKNUDGE_FOCUS_MEETINGS=false
+
+# Feed tags that still list their events but pop no banner, sound or voice and
+# do not move the companion. Comma-separated; also set from Settings >
+# Notifications > Notify me about.
+# Default: none
+#STACKNUDGE_QUIET_TAGS=ci,review-request
+
 # Pill widget accent color preset. Also settable from Settings → Widget →
 # "Accent color". Allowed: cyan, violet, mint, rose, system (system follows
 # the macOS accent and matches the banner color).

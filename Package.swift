@@ -31,6 +31,7 @@ let package = Package(
                 "install.sh",
                 "uninstall.sh",
                 "notify.sh",
+                "stack-nudge.sh",
                 "notify.conf.example",
                 "README.md",
                 "LICENSE",

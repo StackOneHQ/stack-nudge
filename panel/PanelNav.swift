@@ -55,6 +55,9 @@ enum PanelMode: Hashable {
     // Settings → Extensions → Other catalogues: the extra repositories the
     // browser reads. Another sub-page of Settings.
     case extensionSources
+    // "Notify me about": one toggle per feed tag, a sub-page of Settings like
+    // .phrases.
+    case notifyTags
     // Confirmation step after the user clicks the "Update available" row.
     // Shows release notes (when available) + Cancel / Update Now buttons.
     case updateConfirm
@@ -204,6 +207,7 @@ enum SettingsRow: Hashable {
     case extensionUpdates
     case banner, muteWhenFocused, mute, muteDuration, remindUnanswered, stalledSessions,
          tabTitleNames, pinPanel, keepOpenWhenEmpty, launchAtLogin
+    case respectFocus, focusMeetings, notifyTagsPage
     case floatingWidget, snapToCorners, widgetCorner, widgetOpacity, widgetContent, mascot, theme
     case companionTurnOn, companionSize, companionBadge, companionPreviewPose, companionResetPosition
     case eventHistory, clearHistory
@@ -264,6 +268,7 @@ extension SettingsRow: CaseIterable {
         .permissions, .update, .extensionUpdates, .hotkey,
         .banner, .muteWhenFocused, .mute, .muteDuration, .remindUnanswered,
         .stalledSessions, .tabTitleNames, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin,
+        .respectFocus, .focusMeetings, .notifyTagsPage,
         .floatingWidget, .snapToCorners, .widgetCorner, .widgetOpacity, .widgetContent,
         .mascot, .theme,
         .companionTurnOn, .companionSize, .companionBadge, .companionPreviewPose, .companionResetPosition,
@@ -290,6 +295,7 @@ struct SettingsActions {
     let editPhrases:      () -> Void
     let browseExtensions: () -> Void
     let openExtensionSources: () -> Void
+    let editNotifyTags:   () -> Void
     let openExtension:     (String) -> Void
     let openReleaseNotes: () -> Void
     let checkForUpdates:  () -> Void
@@ -387,6 +393,45 @@ final class PanelNav: ObservableObject {
     // reference it so a value-less change still refreshes them).
     @Published var muteUntil: Date?
     @Published var muteTick: Int = 0
+    // macOS Focus, pushed in by a Shortcuts automation through the socket. Kept
+    // apart from muteUntil: it ends by itself, and it summarises what it held.
+    @Published var focus = FocusTracker()
+    @Published var respectFocus: Bool = true
+    @Published var focusMeetings: Bool = true
+    // Tags turned off under "Notify me about", and every tag seen since launch
+    // so the page can offer ones the shipped list does not know.
+    @Published var quietTags: Set<String> = []
+    @Published var seenTags: Set<String> = []
+    @Published var notifyTagSelection: Int = 0
+    // Hooks for branches that own the thing behind a socket command. All inert
+    // until wired: `poll` replies "no poller" while pollNow is nil.
+    var pollNow: ((@escaping (Int) -> Void) -> Void)?
+    var onPoseOverride: ((PoseOverride) -> Void)?
+    let busySources = BusySources()
+    // Set through the `state` socket command. The companion reads it; it is
+    // inert until then.
+    @Published var poseOverride: PoseOverride?
+    var focusPolicy: FocusPolicy {
+        FocusPolicy(focused: focus.active, respect: respectFocus, meetingsPass: focusMeetings)
+    }
+    var focusHolding: Bool { focus.active && respectFocus }
+    // Whether an event may pop a banner, speak or move the companion. Mute is
+    // checked separately by the callers, which already gate on it.
+    func interrupts(_ event: NudgeEvent) -> Bool {
+        !focusPolicy.holds(event) && !QuietTags.isQuiet(event, in: quietTags)
+    }
+    var notifyTagList: [String] {
+        QuietTags.known(seen: Array(seenTags), quiet: quietTags)
+    }
+    func toggleQuietTag(_ tag: String) {
+        if quietTags.contains(tag) { quietTags.remove(tag) } else { quietTags.insert(tag) }
+        ConfigFile.write(key: QuietTags.configKey, value: QuietTags.serialize(quietTags))
+    }
+    func moveNotifyTagSelection(by delta: Int) {
+        let count = notifyTagList.count
+        guard count > 0 else { return }
+        notifyTagSelection = min(max(notifyTagSelection + delta, 0), count - 1)
+    }
     // Persistent default duration (minutes) the bell button and menu use.
     @Published var muteDurationMinutes: Int = 30
     static let muteDurationOptions: [Int] = [15, 30, 60, 120]
@@ -1677,7 +1722,10 @@ final class PanelNav: ObservableObject {
         case .notifications:
             return [.banner, .muteWhenFocused, .mute, .muteDuration,
                     .remindUnanswered, .stalledSessions,
-                    .soundEnabled, .agentDoneSound, .permissionSound]
+                    .soundEnabled, .agentDoneSound, .permissionSound,
+                    .notifyTagsPage]
+        case .focus:
+            return [.respectFocus, .focusMeetings]
         case .voice:
             return [.voiceEnabled, .speakHotkey]
                 + (voiceModelCached ? [.voice, .voiceSpeed] : [.downloadVoiceModel])
@@ -1966,6 +2014,9 @@ final class PanelNav: ObservableObject {
         soundEnabled    = ConfigFile.bool(config, "STACKNUDGE_SOUND",     default: true)
         voiceEnabled    = ConfigFile.bool(config, "STACKNUDGE_VOICE",     default: false)
         muteWhenFocused = ConfigFile.bool(config, "STACKNUDGE_MUTE_WHEN_FOCUSED", default: true)
+        respectFocus    = ConfigFile.bool(config, "STACKNUDGE_RESPECT_FOCUS", default: true)
+        focusMeetings   = ConfigFile.bool(config, "STACKNUDGE_FOCUS_MEETINGS", default: true)
+        quietTags       = QuietTags.parse(config[QuietTags.configKey])
         tabTitleNames   = ConfigFile.bool(config, "STACKNUDGE_TAB_TITLE_NAMES", default: false)
         // Persistent default only — the live `muteUntil` is transient and
         // intentionally left untouched here so config reloads never clear it.
@@ -2300,6 +2351,7 @@ final class PanelNav: ObservableObject {
         case .editPhrases:      actions?.editPhrases()
         case .browseExtensions: actions?.browseExtensions()
         case .extensionSources: actions?.openExtensionSources()
+        case .notifyTagsPage:   actions?.editNotifyTags()
         // Listed explicitly. This switch ends in `default: applyCycle`, so an
         // omission here is not a build error — it is Enter quietly doing
         // nothing, on the one row whose whole purpose is being opened.
@@ -2354,7 +2406,7 @@ final class PanelNav: ObservableObject {
         switch selectedRow {
         case .wireAgents, .dismissAgents,
              .connectGithub, .disconnectGithub, .editPhrases, .browseExtensions, .extensionSources,
-             .installedExtension, .integration, .mcpSetupClients, .mcpClient,
+             .installedExtension, .integration, .mcpSetupClients, .mcpClient, .notifyTagsPage,
              .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
              .slackPaste, .slackIdentity, .slackTest, .openRepo, .companionResetPosition, .companionTurnOn, .none:
@@ -2363,7 +2415,7 @@ final class PanelNav: ObservableObject {
             return extensionConfigKey(id, key)?.kind.isPicker ?? false
         case .extensionUpdate, .extensionRemove:
             return false
-        case .banner, .muteWhenFocused, .mute, .tabTitleNames, .pinPanel,
+        case .banner, .muteWhenFocused, .mute, .respectFocus, .focusMeetings, .tabTitleNames, .pinPanel,
              .keepOpenWhenEmpty, .launchAtLogin, .snapToCorners, .companionBadge,
              .soundEnabled, .voiceEnabled,
              .quotaTracking, .quotaAlerts, .showRemaining,
@@ -2541,6 +2593,12 @@ final class PanelNav: ObservableObject {
         case .muteWhenFocused:
             muteWhenFocused.toggle()
             ConfigFile.write(key: "STACKNUDGE_MUTE_WHEN_FOCUSED", value: muteWhenFocused ? "true" : "false")
+        case .respectFocus:
+            respectFocus.toggle()
+            ConfigFile.write(key: "STACKNUDGE_RESPECT_FOCUS", value: respectFocus ? "true" : "false")
+        case .focusMeetings:
+            focusMeetings.toggle()
+            ConfigFile.write(key: "STACKNUDGE_FOCUS_MEETINGS", value: focusMeetings ? "true" : "false")
         case .tabTitleNames:
             tabTitleNames.toggle()
             ConfigFile.write(key: "STACKNUDGE_TAB_TITLE_NAMES", value: tabTitleNames ? "true" : "false")
@@ -2752,7 +2810,7 @@ final class PanelNav: ObservableObject {
         case .wireAgents, .dismissAgents, .permissions, .update, .extensionUpdates,
              .hotkey, .speakHotkey, .downloadVoiceModel,
              .connectGithub, .disconnectGithub, .editPhrases, .browseExtensions, .extensionSources,
-             .installedExtension, .integration, .mcpSetupClients, .mcpClient,
+             .installedExtension, .integration, .mcpSetupClients, .mcpClient, .notifyTagsPage,
              .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
              .slackPaste, .slackIdentity, .slackTest, .openRepo, .companionResetPosition, .companionTurnOn, .none:
@@ -3009,7 +3067,7 @@ struct ExtensionTab: Equatable, Identifiable {
 // one, in install order, and are listed by PanelNav.settingsCategories, since
 // only nav knows what is installed. `allCases` is the built-in ones alone.
 enum SettingsCategory: Hashable, CaseIterable {
-    case notifications, voice, appearance, companion, usage, integrations, extensions, mcp, panel, events,
+    case notifications, focus, voice, appearance, companion, usage, integrations, extensions, mcp, panel, events,
          actions, about
     // One extension's page, a level below Extensions. Not in the sidebar.
     case extensionPage(String)
@@ -3020,15 +3078,28 @@ enum SettingsCategory: Hashable, CaseIterable {
     case mcpSetupPage
 
     static let allCases: [SettingsCategory] = [
-        .notifications, .voice, .appearance, .companion, .usage, .integrations, .extensions,
+        .notifications, .focus, .voice, .appearance, .companion, .usage, .integrations, .extensions,
         .mcp, .panel, .events, .actions, .about,
     ]
+
+    // The name the `settings` socket command uses: the case name for a built-in
+    // page. An extension's page can be shown but not asked for by name.
+    var key: String {
+        if case .extensionPage(let id) = self { return "extension:\(id)" }
+        return String(describing: self)
+    }
+
+    init?(key: String) {
+        guard let found = Self.allCases.first(where: { $0.key == key }) else { return nil }
+        self = found
+    }
 
     // Kept short: the sidebar is ~120pt. An extension's page is titled by its
     // name, which PanelNav.label(for:) knows; this falls back to the id.
     var label: String {
         switch self {
         case .notifications: return "Notifications"
+        case .focus:         return "Focus"
         case .voice:         return "Voice"
         case .appearance:    return "Appearance"
         case .companion:     return "Companion"

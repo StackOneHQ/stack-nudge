@@ -361,7 +361,7 @@ struct CompactView: View {
     }
 
     // Passive muted signal on the pill — a dimmed bell.slash while a timed
-    // mute is active, nothing otherwise. Reads nav.muteTick so it clears the
+    // mute is active, a dimmed moon while Focus holds banners, nothing otherwise. Reads nav.muteTick so it clears the
     // instant the mute lifts (the controller's timer bumps it).
     @ViewBuilder private var muteIndicator: some View {
         let _ = nav.muteTick
@@ -370,6 +370,12 @@ struct CompactView: View {
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .help("Notifications muted")
+        }
+        if nav.focusHolding {
+            Image(systemName: "moon.fill")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .help("Focus is on: banners held")
         }
     }
 

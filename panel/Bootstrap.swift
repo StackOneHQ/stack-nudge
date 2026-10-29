@@ -75,6 +75,8 @@ enum Bootstrap {
 
     static let installDir       = "\(NSHomeDirectory())/.stack-nudge"
     static let notifyPath       = "\(NSHomeDirectory())/.stack-nudge/notify.sh"
+    // The command-line client: ~/.stack-nudge/stack-nudge say|focus|poll|...
+    static let cliPath          = "\(NSHomeDirectory())/.stack-nudge/stack-nudge"
     static let venvSymlinkPath  = "\(NSHomeDirectory())/.stack-nudge/venv"
     static let configPath       = "\(NSHomeDirectory())/.stack-nudge/config"
     static let phrasesDir       = "\(NSHomeDirectory())/.stack-nudge/phrases"
@@ -188,6 +190,32 @@ enum Bootstrap {
         } catch {
             log("failed to refresh notify.sh: \(error.localizedDescription)")
             return nil
+        }
+    }
+
+    // The `stack-nudge` CLI this bundle ships, nil on a build that didn't bundle it.
+    static func bundledCLIScript() -> String? {
+        guard let url = Bundle.main.url(forResource: "stack-nudge", withExtension: nil)
+        else { return nil }
+        return try? String(contentsOf: url, encoding: .utf8)
+    }
+
+    // Keep the installed CLI equal to the bundled one. Unlike notify.sh it carries
+    // no hook-trust hash and no version stamp, so a plain content compare is the
+    // whole rule. Skips a machine with no install directory, like the refresh above.
+    @discardableResult
+    static func installCLI(bundled script: String?, at path: String = cliPath) -> Bool {
+        guard let script,
+              FileManager.default.fileExists(
+                  atPath: (path as NSString).deletingLastPathComponent),
+              (try? String(contentsOfFile: path, encoding: .utf8)) != script
+        else { return false }
+        do {
+            try writeNotifyScript(script, to: path)
+            return true
+        } catch {
+            log("failed to install the stack-nudge CLI: \(error.localizedDescription)")
+            return false
         }
     }
 
@@ -688,6 +716,12 @@ enum Bootstrap {
               let notifyScript = try? String(contentsOf: notifyURL, encoding: .utf8)
         else { throw BootstrapError.bundleResourceMissing("notify.sh") }
         try writeNotifyScript(notifyScript)
+
+        progress("Copying the stack-nudge CLI…")
+        guard let cliScript = bundledCLIScript() else {
+            throw BootstrapError.bundleResourceMissing("stack-nudge")
+        }
+        try writeNotifyScript(cliScript, to: cliPath)
 
         progress("Copying phrase pools…")
         // Wipe then recopy so reinstalls pick up new phrases.
