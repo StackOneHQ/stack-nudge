@@ -54,6 +54,17 @@ final class GlobalKeyRouterTests: XCTestCase {
                        .swallowRepeat)
     }
 
+    // ⏎ on the post-update screen turns the companion on or dismisses; a held
+    // one must not carry on into the Events page that follows.
+    func test_heldReturnAfterAScreenEndsIsSwallowed() {
+        var router = PanelController.GlobalKeyRouter()
+        router.swallowRepeats(of: 36)
+        XCTAssertEqual(router.route(key(36, isRepeat: true), recording: false, fieldEditor: nil),
+                       .swallowRepeat)
+        XCTAssertNil(router.route(key(36), recording: false, fieldEditor: nil))
+        XCTAssertNil(router.route(key(36, isRepeat: true), recording: false, fieldEditor: nil))
+    }
+
     func test_aFreshPressAfterwardsActsNormally() {
         var router = PanelController.GlobalKeyRouter()
         _ = router.route(key(53), recording: false, fieldEditor: field())

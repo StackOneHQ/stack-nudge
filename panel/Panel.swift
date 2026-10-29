@@ -1124,6 +1124,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     })
     private var listener: EventListener?
     private var menuBar: MenuBarController?
+    private var companion: CompanionController?
     private var updateChecker: UpdateChecker?
     private var updater: Updater?
     private let claudeCliQuotaProbe = ClaudeCliQuotaProbe()
@@ -1281,6 +1282,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
         startListener()
         menuBar = MenuBarController(panelController: self)
+        companion = CompanionController(
+            store: store, sessions: sessions, nav: nav,
+            onClick: { [weak self] in self?.toggle() },
+            onContextMenu: { [weak self] event, view in self?.menuBar?.popUpMenu(for: event, in: view) })
+        companion?.onMove = { [weak self] in
+            guard let self, self.panel.isVisible, !self.nav.compactMode else { return }
+            self.positionPanel()
+        }
 
         nav.actions = SettingsActions(
             checkPermissions: { [weak self] in self?.showPermissions() },
@@ -5218,6 +5227,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // cursor's on. Re-arranged monitors or laptops opening lidless can leave
     // a saved origin pointing nowhere, so the validation is important.
     private func positionPanel() {
+        // With the companion on, the panel opens beside the character instead
+        // of at its own saved spot.
+        if let character = MainActor.assumeIsolated({ companion?.visibleFrame }),
+           let screen = NSScreen.screens.first(where: { $0.frame.intersects(character) }) ?? NSScreen.main {
+            let frame = CompanionPlacement.panelFrame(character: character, visible: screen.visibleFrame,
+                                                      size: panel.frame.size)
+            panel.setFrameOrigin(frame.origin)
+            return
+        }
         let savedOrigin = Self.loadSavedPanelOrigin()
         if let origin = savedOrigin,
            NSScreen.screens.contains(where: { $0.frame.contains(origin) }) {

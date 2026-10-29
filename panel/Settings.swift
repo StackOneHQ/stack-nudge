@@ -633,13 +633,18 @@ struct SettingsView: View {
         case .downloadVoiceModel: voiceModelDownloadRow(index: nav.index(of: .downloadVoiceModel))
 
         // Appearance
-        case .widget:        row(.widget, label: "Widget", kind: .toggle, value: nav.compactMode ? "On" : "Off")
+        // The companion stands in for the pill while it is on.
+        case .widget:        row(.widget, label: "Widget", kind: .toggle, value: nav.companionEnabled ? "Companion" : (nav.widgetPreferred ? "On" : "Off"), enabled: !nav.companionEnabled)
         case .snapToCorners: row(.snapToCorners, label: "Snap to corners", kind: .toggle, value: nav.compactSnap ? "On" : "Off", enabled: nav.compactMode)
         case .widgetCorner:  row(.widgetCorner, label: "Widget corner", kind: .cycle, value: nav.compactCorner.label, enabled: nav.compactMode && nav.compactSnap)
         case .widgetOpacity: row(.widgetOpacity, label: "Widget opacity", kind: .cycle, value: "\(Int(nav.compactAlpha * 100))%", enabled: nav.compactMode)
         case .widgetContent: row(.widgetContent, label: "Widget type", kind: .cycle, value: nav.compactContent.label, enabled: nav.compactMode)
         case .mascot:        row(.mascot, label: "Mascot", kind: .cycle, value: nav.mascot.label, enabled: nav.compactMode)
         case .theme:         row(.theme, label: "Accent color", kind: .cycle, value: nav.theme.label, enabled: nav.compactMode)
+
+        // Companion
+        case .companion:     row(.companion, label: "Companion", kind: .toggle, value: nav.companionEnabled ? "On" : "Off")
+        case .companionSize: row(.companionSize, label: "Size", kind: .cycle, value: nav.companionSize.label, enabled: nav.companionEnabled)
 
         // Usage
         case .quotaTracking:  row(.quotaTracking, label: "Quota tracking", kind: .toggle, value: nav.quotaTrackingEnabled ? "On" : "Off")

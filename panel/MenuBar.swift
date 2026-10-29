@@ -152,6 +152,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         statusItem.menu = menu
     }
 
+    // The companion's right-click shows this same menu at the pointer;
+    // menuWillOpen fills it either way.
+    func popUpMenu(for event: NSEvent, in view: NSView) {
+        guard let menu = statusItem.menu else { return }
+        NSMenu.popUpContextMenu(menu, with: event, for: view)
+    }
+
     // MARK: - Menu bar icon
 
     // StackOne brand green (#00AF66), taken from the official icon SVG and
