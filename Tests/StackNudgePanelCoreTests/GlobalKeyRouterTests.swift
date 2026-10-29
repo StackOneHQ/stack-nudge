@@ -29,11 +29,14 @@ final class GlobalKeyRouterTests: XCTestCase {
     }
 
     // Recording takes ⌘Esc and ends. The rest of the held key then reads as
-    // Esc outside a field, which used to hide the panel.
+    // Esc outside a field, which used to hide the panel, with ⌘ still down or
+    // let go first.
     func test_heldCommandEscapeAfterRecordingIsSwallowed() {
         var router = PanelController.GlobalKeyRouter()
         XCTAssertNil(router.route(key(53, .command), recording: true, fieldEditor: nil))
         XCTAssertEqual(router.route(key(53, .command, isRepeat: true), recording: false, fieldEditor: nil),
+                       .swallowRepeat)
+        XCTAssertEqual(router.route(key(53, isRepeat: true), recording: false, fieldEditor: nil),
                        .swallowRepeat)
     }
 
