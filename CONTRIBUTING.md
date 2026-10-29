@@ -67,7 +67,8 @@ CI runs the suite on every push and PR — `swift test` is one of the required c
 - `shared/` — code shared by both binaries (currently `AppActivator.swift`)
 - `phrases/` — per-language voice phrase pools sourced by `notify.sh` at hook time
 - `notify.sh` — the shell entry-point CC/Cursor/Gemini hooks invoke; routes events to banner / panel / voice surfaces
-- `assets/` — logo / icon source files
+- `panel/Companion/`: the companion character (skin engine in `LayerRig` and `BakedRig`, its skins, window and menu)
+- `assets/`: logo / icon source files, plus `assets/skins/` (the companion's baked art, copied into the app bundle by `build.sh`)
 
 ## macOS permissions during development
 
