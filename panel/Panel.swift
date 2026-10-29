@@ -40,6 +40,10 @@ private enum KeyCode {
     static let mKey:      UInt16 = 46
     static let wKey:      UInt16 = 13
     static let hKey:      UInt16 = 4
+    static let aKey:      UInt16 = 0
+    static let cKey:      UInt16 = 8
+    static let fKey:      UInt16 = 3
+    static let uKey:      UInt16 = 32
     static let slash:     UInt16 = 44
 }
 
@@ -151,6 +155,7 @@ struct PanelContentView: View {
     @State private var tabsViewportWidth: CGFloat = 0
 
     let onGrantPermissions: () -> Void
+    let onOpenFeedEvent: (NudgeEvent) -> Void
     // False only for ScreenshotRenderer, passed on to Settings: see SettingsView.
     var runsOnAppear = true
 
@@ -286,7 +291,7 @@ struct PanelContentView: View {
 
     private func tabCount(_ mode: PanelMode) -> Int {
         switch mode {
-        case .events:   return store.events.count
+        case .events:   return store.pendingCount
         case .sessions: return sessions.liveSessions.count
         case .outcomes: return ticketGroupCount
         default:        return 0
@@ -505,7 +510,12 @@ struct PanelContentView: View {
             }
             switch nav.eventsPane {
             case .live:
-                if store.events.isEmpty { emptyState } else { eventList }
+                if store.events.isEmpty {
+                    emptyState
+                } else {
+                    FeedTagChips(store: store)
+                    if store.visibleEvents.isEmpty { filteredEmptyState } else { eventList }
+                }
             case .history:
                 historyPane
             }
@@ -635,35 +645,33 @@ struct PanelContentView: View {
         .background(Color.orange.opacity(0.12))
     }
 
+    @ViewBuilder
     private var emptyState: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "bell.slash")
-                .font(.system(size: 28, weight: .light))
-                .foregroundStyle(.tertiary)
-            Text("No nudges yet")
-                .foregroundStyle(.secondary)
-                .font(.subheadline)
+        if store.clearedFeed {
+            EventsNoticeView(symbol: "checkmark.circle", title: "All caught up")
+        } else {
+            EventsNoticeView(symbol: "bell.slash", title: "No nudges yet")
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.vertical, 24)
+    }
+
+    private var filteredEmptyState: some View {
+        let none = store.tagFilter.noneShown(among: store.presentTags)
+        return EventsNoticeView(symbol: "line.3.horizontal.decrease.circle",
+                                title: none ? "No filters selected" : "Nothing matches the filters",
+                                detail: "Click All, or press F to cycle")
     }
 
     private var eventList: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 2) {
-                    ForEach(store.events) { event in
-                        EventRow(event: event,
-                                 selected: store.selectedID == event.id,
-                                 sessionLabel: SessionLabel.displayName(
-                                     for: event,
-                                     in: sessions.sessions,
-                                     persistence: persistence,
-                                     allowTabTitle: nav.tabTitleNames
-                                 ))
-                            .id(event.id)
-                            .contentShape(Rectangle())
-                            .onTapGesture { store.selectedID = event.id }
+                    ForEach(EventListItem.items(store.visibleEvents, now: Date())) { item in
+                        switch item {
+                        case .day(let title):
+                            DaySeparator(title: title)
+                        case .event(let event):
+                            eventRow(event).id(event.id)
+                        }
                     }
                 }
                 .padding(.top, 4)
@@ -687,6 +695,39 @@ struct PanelContentView: View {
         }
     }
 
+    private func eventRow(_ event: NudgeEvent) -> some View {
+        EventRow(event: event,
+                 selected: store.selectedID == event.id,
+                 sessionLabel: SessionLabel.displayName(
+                     for: event,
+                     in: sessions.sessions,
+                     persistence: persistence,
+                     allowTabTitle: nav.tabTitleNames
+                 ),
+                 expanded: store.expandedIDs.contains(event.id),
+                 onToggleExpand: { store.toggleExpanded(id: event.id) })
+            .contentShape(Rectangle())
+            .onTapGesture { store.selectedID = event.id }
+            .contextMenu { if event.isFeed { rowMenu(event) } }
+    }
+
+    @ViewBuilder
+    private func rowMenu(_ event: NudgeEvent) -> some View {
+        Button("Open") { onOpenFeedEvent(event) }
+            .disabled(event.url == nil)
+        Button(event.isRead ? "Mark as unread" : "Mark as read") {
+            store.toggleRead(id: event.id)
+        }
+        Button("Remove") { store.remove(id: event.id) }
+        if let url = event.url {
+            Divider()
+            Button("Copy link") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(url.absoluteString, forType: .string)
+            }
+        }
+    }
+
     private var footer: some View {
         let hints = Self.eventsFooterHints(
             pane: nav.eventsPane,
@@ -695,7 +736,14 @@ struct PanelContentView: View {
             primaryAction: primaryActionLabel,
             dismissLabel: dismissLabel,
             snoozeEnabled: snoozeEnabled,
-            muted: nav.isMuted
+            muted: nav.isMuted,
+            feed: FeedFooterState(unread: store.unreadCount,
+                                  feedCount: store.events.filter(\.isFeed).count,
+                                  selectedIsFeed: store.selectedEvent?.isFeed == true,
+                                  selectedIsRead: store.selectedEvent?.isRead == true,
+                                  selectedExpandable: store.selectedEvent?.members.isEmpty == false,
+                                  selectedExpanded: store.selectedID.map(store.expandedIDs.contains) == true,
+                                  confirmingClear: nav.confirmingClear)
         )
         return PageFooter {
             ForEach(hints.indices, id: \.self) { FooterHintRow(spec: hints[$0]) }
@@ -715,7 +763,8 @@ struct PanelContentView: View {
                                   primaryAction: String?,
                                   dismissLabel: String,
                                   snoozeEnabled: Bool,
-                                  muted: Bool) -> [FooterHintSpec] {
+                                  muted: Bool,
+                                  feed: FeedFooterState = FeedFooterState()) -> [FooterHintSpec] {
         // "Mute" toggles to "Resume" while a timed mute is active — mirrors the
         // header bell and the menu-bar "Resume notifications" item.
         let muteLabel = muted ? "Resume" : "Mute"
@@ -736,6 +785,11 @@ struct PanelContentView: View {
                 FooterHintSpec(label: "Select", keys: ["↑↓", "⌘↑↓"]),
                 FooterHintSpec(label: "Filter", keys: ["/"]),
                 FooterHintSpec(label: "Back",   keys: ["←"]),
+            ]
+
+        case .live where feed.confirmingClear:
+            return [
+                FooterHintSpec(label: "Clear \(feed.feedCount) feed events", keys: ["C"], primary: true),
             ]
 
         case .live where liveQueueEmpty:
@@ -768,6 +822,22 @@ struct PanelContentView: View {
             hints.append(FooterHintSpec(label: dismissLabel, keys: ["⌫"]))
             hints.append(FooterHintSpec(label: muteLabel, keys: ["M"]))
             hints.append(FooterHintSpec(label: "History", keys: ["H"]))
+            // Feed shortcuts only exist while there is a feed to act on, and
+            // they shed before anything the bar already advertised.
+            if feed.feedCount > 0 {
+                hints.append(FooterHintSpec(label: "Filter", keys: ["F"], shedOrder: -4))
+                if feed.selectedExpandable {
+                    hints.append(FooterHintSpec(label: feed.selectedExpanded ? "Collapse" : "Expand",
+                                                keys: ["Space"], shedOrder: -5))
+                }
+                if feed.selectedIsFeed {
+                    hints.append(FooterHintSpec(label: feed.selectedIsRead ? "Unread" : "Read",
+                                                keys: ["U"], shedOrder: -3))
+                }
+                hints.append(FooterHintSpec(label: "All read", keys: ["A"],
+                                            dimmed: feed.unread == 0, shedOrder: -2))
+                hints.append(FooterHintSpec(label: "Clear", keys: ["C"], shedOrder: -1))
+            }
             return hints
         }
     }
@@ -844,6 +914,18 @@ private struct HistoryRow: View {
     }
 }
 
+// What the footer needs to know about the feed, as data so the hint table
+// stays pure.
+struct FeedFooterState: Equatable {
+    var unread = 0
+    var feedCount = 0
+    var selectedIsFeed = false
+    var selectedIsRead = false
+    var selectedExpandable = false
+    var selectedExpanded = false
+    var confirmingClear = false
+}
+
 struct EventRow: View {
 
     let event: NudgeEvent
@@ -852,7 +934,8 @@ struct EventRow: View {
     // still re-renders the row without every row observing the whole session
     // list. nil when we know neither a name nor a project for this event.
     let sessionLabel: String?
-
+    var expanded = false
+    var onToggleExpand: (() -> Void)?
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -864,7 +947,7 @@ struct EventRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(event.title)
-                        .font(.subheadline.weight(.medium))
+                        .font(.subheadline.weight(event.isUnread ? .bold : .medium))
                         .lineLimit(1)
                         .truncationMode(.tail)
                     if let term = terminalLabel {
@@ -897,15 +980,34 @@ struct EventRow: View {
                             .truncationMode(.tail)
                     }
                     Spacer(minLength: 8)
-                    Text(rightTimestamp)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                    if event.isFeed, !isSnoozed {
+                        EventTimeLabel(date: event.timestamp)
+                    } else {
+                        Text(rightTimestamp)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    if !event.members.isEmpty {
+                        Button { onToggleExpand?() } label: {
+                            Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 14, height: 14)
+                        }
+                        .buttonStyle(.plain)
+                        .help(expanded ? "Collapse" : "Show each comment")
+                    }
                 }
                 Text(event.message)
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(event.isUnread ? .primary : .secondary)
                     .lineLimit(2)
                     .truncationMode(.tail)
+                if expanded {
+                    ForEach(Array(event.members.enumerated()), id: \.offset) { _, member in
+                        memberLine(member)
+                    }
+                }
             }
         }
         .opacity(isSnoozed ? 0.55 : 1.0)
@@ -914,6 +1016,28 @@ struct EventRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(rowBackground)
         .padding(.horizontal, 6)
+    }
+
+    private func memberLine(_ member: FeedMember) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(member.message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(EventTime.listTime(member.at, now: Date()))
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .help(EventTime.fullDate(member.at))
+        }
+        .padding(.leading, 8)
+        .padding(.vertical, 2)
+        .overlay(alignment: .leading) {
+            Rectangle().fill(Color.primary.opacity(0.15)).frame(width: 2)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { if let url = member.url { NSWorkspace.shared.open(url) } }
+        .help(member.url == nil ? "" : "Open this comment")
     }
 
     // Composes the selection tint with a 3pt left-edge accent in the
@@ -1489,7 +1613,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             onCloseExtensionsBrowser: { [weak self] in self?.closeExtensionsBrowser() },
             extensionSources: extensionSources,
             onCloseExtensionSources: { [weak self] in self?.closeExtensionSources() },
-            onGrantPermissions: { [weak self] in self?.handleGrantPermissions() }
+            onGrantPermissions: { [weak self] in self?.handleGrantPermissions() },
+            onOpenFeedEvent: { [weak self] event in self?.openFeedEvent(event) }
         ).environmentObject(SessionPersistence.shared))
         // Don't let SwiftUI's preferred / intrinsic content size drive
         // the NSPanel frame. The panel is user-resizable + size-persisted;
@@ -3830,6 +3955,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // recording off should stop new writes, not hide what's already there.
     private func startEventHistory() {
         nav.historyRecords = eventLog.load()
+        store.restoreFeed(from: nav.historyRecords)
         applyEventHistorySetting()
     }
 
@@ -4135,12 +4261,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // Resolve a blocking permission's FIFO from the chosen action so the
         // agent never hangs to its 550s timeout. Only a body tap goes on to
         // focus the editor.
-        store.remove(id: event.id)
-        // A feed has no window to raise; its banner opens its link.
+        // A feed has no window to raise; its banner opens its link and leaves
+        // the event listed, read.
         if event.isFeed {
+            store.setRead(id: event.id, true)
             if let url = event.url { NSWorkspace.shared.open(url) }
             return
         }
+        store.remove(id: event.id)
         if let fifo = event.fifoPath {
             let reply = Self.bannerReply(to: response.actionIdentifier)
             DispatchQueue.global(qos: .userInitiated).async { Self.writeFIFO(fifo, reply) }
@@ -5158,6 +5286,21 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return true
         }
 
+        // Clear all asks first. C confirms; anything else backs out, and the
+        // key is swallowed so a stray ⌫ can't also deny a prompt.
+        if nav.confirmingClear {
+            nav.confirmingClear = false
+            if event.keyCode == KeyCode.cKey, !shifted { store.clearFeed() }
+            return true
+        }
+
+        // F / Shift+F step the tag filter. Shift is part of the key here, so
+        // it is handled before the no-shift guard like S.
+        if event.keyCode == KeyCode.fKey {
+            store.tagFilter.cycle(among: store.presentTags, forward: !shifted)
+            return true
+        }
+
         // S/Shift+S handled before the no-shift switch since both variants
         // are valid; everything else requires no shift.
         if event.keyCode == KeyCode.sKey {
@@ -5167,6 +5310,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         guard !shifted else { return false }
 
         switch event.keyCode {
+        case KeyCode.space, KeyCode.rightArrow:
+            guard let selected = store.selectedEvent, !selected.members.isEmpty else { return false }
+            if event.keyCode == KeyCode.space { store.toggleExpanded(id: selected.id) }
+            else { store.setExpanded(id: selected.id, true) }
+        case KeyCode.leftArrow:
+            guard let selected = store.selectedEvent, !selected.members.isEmpty else { return false }
+            store.setExpanded(id: selected.id, false)
+        case KeyCode.uKey:
+            if let selected = store.selectedEvent { store.toggleRead(id: selected.id) }
+        case KeyCode.aKey:
+            store.markAllRead()
+        case KeyCode.cKey:
+            if store.events.contains(where: \.isFeed) { nav.confirmingClear = true }
         case KeyCode.upArrow:
             store.selectPrevious()
         case KeyCode.downArrow:
@@ -5534,18 +5690,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func actOnSelected(approve: Bool) {
         guard let event = store.selectedEvent else { return }
         let sendApproval = approve && event.hasActionButton
-        store.remove(id: event.id)
 
-        // A feed event opens its link; one without a link is simply done.
+        // A feed event opens its link and stays listed, read; one without a
+        // link is simply done.
         if event.isFeed {
-            if let url = event.url {
-                hidePanel()
-                NSWorkspace.shared.open(url)
-            } else if store.events.isEmpty {
-                hidePanel()
+            if event.url != nil {
+                openFeedEvent(event)
+            } else {
+                store.remove(id: event.id)
+                if store.events.isEmpty { hidePanel() }
             }
             return
         }
+        store.remove(id: event.id)
 
         // Approve a blocking permission by writing "allow" to its FIFO; the agent
         // then skips its own prompt. This path doesn't hand focus to the editor,
@@ -5597,6 +5754,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 agent: event.agent
             )
         }
+    }
+
+    func openFeedEvent(_ event: NudgeEvent) {
+        store.setRead(id: event.id, true)
+        guard let url = event.url else { return }
+        hidePanel()
+        NSWorkspace.shared.open(url)
     }
 
     private func dismissSelected() {
@@ -5861,6 +6025,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         nav.pickingValue = false
         if nav.recordingSpeakHotkey { nav.cancelRecordingSpeakHotkey() }
         if nav.recordingHotkey { nav.cancelRecordingHotkey() }
+        nav.confirmingClear = false
         // Compact mode: "hide" means "collapse back to the pill," never
         // make the user lose their widget entirely. Esc / hotkey / focus
         // loss all funnel through here.

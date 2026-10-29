@@ -6,7 +6,11 @@ import SwiftUI
 enum FeedStyle {
 
     static func symbol(for event: NudgeEvent) -> String {
-        switch event.tag {
+        symbol(tag: event.tag, source: event.source)
+    }
+
+    static func symbol(tag: String?, source: EventSource) -> String {
+        switch tag {
         case "review":         return "text.bubble.fill"
         case "review-request": return "person.crop.circle.badge.questionmark"
         case "ci":             return "gearshape.2.fill"
@@ -14,7 +18,7 @@ enum FeedStyle {
         case "deploy":         return "shippingbox.fill"
         case "pipeline":       return "arrow.triangle.branch"
         case "calendar":       return "calendar"
-        default:               return sourceSymbol(event.source)
+        default:               return sourceSymbol(source)
         }
     }
 

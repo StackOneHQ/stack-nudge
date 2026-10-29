@@ -1089,6 +1089,9 @@ final class PanelNav: ObservableObject {
     // Where ← leaves the Permissions page for: .settings, or .bootstrap when
     // setup opened it. Setup has no tab strip, so the page keeps that look too.
     @Published var permissionsReturnMode: PanelMode = .settings
+    // Clear all is destructive, so the first C only asks; the footer then
+    // offers C to confirm and Esc to cancel.
+    @Published var confirmingClear = false
     // Bumped when the panel's key handler wants the history filter field to take
     // the keyboard (the user pressed / or started typing). A counter rather than
     // a Bool because @FocusState can't be driven from an ObservableObject

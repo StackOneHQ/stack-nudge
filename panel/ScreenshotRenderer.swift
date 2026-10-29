@@ -328,7 +328,7 @@ enum ScreenshotRenderer {
                 onConfigureExtension: { _ in }, onCloseExtensionsBrowser: {},
                 extensionSources: ExtensionSources(readValue: { nil }, writeValue: { _ in }),
                 onCloseExtensionSources: {},
-                onGrantPermissions: {}, runsOnAppear: false
+                onGrantPermissions: {}, onOpenFeedEvent: { _ in }, runsOnAppear: false
             ).environmentObject(persistence))
         }
 
