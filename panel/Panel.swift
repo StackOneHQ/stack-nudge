@@ -1599,6 +1599,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             }
             nav.postUpdateVersion = result.version.isEmpty ? "?" : result.version
             nav.postUpdateNotes = nil
+            nav.postUpdateFocus = .gotIt
             nav.mode = .postUpdate
             // Auto-open the panel so the user immediately sees the
             // "what shipped" view rather than discovering it via hotkey.
@@ -3904,6 +3905,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             if action == .cancelField || recorderTakesIt { swallowingRepeatsOf = event.keyCode }
             return action
         }
+
+        // For a key that ends a screen: a held ⏎ would otherwise repeat into
+        // whatever page comes next.
+        mutating func swallowRepeats(of keyCode: UInt16) {
+            swallowingRepeatsOf = keyCode
+        }
     }
 
     // Whether to swallow a key held over from a cancel or a recording, and
@@ -4141,20 +4148,25 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             }
         }
 
-        // Post-update view: Enter dismisses to the events tab. Single-purpose
-        // screen, no other navigation allowed while it's up.
+        // Post-update view: see postUpdateKeyAction. Single-purpose screen, no
+        // other navigation allowed while it's up.
         if nav.mode == .postUpdate {
-            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
-            guard plain else { return true }
-            switch event.keyCode {
-            case KeyCode.returnKey, KeyCode.numpadEnter:
+            let flags = mods.intersection([.command, .control, .option, .shift])
+            switch Self.postUpdateKeyAction(keyCode: event.keyCode, modifiers: flags,
+                                            focus: nav.postUpdateFocus,
+                                            offerShowing: nav.showCompanionOffer) {
+            case .moveFocus(let focus): nav.postUpdateFocus = focus
+            case .turnOn:
+                globalKeys.swallowRepeats(of: event.keyCode)
+                nav.acceptCompanionOffer()
+            case .dismiss:
+                globalKeys.swallowRepeats(of: event.keyCode)
                 nav.postUpdateVersion = nil
                 nav.postUpdateNotes = nil
                 nav.mode = .events
-                return true
-            default:
-                return true
+            case .swallow:              break
             }
+            return true
         }
 
         // Update-confirm: Enter triggers install, ← cancels back to Settings.
@@ -4757,6 +4769,28 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         case openInSettings
         case refresh
         case swallow
+    }
+
+    enum PostUpdateKeyAction: Equatable {
+        case moveFocus(PostUpdateFocus)
+        case turnOn
+        case dismiss
+        case swallow
+    }
+
+    // Tab and ⇧Tab walk the two buttons while the companion card shows, and ⏎
+    // presses the focused one. With no card there is one button, so Tab has
+    // nowhere to go. Every other key is swallowed so none reaches Events.
+    static func postUpdateKeyAction(keyCode: UInt16, modifiers: NSEvent.ModifierFlags,
+                                    focus: PostUpdateFocus, offerShowing: Bool) -> PostUpdateKeyAction {
+        switch (keyCode, modifiers) {
+        case (KeyCode.tab, []), (KeyCode.tab, .shift):
+            return offerShowing ? .moveFocus(focus.other) : .swallow
+        case (KeyCode.returnKey, []), (KeyCode.numpadEnter, []):
+            return offerShowing && focus == .turnOn ? .turnOn : .dismiss
+        default:
+            return .swallow
+        }
     }
 
     // ↑↓ pick a grant, ⏎ prompts for it, ⌘⏎ opens its pane in System Settings,

@@ -3,6 +3,13 @@ import SwiftUI
 
 // Hashable is declared rather than synthesised: extensionTab's associated value
 // removes the implicit conformance that `nav.mode == x` relies on everywhere.
+// Which button of the post-update screen has the keyboard.
+enum PostUpdateFocus: Equatable {
+    case turnOn, gotIt
+
+    var other: PostUpdateFocus { self == .turnOn ? .gotIt : .turnOn }
+}
+
 enum PanelMode: Hashable {
     case events
     case sessions
@@ -384,6 +391,7 @@ final class PanelNav: ObservableObject {
     // PostUpdateView (mode = .postUpdate). Cleared on dismiss.
     @Published var postUpdateVersion: String?
     @Published var postUpdateNotes:   String?
+    @Published var postUpdateFocus:   PostUpdateFocus = .gotIt
     // Latest quota snapshot from `claude /usage`. Driven by the CLI probe
     // poller in PanelController. nil before the first probe completes, or
     // when the probe failed (no `claude` on PATH, not signed in, parse error).
@@ -1862,6 +1870,12 @@ final class PanelNav: ObservableObject {
     // Existing installs see the companion offered once, after an update; new
     // installs already start with it on.
     var showCompanionOffer: Bool { !companionEnabled && !companionOffered }
+
+    func acceptCompanionOffer() {
+        markCompanionOffered()
+        setCompanionEnabled(true)
+        postUpdateFocus = .gotIt
+    }
 
     func markCompanionOffered() {
         guard !companionOffered else { return }

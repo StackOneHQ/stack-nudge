@@ -354,7 +354,7 @@ grep -c stack-nudge-version ~/.stack-nudge/notify.sh   # 0 means the script pred
 
 ### Companion (macOS)
 
-The companion is a small animated character that floats on your desktop and takes the pill widget's place while it is on. New installs start with it; on an existing install you are offered it once after an update, or you can turn it on in **Settings → Companion** (`STACKNUDGE_COMPANION=true`). Turning it off brings the pill back with the settings you had.
+The companion is a small animated character that floats on your desktop and takes the pill widget's place while it is on. New installs start with it; on an existing install you are offered it once after an update, or you can turn it on in **Settings → Companion** (`STACKNUDGE_COMPANION=true`). Turning it off brings the pill back with the settings you had. On the update screen, `Tab` / `⇧Tab` move between **Turn on** and **Got it** (focus starts on **Got it**) and `⏎` presses the one with the ring.
 
 - **Click** the character to open the panel beside it. The hotkey opens it there too.
 - **Drag** it anywhere; it stays where you drop it, and comes back on screen if a display it was on goes away.
