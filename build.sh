@@ -51,6 +51,12 @@ build_app() {
   if [[ -f "$repo_root/CHANGELOG.md" ]]; then
     cp "$repo_root/CHANGELOG.md" "$contents/Resources/CHANGELOG.md"
   fi
+  # Companion skins: PNG parts and manifests baked from the design sheets.
+  # Baking needs Node and Chromium, so the output is committed and this only
+  # copies it. The .bake-hash files are for the bake, not the app.
+  if [[ -d "$repo_root/assets/skins" ]]; then
+    rsync -a --exclude '.*' "$repo_root/assets/skins/" "$contents/Resources/skins/"
+  fi
 
   # Optional: bundle a self-contained Python + stackvox into Resources/venv/.
   # Skipped for local iteration (slow); enabled by CI for release artifacts.
@@ -227,11 +233,13 @@ mkdir -p build
 # every run.
 touch build/.metadata_never_index
 
-# Sources are globbed (mirrors Package.swift's `sources: ["panel","shared"]`)
+# Sources are globbed (mirrors Package.swift's `sources: ["panel","shared"]`,
+# which includes subfolders such as panel/Companion)
 # so new files are picked up automatically — no hand-maintained list to drift.
 build_app "$APP" "stack-nudge" \
   "panel/Info.plist" "notifier/Icon.icns" "13.0" \
   panel/*.swift \
+  panel/Companion/*.swift \
   shared/*.swift \
   -framework Foundation -framework AppKit -framework SwiftUI -framework Carbon \
   -framework UserNotifications
