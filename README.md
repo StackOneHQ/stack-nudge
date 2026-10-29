@@ -300,7 +300,7 @@ Independent of quota: stack-nudge can also fire a banner when an individual Clau
 
 #### Settings tab
 
-Reachable from the tab strip or `Cmd+5`. Keyboard-driven rows for hotkey, behavior toggles (banner, mute when focused, a Mute/Resume action row with mute duration, unanswered-prompt reminder interval, stalled-session threshold, pin panel, launch at login), widget (snap-to-corners toggle, corner, mascot picker, opacity), companion (on/off, size), sound picks (with preview-on-cycle), voice notifications + picker + speed (with preview-on-cycle using a random conversational phrase), usage config (quota tracking + alerts + threshold + poll frequency + context alert threshold + show-remaining), event history (recording toggle + clear), Slack (paste setup, detected user, test message, notifications toggle, idle threshold, message detail, finished-turn toggle), and action rows (edit phrases, check permissions, open config file, view release notes, check for updates, uninstall, quit).
+Reachable from the tab strip or `Cmd+5`. Keyboard-driven rows for hotkey, behavior toggles (banner, mute when focused, a Mute/Resume action row with mute duration, unanswered-prompt reminder interval, stalled-session threshold, pin panel, launch at login), widget (snap-to-corners toggle, corner, mascot picker, opacity), companion (on/off, count badge, size, pose preview, reset position), sound picks (with preview-on-cycle), voice notifications + picker + speed (with preview-on-cycle using a random conversational phrase), usage config (quota tracking + alerts + threshold + poll frequency + context alert threshold + show-remaining), event history (recording toggle + clear), Slack (paste setup, detected user, test message, notifications toggle, idle threshold, message detail, finished-turn toggle), and action rows (edit phrases, check permissions, open config file, view release notes, check for updates, uninstall, quit).
 
 | Key | Action |
 |-----|--------|
@@ -358,16 +358,17 @@ The companion is a small animated character that floats on your desktop and take
 
 - **Click** the character to open the panel beside it. The hotkey opens it there too.
 - **Drag** it anywhere; it stays where you drop it, and comes back on screen if a display it was on goes away.
-- **Right-click** for the menu, including a **Companion** submenu with its size.
+- **Right-click** for the menu, including a **Companion** submenu with its size and **Reset position**, which puts it back where a fresh install starts it.
 
-Its pose follows what stack-nudge knows: thinking while an agent is busy, watching while agent sessions are live, waiting when an event or a permission prompt is queued, alert when a quota is past your alert threshold, muted while notifications are muted, and asleep after five quiet minutes. It animates on the render server and pauses while it is covered, the display sleeps or the screen is locked, so it stays near 0% CPU. With Reduce Motion on, it holds still.
+Its pose follows what stack-nudge knows: thinking while an agent is busy, watching while agent sessions are live, waiting when an event or a permission prompt is queued, alert when a quota is past your alert threshold, muted while notifications are muted, and asleep after five quiet minutes. The waiting pose is a wave: it means something wants you to act, and a finished agent turn is one of those, so it still waves. A new finished turn also gets a single small nod on arrival, when the character is otherwise calm (idle or asleep), not muted, and Reduce Motion is off. A count badge at its corner shows how many events are waiting, grey while muted. It animates on the render server and pauses while it is covered, the display sleeps or the screen is locked, so it stays near 0% CPU. With Reduce Motion on, it holds still.
 
 | Setting | Key | Values |
 |---------|-----|--------|
 | Companion | `STACKNUDGE_COMPANION` | `true` / `false` |
 | Size | `STACKNUDGE_COMPANION_SIZE` | `small`, `medium` (default), `large` |
+| Count badge | `STACKNUDGE_COMPANION_BADGE` | `true` (default) / `false` |
 
-In Settings → Companion, `Space` or `⏎` flips Companion, and on Size starts picking, as on every other value row. The character's last spot is kept in `STACKNUDGE_COMPANION_POS`.
+In Settings → Companion, `Space` or `⏎` flips Companion and Count badge, runs Reset position, and on Size and Preview pose starts picking, as on every other row. Preview pose shows any pose on the character without changing anything else; it isn't saved. Holding `⌥` while the menu is open also reveals a **Debug** submenu under Companion with the same pose preview and an **Info (nod)** entry that plays the nod once. The character's last spot is kept in `STACKNUDGE_COMPANION_POS`.
 
 ### Menu bar (macOS)
 
@@ -379,7 +380,7 @@ When the panel daemon is running, a bell icon appears in your menu bar. The same
 | `Show banners` | Toggles macOS banner notifications. Enabling fires a confirmation banner. |
 | `Voice notifications` | Toggles spoken notifications. Enabling speaks *"Voice notifications enabled"*. |
 | `Mute notifications ▸` | Submenu (For 15m / 30m / 1h / 2h) to silence all nudges for a set time. While muted the item becomes `Resume notifications` and the menu-bar icon shows a `bell.slash` + countdown. |
-| `Companion ▸` | While the companion is on: its size |
+| `Companion ▸` | While the companion is on: size, Reset position, and (with `⌥` held) Debug |
 | `Show panel` | Brings the floating panel up (handy when no events are queued) |
 | `Settings…` (⌘,) | Opens the panel straight on Settings |
 | `Check permissions…` | Opens the Permissions page in the panel (see below) |
