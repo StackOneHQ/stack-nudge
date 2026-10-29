@@ -146,7 +146,7 @@ final class SettingsRowTests: XCTestCase {
 
         for row in [SettingsRow.wireAgents, .dismissAgents, .quit, .editPhrases,
                     .openConfig, .releaseNotes, .checkUpdates, .checkPermissions,
-                    .uninstall, .disconnectGithub, .openRepo, .browseExtensions, .companionResetPosition,
+                    .uninstall, .disconnectGithub, .openRepo, .browseExtensions, .companionResetPosition, .companionTurnOn,
                     .installedExtension("derby"), .permissions, .hotkey] {
             select(row)
             XCTAssertEqual(nav.selectedRow, row)
@@ -154,14 +154,14 @@ final class SettingsRowTests: XCTestCase {
         }
 
         // On/off rows flip on Space / Enter only.
-        for row in [SettingsRow.banner, .voiceEnabled, .soundEnabled, .widget, .companion, .companionBadge,
+        for row in [SettingsRow.banner, .voiceEnabled, .soundEnabled, .companionBadge,
                     .quotaTracking, .githubLinks, .eventHistory, .pinPanel, .mute] {
             select(row)
             XCTAssertEqual(nav.selectedRow, row)
             XCTAssertFalse(nav.selectedRowIsPicker, "\(row) should ignore arrows")
         }
 
-        for row in [SettingsRow.muteDuration, .theme, .companionSize, .companionPreviewPose, .historyPerSession, .agentDoneSound] {
+        for row in [SettingsRow.muteDuration, .floatingWidget, .theme, .companionSize, .companionPreviewPose, .historyPerSession, .agentDoneSound] {
             select(row)
             XCTAssertEqual(nav.selectedRow, row)
             XCTAssertTrue(nav.selectedRowIsPicker, "\(row) should pick")
@@ -257,7 +257,7 @@ final class SettingsRowTests: XCTestCase {
 
     func test_snapToCorners_sitsRightAfterWidget() {
         let rows = PanelNav().rows(in: .appearance)
-        let widget = rows.firstIndex(of: .widget)
+        let widget = rows.firstIndex(of: .floatingWidget)
         XCTAssertNotNil(widget)
         XCTAssertEqual(rows[widget! + 1], .snapToCorners)
         XCTAssertEqual(rows[widget! + 2], .widgetCorner)

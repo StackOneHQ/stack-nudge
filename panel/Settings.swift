@@ -633,8 +633,7 @@ struct SettingsView: View {
         case .downloadVoiceModel: voiceModelDownloadRow(index: nav.index(of: .downloadVoiceModel))
 
         // Appearance
-        // The companion stands in for the pill while it is on.
-        case .widget:        row(.widget, label: "Widget", kind: .toggle, value: nav.companionEnabled ? "Companion" : (nav.widgetPreferred ? "On" : "Off"), enabled: !nav.companionEnabled)
+        case .floatingWidget: row(.floatingWidget, label: "Floating widget", kind: .cycle, value: nav.floatingWidget.label)
         case .snapToCorners: row(.snapToCorners, label: "Snap to corners", kind: .toggle, value: nav.compactSnap ? "On" : "Off", enabled: nav.compactMode)
         case .widgetCorner:  row(.widgetCorner, label: "Widget corner", kind: .cycle, value: nav.compactCorner.label, enabled: nav.compactMode && nav.compactSnap)
         case .widgetOpacity: row(.widgetOpacity, label: "Widget opacity", kind: .cycle, value: "\(Int(nav.compactAlpha * 100))%", enabled: nav.compactMode)
@@ -643,7 +642,7 @@ struct SettingsView: View {
         case .theme:         row(.theme, label: "Accent color", kind: .cycle, value: nav.theme.label, enabled: nav.compactMode)
 
         // Companion
-        case .companion:     row(.companion, label: "Companion", kind: .toggle, value: nav.companionEnabled ? "On" : "Off")
+        case .companionTurnOn: row(.companionTurnOn, label: "Turn on companion", kind: .action, value: "")
         case .companionSize: row(.companionSize, label: "Size", kind: .cycle, value: nav.companionSize.label, enabled: nav.companionEnabled)
         case .companionBadge: row(.companionBadge, label: "Count badge", kind: .toggle, value: nav.companionBadge ? "On" : "Off", enabled: nav.companionEnabled)
         case .companionPreviewPose: row(.companionPreviewPose, label: "Preview pose", kind: .cycle, value: nav.companionPreviewPose?.label ?? "Live", enabled: nav.companionEnabled)
@@ -875,7 +874,15 @@ struct SettingsView: View {
             .onTapGesture { nav.settingsCategory = category }
     }
 
-    private var detailRows: some View {
+    @ViewBuilder private var detailRows: some View {
+        if nav.settingsCategory == .companion, !nav.companionEnabled {
+            Text("The companion is off. Turn it on with Floating widget in Appearance.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 6)
+        }
         ForEach(nav.rows(in: nav.settingsCategory), id: \.self) { id in
             settingRow(id)
         }

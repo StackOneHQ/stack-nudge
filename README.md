@@ -354,7 +354,7 @@ grep -c stack-nudge-version ~/.stack-nudge/notify.sh   # 0 means the script pred
 
 ### Companion (macOS)
 
-The companion is a small animated character that floats on your desktop and takes the pill widget's place while it is on. New installs start with it; on an existing install you are offered it once after an update, or you can turn it on in **Settings → Companion** (`STACKNUDGE_COMPANION=true`). Turning it off brings the pill back with the settings you had. On the update screen, `Tab` / `⇧Tab` move between **Turn on** and **Got it** (focus starts on **Got it**) and `⏎` presses the one with the ring.
+The companion is a small animated character that floats on your desktop and takes the pill widget's place while it is on. New installs start with it; on an existing install you are offered it once after an update, or you can choose it in **Settings → Appearance → Floating widget**, which is `Pill`, `Companion` or `Off` (`STACKNUDGE_FLOATING_WIDGET`). The pill's own rows (corner, opacity, type, mascot, snap) apply only to `Pill`. A config from before that setting is migrated on first load: `STACKNUDGE_COMPANION=true` becomes `companion`, else the old `STACKNUDGE_COMPACT_MODE` (on unless `false`) becomes `pill`, else `off`. On the update screen, `Tab` / `⇧Tab` move between **Turn on** and **Got it** (focus starts on **Got it**) and `⏎` presses the one with the ring.
 
 - **Click** the character to open the panel beside it. The hotkey opens it there too.
 - **Drag** it anywhere; it stays where you drop it, and comes back on screen if a display it was on goes away.
@@ -364,11 +364,11 @@ Its pose follows what stack-nudge knows: thinking while an agent is busy, watchi
 
 | Setting | Key | Values |
 |---------|-----|--------|
-| Companion | `STACKNUDGE_COMPANION` | `true` / `false` |
+| Floating widget (Appearance) | `STACKNUDGE_FLOATING_WIDGET` | `pill`, `companion`, `off` |
 | Size | `STACKNUDGE_COMPANION_SIZE` | `small`, `medium` (default), `large` |
 | Count badge | `STACKNUDGE_COMPANION_BADGE` | `true` (default) / `false` |
 
-In Settings → Companion, `Space` or `⏎` flips Companion and Count badge, runs Reset position, and on Size and Preview pose starts picking, as on every other row. Preview pose shows any pose on the character without changing anything else; it isn't saved. Holding `⌥` while the menu is open also reveals a **Debug** submenu under Companion with the same pose preview and an **Info (nod)** entry that plays the nod once. The character's last spot is kept in `STACKNUDGE_COMPANION_POS`.
+The Companion tab holds only the character's own settings. While Floating widget isn't `Companion` it shows a note and a **Turn on companion** row that switches it, and the settings are dimmed. `Space` or `⏎` flips Count badge, runs Reset position and Turn on companion, and on Floating widget, Size and Preview pose starts picking, as on every other row. Preview pose shows any pose on the character without changing anything else; it isn't saved. Holding `⌥` while the menu is open also reveals a **Debug** submenu under Companion with the same pose preview and an **Info (nod)** entry that plays the nod once. The character's last spot is kept in `STACKNUDGE_COMPANION_POS`.
 
 ### Menu bar (macOS)
 

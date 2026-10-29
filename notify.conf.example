@@ -57,13 +57,15 @@
 # Default: cyan
 #STACKNUDGE_THEME=violet
 
-# The companion: a floating character that takes the pill widget's place while
-# it is on. Click it to open the panel beside it, drag it anywhere, right-click
-# for its menu. Also settable in Settings → Companion. Set here, uncommented,
-# so new installs start with it; an install whose config predates it keeps the
-# pill until it is turned on.
-# Default when unset: false
-STACKNUDGE_COMPANION=true
+# What floats on the desktop: pill (the compact widget), companion (a character
+# that takes the pill's place; click it to open the panel beside it, drag it
+# anywhere, right-click for its menu) or off. Also settable in Settings →
+# Appearance → Floating widget. Set here, uncommented, so new installs start
+# with the companion. A config that predates this key is migrated on first
+# load: STACKNUDGE_COMPANION=true gives companion, else STACKNUDGE_COMPACT_MODE
+# (on unless false) gives pill, else off.
+# Default when unset and nothing to migrate: pill
+STACKNUDGE_FLOATING_WIDGET=companion
 
 # Character size: small, medium or large.
 # Default: medium

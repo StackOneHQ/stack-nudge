@@ -3,6 +3,31 @@ import SwiftUI
 
 // Hashable is declared rather than synthesised: extensionTab's associated value
 // removes the implicit conformance that `nav.mode == x` relies on everywhere.
+// What floats on the desktop: the compact pill, the companion, or nothing.
+// STACKNUDGE_FLOATING_WIDGET holds it. The two keys it replaced still decide
+// it on a config that predates it.
+enum FloatingWidget: String, CaseIterable {
+    case pill, companion, off
+
+    var label: String {
+        switch self {
+        case .pill:      return "Pill"
+        case .companion: return "Companion"
+        case .off:       return "Off"
+        }
+    }
+
+    // The new key wins. Without it: companion on is companion, else the old
+    // widget key (on unless set false) is pill, else off.
+    static func resolve(_ config: [String: String]) -> FloatingWidget {
+        if let saved = FloatingWidget(rawValue: config["STACKNUDGE_FLOATING_WIDGET"] ?? "") {
+            return saved
+        }
+        if ConfigFile.bool(config, "STACKNUDGE_COMPANION", default: false) { return .companion }
+        return ConfigFile.bool(config, "STACKNUDGE_COMPACT_MODE", default: true) ? .pill : .off
+    }
+}
+
 // Which button of the post-update screen has the keyboard.
 enum PostUpdateFocus: Equatable {
     case turnOn, gotIt
@@ -175,8 +200,8 @@ enum SettingsRow: Hashable {
     case permissions, update, hotkey
     case banner, muteWhenFocused, mute, muteDuration, remindUnanswered, stalledSessions,
          tabTitleNames, pinPanel, keepOpenWhenEmpty, launchAtLogin
-    case widget, snapToCorners, widgetCorner, widgetOpacity, widgetContent, mascot, theme
-    case companion, companionSize, companionBadge, companionPreviewPose, companionResetPosition
+    case floatingWidget, snapToCorners, widgetCorner, widgetOpacity, widgetContent, mascot, theme
+    case companionTurnOn, companionSize, companionBadge, companionPreviewPose, companionResetPosition
     case eventHistory, clearHistory
     case slackPaste, slackIdentity, slackTest
     case slackEnabled, slackIdle, slackDetail, slackStop
@@ -215,9 +240,9 @@ extension SettingsRow: CaseIterable {
         .permissions, .update, .hotkey,
         .banner, .muteWhenFocused, .mute, .muteDuration, .remindUnanswered,
         .stalledSessions, .tabTitleNames, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin,
-        .widget, .snapToCorners, .widgetCorner, .widgetOpacity, .widgetContent,
+        .floatingWidget, .snapToCorners, .widgetCorner, .widgetOpacity, .widgetContent,
         .mascot, .theme,
-        .companion, .companionSize, .companionBadge, .companionPreviewPose, .companionResetPosition,
+        .companionTurnOn, .companionSize, .companionBadge, .companionPreviewPose, .companionResetPosition,
         .eventHistory, .clearHistory,
         .slackPaste, .slackIdentity, .slackTest,
         .slackEnabled, .slackIdle, .slackDetail, .slackStop,
@@ -1160,9 +1185,10 @@ final class PanelNav: ObservableObject {
     static let eventsPerSessionOptions: [Int] = [3, 5, 10, 20, 50]
     // Compact widget mode. Shrinks the panel to a glance-only widget pinned
     // to a screen corner; clicking it expands back to the full panel.
-    // On by default, and switched off by Settings → Appearance → Widget, which
-    // persists STACKNUDGE_COMPACT_MODE (see the .widget case in applyCycle).
-    // loadFromConfig reads it back with a default of true.
+    // On by default, and switched off by Settings → Appearance → Floating widget,
+    // which persists STACKNUDGE_FLOATING_WIDGET (see the .floatingWidget case in
+    // applyCycle). A config that predates it still carries STACKNUDGE_COMPACT_MODE,
+    // which FloatingWidget.resolve reads, defaulting to on.
     //
     // Spelled out because two previous versions of this comment were wrong in
     // the same direction, and both cost review time on the PR that added the
@@ -1175,10 +1201,10 @@ final class PanelNav: ObservableObject {
     // hiding and onAppear never fires again — a real code path with real users
     // that "always-on" invites you to treat as dead.
     // Whether the panel runs as the pill. It follows widgetPreferred, the
-    // Widget setting, except while the companion is on: the companion takes
-    // the pill's place, and the user's choice comes back when it is turned off.
+    // Floating widget setting: it is true only for Pill.
     @Published var compactMode:   Bool = true
     @Published var widgetPreferred = true
+    var floatingWidget: FloatingWidget { companionEnabled ? .companion : (widgetPreferred ? .pill : .off) }
     @Published var compactCorner: CompactCorner = .topRight
     // When true (default), releasing a drag snaps the pill to the nearest
     // screen corner (STACKNUDGE_COMPACT_CORNER is the source of truth). When
@@ -1330,10 +1356,13 @@ final class PanelNav: ObservableObject {
             return [.voiceEnabled, .speakHotkey]
                 + (voiceModelCached ? [.voice, .voiceSpeed] : [.downloadVoiceModel])
         case .appearance:
-            return [.widget, .snapToCorners, .widgetCorner, .widgetOpacity,
+            return [.floatingWidget, .snapToCorners, .widgetCorner, .widgetOpacity,
                     .widgetContent, .mascot, .theme]
         case .companion:
-            return [.companion, .companionBadge, .companionSize, .companionPreviewPose, .companionResetPosition]
+            // The way in sits above the settings while the companion is off, so
+            // it is the first thing the keyboard lands on.
+            return (companionEnabled ? [] : [.companionTurnOn])
+                + [.companionBadge, .companionSize, .companionPreviewPose, .companionResetPosition]
         case .usage:
             return [.quotaTracking, .quotaAlerts, .alertThreshold,
                     .pollFrequency, .contextAlert, .showRemaining,
@@ -1524,7 +1553,12 @@ final class PanelNav: ObservableObject {
         remindMinutes = AttentionPolicy.reminderMinuteOptions.min(by: { abs($0 - rawRemind) < abs($1 - rawRemind) }) ?? 2
         let rawStalled = Int(config["STACKNUDGE_STALLED_MIN"] ?? "") ?? 0
         stalledMinutes = AttentionPolicy.stalledMinuteOptions.min(by: { abs($0 - rawStalled) < abs($1 - rawStalled) }) ?? 0
-        widgetPreferred = ConfigFile.bool(config, "STACKNUDGE_COMPACT_MODE", default: true)
+        let chosen = FloatingWidget.resolve(config)
+        widgetPreferred = chosen == .pill
+        companionEnabled = chosen == .companion
+        if config["STACKNUDGE_FLOATING_WIDGET"] == nil {
+            ConfigFile.write(key: "STACKNUDGE_FLOATING_WIDGET", value: chosen.rawValue)
+        }
         compactCorner = CompactCorner(rawValue: config["STACKNUDGE_COMPACT_CORNER"] ?? "")
             ?? .topRight
         compactSnap   = ConfigFile.bool(config, "STACKNUDGE_COMPACT_SNAP", default: true)
@@ -1533,11 +1567,10 @@ final class PanelNav: ObservableObject {
             ?? .sessions
         mascot        = MascotKind(rawValue: config["STACKNUDGE_MASCOT"] ?? "") ?? .robot
         theme         = AccentTheme(rawValue: config["STACKNUDGE_THEME"] ?? "") ?? .cyan
-        companionEnabled = ConfigFile.bool(config, "STACKNUDGE_COMPANION", default: false)
         companionSize = CompanionSize(rawValue: config["STACKNUDGE_COMPANION_SIZE"] ?? "") ?? .medium
         companionOffered = ConfigFile.bool(config, "STACKNUDGE_COMPANION_OFFERED", default: false)
         companionBadge = ConfigFile.bool(config, "STACKNUDGE_COMPANION_BADGE", default: true)
-        compactMode   = widgetPreferred && !companionEnabled
+        compactMode   = chosen == .pill
         let rawAlpha = Double(config["STACKNUDGE_COMPACT_ALPHA"] ?? "") ?? 1.0
         compactAlpha = Self.compactAlphaOptions.min(by: { abs($0 - rawAlpha) < abs($1 - rawAlpha) }) ?? 1.0
         let rawPerSession = Int(config["STACKNUDGE_EVENTS_PER_SESSION"] ?? "") ?? 5
@@ -1806,6 +1839,7 @@ final class PanelNav: ObservableObject {
         case .quit:             actions?.quit()
         case .openRepo:         openRepository()
         case .companionResetPosition: actions?.resetCompanionPosition()
+        case .companionTurnOn:        setFloatingWidget(.companion)
         // Toggles flip on Enter / Space. Value rows never get here: they pick.
         default: applyCycle(forward: true)
         }
@@ -1833,10 +1867,10 @@ final class PanelNav: ObservableObject {
              .disconnectGithub, .editPhrases, .browseExtensions, .installedExtension,
              .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
-             .slackPaste, .slackIdentity, .slackTest, .openRepo, .companionResetPosition, .none:
+             .slackPaste, .slackIdentity, .slackTest, .openRepo, .companionResetPosition, .companionTurnOn, .none:
             return false
         case .banner, .muteWhenFocused, .mute, .tabTitleNames, .pinPanel,
-             .keepOpenWhenEmpty, .launchAtLogin, .widget, .snapToCorners, .companion, .companionBadge,
+             .keepOpenWhenEmpty, .launchAtLogin, .snapToCorners, .companionBadge,
              .soundEnabled, .voiceEnabled,
              .quotaTracking, .quotaAlerts, .showRemaining,
              .githubLinks, .hideShipped, .eventHistory,
@@ -1845,7 +1879,7 @@ final class PanelNav: ObservableObject {
         case .permissions, .update, .hotkey, .speakHotkey, .downloadVoiceModel:
             return false
         case .muteDuration, .remindUnanswered, .stalledSessions,
-             .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme, .companionSize, .companionPreviewPose,
+             .floatingWidget, .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme, .companionSize, .companionPreviewPose,
              .agentDoneSound, .permissionSound,
              .voice, .voiceSpeed,
              .alertThreshold, .pollFrequency,
@@ -1860,10 +1894,11 @@ final class PanelNav: ObservableObject {
     // saved one way. Called with the panel open (Settings, the post-update
     // offer), so the panel stays open as the pill expands back or gives way to
     // the companion.
-    func setCompanionEnabled(_ on: Bool) {
-        companionEnabled = on
-        ConfigFile.write(key: "STACKNUDGE_COMPANION", value: on ? "true" : "false")
-        compactMode = widgetPreferred && !companionEnabled
+    func setFloatingWidget(_ choice: FloatingWidget) {
+        companionEnabled = choice == .companion
+        widgetPreferred = choice == .pill
+        ConfigFile.write(key: "STACKNUDGE_FLOATING_WIDGET", value: choice.rawValue)
+        compactMode = choice == .pill
         compactExpanded = compactMode
     }
 
@@ -1873,7 +1908,7 @@ final class PanelNav: ObservableObject {
 
     func acceptCompanionOffer() {
         markCompanionOffered()
-        setCompanionEnabled(true)
+        setFloatingWidget(.companion)
         postUpdateFocus = .gotIt
     }
 
@@ -1996,16 +2031,14 @@ final class PanelNav: ObservableObject {
                 FileHandle.standardError.write(Data(
                     "stack-nudge: setLaunchAtLogin(\(target)) failed: \(error)\n".utf8))
             }
-        case .widget:
-            // Widget on/off. On toggle-on we set compactExpanded so the panel
-            // stays open at full size; the pill only appears when the user
-            // dismisses. On toggle-off we clear it so the next layout commits
-            // the saved full-panel frame cleanly.
-            widgetPreferred.toggle()
-            ConfigFile.write(key: "STACKNUDGE_COMPACT_MODE",
-                             value: widgetPreferred ? "true" : "false")
-            compactMode = widgetPreferred && !companionEnabled
-            compactExpanded = compactMode
+        case .floatingWidget:
+            // Stepping to Pill sets compactExpanded so the panel stays open at
+            // full size; the pill only appears when the user dismisses. Leaving
+            // it clears the flag so the next layout commits the saved
+            // full-panel frame cleanly.
+            let list = FloatingWidget.allCases
+            let idx = list.firstIndex(of: floatingWidget) ?? 0
+            setFloatingWidget(list[forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count])
         case .snapToCorners:
             compactSnap.toggle()
             ConfigFile.write(key: "STACKNUDGE_COMPACT_SNAP",
@@ -2034,8 +2067,6 @@ final class PanelNav: ObservableObject {
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
             mascot = list[next]
             ConfigFile.write(key: "STACKNUDGE_MASCOT", value: mascot.rawValue)
-        case .companion:
-            setCompanionEnabled(!companionEnabled)
         case .companionBadge:
             companionBadge.toggle()
             ConfigFile.write(key: "STACKNUDGE_COMPANION_BADGE", value: companionBadge ? "true" : "false")
@@ -2148,7 +2179,7 @@ final class PanelNav: ObservableObject {
              .disconnectGithub, .editPhrases, .browseExtensions, .installedExtension,
              .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
-             .slackPaste, .slackIdentity, .slackTest, .openRepo, .companionResetPosition, .none:
+             .slackPaste, .slackIdentity, .slackTest, .openRepo, .companionResetPosition, .companionTurnOn, .none:
             break
         }
     }
