@@ -41,6 +41,9 @@ enum GitHubCLI {
             switch variables[key] {
             case let string as String:  args += ["-f", "\(key)=\(string)"]
             case let number as NSNumber: args += ["-F", "\(key)=\(number)"]
+            // Omitted: GraphQL reads a missing nullable variable as null, and
+            // gh has no flag for an explicit one (a first page's cursor).
+            case is NSNull: continue
             default: return nil   // no query here passes anything else
             }
         }
