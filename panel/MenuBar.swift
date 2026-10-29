@@ -137,6 +137,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private let statusItem: NSStatusItem
     private weak var panelController: PanelController?
+    // Kept here because a menu item does not retain its target.
+    private var companionMenu: CompanionMenu?
 
     init(panelController: PanelController) {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -266,6 +268,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         addMuteSection(to: menu)
         menu.addItem(.separator())
+
+        if let nav = panelController?.nav, nav.companionEnabled {
+            let entries = companionMenu ?? CompanionMenu(nav: nav)
+            companionMenu = entries
+            entries.addItems(to: menu)
+            menu.addItem(.separator())
+        }
 
         menu.addItem(action("Show panel",         #selector(showPanelAction)))
         menu.addItem(action("Settings…",          #selector(showSettingsAction), keyEquivalent: ","))
