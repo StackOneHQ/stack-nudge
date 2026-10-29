@@ -145,10 +145,30 @@ final class CompanionSettingsTests: XCTestCase {
 
     func testCompanionRowsLiveInTheirOwnCategory() {
         let nav = PanelNav()
+        nav.companionEnabled = true
         XCTAssertEqual(nav.rows(in: .companion),
-                       [.companion, .companionBadge, .companionSize, .companionPreviewPose, .companionResetPosition])
-        XCTAssertFalse(nav.rows(in: .appearance).contains(.companion),
-                       "the companion is not one of the widget's settings")
+                       [.companionBadge, .companionSize, .companionPreviewPose, .companionResetPosition])
+        XCTAssertEqual(nav.rows(in: .appearance).first, .floatingWidget)
+        XCTAssertFalse(nav.rows(in: .appearance).contains(.companionTurnOn))
+    }
+
+    // Off, the way in leads the tab so the keyboard lands on it.
+    func testTheTabLeadsWithTurnOnWhileTheCompanionIsOff() {
+        let nav = PanelNav()
+        nav.companionEnabled = false
+        XCTAssertEqual(nav.rows(in: .companion).first, .companionTurnOn)
+        XCTAssertEqual(nav.rows(in: .companion).count, 5)
+    }
+
+    func testFloatingWidgetFollowsTheTwoFlags() {
+        let nav = PanelNav()
+        nav.companionEnabled = true
+        nav.widgetPreferred = true
+        XCTAssertEqual(nav.floatingWidget, .companion)
+        nav.companionEnabled = false
+        XCTAssertEqual(nav.floatingWidget, .pill)
+        nav.widgetPreferred = false
+        XCTAssertEqual(nav.floatingWidget, .off)
     }
 
     // Existing installs are offered the companion once; the offer goes away
@@ -172,5 +192,37 @@ final class CompanionBadgeTests: XCTestCase {
         XCTAssertEqual(CompanionCountBadge.text(1), "1")
         XCTAssertEqual(CompanionCountBadge.text(99), "99")
         XCTAssertEqual(CompanionCountBadge.text(100), "99+")
+    }
+}
+
+final class FloatingWidgetMigrationTests: XCTestCase {
+
+    private func resolve(_ config: [String: String]) -> FloatingWidget {
+        FloatingWidget.resolve(config)
+    }
+
+    func testTheNewKeyWins() {
+        XCTAssertEqual(resolve(["STACKNUDGE_FLOATING_WIDGET": "off", "STACKNUDGE_COMPANION": "true"]), .off)
+        XCTAssertEqual(resolve(["STACKNUDGE_FLOATING_WIDGET": "pill", "STACKNUDGE_COMPACT_MODE": "false"]), .pill)
+        XCTAssertEqual(resolve(["STACKNUDGE_FLOATING_WIDGET": "companion"]), .companion)
+    }
+
+    func testCompanionOnMeansCompanionWhateverTheWidgetKeySays() {
+        XCTAssertEqual(resolve(["STACKNUDGE_COMPANION": "true"]), .companion)
+        XCTAssertEqual(resolve(["STACKNUDGE_COMPANION": "true", "STACKNUDGE_COMPACT_MODE": "false"]), .companion)
+    }
+
+    func testWidgetOnMeansPillAndWidgetOffMeansOff() {
+        XCTAssertEqual(resolve(["STACKNUDGE_COMPANION": "false"]), .pill)
+        XCTAssertEqual(resolve(["STACKNUDGE_COMPACT_MODE": "true"]), .pill)
+        XCTAssertEqual(resolve(["STACKNUDGE_COMPACT_MODE": "false"]), .off)
+    }
+
+    func testAnEmptyConfigKeepsThePill() {
+        XCTAssertEqual(resolve([:]), .pill)
+    }
+
+    func testAnUnknownValueFallsBackToTheOldKeys() {
+        XCTAssertEqual(resolve(["STACKNUDGE_FLOATING_WIDGET": "blob", "STACKNUDGE_COMPACT_MODE": "false"]), .off)
     }
 }

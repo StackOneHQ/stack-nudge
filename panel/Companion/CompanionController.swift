@@ -2,7 +2,7 @@ import AppKit
 import Combine
 import SwiftUI
 
-// Owns the companion window: shows it when STACKNUDGE_COMPANION is on, keeps
+// Owns the companion window: shows it when STACKNUDGE_FLOATING_WIDGET is companion, keeps
 // it on a screen, and saves where the user drops it. Separate from the pill
 // and its placement code, by design: the two can be on at the same time.
 @MainActor
