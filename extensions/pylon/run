@@ -11,28 +11,32 @@ and its first line — so the list says what's going on without opening
 anything.
 
 Both clocks are Pylon's own (`first_response_breach_time`, `next_reply`)
-rather than ones worked out here. It is the number the team is measured on, it already
-knows about business hours, and it is absent on the proactive outreach issues
-we open ourselves — which otherwise look exactly like an unanswered customer.
+rather than ones worked out here. They are what the team is measured on, they
+already know about business hours, and they are absent on the proactive
+outreach issues we open ourselves — which otherwise look exactly like an
+unanswered customer.
 
 The host runs this every minute, tab hidden or not (`whileFocusedOnly` is
 false), but Pylon is only asked every few minutes — the Sync setting, 3 by
 default. The runs between redraw from the last sync: deadlines don't move
 between syncs, so countdowns and reminders stay on the minute, and only a
-brand-new issue waits for the next sync to appear. `r` syncs now.
+brand-new issue waits for the next sync to appear. Before sending a reminder
+it asks Pylon again, so an issue answered since the last sync doesn't ping.
+`r` syncs now.
 
 The reminders are the point of running while the tab is hidden — the banner
 that fires while you are looking at something else:
 
-    30 min left   the issue's owner (account owner or assignee)
+    30 min left   the issue's owner: its assignee, or until somebody is
+                  assigned, the account's owner
     20 min left   the owner again
     10 min left   the owner again
      5 min left   everyone
     breached      everyone
 
 On a 30-minute SLA that is "instantly, then 10, 20 and 25 minutes in", the
-escalation this was built for. An issue nobody owns goes to everyone at
-every stage, because its owner is then the whole team. Keying the stages to
+escalation this was built for. An issue with neither is "ours": it goes to
+everyone at every stage, because its owner is then the whole team. Keying the stages to
 time *left* rather than time elapsed is what keeps an issue that arrives at
 10pm quiet until half an hour before its SLA starts counting the next morning.
 
@@ -79,6 +83,8 @@ HOST_TIMEOUT = 12
 READ_CHUNK = 65536
 # Every issue carries its full body, so a page of them is not small.
 MAX_BODY_BYTES = 6 * 1024 * 1024
+# An error's body is read only for its code, so it is read only this far.
+ERROR_BODY_BYTES = 64 * 1024
 
 # Issues with no message in this long aren't fetched. Measured from the latest
 # message, not from when the issue was opened: a customer writing today on a
@@ -86,9 +92,17 @@ MAX_BODY_BYTES = 6 * 1024 * 1024
 # of those on the day this was measured. A month of silence is a backlog for
 # Pylon's own views, not a nudge.
 LOOKBACK_DAYS = 30
-SEARCH_LIMIT = 500
-MAX_PAGES = 2
+# Small pages, followed while the time budget allows. A scan that can't finish
+# is kept as partial rather than passed off as the whole queue.
+SEARCH_LIMIT = 250
+MAX_PAGES = 20
+PAGE_RESERVE = 2.0
 MAX_ROWS = 200
+
+# A reminder is only sent from a snapshot this fresh. Anything older is synced
+# first: the issue may have been answered since, and a reminder about an
+# answered issue is how a reminder stops being believed.
+FRESH_FOR_BANNER = 60
 
 # The latest message on each row. A thread is fetched only on a sync and only
 # when its latest_message_time has moved, at most this many a sync, and only
@@ -248,11 +262,23 @@ def due_banner(previous, crossed, owner):
     return None
 
 
-def plan_banners(items, ledger):
+def last_team_stage(crossed):
+    """The latest team stage at or before `crossed`, or 0."""
+    return max([s for s in range(1, crossed + 1) if STAGES[s - 1][1] == "team"] or [0])
+
+
+def plan_banners(items, ledger, know_me=True):
     """(banners to send, the ledger to keep).
 
-    The ledger maps issue id -> the highest stage already passed, and only
+    The ledger maps issue id -> the highest stage already dealt with, and only
     holds issues still waiting on a first response, so it can't grow.
+
+    Two things don't use a stage up. A snoozed issue, because it was parked on
+    purpose and should catch up when it comes back rather than having been
+    skipped. And the owner's stages while we can't tell who "you" are: every
+    issue then looks like somebody else's, and recording those stages as dealt
+    with lost the owner's reminders for good. Either way, catching up is one
+    banner for the most severe stage, not one per stage missed.
     """
     banners, kept = [], {}
     for item in items:
@@ -261,12 +287,15 @@ def plan_banners(items, ledger):
         crossed = stage_for(item["left"])
         previous = ledger.get(item["id"])
         previous = previous if isinstance(previous, int) else None
-        kept[item["id"]] = max(crossed, previous or 0)
+        if item["snoozed"]:
+            kept[item["id"]] = previous or 0
+            continue
+        owner = item["mine"] or item["unowned"]
+        dealt = crossed if (know_me or owner) else last_team_stage(crossed)
+        kept[item["id"]] = max(dealt, previous or 0)
         if previous is None and item["left"] < -SILENT_AFTER_BREACH:
             continue
-        if item["snoozed"]:
-            continue
-        stage = due_banner(previous or 0, crossed, item["mine"] or item["unowned"])
+        stage = due_banner(previous or 0, crossed, owner)
         if stage:
             banners.append((stage, item))
     return banners, kept
@@ -343,7 +372,7 @@ def said(preview, now):
     return "%s: %s" % (speaker, words) if words else speaker
 
 
-def header_for(items, mine_only, know_me, freshness=None):
+def header_for(items, mine_only, identity="ok", notes=()):
     ours = [i for i in items if i["mine"] or i["unowned"]]
     live = [i for i in ours if i["kind"] == "first" and i["left"] > 0]
     late = [i for i in ours if i["kind"] == "first" and i["left"] <= 0]
@@ -358,15 +387,16 @@ def header_for(items, mine_only, know_me, freshness=None):
     else:
         badge = {"text": "CLEAR", "tone": "success"}
 
+    # Until we know who "you" is, every issue reads as somebody else's and the
+    # owner's reminders can't be sent. Say so rather than quietly sending none.
     qualifiers = []
-    if not know_me:
-        # Everything reads as somebody else's until we know who "you" is, so
-        # say so rather than quietly never pinging the owner.
+    if identity == "unset":
         qualifiers.append("set your email")
+    elif identity == "unmatched":
+        qualifiers.append("can't find you in Pylon")
     elif mine_only:
         qualifiers.append("mine")
-    if freshness:
-        qualifiers.append(freshness)
+    qualifiers.extend(note for note in notes if note)
     header = {"title": " · ".join(["Waiting on us"] + qualifiers), "badge": badge}
     if live:
         header["trailing"] = short_duration(min(i["left"] for i in live))
@@ -380,15 +410,19 @@ def visible(items, mine_only):
     to catch. Only replies owed on other people's accounts are filtered out."""
     return sorted((i for i in items
                    if not mine_only or i["mine"] or i["unowned"] or i["kind"] == "first"),
-                  key=sort_key)[:MAX_ROWS]
+                  key=sort_key)
 
 
-def document(items, now, mine_only, know_me, freshness=None):
-    shown = visible(items, mine_only)
+def document(items, now, mine_only, identity="ok", notes=()):
+    ordered = visible(items, mine_only)
+    shown = ordered[:MAX_ROWS]
+    notes = list(notes)
+    if len(ordered) > len(shown):
+        notes.append("showing %d of %d" % (len(shown), len(ordered)))
     return {
         "schema": 1,
         "state": "ok",
-        "header": header_for(items, mine_only, know_me, freshness),
+        "header": header_for(items, mine_only, identity, notes),
         "rows": [row_for(i, now) for i in shown],
         "actions": [
             {"id": "refresh", "label": "Sync now", "key": "r"},
@@ -419,9 +453,13 @@ def _post_banner(title, subtitle, body, sound):
     for line in _APPLESCRIPT:
         args += ["-e", line]
     args += [body, title, subtitle, sound]
+    # Detached and not waited for. Waiting cost up to three seconds a banner,
+    # which could push a run into the host's kill after the banners had gone
+    # out but before the ledger was saved — and the next run sent them again. A
+    # session of its own keeps the banner alive if the host kills this run.
     try:
-        subprocess.run(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL, timeout=3, check=False)
+        subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
     except (OSError, subprocess.SubprocessError):
         pass
 
@@ -446,8 +484,7 @@ def banner_text(stage, item):
         title = "Pylon %s · first response missed" % number
     else:
         title = "Pylon %s · %s left" % (number, short_duration(item["left"]))
-    whose = "yours" if item["mine"] else item["who"]
-    subtitle = " · ".join(part for part in (item["account"], whose) if part)
+    subtitle = " · ".join(part for part in (item["account"], item["who"]) if part)
     return title, subtitle, item["title"], SOUNDS.get(stage, "Ping")
 
 
@@ -525,10 +562,15 @@ def read_within(response, deadline):
 
 
 def api_error_code(error):
+    """Pylon's machine-readable `code` for a failed call. Closes the response:
+    the code is all that's wanted from it, and an unclosed one holds its
+    connection until the garbage collector gets round to it."""
     try:
-        payload = json.loads(error.read().decode("utf-8", errors="replace"))
+        payload = json.loads(error.read(ERROR_BODY_BYTES).decode("utf-8", errors="replace"))
     except (ValueError, OSError):
         return None
+    finally:
+        error.close()
     return payload.get("code") if isinstance(payload, dict) else None
 
 
@@ -595,23 +637,25 @@ def load_me(api, state, now_ts):
 
 
 def load_users(api, state, now_ts):
-    """id -> {name, email}. Only used for names and to find "you" by email, so
-    a token that can't list users costs the names, not the tab."""
+    """id -> {name, email}: names, and finding "you" by email.
+
+    Any failed refresh keeps the last list, which is at worst a day old. With
+    no list at all, a transient failure makes the sync wait for the next run,
+    since Pylon gives owners as a bare id and without users nothing would
+    resolve as "yours"; a refusal leaves the list empty, and the header then
+    says "you" can't be found rather than quietly pinging nobody."""
     cached = state.get("users")
     if fresh(cached, USERS_TTL, now_ts):
         return cached.get("by_id") or {}
+    last = cached.get("by_id") if isinstance(cached, dict) and isinstance(cached.get("by_id"), dict) else {}
     try:
         payload = api.call("GET", "/users")
     except Transient:
-        # A slow or rate-limited refresh keeps the last list, which is at worst
-        # a day old. With no list at all the sync waits for the next run:
-        # Pylon gives account owners as a bare id, so without users nothing
-        # resolves as "yours" and every owner's reminders would quietly stop.
-        if isinstance(cached, dict) and cached.get("by_id"):
-            return cached["by_id"]
+        if last:
+            return last
         raise
     except (urllib.error.HTTPError, Unauthorised):
-        return {}
+        return last
     by_id = {}
     for user in (payload or {}).get("data") or []:
         if isinstance(user, dict) and user.get("id"):
@@ -631,14 +675,16 @@ def load_issues(api, now):
         "limit": SEARCH_LIMIT,
     }
     issues = []
-    for _ in range(MAX_PAGES):
+    for pages in range(1, MAX_PAGES + 1):
         payload = api.call("POST", "/issues/search", body) or {}
         issues.extend(i for i in payload.get("data") or [] if isinstance(i, dict))
         page = payload.get("pagination") or {}
         if not page.get("has_next_page") or not page.get("cursor"):
-            break
+            return issues, True
+        if pages == MAX_PAGES or api.deadline - time.monotonic() < PAGE_RESERVE:
+            return issues, False
         body = dict(body, cursor=page["cursor"])
-    return issues
+    return issues, False
 
 
 def load_accounts(api, state, ids, now_ts):
@@ -669,8 +715,9 @@ def load_accounts(api, state, ids, now_ts):
 
 
 def load_messages(api, issue_id):
-    """An issue's messages, oldest first. Paged only in case a thread is long:
-    every thread seen so far has come back in one response."""
+    """(an issue's messages oldest first, whether that's all of them). Paged
+    only in case a thread is long: every thread seen so far has come back in
+    one response."""
     path = "/issues/%s/messages" % urllib.parse.quote(issue_id, safe="")
     messages, cursor = [], None
     for _ in range(MESSAGE_PAGES):
@@ -680,8 +727,8 @@ def load_messages(api, issue_id):
         page = payload.get("pagination") or {}
         cursor = page.get("cursor")
         if not page.get("has_next_page") or not cursor:
-            break
-    return messages
+            return messages, True
+    return messages, False
 
 
 def preview_of(messages, users):
@@ -719,7 +766,7 @@ def attach_previews(api, state, items, shown, users, fetch=True):
     on is dropped rather than shown — a stale "customer said X" next to an
     issue that has since been answered is worse than no preview. Kept for every
     item, not just shown ones, so toggling "mine" doesn't throw them away."""
-    cache = state.get("previews") or {}
+    cache = _dict(state.get("previews"))
     latest = {i["id"]: i["latest"] for i in items}
     kept = {key: entry for key, entry in cache.items()
             if isinstance(entry, dict) and key in latest and entry.get("latest") == latest[key]}
@@ -731,17 +778,21 @@ def attach_previews(api, state, items, shown, users, fetch=True):
                 and api.deadline - time.monotonic() > PREVIEW_RESERVE):
             fetched += 1
             try:
-                preview = preview_of(load_messages(api, item["id"]), users)
+                messages, complete = load_messages(api, item["id"])
+                preview = preview_of(messages, users)
             except Transient:
                 # Slow or rate limited: the next poll carries on from here.
                 stop = True
                 continue
             except (urllib.error.HTTPError, Unauthorised, WrongRegion,
                     ValueError, TypeError, AttributeError):
-                preview = None
+                preview, complete = None, True
             # "Nothing to show" is remembered too, until the thread moves. An
             # empty or unreadable thread was otherwise fetched on every poll.
-            kept[item["id"]] = dict(preview or {}, latest=item["latest"])
+            # A history cut short is shown but not marked current, so the next
+            # sync fetches it again rather than keeping what may not be the
+            # latest message.
+            kept[item["id"]] = dict(preview or {}, latest=item["latest"] if complete else None)
     for item in items:
         entry = kept.get(item["id"])
         item["preview"] = entry if entry and entry.get("who") else None
@@ -760,19 +811,22 @@ def first_name(user_id, users):
 def item_for(issue, waiting, now, accounts, users, me):
     me_id, email = me
     account = accounts.get(str((issue.get("account") or {}).get("id"))) or {}
-    owner_id = account.get("owner")
     assignee_id = (issue.get("assignee") or {}).get("id")
-    # The owner's email as well as the id, so "yours" still works for a token
-    # that can't list users and so can't turn an email into an id.
-    mine = (bool(me_id) and me_id in (owner_id, assignee_id)) or (
-        bool(email) and email == account.get("owner_email"))
-    unowned = not owner_id and not assignee_id
+    # The assignee is whose issue it is; the account owner stands in until
+    # somebody is assigned. With neither, it's the team's: "ours".
+    owner_id = assignee_id or account.get("owner")
+    mine = bool(me_id) and me_id == owner_id
+    if not mine and not assignee_id and email:
+        # The owner's email as well as the id, so "yours" still works for a
+        # token that can't list users and so can't turn an email into an id.
+        mine = email == account.get("owner_email")
+    unowned = not owner_id
     if mine:
         who = "yours"
     elif unowned:
-        who = "unowned"
+        who = "ours"
     else:
-        who = first_name(assignee_id or owner_id, users)
+        who = first_name(owner_id, users)
     snoozed = parse_time(issue.get("snoozed_until_time"))
     due = waiting["due"]
     return {
@@ -809,12 +863,17 @@ def sync_minutes():
     return min(max(minutes, 1), 60)
 
 
-def sync(api, state, now):
-    """Ask Pylon what's waiting on us, and keep only what drawing it needs."""
+def sync(api, state, now, previous=None):
+    """Ask Pylon what's waiting on us, and keep only what drawing it needs.
+
+    A scan that couldn't finish within the budget keeps the issues the last
+    snapshot had that this one didn't reach, and is marked partial, rather
+    than dropping them as if they had been answered."""
     now_ts = now.timestamp()
     email, me_id = load_me(api, state, now_ts)
     users = load_users(api, state, now_ts)
-    waiting = [issue for issue in load_issues(api, now) if classify(issue)]
+    issues, complete = load_issues(api, now)
+    waiting = [issue for issue in issues if classify(issue)]
     account_of = lambda issue: str((issue.get("account") or {}).get("id"))
     ids = sorted({account_of(i) for i in waiting if (i.get("account") or {}).get("id")})
     accounts = load_accounts(api, state, ids, now_ts)
@@ -824,8 +883,66 @@ def sync(api, state, now):
     waiting = [i for i in waiting if (accounts.get(account_of(i)) or {}).get("type") != "internal"]
     if email:
         me_id = next((uid for uid, u in users.items() if u.get("email") == email), me_id)
-    return {"at": now_ts, "email": email, "me_id": me_id,
-            "issues": [{k: i[k] for k in SNAPSHOT_FIELDS if k in i} for i in waiting]}
+    snapshot = {"at": now_ts, "email": email, "me_id": me_id, "partial": not complete,
+                "issues": [{k: i[k] for k in SNAPSHOT_FIELDS if k in i} for i in waiting]}
+    if not complete and previous:
+        seen = {str(i.get("id")) for i in issues}
+        snapshot["issues"] += [i for i in previous.get("issues") or []
+                               if isinstance(i, dict) and str(i.get("id")) not in seen]
+    return snapshot
+
+
+def _dict(value):
+    return value if isinstance(value, dict) else {}
+
+
+def usable_snapshot(value):
+    """The saved snapshot if it has the shape this version writes, else None.
+    A malformed one used to crash every run before anything could recover."""
+    if (isinstance(value, dict) and isinstance(value.get("at"), (int, float))
+            and isinstance(value.get("issues"), list)):
+        return value
+    return None
+
+
+def attempt_sync(api, state, now, snapshot):
+    """(snapshot, note, error document).
+
+    With a snapshot in hand, any failed sync keeps drawing it with a note: the
+    reminders run off deadlines already known, and the next run tries again.
+    Without one, a refused token or a bad response is an error document and a
+    transient failure is left to the host's retry. A refused token is an error
+    either way — it needs the user, and old data would hide that."""
+    try:
+        return sync(api, state, now, snapshot), None, None
+    except Unauthorised:
+        return None, None, message(
+            "error", "Pylon refused the API token. Check it in Settings → Extensions → Pylon.")
+    except WrongRegion:
+        return None, None, message("error", "Neither Pylon region accepts this API token.")
+    except (Transient, TimeoutError) as error:
+        if snapshot is None:
+            raise Transient(str(error)) from None
+        return snapshot, "sync failed, retrying", None
+    except urllib.error.HTTPError as error:
+        if snapshot is None:
+            return None, None, message("error", "Pylon returned %d." % error.code)
+        return snapshot, "sync failed (Pylon %d), retrying" % error.code, None
+    except (ValueError, TypeError, AttributeError):
+        if snapshot is None:
+            return None, None, message("error", "Pylon's response wasn't readable.")
+        return snapshot, "sync failed (unreadable response), retrying", None
+
+
+def render_items(state, snapshot, now):
+    """(items, whether "you" is known, how to say so) for a snapshot."""
+    users = _dict(_dict(state.get("users")).get("by_id"))
+    accounts = _dict(state.get("accounts"))
+    me_id, email = snapshot.get("me_id"), snapshot.get("email")
+    items = [item_for(issue, classify(issue), now, accounts, users, (me_id, email))
+             for issue in snapshot.get("issues") or [] if classify(issue)]
+    identity = "ok" if me_id else ("unmatched" if email else "unset")
+    return items, bool(me_id), identity
 
 
 def build(state, now, force=False):
@@ -843,44 +960,52 @@ def build(state, now, force=False):
         state["token"] = fingerprint
 
     api = Api(token, state, time.monotonic() + TOTAL_BUDGET)
-    snapshot = state.get("snapshot") if isinstance(state.get("snapshot"), dict) else None
-    age = now.timestamp() - snapshot.get("at", 0) if snapshot else None
-    synced, trouble = False, None
+    snapshot = usable_snapshot(state.get("snapshot"))
+    age = now.timestamp() - snapshot["at"] if snapshot else None
+    synced, note = False, None
     # A negative age is a clock that moved back; sync rather than trust it.
-    if force or age is None or not 0 <= age < sync_minutes() * 60:
-        try:
-            snapshot = state["snapshot"] = sync(api, state, now)
-            synced, age = True, 0
-        except Unauthorised:
-            return message("error", "Pylon refused the API token. Check it in Settings → Extensions → Pylon.")
-        except WrongRegion:
-            return message("error", "Neither Pylon region accepts this API token.")
-        except urllib.error.HTTPError as error:
-            return message("error", "Pylon returned %d." % error.code)
-        except (Transient, TimeoutError) as error:
-            # With a snapshot in hand, keep drawing it: the reminders run off
-            # deadlines we already know, and the next run tries again.
-            if snapshot is None:
-                raise Transient(str(error)) from None
-            trouble = "sync failed, retrying"
-        except (ValueError, TypeError, AttributeError):
-            return message("error", "Pylon's response wasn't readable.")
+    attempted = force or age is None or not 0 <= age < sync_minutes() * 60
+    if attempted:
+        snapshot, note, failed = attempt_sync(api, state, now, snapshot)
+        if failed:
+            return failed
+        if note is None:
+            state["snapshot"], synced, age = snapshot, True, 0
 
-    users = (state.get("users") or {}).get("by_id") or {}
-    accounts = state.get("accounts") or {}
-    me = (snapshot.get("me_id"), snapshot.get("email"))
-    items = [item_for(issue, classify(issue), now, accounts, users, me)
-             for issue in snapshot.get("issues") or [] if classify(issue)]
+    ledger = _dict(state.get("notified"))
+    items, know_me, identity = render_items(state, snapshot, now)
+    banners, kept = plan_banners(items, ledger, know_me)
+    if banners and not attempted and age >= FRESH_FOR_BANNER:
+        # About to remind from data up to a sync old. Ask Pylon first: the
+        # issue may have been answered since. If Pylon can't be reached, the
+        # reminder goes out from what we have — a late answer is a smaller
+        # problem than a missed one. Not when this run's sync has already
+        # failed: asking twice in one run only doubles the failing calls.
+        checked, failed_note, failed = attempt_sync(api, state, now, snapshot)
+        if failed:
+            return failed
+        if failed_note is None:
+            state["snapshot"], snapshot, synced, age = checked, checked, True, 0
+            items, know_me, identity = render_items(state, snapshot, now)
+            banners, kept = plan_banners(items, ledger, know_me)
+        else:
+            note = failed_note
     state["links"] = {i["id"]: i["link"] for i in items if is_pylon_link(i["link"])}
 
-    banners, state["notified"] = plan_banners(items, state.get("notified") or {})
+    # The ledger is saved before anything is posted, so a run the host kills
+    # after posting can't post the same banners again on the next run.
+    state["notified"] = kept
+    save_state(state)
     if banners and notifications_on():
         send_banners(banners)
 
     mine_only = bool(state.get("mine_only"))
-    attach_previews(api, state, items, visible(items, mine_only), users, fetch=synced)
-    freshness = trouble or ("synced %s ago" % short_duration(age) if age >= 60 else None)
-    return document(items, now, mine_only, bool(me[0] or me[1]), freshness)
+    users = _dict(_dict(state.get("users")).get("by_id"))
+    attach_previews(api, state, items, visible(items, mine_only)[:MAX_ROWS], users, fetch=synced)
+    notes = [note or ("synced %s ago" % short_duration(age) if age >= 60 else None)]
+    if snapshot.get("partial"):
+        notes.append("partial sync")
+    return document(items, now, mine_only, identity, notes)
 
 
 # --- State ------------------------------------------------------------------
@@ -896,11 +1021,16 @@ def load_state():
 
 def save_state(state):
     # Write-then-rename, so a run killed at the host's deadline leaves the old
-    # file rather than half of a new one.
+    # file rather than half of a new one. Private to the user: it holds the
+    # workspace's names and emails and customers' latest messages.
     temporary = _state_path + ".tmp"
     try:
-        with open(temporary, "w", encoding="utf-8") as handle:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump(state, handle)
+        # O_CREAT's mode only applies to a new file; a .tmp left over by an
+        # older version would keep whatever mode it had.
+        os.chmod(temporary, 0o600)
         os.replace(temporary, _state_path)
     except OSError:
         pass
@@ -925,7 +1055,7 @@ def main(argv=None, now=None):
     # Opened from the links the last build saw, before fetching again, so the
     # browser doesn't wait on Pylon.
     if action == "open" and row:
-        link = (state.get("links") or {}).get(row)
+        link = _dict(state.get("links")).get(row)
         if is_pylon_link(link):
             _launcher(link)
     elif action == "mine":

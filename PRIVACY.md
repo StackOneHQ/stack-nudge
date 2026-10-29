@@ -50,11 +50,14 @@ StackNudge identifier, because there isn't one.
     so it can post a banner before a first-response SLA runs out. It is read-only: it sends the token, your IP address and a
     `stack-nudge` user agent, and reads issues, their messages, accounts and
     users. Issue titles, account names and the first line of each issue's
-    latest message are kept on screen and in banners. A cache is kept in the
+    latest message are shown in the tab; banners show issue titles and account
+    names, and so appear in Notification Center and, depending on your macOS
+    settings, on the lock screen. A cache is kept in the
     extension's own directory: the issues waiting on a response (title,
     number, link, state, source, assignee, account and SLA times), account
     names and owners, the workspace's users (names and emails), and those
-    message previews. Nothing about your sessions or usage is sent.
+    message previews; it is readable only by you. Nothing about your sessions
+    or usage is sent.
 - **Voice** (`STACKNUDGE_VOICE`). Downloading a voice model runs `stackvox` in
   the bundled Python environment, which fetches the model over the network.
   That download is the only part that leaves your machine: synthesis runs

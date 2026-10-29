@@ -11,6 +11,7 @@ recorders, so a test can never post a notification or open a page.
 """
 
 import contextlib
+import hashlib
 import importlib.machinery
 import importlib.util
 import io
@@ -79,7 +80,7 @@ def item(left_minutes=30, mine=True, unowned=False, number=1, snoozed=False, kin
         "account": "Acme", "link": None, "source": "slack", "kind": kind,
         "due": due, "left": left_minutes * 60.0,
         "mine": mine, "unowned": unowned,
-        "who": "yours" if mine else ("unowned" if unowned else "Alex"),
+        "who": "yours" if mine else ("ours" if unowned else "Alex"),
         "snoozed": snoozed,
     }
 
@@ -170,6 +171,28 @@ class Escalation(unittest.TestCase):
         banners, _ = pylon.plan_banners([item(left_minutes=4, snoozed=True)], {})
         self.assertEqual(banners, [])
 
+    def test_a_snooze_does_not_use_up_stages_and_catches_up_once(self):
+        # Snoozed through its breach: when it comes back it gets one banner,
+        # rather than the stages having been spent while it was parked.
+        _, ledger = pylon.plan_banners([item(left_minutes=-20, snoozed=True)], {"issue-1": 1})
+        self.assertEqual(ledger, {"issue-1": 1})
+        banners, ledger = pylon.plan_banners([item(left_minutes=-25)], ledger)
+        self.assertEqual([stage for stage, _ in banners], [5])
+        self.assertEqual(ledger, {"issue-1": 5})
+
+    def test_an_unknown_you_does_not_use_up_the_owners_stages(self):
+        # Until "you" can be resolved, an issue that is really yours looks like
+        # somebody else's. Its owner stages stay unspent, so once you're found
+        # the reminder still comes, once.
+        theirs = item(left_minutes=18, mine=False)
+        banners, ledger = pylon.plan_banners([theirs], {}, know_me=False)
+        self.assertEqual((banners, ledger), ([], {"issue-1": 0}))
+        banners, ledger = pylon.plan_banners([item(left_minutes=17)], ledger)
+        self.assertEqual([stage for stage, _ in banners], [2])
+        # Team stages are everyone's, known or not, so those are spent.
+        _, ledger = pylon.plan_banners([item(left_minutes=4, mine=False)], {}, know_me=False)
+        self.assertEqual(ledger, {"issue-1": 4})
+
     def test_the_ledger_only_keeps_issues_still_waiting(self):
         _, ledger = pylon.plan_banners([item(number=2)], {"issue-1": 3, "issue-2": 1})
         self.assertEqual(ledger, {"issue-2": 1})
@@ -183,13 +206,22 @@ class Banners(unittest.TestCase):
 
     def test_customer_text_never_reaches_the_script_source(self):
         hostile = 'x" & (do shell script "touch /tmp/pwned") & "'
-        with mock.patch.object(pylon.subprocess, "run") as run:
+        with mock.patch.object(pylon.subprocess, "Popen") as popen:
             pylon._post_banner("t", "s", hostile, "Ping")
-        args = run.call_args[0][0]
+        args = popen.call_args[0][0]
         scripts = [args[i + 1] for i, arg in enumerate(args) if arg == "-e"]
         self.assertEqual(tuple(scripts), pylon._APPLESCRIPT)
         self.assertIn(hostile, args)
         self.assertNotIn(hostile, " ".join(scripts))
+
+    def test_a_banner_is_posted_detached_and_never_waited_for(self):
+        # Waiting cost up to three seconds a banner, inside the host's kill
+        # window; its own session keeps it alive if the host kills the run.
+        with mock.patch.object(pylon.subprocess, "Popen") as popen:
+            pylon._post_banner("t", "s", "b", "Ping")
+        self.assertTrue(popen.call_args[1]["start_new_session"])
+        popen.return_value.wait.assert_not_called()
+        popen.return_value.communicate.assert_not_called()
 
     def test_banner_names_the_issue_the_time_left_and_whose_it_is(self):
         title, subtitle, body, sound = pylon.banner_text(2, item(left_minutes=20))
@@ -261,8 +293,16 @@ class Rows(unittest.TestCase):
         self.assertEqual(badge([item(left_minutes=-1, mine=False)])["text"], "CLEAR")
 
     def test_not_knowing_who_you_are_is_said_out_loud(self):
-        header = pylon.document([], NOW, False, False)["header"]
-        self.assertIn("set your email", header["title"])
+        self.assertIn("set your email", pylon.document([], NOW, False, "unset")["header"]["title"])
+        self.assertIn("can't find you in Pylon",
+                      pylon.document([], NOW, False, "unmatched")["header"]["title"])
+
+    def test_rows_past_the_cap_are_said_not_silently_dropped(self):
+        items = [item(number=n, left_minutes=20 + n) for n in range(3)]
+        with mock.patch.object(pylon, "MAX_ROWS", 2):
+            doc = pylon.document(items, NOW, False, "ok")
+        self.assertEqual(len(doc["rows"]), 2)
+        self.assertIn("showing 2 of 3", doc["header"]["title"])
 
     def test_titles_are_one_line(self):
         self.assertEqual(pylon.text("Sync\nfailing\t again"), "Sync failing again")
@@ -423,7 +463,7 @@ class EndToEnd(unittest.TestCase):
         footnotes = {r["id"]: r["footnote"] for r in doc["rows"]}
         self.assertIn("yours", footnotes["issue-1"])
         self.assertIn("Alex", footnotes["issue-2"])
-        self.assertIn("unowned", footnotes["issue-3"])
+        self.assertIn("ours", footnotes["issue-3"])
         # Mine at 30 left, Alex's at 4 left (a team stage). The three-day-old
         # breach is on screen and silent.
         self.assertEqual(sorted(b[0] for b in self.banners),
@@ -600,7 +640,11 @@ class EndToEnd(unittest.TestCase):
 
     def test_the_sync_setting_decides_how_often_pylon_is_asked(self):
         env = dict(self.env, **{pylon.SYNC_KEY: "5"})
-        fake = _FakePylon(workspace())
+        routes = workspace()
+        # Nothing comes due in these five minutes, so only the setting decides.
+        routes[("POST", "/issues/search")]["data"][1]["first_response_breach_time"] = stamp(
+            NOW + timedelta(minutes=40))
+        fake = _FakePylon(routes)
         self.run_once(fake, env=env)
         fake.requests.clear()
         self.run_once(fake, env=env, now=NOW + timedelta(minutes=4, seconds=59))
@@ -624,16 +668,68 @@ class EndToEnd(unittest.TestCase):
         self.run_once(fake, argv=["--action", "refresh"], now=NOW + timedelta(seconds=30))
         self.assertEqual([r[2] for r in fake.requests], ["/issues/search"])
 
-    def test_reminders_fire_on_the_minute_between_syncs(self):
+    def test_reminders_fire_on_the_minute_between_syncs_after_checking_pylon(self):
         # Synced once an hour, and the owner's 20-minute reminder still lands
-        # at ten minutes in, from the deadline the last sync already had.
+        # at ten minutes in — after asking Pylon whether it's still owed.
         env = dict(self.env, **{pylon.SYNC_KEY: "60"})
-        self.run_once(_FakePylon(workspace()), env=env)
+        fake = _FakePylon(workspace())
+        self.run_once(fake, env=env)
         self.banners.clear()
-        self.run_once(_Forbidden(), env=env, now=NOW + timedelta(minutes=10))
+        fake.requests.clear()
+        self.run_once(fake, env=env, now=NOW + timedelta(minutes=10))
+        self.assertEqual([r[2] for r in fake.requests], ["/issues/search"])
         # Alex's issue breached in the same ten minutes: everyone hears that too.
         self.assertEqual(sorted(b[0] for b in self.banners),
                          ["Pylon #1 · 20m left", "Pylon #2 · first response missed"])
+
+    def test_an_issue_answered_since_the_last_sync_is_not_reminded_about(self):
+        env = dict(self.env, **{pylon.SYNC_KEY: "60"})
+        routes = workspace()
+        fake = _FakePylon(routes)
+        self.run_once(fake, env=env)
+        for issue in routes[("POST", "/issues/search")]["data"]:
+            issue["first_response_time"] = stamp(NOW + timedelta(minutes=1))
+        self.banners.clear()
+        status, doc = self.run_once(fake, env=env, now=NOW + timedelta(minutes=10))
+        self.assertEqual((status, self.banners), (0, []))
+        self.assertNotIn("issue-1", [r["id"] for r in doc["rows"]])
+
+    def test_with_pylon_unreachable_a_due_reminder_still_goes_out(self):
+        env = dict(self.env, **{pylon.SYNC_KEY: "60"})
+        routes = workspace()
+        fake = _FakePylon(routes)
+        self.run_once(fake, env=env)
+        routes[("POST", "/issues/search")] = http_error(503)
+        self.banners.clear()
+        _, doc = self.run_once(fake, env=env, now=NOW + timedelta(minutes=10))
+        self.assertIn("Pylon #1 · 20m left", [b[0] for b in self.banners])
+        self.assertIn("sync failed", doc["header"]["title"])
+
+    def test_a_failed_sync_is_not_retried_in_the_same_run(self):
+        routes = workspace()
+        fake = _FakePylon(routes)
+        self.run_once(fake)
+        routes[("POST", "/issues/search")] = http_error(503)
+        fake.requests.clear()
+        self.banners.clear()
+        self.run_once(fake, now=NOW + timedelta(minutes=10))  # sync due, and reminders due
+        self.assertEqual([r[2] for r in fake.requests], ["/issues/search"])
+        self.assertIn("Pylon #1 · 20m left", [b[0] for b in self.banners])
+
+    def test_the_ledger_is_saved_before_any_banner_is_posted(self):
+        # So a run the host kills after posting can't post them again.
+        saved = []
+        def notifier(*banner):
+            with open(pylon._state_path) as handle:
+                saved.append(json.load(handle).get("notified"))
+        fake = _FakePylon(workspace())
+        with mock.patch.object(pylon, "_opener", fake), \
+                mock.patch.object(pylon, "_notifier", notifier), \
+                mock.patch.dict(os.environ, self.env, clear=True), \
+                contextlib.redirect_stdout(io.StringIO()):
+            pylon.main([], now=NOW)
+        self.assertTrue(saved)
+        self.assertEqual(saved[0], {"issue-1": 1, "issue-2": 4, "issue-3": 5})
 
     def test_a_failed_sync_keeps_drawing_the_last_snapshot(self):
         routes = workspace()
@@ -676,6 +772,122 @@ class EndToEnd(unittest.TestCase):
 
     def test_a_blocked_read_cannot_outlast_the_host(self):
         self.assertLess(pylon.TOTAL_BUDGET + pylon.MAX_PER_REQUEST, pylon.HOST_TIMEOUT)
+
+    # --- Ownership --------------------------------------------------------
+
+    def test_the_assignee_is_the_owner_and_the_account_owner_stands_in(self):
+        routes = workspace()
+        data = routes[("POST", "/issues/search")]["data"]
+        data[0]["assignee"] = {"id": ALEX}   # my account, assigned to Alex
+        data[1]["assignee"] = {"id": ME}     # Alex's account, assigned to me
+        _, doc = self.run_once(_FakePylon(routes))
+        footnotes = {r["id"]: r["footnote"] for r in doc["rows"]}
+        self.assertTrue(footnotes["issue-1"].startswith("Alex"))
+        self.assertTrue(footnotes["issue-2"].startswith("yours"))
+        self.assertIn(" · ours", footnotes["issue-3"])  # no preview, so the stage comes first
+
+    def test_a_refused_user_list_keeps_the_last_one(self):
+        routes = workspace()
+        fake = _FakePylon(routes)
+        self.run_once(fake)
+        routes[("GET", "/users")] = http_error(403, "permission_denied")
+        with mock.patch.object(pylon, "USERS_TTL", 0):
+            status, doc = self.run_once(fake, argv=["--action", "refresh"])
+        footnotes = {r["id"]: r["footnote"] for r in doc["rows"]}
+        self.assertEqual(status, 0)
+        self.assertTrue(footnotes["issue-1"].startswith("yours"))
+
+    def test_an_email_that_matches_nobody_is_said_rather_than_guessed(self):
+        env = dict(self.env, **{pylon.EMAIL_KEY: "nobody@example.com"})
+        _, doc = self.run_once(_FakePylon(workspace()), env=env)
+        self.assertIn("can't find you in Pylon", doc["header"]["title"])
+        self.assertNotIn("yours", " ".join(r["footnote"] for r in doc["rows"]))
+
+    # --- Completeness and failure -------------------------------------------
+
+    def test_pages_are_followed_to_the_end(self):
+        routes = workspace()
+        first, second, third = routes[("POST", "/issues/search")]["data"][:3]
+        pages = {None: {"data": [first], "pagination": {"has_next_page": True, "cursor": "p2"}},
+                 "p2": {"data": [second, third], "pagination": {"has_next_page": False}}}
+        routes[("POST", "/issues/search")] = lambda host, body, path: pages[body.get("cursor")]
+        fake = _FakePylon(routes)
+        _, doc = self.run_once(fake)
+        searches = [r[3] for r in fake.requests if r[2] == "/issues/search"]
+        self.assertEqual([s.get("cursor") for s in searches], [None, "p2"])
+        self.assertEqual(searches[0]["limit"], pylon.SEARCH_LIMIT)
+        self.assertEqual(len(doc["rows"]), 3)
+        self.assertNotIn("partial", doc["header"]["title"])
+
+    def test_a_scan_that_cannot_finish_keeps_what_it_did_not_reach(self):
+        routes = workspace()
+        fake = _FakePylon(routes)
+        self.run_once(fake)
+        reached = routes[("POST", "/issues/search")]["data"][2]
+        routes[("POST", "/issues/search")] = {
+            "data": [reached], "pagination": {"has_next_page": True, "cursor": "more"}}
+        with mock.patch.object(pylon, "MAX_PAGES", 1):
+            _, doc = self.run_once(fake, argv=["--action", "refresh"])
+        self.assertEqual(sorted(r["id"] for r in doc["rows"]), ["issue-1", "issue-2", "issue-3"])
+        self.assertIn("partial sync", doc["header"]["title"])
+
+    def test_a_bad_request_keeps_drawing_the_last_snapshot(self):
+        routes = workspace()
+        fake = _FakePylon(routes)
+        self.run_once(fake)
+        routes[("POST", "/issues/search")] = http_error(400, "invalid_request_body")
+        status, doc = self.run_once(fake, argv=["--action", "refresh"])
+        self.assertEqual((status, len(doc["rows"])), (0, 3))
+        self.assertIn("sync failed (Pylon 400)", doc["header"]["title"])
+
+    def test_a_bad_request_with_nothing_to_show_says_so(self):
+        routes = workspace()
+        routes[("POST", "/issues/search")] = http_error(400, "invalid_request_body")
+        _, doc = self.run_once(_FakePylon(routes))
+        self.assertEqual((doc["state"], doc["message"]), ("error", "Pylon returned 400."))
+
+    def test_a_malformed_snapshot_is_replaced_not_fatal(self):
+        token = hashlib.sha256(b"secret-token").hexdigest()[:12]
+        with open(pylon._state_path, "w") as handle:
+            json.dump({"token": token, "snapshot": {"at": "invalid", "issues": "x"},
+                       "links": [], "notified": "x", "users": 3}, handle)
+        status, doc = self.run_once(_FakePylon(workspace()))
+        self.assertEqual((status, len(doc["rows"])), (0, 3))
+
+    def test_a_thread_cut_short_is_fetched_again_on_the_next_sync(self):
+        routes = workspace()
+        routes[("GET", "/issues/*/messages")] = lambda host, body, path: {
+            "data": THREADS.get(path.split("/")[2], []),
+            "pagination": {"has_next_page": True, "cursor": "more"}}
+        fake = _FakePylon(routes)
+        with mock.patch.object(pylon, "MESSAGE_PAGES", 1):
+            _, doc = self.run_once(fake)
+            footnotes = {r["id"]: r["footnote"] for r in doc["rows"]}
+            self.assertIn("Robin Vale", footnotes["issue-1"])
+            fake.requests.clear()
+            self.run_once(fake, argv=["--action", "refresh"])
+        self.assertIn("issue-1", message_calls(fake))
+
+    def test_the_state_file_is_readable_only_by_you(self):
+        stale = pylon._state_path + ".tmp"
+        with open(stale, "w") as handle:
+            handle.write("{}")
+        os.chmod(stale, 0o644)
+        self.run_once(_FakePylon(workspace()))
+        self.assertEqual(os.stat(pylon._state_path).st_mode & 0o777, 0o600)
+
+    def test_an_error_body_is_read_only_as_far_as_its_code(self):
+        class Body:
+            asked = None
+            def read(self, size=-1):
+                Body.asked = size
+                return b'{"code": "rate_limited"}'
+            def close(self):
+                pass
+        error = urllib.error.HTTPError("https://api.usepylon.com", 429, "busy", {}, Body())
+        self.assertEqual(pylon.api_error_code(error), "rate_limited")
+        self.assertEqual(Body.asked, pylon.ERROR_BODY_BYTES)
+        error.close()
 
     def test_a_new_token_forgets_what_the_old_one_learned(self):
         fake = _FakePylon(workspace())

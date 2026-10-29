@@ -370,6 +370,29 @@ final class ExtensionHostTests: XCTestCase {
                                               visible: true, now: now))
     }
 
+    // A background extension polls so that it can act while nobody is looking.
+    // Leaving its first run to onOpen meant it did nothing after every launch
+    // until somebody happened to open its tab.
+    func testABackgroundExtensionIsDueBeforeItsFirstAttempt() {
+        let now = Date()
+        let m = manifest("pylon", refresh: "{\"intervalSeconds\":60,\"whileFocusedOnly\":false}")
+        XCTAssertTrue(ExtensionHost.isDue(m, pane: pane(updatedAt: nil),
+                                             visible: false, now: now))
+        XCTAssertFalse(ExtensionHost.isDue(m, pane: pane(updatedAt: nil, busy: true),
+                                              visible: false, now: now),
+                       "still one invocation at a time")
+    }
+
+    func testTheFirstTickAfterLaunchStartsABackgroundExtensionWithItsTabClosed() {
+        let recorder = Recorder()
+        let (host, _, _) = host([manifest("pylon", refresh: "{\"intervalSeconds\":60,\"whileFocusedOnly\":false}"),
+                                 manifest("derby", refresh: "{\"intervalSeconds\":30}")],
+                                recorder: recorder)
+        host.tick(visibleTab: nil, now: Date())
+        XCTAssertEqual(recorder.calls.map(\.id), ["pylon"],
+                       "a focused-only extension still waits for its tab")
+    }
+
     // A manifest is floored at parse time, but isDue is a pure static that has
     // to hold on its own — a zero interval makes `now - attemptedAt >= 0`
     // unconditionally true, so the extension re-spawns on every single tick.

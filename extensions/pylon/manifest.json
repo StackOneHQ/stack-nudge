@@ -15,24 +15,24 @@
     {
       "key": "STACKNUDGE_EXT_PYLON_TOKEN",
       "label": "API token",
-      "help": "Pylon \u2192 Settings \u2192 API Tokens. It reads issues, accounts and users; nothing is written back."
+      "help": "Pylon \u2192 Settings \u2192 API Tokens. Under Act as user or bot, pick yourself, so the token has your access and no more, and the tab knows which issues are yours. It only reads; nothing is written back."
     },
     {
       "key": "STACKNUDGE_EXT_PYLON_EMAIL",
       "label": "Your Pylon email",
-      "help": "Whose issues count as yours. Leave blank to use the token's own user.",
+      "help": "Only needed if the token doesn't act as you. Whose issues count as yours.",
       "placeholder": "you@stackone.com"
     },
     {
       "key": "STACKNUDGE_EXT_PYLON_SYNC_MINUTES",
       "label": "Sync every (minutes)",
-      "help": "How often to ask Pylon for changes, 1 to 60. Countdowns and reminders still update every minute; a brand-new ticket appears at the next sync. r syncs now.",
+      "help": "How often to ask Pylon for changes, 1 to 60. A new ticket appears at the next sync. Countdowns update every minute, and Pylon is checked again before any reminder, so answered tickets don't ping. Press r in the tab to sync now.",
       "placeholder": "3"
     },
     {
       "key": "STACKNUDGE_EXT_PYLON_NOTIFY",
       "label": "Notifications",
-      "help": "on or off. Off keeps the tab and stops the banners.",
+      "help": "on or off. Banners come from macOS (listed as Script Editor in System Settings \u2192 Notifications) and don't follow StackNudge's mute. Off keeps the tab and stops them.",
       "placeholder": "on"
     }
   ],
