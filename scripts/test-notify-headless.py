@@ -79,14 +79,17 @@ def run_under_claude_parent(workdir, flag, expect_event):
     claude = os.path.join(workdir, "claude")
     if not os.path.lexists(claude):
         os.symlink("/bin/bash", claude)
-    wrapper = os.path.join(workdir, "under-claude.sh")
-    with open(wrapper, "w", encoding="utf-8") as wrapper_file:
+    base_real = os.path.realpath(workdir)
+    wrapper_real = os.path.realpath(os.path.join(workdir, "under-claude.sh"))
+    if os.path.commonpath([base_real, wrapper_real]) != base_real:
+        raise Exception("Invalid file path")
+    with open(wrapper_real, "w", encoding="utf-8") as wrapper_file:
         # The trailing `exit` keeps bash from exec'ing notify.sh in its own
         # place, which would drop `claude` out of the process tree.
         wrapper_file.write('#!/bin/sh\nexec "$CLAUDE_STAND_IN" -c \'"$@"; exit $?\' "$CLAUDE_FLAG" "$REAL_NOTIFY" "$@"\n')
-    os.chmod(wrapper, 0o755)
+    os.chmod(wrapper_real, 0o755)
     real_notify = harness.NOTIFY
-    harness.NOTIFY = wrapper
+    harness.NOTIFY = wrapper_real
     try:
         env = {"CLAUDE_STAND_IN": claude, "CLAUDE_FLAG": flag, "REAL_NOTIFY": real_notify}
         return harness.posted_title("claude-code", {}, env, expect_event, False, "permission")
