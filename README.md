@@ -171,6 +171,26 @@ When you press `⏎` on a permission event in a VS Code / Cursor terminal pane, 
 
 History is deliberately a separate pane rather than more rows in the queue. The queue is an action list — `⏎` approves, `⌫` dismisses — and a replayed record has no FIFO to answer and no process to focus, so mixing the two would make those keys mean different things depending on which row you happened to land on.
 
+**Feed events.** Besides agent nudges, the queue can show events from a script or an in-app feed. A script writes one JSON object per line to `~/.stack-nudge/panel.sock`:
+
+```bash
+printf '%s\n' '{"agent":"deploy-bot","event":"other","title":"Deployed","message":"api to production","source":"script","tag":"deploy","severity":"action","url":"https://example.com/deploys/9","repo":"acme/api","key":"deploy:9"}' \
+  | nc -U ~/.stack-nudge/panel.sock
+```
+
+`agent`, `event`, `title` and `message` are required. The rest are optional:
+
+| Field | Meaning |
+|-------|---------|
+| `source` | `script`, `github` or `calendar`. Anything else, or `agent`, makes it an ordinary agent event. A feed event is never a permission prompt: it ignores `event`, `fifo_path`, `hook_pid` and `has_action_button`. |
+| `tag` | Free-form label that picks the row's icon: `review`, `review-request`, `ci`, `ready`, `deploy`, `pipeline` or `calendar`. Any other tag gets the source's icon. Searchable in history. |
+| `severity` | `info` (default), `action` or `alert`. Colours the icon grey, orange or red. |
+| `url` | Opened by `⏎` or `O` (the primary action reads **Open**). Only `http` and `https` links are kept. Without one, `⏎` just dismisses the row. |
+| `repo`, `pr` | Shown in the row's chip, for example `GitHub · api#9`. |
+| `key` | An event with the same `key` replaces the one already queued, so a build that fails and then passes is one row. |
+
+Each source keeps its own 20 most recent events, so a busy feed can't push a permission prompt out of the queue. A feed banner doesn't clear other banners, and clicking it opens its `url`. History records the source, tag and link, and searches the source and tag.
+
 Records live in `~/.stack-nudge/events.jsonl` (mode 0600), one JSON object per line, holding timestamp, agent, kind, title, message, repo path, and session id — the descriptive fields only, never the FIFO paths or PIDs. They're kept for 30 days or 10,000 records, whichever binds first, trimmed once per launch. **The log contains prompt and tool text**, so if that isn't something you want on disk, turn it off in Settings → **Event history** (`STACKNUDGE_EVENT_HISTORY=false`); Settings → **Clear event history** deletes the file outright. Nothing is ever sent anywhere — this is a local file, same as the rest of `~/.stack-nudge`.
 
 **Answering elsewhere clears the prompt.** A permission prompt is tracked by two things: the FIFO notify.sh creates for your decision, and the hook process waiting to read it. Both are required. The FIFO alone isn't proof — its cleanup is skipped entirely on `SIGKILL`, which is what the agent does to the hook when you answer in its own UI. (It was also skipped on a clean exit until recently — the trap referenced a variable that had gone out of scope by the time it fired — so answered and timed-out prompts leaked their FIFO directory until the half-hourly sweep collected it.) So approving a plan in the terminal used to leave the panel convinced the prompt was still blocking, keeping it in the menu-bar count and re-nudging you (and Slack) for the full 550 seconds. Now a prompt whose hook has gone is retired within a tick, because there's nobody left to read a decision.
