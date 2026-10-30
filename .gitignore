@@ -27,3 +27,6 @@ venv/
 /tmp/
 *.log
 keys/
+# The Pylon extension's cache, written beside it when run from a checkout. It
+# holds customer account names, issue links and message previews.
+extensions/pylon/state.json*

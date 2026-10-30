@@ -3,9 +3,9 @@ import XCTest
 
 @testable import StackNudgePanelCore
 
-// The guards that stop a stray ⌫ killing an agent or removing a phrase. Raw
-// virtual key codes, since the panel's KeyCode table is private: 51 delete,
-// 117 forward delete, 53 Esc, 15 "r", 0 "a".
+// The guards that stop a stray ⌫ killing an agent or removing a phrase or an
+// extension. Raw virtual key codes, since the panel's KeyCode table is
+// private: 51 delete, 117 forward delete, 53 Esc, 15 "r", 0 "a".
 final class DestructiveKeyTests: XCTestCase {
 
     private func destructive(_ keyCode: UInt16, _ modifiers: NSEvent.ModifierFlags = [],
@@ -32,6 +32,28 @@ final class DestructiveKeyTests: XCTestCase {
     // the next agent.
     func test_heldCommandDeleteActsOnce() {
         XCTAssertEqual(destructive(51, .command, isRepeat: true), .ignoreRepeat)
+    }
+
+    private func event(_ keyCode: UInt16, _ modifiers: NSEvent.ModifierFlags,
+                       isRepeat: Bool = false) -> NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+                         timestamp: 0, windowNumber: 0, context: nil,
+                         characters: "", charactersIgnoringModifiers: "",
+                         isARepeat: isRepeat, keyCode: keyCode)!
+    }
+
+    // What the pages call. ⌦ arrives with .function set and caps lock adds its
+    // own flag; neither may stop ⌘⌫ working or let a bare ⌫ through.
+    func test_theEventFormMasksDeviceFlags() {
+        XCTAssertEqual(PanelController.destructiveKeyAction(for: event(117, [.command, .function])), .act)
+        XCTAssertEqual(PanelController.destructiveKeyAction(for: event(51, [.command, .capsLock])), .act)
+        XCTAssertNil(PanelController.destructiveKeyAction(for: event(51, .capsLock)))
+        XCTAssertNil(PanelController.destructiveKeyAction(for: event(117, .function)))
+    }
+
+    func test_theEventFormReadsTheRepeat() {
+        XCTAssertEqual(PanelController.destructiveKeyAction(for: event(51, .command, isRepeat: true)),
+                       .ignoreRepeat)
     }
 
     // After ⌫ or Esc cancels a field, the rest of that held key is eaten so it

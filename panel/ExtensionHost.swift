@@ -216,9 +216,13 @@ final class ExtensionHost: ObservableObject {
         guard let interval = manifest.refresh.intervalSeconds, interval > 0 else { return false }
         guard !pane.busy else { return false }
         if manifest.refresh.whileFocusedOnly && !visible { return false }
-        // No fetch yet at all: onOpen (or the user) owns the first one, so the
-        // interval doesn't start until something has been tried.
-        guard let attemptedAt = pane.attemptedAt else { return false }
+        // No fetch yet at all. A focused-only pane leaves the first one to
+        // onOpen (or the user), so its interval doesn't start until something
+        // has been tried. A background one is due straight away: it polls so
+        // that it can act while nobody is looking, and waiting for its tab to
+        // be opened meant it did nothing after every launch, login or update
+        // until somebody happened to open it.
+        guard let attemptedAt = pane.attemptedAt else { return !manifest.refresh.whileFocusedOnly }
         // Measured from the last *attempt*, not the last success — otherwise a
         // broken extension is overdue on every tick and polls at the ticker's
         // cadence instead of its own.

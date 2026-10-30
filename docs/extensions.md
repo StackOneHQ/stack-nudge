@@ -49,7 +49,7 @@ does not buy.
 | `config` | no | Environment keys to pass through. Each must match `^STACKNUDGE_EXT_[A-Z0-9_]+$`. See [Configuration](#configuration). |
 | `refresh.onOpen` | no | Default `true`. Fetch when the tab is opened. |
 | `refresh.intervalSeconds` | no | Default off. Floored at 5 — every tick is a process spawn. |
-| `refresh.whileFocusedOnly` | no | Default `true`. Only poll while your tab is the one on screen. |
+| `refresh.whileFocusedOnly` | no | Default `true`. Only poll while your tab is the one on screen. Set `false` to keep polling while the tab is hidden; such an extension is also first run on the first tick after launch, without waiting for its tab to be opened. |
 
 A manifest that fails any of these is **refused**, and the reason is reported —
 it does not silently produce a missing tab.
