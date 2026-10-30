@@ -1412,11 +1412,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         nav.$compactMode
             .removeDuplicates()
             .dropFirst()  // initial value applied via applyCompactLayout on launch
-            .sink { [weak self] _ in DispatchQueue.main.async { self?.applyCompactLayout() } }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.applyCompactLayout() }
             .store(in: &cancellables)
         nav.$compactExpanded
             .removeDuplicates()
-            .sink { [weak self] _ in DispatchQueue.main.async { self?.applyCompactLayout() } }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.applyCompactLayout() }
             .store(in: &cancellables)
         // Cadence follows these flags wherever they flip, not just at the call
         // sites that remember to say so — Settings → "Pin panel" expands the pill
@@ -1571,9 +1573,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             // full-panel-sized window.
             if nav.compactMode, !nav.compactExpanded {
                 nav.compactExpanded = true
-                // applyCompactLayout already ran via the Combine sink;
-                // call again here so the synchronous setFrame is committed
-                // before the mode flip below schedules SwiftUI work.
+                // The Combine sinks lay out a turn later, so this call is the
+                // only layout before the mode flip below: it commits the
+                // synchronous setFrame before SwiftUI work is scheduled.
                 applyCompactLayout()
             }
             nav.postUpdateVersion = result.version.isEmpty ? "?" : result.version
