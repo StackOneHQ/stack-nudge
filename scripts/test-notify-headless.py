@@ -71,14 +71,14 @@ def start_stand_in(agent, argv, workdir):
 def run_under_claude_parent(workdir, flag, expect_event):
     """Run a permission hook as the child of `claude <flag>`, NUDGE_AGENT_PID unset.
 
-    ps reports a process by its executable's file name, so the parent is a copy
-    of bash called `claude`. macOS kills a copied system binary on launch until
-    it is re-signed, hence the ad-hoc codesign.
+    ps reports a process by the name it was launched under, so the parent is
+    bash run through a symlink called `claude`. A copy of bash would need
+    re-signing to launch at all, and on the CI runner the re-signed copy never
+    ran the hook.
     """
     claude = os.path.join(workdir, "claude")
-    if not os.path.exists(claude):
-        shutil.copy("/bin/bash", claude)
-        subprocess.run(["codesign", "-s", "-", "-f", claude], check=True, capture_output=True)
+    if not os.path.lexists(claude):
+        os.symlink("/bin/bash", claude)
     wrapper = os.path.join(workdir, "under-claude.sh")
     with open(wrapper, "w", encoding="utf-8") as wrapper_file:
         # The trailing `exit` keeps bash from exec'ing notify.sh in its own
