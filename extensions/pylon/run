@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """Pylon: customer issues waiting on a response from us.
 
-Two kinds of row. A *first response* is an issue Pylon is running a
-first-response SLA on that nobody has answered yet; its bar fills as the SLA
-runs down. A *reply owed* is an issue we have answered before where Pylon's
-next-reply SLA is running, because the customer has written since.
+Three kinds of row, told apart by the colour of their bar, the one thing on
+a row an extension can colour.
+
+- **First response** (green, then amber, then red): an issue Pylon is running a
+  first-response SLA on that nobody has answered yet. Its bar fills as the SLA
+  runs down.
+- **Reply owed** (blue): an issue we have answered before where Pylon's
+  next-reply SLA is running, because the customer has written since.
+- **With engineering** (solid purple): an issue in an engineering state. It's
+  shown whether or not an SLA is running, and never reminded about, because
+  the next move is engineering's.
 
 Each row's footnote is the latest message on the issue — who, how long ago,
 and its first line — so the list says what's going on without opening
@@ -119,6 +126,12 @@ PREVIEW_CHARS = 200
 # parked it on purpose, or it is done.
 NOT_ON_US = ["closed", "waiting_on_customer", "on_hold"]
 
+# States meaning the ticket is with engineering. Pylon lets a workspace add its
+# own states, and this is the one in use where this was built. Such a ticket is
+# shown whether or not an SLA is running, so it doesn't vanish while it waits.
+# It isn't reminded about, because the next move is engineering's.
+ENGINEERING_STATES = ("waiting_on_engineering",)
+
 ME_TTL = 24 * 3600
 USERS_TTL = 24 * 3600
 ACCOUNTS_TTL = 6 * 3600
@@ -147,7 +160,11 @@ SILENT_AFTER_BREACH = 60 * 60
 # More banners than this in one run collapse into a single summary.
 MAX_BANNERS = 3
 
+# The bar is the one thing on a row an extension can colour, so it carries the
+# category: green to amber to red for a first response as its deadline nears,
+# blue for a reply owed, purple for a ticket with engineering.
 GREEN, AMBER, RED = "#7FD1B9", "#E8A87C", "#E5534B"
+BLUE, PURPLE = "#6FA8DC", "#A78BDB"
 
 _state_path = "state.json"
 
@@ -240,6 +257,8 @@ def classify(issue):
     if state in NOT_ON_US:
         return None
     breach = parse_time(issue.get("first_response_breach_time"))
+    # A first response still owed outranks everything, engineering included:
+    # the customer needs to hear something before engineering's answer comes.
     if issue.get("first_response_time") is None and breach is not None:
         return {"kind": "first", "due": breach}
     # The next-reply SLA rather than the state, because an issue stays
@@ -248,7 +267,10 @@ def classify(issue):
     reply = issue.get("next_reply")
     reply = reply if isinstance(reply, dict) else {}
     due = parse_time(reply.get("breach_time"))
-    if due is not None and not reply.get("time"):
+    owed = due is not None and not reply.get("time")
+    if state in ENGINEERING_STATES:
+        return {"kind": "eng", "due": due if owed else None}
+    if owed:
         return {"kind": "reply", "due": due}
     # Unanswered with no SLA is our own outreach that nobody has replied to.
     return None
@@ -319,10 +341,15 @@ def plan_banners(items, ledger, know_me=True):
 
 def sort_key(item):
     """Live SLAs soonest first, then the most recently missed, then replies
-    owed in due order."""
+    owed in due order, then tickets with engineering: any with a reply due
+    first, then the longest quiet, since those are the ones to chase."""
     if item["kind"] == "first":
         return (0, item["left"]) if item["left"] > 0 else (1, -item["left"])
-    return (2, item["left"])
+    if item["kind"] == "reply":
+        return (2, item["left"])
+    latest = parse_time(item["latest"])
+    return (3, item["left"] if item["due"] else float("inf"),
+            latest.timestamp() if latest else 0)
 
 
 def row_for(item, now):
@@ -347,22 +374,41 @@ def row_for(item, now):
             row["value"] = "late %s" % short_duration(-left)
             fill, tint = 1.0, RED
             notes = ["first response missed"]
-        row["track"] = {"fill": round(min(max(fill, 0.0), 1.0), 4), "tint": tint}
-    else:
+        if item["engineering"]:
+            notes.append("with engineering")
+    elif item["kind"] == "reply":
         due = item["due"]
         if due > now:
             row["value"] = "due %s" % short_duration((due - now).total_seconds())
+            fill = 1 - (due - now).total_seconds() / item["window"]
             notes = ["reply due %s" % clock(due, now)]
         else:
             row["value"] = "overdue %s" % short_duration((now - due).total_seconds())
+            fill = 1.0
             notes = ["reply overdue"]
+        tint = BLUE
+    else:
+        due = item["due"]
+        latest = parse_time(item["latest"])
+        if due is not None and due > now:
+            row["value"] = "due %s" % short_duration((due - now).total_seconds())
+        elif due is not None:
+            row["value"] = "overdue %s" % short_duration((now - due).total_seconds())
+        elif latest is not None:
+            row["value"] = "quiet %s" % short_duration((now - latest).total_seconds())
+        # Solid, not a countdown: there is no deadline of ours to run down.
+        fill, tint = 1.0, PURPLE
+        notes = ["with engineering"]
+    row["track"] = {"fill": round(min(max(fill, 0.0), 1.0), 4), "tint": tint}
 
     preview = item.get("preview")
     if preview:
         # What's going on beats what kind of row it is, which the value and the
-        # bar already say. The message goes last so a narrow panel truncates
-        # the customer's words rather than whose issue it is.
-        notes = [item["who"]] + (["snoozed"] if item["snoozed"] else []) + [said(preview, now)]
+        # bar already say — except engineering, which the colour alone mustn't
+        # carry. The message goes last so a narrow panel truncates the
+        # customer's words rather than whose issue it is.
+        notes = ([item["who"]] + (["with engineering"] if item["engineering"] else [])
+                 + (["snoozed"] if item["snoozed"] else []) + [said(preview, now)])
     else:
         notes.append(item["who"])
         if item["source"]:
@@ -684,7 +730,12 @@ def load_issues(api, now):
     body = {
         "filter": {"operator": "and", "subfilters": [
             {"field": "state", "operator": "not_in", "values": NOT_ON_US},
-            {"field": "latest_message_activity_at", "operator": "time_is_after", "value": since},
+            # A ticket with engineering can go quiet for weeks, and quiet is
+            # exactly when it should still be on screen.
+            {"operator": "or", "subfilters": [
+                {"field": "latest_message_activity_at", "operator": "time_is_after", "value": since},
+                {"field": "state", "operator": "in", "values": list(ENGINEERING_STATES)},
+            ]},
         ]},
         "limit": SEARCH_LIMIT,
     }
@@ -843,8 +894,12 @@ def item_for(issue, waiting, now, accounts, users, me):
         who = first_name(owner_id, users)
     snoozed = parse_time(issue.get("snoozed_until_time"))
     due = waiting["due"]
-    opened = parse_time(issue.get("created_at"))
-    window = (due - opened).total_seconds() if (due and opened) else 0
+    # The window a bar fills over. A first response's runs from opening; a
+    # reply's from the customer's last message, which is what starts Pylon's
+    # next-reply clock.
+    started = parse_time(issue.get("created_at") if waiting["kind"] == "first"
+                         else issue.get("latest_message_time"))
+    window = (due - started).total_seconds() if (due and started) else 0
     return {
         "id": str(issue["id"]),
         "number": issue.get("number"),
@@ -856,6 +911,7 @@ def item_for(issue, waiting, now, accounts, users, me):
         "due": due,
         "left": (due - now).total_seconds() if due else None,
         "window": window if window > 0 else FALLBACK_WINDOW,
+        "engineering": issue.get("state") in ENGINEERING_STATES,
         "latest": issue.get("latest_message_time"),
         "preview": None,
         "mine": mine,

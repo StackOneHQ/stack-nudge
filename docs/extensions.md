@@ -50,6 +50,7 @@ does not buy.
 | `refresh.onOpen` | no | Default `true`. Fetch when the tab is opened. |
 | `refresh.intervalSeconds` | no | Default off. Floored at 5 — every tick is a process spawn. |
 | `refresh.whileFocusedOnly` | no | Default `true`. Only poll while your tab is the one on screen. Set `false` to keep polling while the tab is hidden; such an extension is also first run on the first tick after launch, without waiting for its tab to be opened. |
+| `glance` | no | Default `false`. Let the widget show your header badge while it is urgent. See [The widget](#the-widget). |
 
 A manifest that fails any of these is **refused**, and the reason is reported —
 it does not silently produce a missing tab.
@@ -187,6 +188,20 @@ avoid a blank pane.
 `title` is required if you send a header at all; `badge.tone` is one of
 `neutral` (default), `success`, `warning`, `danger`; `trailing` is rendered
 monospaced and is a good place for a countdown.
+
+#### The widget
+
+With `"glance": true` in your manifest, the widget shows your header badge —
+your tab label, the badge text and `trailing` — as a small chip while the
+badge's tone is `warning` or `danger`, and nothing otherwise. Clicking it opens
+your tab without leaving widget mode. There is room for one chip: the most
+severe wins, first in tab order among equals, and a `+N` counts the rest.
+
+It is the same badge your tab shows, so there is nothing new to send, but keep
+it short. The pill is narrow: when the chip doesn't fit it drops your label,
+then `trailing`, and only then truncates the badge text.
+A glance only stays current while you are polled, so it pairs with
+`whileFocusedOnly: false`. Hosts that predate the field ignore it.
 
 ### `rows`
 

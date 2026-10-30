@@ -1121,6 +1121,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     }, onRefusalsChanged: { [weak self] count in
         self?.nav.refusedExtensionCount = count
         self?.refreshInstalledExtensions()
+    }, onGlancesChanged: { [weak self] glances in
+        self?.nav.extensionGlances = glances
     })
     private var listener: EventListener?
     private var menuBar: MenuBarController?

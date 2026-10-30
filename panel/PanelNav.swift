@@ -1094,6 +1094,11 @@ final class PanelNav: ObservableObject {
         didSet { reconcileModeWithTabs() }
     }
 
+    // Badges the widget shows for extensions that opted in. Published by
+    // ExtensionHost only when they change, so the pill isn't redrawn on every
+    // scheduled refresh.
+    @Published var extensionGlances: [ExtensionGlance] = []
+
     // The tab order, and the only source of it: ⌘-number, ←/→ and the strip all
     // read this, so a tab can't be drawn fifth and answer to ⌘6.
     var orderedTabs: [PanelMode] {

@@ -51,6 +51,11 @@ struct ExtensionManifest: Equatable {
     let requires: [String]
     let config: [ConfigKey]
     let refresh: Refresh
+    // Whether the widget may show this extension's header badge while it says
+    // something urgent. Opt-in: the pill has room for one chip, and an
+    // extension that never asked for it shouldn't be able to take it. Last and
+    // defaulted, so every existing memberwise construction stays valid.
+    var glance = false
 
     var tabEntry: ExtensionTab { ExtensionTab(id: id, label: tab.label) }
 
@@ -202,7 +207,8 @@ struct ExtensionManifest: Equatable {
             refresh: Refresh(onOpen: decoded.refresh?.onOpen ?? true,
                              intervalSeconds: decoded.refresh?.intervalSeconds
                                  .map { max($0, minimumIntervalSeconds) },
-                             whileFocusedOnly: decoded.refresh?.whileFocusedOnly ?? true)))
+                             whileFocusedOnly: decoded.refresh?.whileFocusedOnly ?? true),
+            glance: decoded.glance ?? false))
     }
 
     // The decoder's own description names the field, which is the one thing a
@@ -236,6 +242,7 @@ struct ExtensionManifest: Equatable {
         let requires: [String]?
         let config: [ConfigKey]?
         let refresh: Refresh?
+        let glance: Bool?
     }
 }
 

@@ -61,6 +61,7 @@ struct CompactView: View {
                 HStack(alignment: .center, spacing: 4) {
                     gaugeCluster
                     Spacer(minLength: 0)
+                    extensionGlance
                     muteIndicator
                     expandButton
                 }
@@ -73,6 +74,7 @@ struct CompactView: View {
                     headline
                     sessionBadge
                     Spacer(minLength: 0)
+                    extensionGlance
                     muteIndicator
                     expandButton
                 }
@@ -353,6 +355,88 @@ struct CompactView: View {
     // Passive muted signal on the pill — a dimmed bell.slash while a timed
     // mute is active, nothing otherwise. Reads nav.muteTick so it clears the
     // instant the mute lifts (the controller's timer bumps it).
+    // MARK: - Extension glance
+
+    // The one glance there's room for on the pill: the most severe, first in
+    // tab order among equals, and how many more are waiting behind it.
+    struct GlanceShown: Equatable {
+        let glance: ExtensionGlance
+        let more: Int
+    }
+
+    static func glanceToShow(_ glances: [ExtensionGlance]) -> GlanceShown? {
+        guard let shown = glances.first(where: { $0.tone == .danger }) ?? glances.first else {
+            return nil
+        }
+        return GlanceShown(glance: shown, more: glances.count - 1)
+    }
+
+    // An extension's urgent badge. Tapping it opens that extension's tab with
+    // the transient expand: the expand button leaves widget mode for good, and
+    // a chip asking to be looked at shouldn't cost somebody their widget. The
+    // window expands before the mode flips, so the tab renders into a
+    // panel-sized frame rather than the pill's — the order postUpdate uses.
+    //
+    // Sheds detail rather than truncating it. With the sessions headline and
+    // gauge beside it the pill leaves about 120pt, which cut "Pylon 2 DUE 12m"
+    // to "Pyl… 2 D… 12m": the label goes first, then the countdown, and only
+    // the last resort truncates. The tooltip always carries all of it.
+    @ViewBuilder private var extensionGlance: some View {
+        if let shown = Self.glanceToShow(nav.extensionGlances) {
+            let glance = shown.glance
+            let tint: Color = glance.tone == .danger ? .red : .orange
+            Button {
+                nav.actions?.expandFromCompact()
+                nav.mode = .extensionTab(glance.id)
+            } label: {
+                ViewThatFits(in: .horizontal) {
+                    glanceChip(shown, tint: tint, label: true, trailing: true)
+                    glanceChip(shown, tint: tint, label: false, trailing: true)
+                    glanceChip(shown, tint: tint, label: false, trailing: false)
+                }
+                .frame(maxWidth: 170)
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .layoutPriority(1)
+            .help("\(glance.label): \(glance.text)"
+                  + (glance.trailing.map { " · \($0)" } ?? "") + ". Click to open its tab.")
+            .accessibilityLabel("\(glance.label): \(glance.text)"
+                                + (glance.trailing.map { ", \($0)" } ?? ""))
+        }
+    }
+
+    private func glanceChip(_ shown: GlanceShown, tint: Color,
+                            label: Bool, trailing: Bool) -> some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(tint)
+                .frame(width: 6, height: 6)
+            if label {
+                Text(shown.glance.label)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            Text(shown.glance.text)
+                .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                .foregroundStyle(.primary)
+            if trailing, let text = shown.glance.trailing {
+                Text(text)
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            if shown.more > 0 {
+                Text("+\(shown.more)")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .lineLimit(1)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(Capsule().fill(tint.opacity(0.16)))
+    }
+
     @ViewBuilder private var muteIndicator: some View {
         let _ = nav.muteTick
         if nav.isMuted {

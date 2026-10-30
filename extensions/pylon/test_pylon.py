@@ -74,13 +74,16 @@ def issue(number=1, **overrides):
 
 
 def item(left_minutes=30, mine=True, unowned=False, number=1, snoozed=False, kind="first",
-         window_minutes=30):
-    due = NOW + timedelta(minutes=left_minutes)
+         window_minutes=30, engineering=False, quiet_minutes=0):
+    """A built row item. `left_minutes=None` means no deadline at all, which
+    only a ticket with engineering can have."""
+    due = NOW + timedelta(minutes=left_minutes) if left_minutes is not None else None
     return {
         "id": "issue-%d" % number, "number": number, "title": "Workday sync failing",
         "account": "Acme", "link": None, "source": "slack", "kind": kind,
-        "due": due, "left": left_minutes * 60.0, "window": window_minutes * 60.0,
-        "mine": mine, "unowned": unowned,
+        "due": due, "left": left_minutes * 60.0 if due else None,
+        "window": window_minutes * 60.0, "latest": stamp(NOW - timedelta(minutes=quiet_minutes)),
+        "mine": mine, "unowned": unowned, "engineering": engineering or kind == "eng",
         "who": "yours" if mine else ("ours" if unowned else "Alex"),
         "snoozed": snoozed,
     }
@@ -121,6 +124,17 @@ class Classification(unittest.TestCase):
             state="waiting_on_you", first_response_time=stamp(NOW),
             next_reply={"time": None, "breach_time": stamp(NOW + timedelta(hours=2))}))
         self.assertEqual(waiting, {"kind": "reply", "due": NOW + timedelta(hours=2)})
+
+    def test_a_ticket_with_engineering_is_shown_with_or_without_an_sla(self):
+        quiet = issue(state="waiting_on_engineering", first_response_time=stamp(NOW))
+        self.assertEqual(pylon.classify(quiet), {"kind": "eng", "due": None})
+        owed = issue(state="waiting_on_engineering", first_response_time=stamp(NOW),
+                     next_reply={"time": None, "breach_time": stamp(NOW + timedelta(hours=2))})
+        self.assertEqual(pylon.classify(owed), {"kind": "eng", "due": NOW + timedelta(hours=2)})
+
+    def test_a_first_response_still_owed_outranks_engineering(self):
+        # The customer needs to hear something before engineering's answer.
+        self.assertEqual(pylon.classify(issue(state="waiting_on_engineering"))["kind"], "first")
 
     def test_a_met_reply_sla_means_nothing_is_owed(self):
         waiting = pylon.classify(issue(
@@ -223,6 +237,10 @@ class Escalation(unittest.TestCase):
         _, ledger = pylon.plan_banners([item(number=2)], {"issue-1": 3, "issue-2": 1})
         self.assertEqual(ledger, {"issue-2": 1})
 
+    def test_tickets_with_engineering_never_banner(self):
+        banners, ledger = pylon.plan_banners([item(left_minutes=None, kind="eng")], {})
+        self.assertEqual((banners, ledger), ([], {}))
+
     def test_replies_owed_never_banner(self):
         banners, ledger = pylon.plan_banners([item(left_minutes=-5, kind="reply")], {})
         self.assertEqual((banners, ledger), ([], {}))
@@ -287,6 +305,44 @@ class Rows(unittest.TestCase):
         rows = pylon.document(items, NOW, False, True)["rows"]
         self.assertEqual([r["id"] for r in rows],
                          ["issue-3", "issue-1", "issue-4", "issue-2", "issue-5"])
+
+    def test_each_kind_has_its_own_bar_colour(self):
+        rows = {r["id"]: r for r in pylon.document(
+            [item(number=1, left_minutes=20),
+             item(number=2, kind="reply", left_minutes=30, window_minutes=120),
+             item(number=3, kind="eng", left_minutes=None, quiet_minutes=5 * 24 * 60)],
+            NOW, False, "ok")["rows"]}
+        self.assertEqual(rows["issue-1"]["track"]["tint"], pylon.GREEN)
+        # A reply's bar fills toward its deadline, like a first response's.
+        self.assertEqual(rows["issue-2"]["track"], {"fill": 0.75, "tint": pylon.BLUE})
+        # Engineering's is solid: there's no deadline of ours to run down.
+        self.assertEqual(rows["issue-3"]["track"], {"fill": 1.0, "tint": pylon.PURPLE})
+        self.assertEqual(rows["issue-3"]["value"], "quiet 5d")
+        self.assertIn("with engineering", rows["issue-3"]["footnote"])
+
+    def test_engineering_is_said_in_words_too_not_only_in_colour(self):
+        row = pylon.row_for(dict(item(kind="eng", left_minutes=None), preview={
+            "who": "Dana", "at": stamp(NOW - timedelta(hours=3)), "text": "any news?", "note": False}), NOW)
+        self.assertEqual(row["footnote"], "yours · with engineering · Dana, 3h ago: any news?")
+        first = pylon.row_for(item(left_minutes=20, engineering=True), NOW)
+        self.assertIn("with engineering", first["footnote"])
+        self.assertEqual(first["track"]["tint"], pylon.GREEN)
+
+    def test_engineering_comes_last_with_the_longest_quiet_first(self):
+        items = [item(number=1, kind="eng", left_minutes=None, quiet_minutes=60),
+                 item(number=2, kind="reply", left_minutes=90),
+                 item(number=3, kind="eng", left_minutes=None, quiet_minutes=10 * 24 * 60),
+                 item(number=4, kind="eng", left_minutes=120),
+                 item(number=5, left_minutes=25)]
+        rows = pylon.document(items, NOW, False, "ok")["rows"]
+        self.assertEqual([r["id"] for r in rows],
+                         ["issue-5", "issue-2", "issue-4", "issue-3", "issue-1"])
+
+    def test_mine_only_hides_other_peoples_engineering_tickets(self):
+        items = [item(number=1, kind="eng", left_minutes=None, mine=False),
+                 item(number=2, kind="eng", left_minutes=None)]
+        rows = pylon.document(items, NOW, True, "ok")["rows"]
+        self.assertEqual([r["id"] for r in rows], ["issue-2"])
 
     def test_the_bar_and_its_colour_are_shares_of_the_window(self):
         rows = {r["id"]: r for r in pylon.document(
@@ -530,13 +586,18 @@ class EndToEnd(unittest.TestCase):
         fake = _FakePylon(workspace())
         self.run_once(fake)
         search = next(r[3] for r in fake.requests if r[2] == "/issues/search")
-        state_filter, window = search["filter"]["subfilters"]
+        state_filter, either = search["filter"]["subfilters"]
         self.assertEqual(state_filter, {"field": "state", "operator": "not_in",
                                         "values": ["closed", "waiting_on_customer", "on_hold"]})
+        window, engineering = either["subfilters"]
+        self.assertEqual(either["operator"], "or")
         # Windowed on the latest message, not on creation: a customer writing
         # today on an old thread is owed a reply today.
         self.assertEqual(window["field"], "latest_message_activity_at")
         self.assertEqual(window["value"], stamp(NOW - timedelta(days=pylon.LOOKBACK_DAYS)))
+        # ...or with engineering, however long it has been quiet.
+        self.assertEqual(engineering, {"field": "state", "operator": "in",
+                                       "values": ["waiting_on_engineering"]})
 
     def test_notifications_off_keeps_the_tab_and_drops_the_banners(self):
         env = dict(self.env, **{pylon.NOTIFY_KEY: "off"})
@@ -805,6 +866,20 @@ class EndToEnd(unittest.TestCase):
 
     def test_a_blocked_read_cannot_outlast_the_host(self):
         self.assertLess(pylon.TOTAL_BUDGET + pylon.MAX_PER_REQUEST, pylon.HOST_TIMEOUT)
+
+    def test_a_quiet_ticket_with_engineering_shows_and_pings_nobody(self):
+        routes = workspace()
+        routes[("POST", "/issues/search")]["data"].append(issue(
+            9, account={"id": "acct-mine"}, state="waiting_on_engineering",
+            first_response_time=stamp(NOW - timedelta(days=12)), first_response_breach_time=None,
+            latest_message_time=stamp(NOW - timedelta(days=12))))
+        status, doc = self.run_once(_FakePylon(routes))
+        rows = {r["id"]: r for r in doc["rows"]}
+        self.assertEqual(status, 0)
+        self.assertEqual(rows["issue-9"]["track"]["tint"], pylon.PURPLE)
+        self.assertEqual(rows["issue-9"]["value"], "quiet 12d")
+        self.assertEqual([r["id"] for r in doc["rows"]][-1], "issue-9")
+        self.assertNotIn("Pylon #9", " ".join(b[0] for b in self.banners))
 
     # --- Ownership --------------------------------------------------------
 
