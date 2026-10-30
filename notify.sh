@@ -1048,11 +1048,21 @@ play_windows() {
 # turns ending aren't news either. STACKNUDGE_HEADLESS_NUDGES=on brings both
 # back.
 #
-# The flags differ per agent: codex's `-p` is `--profile`, so only its
-# subcommand counts, and only in first-argument position. ps flattens argv into
-# one string, so a claude prompt that itself contains " -p " still reads as
-# headless.
+# Claude Code says how it was started in CLAUDE_CODE_ENTRYPOINT, which its
+# hooks inherit: `sdk-cli` for `-p` and the other `sdk-*` values for the SDKs,
+# `cli` for a terminal session, and whatever an IDE or other host set. Only an
+# older Claude Code without the variable falls back to reading argv, and ps
+# flattens argv into one string, so there a prompt that itself contains " -p "
+# still reads as headless.
+#
+# codex has no such variable, so its subcommand decides. Its `-p` is
+# `--profile`, and global flags can come before the subcommand, so skip them
+# and their values and read the first positional word.
 agent_is_headless() {
+  if [[ "$AGENT" == claude* && -n "${CLAUDE_CODE_ENTRYPOINT:-}" ]]; then
+    [[ "$CLAUDE_CODE_ENTRYPOINT" == sdk-* ]]
+    return
+  fi
   local pid="${NUDGE_AGENT_PID:-}"
   if [[ -z "$pid" ]]; then
     walk_session_chain
@@ -1066,11 +1076,18 @@ agent_is_headless() {
       [[ " $args " =~ \ (-p|--print)(\ |=) ]] && return 0
       ;;
     codex*)
-      local subcommand
-      read -r _ subcommand _ <<< "$args"
-      case "$subcommand" in
-        exec|e|review) return 0 ;;
-      esac
+      local -a words
+      read -ra words <<< "$args"
+      local i=1
+      while (( i < ${#words[@]} )); do
+        case "${words[i]}" in
+          -c|--config|-m|--model|-p|--profile|-a|--ask-for-approval|-s|--sandbox|-C|--cd|-i|--image)
+            (( i += 2 )) ;;
+          -*) (( i += 1 )) ;;
+          exec|e|review) return 0 ;;
+          *) return 1 ;;
+        esac
+      done
       ;;
   esac
   return 1

@@ -7,7 +7,8 @@ the script for up to 550s. notify.sh therefore posts nothing for a headless run
 unless STACKNUDGE_HEADLESS_NUDGES=on.
 
 Most cases seed the agent through NUDGE_AGENT_PID: a stand-in process whose
-command line carries the flags under test. One case leaves NUDGE_AGENT_PID unset
+command line carries the flags under test. Claude cases that set
+CLAUDE_CODE_ENTRYPOINT check that the variable wins over the command line. One case leaves NUDGE_AGENT_PID unset
 and runs the hook as the child of a process named `claude`, so notify.sh finds
 the agent by walking up from $PPID, as it does under a real agent. The run
 itself reuses the harness in test-notify-subagents.py (throwaway $HOME, fake
@@ -40,6 +41,19 @@ CASES = [
     ("codex -p profile prompt", "codex", ["-p", "work"], "permission", {}, "Codex"),
     ("claude -p, opted back in", "claude-code", ["-p"], "permission",
      {"STACKNUDGE_HEADLESS_NUDGES": "on"}, "Claude Code"),
+    # The entrypoint decides when it's set: a prompt that mentions -p is still
+    # an interactive session, and an SDK run is headless whatever its argv.
+    ("claude cli, prompt says -p", "claude-code", ["fix", "-p", "parsing"], "permission",
+     {"CLAUDE_CODE_ENTRYPOINT": "cli"}, "Claude Code"),
+    ("claude sdk-cli prompt", "claude-code", ["--resume", "abc"], "permission",
+     {"CLAUDE_CODE_ENTRYPOINT": "sdk-cli"}, None),
+    ("claude sdk-ts prompt", "claude-code", [], "permission",
+     {"CLAUDE_CODE_ENTRYPOINT": "sdk-ts"}, None),
+    # Global flags and their values come before codex's subcommand.
+    ("codex -c value exec prompt", "codex", ["-c", "model=o3", "exec"], "permission", {}, None),
+    ("codex --model value e prompt", "codex", ["--model", "m", "e"], "permission", {}, None),
+    # A model named exec is the flag's value, not the subcommand.
+    ("codex -m exec prompt", "codex", ["-m", "exec"], "permission", {}, "Codex"),
 ]
 
 # Hook run as the child of `claude <flag>`, NUDGE_AGENT_PID unset. The
@@ -51,19 +65,16 @@ PARENT_CASES = [
 ]
 
 # Written out so deleting a case can't quietly lower the bar.
-EXPECTED_CASE_COUNT = 10
-
-# Scripts a codex stand-in runs: bash treats its first non-option argument as a
-# script file, so each subcommand above needs a file of that name.
-CODEX_SCRIPTS = ["exec", "e", "review", "work"]
+EXPECTED_CASE_COUNT = 16
 
 
-def start_stand_in(agent, argv, workdir):
+def start_stand_in(agent, argv):
     """Start a sleeping process whose `ps -o args=` reads like the agent's."""
     if agent == "codex":
-        # The codex check reads the first argument after the program, so the
-        # argv has to start right there: bash runs under argv[0] "codex".
-        return subprocess.Popen(["codex", *argv], executable="/bin/bash", cwd=workdir)
+        # The codex check reads the words after the program, so the argv has
+        # to start right there, under argv[0] "codex". yes parses no options,
+        # and blocks once the pipe nobody reads is full.
+        return subprocess.Popen(["codex", *argv], executable="/usr/bin/yes", stdout=subprocess.PIPE)
     # The claude check matches the flags anywhere, so a python stand-in will do.
     return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)", *argv])
 
@@ -102,14 +113,14 @@ def main():
         print("skipped: notify.sh only posts to the panel on macOS")
         return 0
     os.environ.pop("NUDGE_AGENT_PID", None)
+    # Set when the tests themselves run under Claude Code; it would decide
+    # every claude case.
+    os.environ.pop("CLAUDE_CODE_ENTRYPOINT", None)
     workdir = tempfile.mkdtemp(prefix="stack-nudge-test-headless-")
-    for script in CODEX_SCRIPTS:
-        with open(os.path.join(workdir, script), "w", encoding="utf-8") as script_file:
-            script_file.write("sleep 120; :\n")
     passed = 0
     try:
         for name, agent, argv, event, env, expected in CASES:
-            stand_in = start_stand_in(agent, argv, workdir)
+            stand_in = start_stand_in(agent, argv)
             try:
                 actual = harness.posted_title(agent, {}, dict(env, NUDGE_AGENT_PID=str(stand_in.pid)),
                                               expected is not None, False, event)
