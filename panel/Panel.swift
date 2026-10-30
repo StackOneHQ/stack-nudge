@@ -2782,7 +2782,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                     guard case .awaitingApproval = self.nav.githubSignIn else { return }
                     switch result {
                     case .token(let token):
-                        GitHubAuth.store(token: token)
+                        // Signed in only once a token reads back: a save the
+                        // Keychain refused must not look like success.
+                        switch GitHubAuth.completeSignIn(token: token) {
+                        case .failed(let failure):
+                            self.nav.githubSignedIn = false
+                            self.nav.githubSignIn = .failed(failure)
+                            return
+                        case .keptOlderToken:
+                            self.nav.githubSignInNote = "Couldn't save the new sign-in, still using the earlier one"
+                        case .saved:
+                            self.nav.githubSignInNote = nil
+                        }
                         self.nav.githubSignedIn = true
                         self.nav.githubSignIn = .idle
                         self.refreshPullRequestsNow()
