@@ -1041,6 +1041,62 @@ play_windows() {
     || powershell -c "[console]::beep(${freq},${dur})" 2>/dev/null
 }
 
+# A headless run (`claude -p` / `--print`, `codex exec` / `e` / `review`) is a
+# script driving the agent, with nobody at a terminal: a prompt from it can't be
+# answered by a person, and holding its hook for the 550s FIFO wait stalls the
+# script. Leave it alone and let the agent's own permission setting decide. Its
+# turns ending aren't news either. STACKNUDGE_HEADLESS_NUDGES=on brings both
+# back.
+#
+# Claude Code says how it was started in CLAUDE_CODE_ENTRYPOINT, which its
+# hooks inherit: `sdk-cli` for `-p` and the other `sdk-*` values for the SDKs,
+# `cli` for a terminal session, and whatever an IDE or other host set. Only an
+# older Claude Code without the variable falls back to reading argv, and ps
+# flattens argv into one string, so there a prompt that itself contains " -p "
+# still reads as headless.
+#
+# codex has no such variable, so its subcommand decides. Its `-p` is
+# `--profile`, and global flags can come before the subcommand, so skip them
+# and their values and read the first positional word.
+agent_is_headless() {
+  if [[ "$AGENT" == claude* && -n "${CLAUDE_CODE_ENTRYPOINT:-}" ]]; then
+    [[ "$CLAUDE_CODE_ENTRYPOINT" == sdk-* ]]
+    return
+  fi
+  local pid="${NUDGE_AGENT_PID:-}"
+  if [[ -z "$pid" ]]; then
+    walk_session_chain
+    pid="$AGENT_PID"
+  fi
+  [[ -z "$pid" ]] && return 1
+  local args
+  args="$(ps -p "$pid" -o args= 2>/dev/null)"
+  case "$AGENT" in
+    claude*)
+      [[ " $args " =~ \ (-p|--print)(\ |=) ]] && return 0
+      ;;
+    codex*)
+      local -a words
+      read -ra words <<< "$args"
+      local i=1
+      while (( i < ${#words[@]} )); do
+        case "${words[i]}" in
+          -c|--config|-m|--model|-p|--profile|-a|--ask-for-approval|-s|--sandbox|-C|--cd|-i|--image)
+            (( i += 2 )) ;;
+          -*) (( i += 1 )) ;;
+          exec|e|review) return 0 ;;
+          *) return 1 ;;
+        esac
+      done
+      ;;
+  esac
+  return 1
+}
+if [[ "${STACKNUDGE_HEADLESS_NUDGES:-off}" != "on" ]] && agent_is_headless; then
+  nudge_debug "nudge skipped: the agent is a headless run"
+  exit 0
+fi
+
 TITLE="$(agent_label "$AGENT")"
 
 # Say which subagent a nudge came from, so "I didn't ask for that" has an
