@@ -1041,11 +1041,17 @@ play_windows() {
     || powershell -c "[console]::beep(${freq},${dur})" 2>/dev/null
 }
 
-# A headless run (`claude -p` / `--print`, `codex exec`) is a script driving
-# the agent, with nobody at a terminal: a prompt from it can't be answered by a
-# person, and holding its hook for the 550s FIFO wait stalls the script. Leave
-# it alone and let the agent's own permission setting decide. Its turns ending
-# aren't news either. STACKNUDGE_HEADLESS_NUDGES=on brings both back.
+# A headless run (`claude -p` / `--print`, `codex exec` / `e` / `review`) is a
+# script driving the agent, with nobody at a terminal: a prompt from it can't be
+# answered by a person, and holding its hook for the 550s FIFO wait stalls the
+# script. Leave it alone and let the agent's own permission setting decide. Its
+# turns ending aren't news either. STACKNUDGE_HEADLESS_NUDGES=on brings both
+# back.
+#
+# The flags differ per agent: codex's `-p` is `--profile`, so only its
+# subcommand counts, and only in first-argument position. ps flattens argv into
+# one string, so a claude prompt that itself contains " -p " still reads as
+# headless.
 agent_is_headless() {
   local pid="${NUDGE_AGENT_PID:-}"
   if [[ -z "$pid" ]]; then
@@ -1054,9 +1060,19 @@ agent_is_headless() {
   fi
   [[ -z "$pid" ]] && return 1
   local args
-  args=" $(ps -p "$pid" -o args= 2>/dev/null) "
-  [[ "$args" =~ \ (-p|--print)(\ |=) ]] && return 0
-  [[ "$AGENT" == codex* && "$args" =~ \ exec\  ]] && return 0
+  args="$(ps -p "$pid" -o args= 2>/dev/null)"
+  case "$AGENT" in
+    claude*)
+      [[ " $args " =~ \ (-p|--print)(\ |=) ]] && return 0
+      ;;
+    codex*)
+      local subcommand
+      read -r _ subcommand _ <<< "$args"
+      case "$subcommand" in
+        exec|e|review) return 0 ;;
+      esac
+      ;;
+  esac
   return 1
 }
 if [[ "${STACKNUDGE_HEADLESS_NUDGES:-off}" != "on" ]] && agent_is_headless; then
