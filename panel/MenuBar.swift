@@ -137,6 +137,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private let statusItem: NSStatusItem
     private weak var panelController: PanelController?
+    // Kept here because a menu item does not retain its target.
+    private var companionMenu: CompanionMenu?
 
     init(panelController: PanelController) {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -150,6 +152,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
+    }
+
+    // The companion's right-click shows this same menu at the pointer;
+    // menuWillOpen fills it either way.
+    func popUpMenu(for event: NSEvent, in view: NSView) {
+        guard let menu = statusItem.menu else { return }
+        NSMenu.popUpContextMenu(menu, with: event, for: view)
     }
 
     // MARK: - Menu bar icon
@@ -231,10 +240,36 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         rebuildMenu(menu)
+        watchOption(in: menu)
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        optionWatch?.invalidate()
+        optionWatch = nil
+    }
+
+    private var optionWatch: Timer?
+
+    // An open menu runs its own tracking loop, which event monitors never see,
+    // so a short timer in the tracking run loop mode reads the Option key and
+    // shows or hides the Debug item. It exists only while the menu is open.
+    private func watchOption(in menu: NSMenu) {
+        optionWatch?.invalidate()
+        guard let entries = companionMenu else { return }
+        var held = NSEvent.modifierFlags.contains(.option)
+        let timer = Timer(timeInterval: 0.05, repeats: true) { [weak entries, weak menu] _ in
+            let now = NSEvent.modifierFlags.contains(.option)
+            guard now != held, let entries, let menu else { return }
+            held = now
+            entries.applyOption(now, to: menu)
+        }
+        RunLoop.main.add(timer, forMode: .eventTracking)
+        optionWatch = timer
     }
 
     private func rebuildMenu(_ menu: NSMenu) {
         menu.removeAllItems()
+        addPreviewBanner(to: menu)
 
         let config = ConfigFile.read()
         let banner = ConfigFile.bool(config, "STACKNUDGE_BANNER", default: true)
@@ -260,6 +295,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         addMuteSection(to: menu)
         menu.addItem(.separator())
 
+        if let nav = panelController?.nav, nav.companionEnabled {
+            let entries = companionMenu ?? CompanionMenu(nav: nav)
+            companionMenu = entries
+            entries.addItems(to: menu)
+            // A development aid: built always, shown only while Option is held.
+            entries.addDebugItems(to: menu, optionHeld: NSEvent.modifierFlags.contains(.option))
+            menu.addItem(.separator())
+        }
+
         menu.addItem(action("Show panel",         #selector(showPanelAction)))
         menu.addItem(action("Settings…",          #selector(showSettingsAction), keyEquivalent: ","))
         menu.addItem(action("Check permissions…", #selector(showPermissionsAction)))
@@ -267,6 +311,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
 
         menu.addItem(action("Quit StackNudge panel", #selector(quitAction), keyEquivalent: "q"))
+    }
+
+    // A forced pose hides the real state, so say so at the top and make it
+    // one click to undo.
+    private func addPreviewBanner(to menu: NSMenu) {
+        guard let pose = panelController?.nav.companionPreviewPose else { return }
+        menu.addItem(action("Previewing \(pose.label.lowercased()). Click to stop", #selector(stopPreviewsAction)))
+        menu.addItem(.separator())
     }
 
     // MARK: - Timed mute
@@ -385,6 +437,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     @objc private func resumeMuteAction() {
         panelController?.resumeNotifications()
+    }
+
+    @objc private func stopPreviewsAction() {
+        panelController?.nav.companionPreviewPose = nil
     }
 
     @objc private func showPanelAction() {

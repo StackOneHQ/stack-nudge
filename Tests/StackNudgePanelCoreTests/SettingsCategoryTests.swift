@@ -18,7 +18,7 @@ final class SettingsCategoryTests: XCTestCase {
         }
         XCTAssertEqual(Set(seen).count, seen.count, "a row appears in two categories")
         // The rows that only exist conditionally live outside the categories.
-        for row in [SettingsRow.banner, .voiceEnabled, .widget, .quotaTracking,
+        for row in [SettingsRow.banner, .voiceEnabled, .floatingWidget, .quotaTracking,
                     .slackEnabled, .hotkey, .eventHistory, .quit] {
             XCTAssertTrue(seen.contains(row), "\(row) is in no category")
         }
@@ -155,7 +155,7 @@ final class SettingsCategoryTests: XCTestCase {
             openReleaseNotes: {}, checkForUpdates: {}, beginUpdate: {}, runUpdate: {},
             beginUninstall: {}, runUninstall: {}, runBootstrap: {}, quit: {},
             expandFromCompact: {}, exitCompactMode: {},
-            muteFor: { _ in }, resumeNotifications: {},
+            muteFor: { _ in }, resumeNotifications: {}, resetCompanionPosition: {},
             applyEventHistorySetting: {}, clearEventHistory: {},
             pasteSlackSetup: {}, detectSlackUser: {}, sendSlackTest: {})
     }

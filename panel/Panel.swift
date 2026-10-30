@@ -1124,6 +1124,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     })
     private var listener: EventListener?
     private var menuBar: MenuBarController?
+    private var companion: CompanionController?
     private var updateChecker: UpdateChecker?
     private var updater: Updater?
     private let claudeCliQuotaProbe = ClaudeCliQuotaProbe()
@@ -1281,6 +1282,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
         startListener()
         menuBar = MenuBarController(panelController: self)
+        companion = CompanionController(
+            store: store, sessions: sessions, nav: nav,
+            onClick: { [weak self] in self?.toggle() },
+            onContextMenu: { [weak self] event, view in self?.menuBar?.popUpMenu(for: event, in: view) })
+        // A finished turn in a muted session does not nod the companion either.
+        companion?.interrupts = { [weak self] event in
+            guard let self else { return true }
+            return event.bypassMute || !self.nav.isSessionMuted(event: event, in: self.sessions.sessions)
+        }
+        companion?.onMove = { [weak self] in
+            guard let self, self.panel.isVisible, !self.nav.compactMode else { return }
+            self.positionPanel()
+        }
 
         nav.actions = SettingsActions(
             checkPermissions: { [weak self] in self?.showPermissions() },
@@ -1320,6 +1334,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             exitCompactMode:   { [weak self] in self?.exitCompactMode() },
             muteFor:             { [weak self] minutes in self?.muteFor(minutes: minutes) },
             resumeNotifications: { [weak self] in self?.resumeNotifications() },
+            resetCompanionPosition: { [weak self] in
+                MainActor.assumeIsolated { self?.companion?.resetPosition() }
+            },
             applyEventHistorySetting: { [weak self] in self?.applyEventHistorySetting() },
             clearEventHistory:        { [weak self] in self?.clearEventHistory() },
             pasteSlackSetup:  { [weak self] in self?.pasteSlackSetup() },
@@ -1351,6 +1368,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             self?.captureHandoff(for: event)
             self?.noteHistory(event)
             self?.nav.reactToEvent(event.kind)
+            // Only live arrivals reach onAppend, so events restored at launch never nod.
+            MainActor.assumeIsolated { self?.companion?.noteArrival(event) }
         }
         nav.loadFromConfig()  // populate panelPinned + other live values up-front
         // Scan agent configs for missing wires (post-update / post-install
@@ -1580,6 +1599,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             }
             nav.postUpdateVersion = result.version.isEmpty ? "?" : result.version
             nav.postUpdateNotes = nil
+            nav.postUpdateFocus = .gotIt
             nav.mode = .postUpdate
             // Auto-open the panel so the user immediately sees the
             // "what shipped" view rather than discovering it via hotkey.
@@ -3885,6 +3905,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             if action == .cancelField || recorderTakesIt { swallowingRepeatsOf = event.keyCode }
             return action
         }
+
+        // For a key that ends a screen: a held ⏎ would otherwise repeat into
+        // whatever page comes next.
+        mutating func swallowRepeats(of keyCode: UInt16) {
+            swallowingRepeatsOf = keyCode
+        }
     }
 
     // Whether to swallow a key held over from a cancel or a recording, and
@@ -4122,20 +4148,25 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             }
         }
 
-        // Post-update view: Enter dismisses to the events tab. Single-purpose
-        // screen, no other navigation allowed while it's up.
+        // Post-update view: see postUpdateKeyAction. Single-purpose screen, no
+        // other navigation allowed while it's up.
         if nav.mode == .postUpdate {
-            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
-            guard plain else { return true }
-            switch event.keyCode {
-            case KeyCode.returnKey, KeyCode.numpadEnter:
+            let flags = mods.intersection([.command, .control, .option, .shift])
+            switch Self.postUpdateKeyAction(keyCode: event.keyCode, modifiers: flags,
+                                            focus: nav.postUpdateFocus,
+                                            offerShowing: nav.showCompanionOffer) {
+            case .moveFocus(let focus): nav.postUpdateFocus = focus
+            case .turnOn:
+                globalKeys.swallowRepeats(of: event.keyCode)
+                nav.acceptCompanionOffer()
+            case .dismiss:
+                globalKeys.swallowRepeats(of: event.keyCode)
                 nav.postUpdateVersion = nil
                 nav.postUpdateNotes = nil
                 nav.mode = .events
-                return true
-            default:
-                return true
+            case .swallow:              break
             }
+            return true
         }
 
         // Update-confirm: Enter triggers install, ← cancels back to Settings.
@@ -4740,6 +4771,28 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         case swallow
     }
 
+    enum PostUpdateKeyAction: Equatable {
+        case moveFocus(PostUpdateFocus)
+        case turnOn
+        case dismiss
+        case swallow
+    }
+
+    // Tab and ⇧Tab walk the two buttons while the companion card shows, and ⏎
+    // presses the focused one. With no card there is one button, so Tab has
+    // nowhere to go. Every other key is swallowed so none reaches Events.
+    static func postUpdateKeyAction(keyCode: UInt16, modifiers: NSEvent.ModifierFlags,
+                                    focus: PostUpdateFocus, offerShowing: Bool) -> PostUpdateKeyAction {
+        switch (keyCode, modifiers) {
+        case (KeyCode.tab, []), (KeyCode.tab, .shift):
+            return offerShowing ? .moveFocus(focus.other) : .swallow
+        case (KeyCode.returnKey, []), (KeyCode.numpadEnter, []):
+            return offerShowing && focus == .turnOn ? .turnOn : .dismiss
+        default:
+            return .swallow
+        }
+    }
+
     // ↑↓ pick a grant, ⏎ prompts for it, ⌘⏎ opens its pane in System Settings,
     // ⌘R probes again, ← goes back to Settings or setup. Other plain keys are
     // swallowed so none reaches Events; other ⌘ combos go on to the app.
@@ -5218,6 +5271,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // cursor's on. Re-arranged monitors or laptops opening lidless can leave
     // a saved origin pointing nowhere, so the validation is important.
     private func positionPanel() {
+        // With the companion on, the panel opens beside the character instead
+        // of at its own saved spot.
+        if let character = MainActor.assumeIsolated({ companion?.visibleFrame }),
+           let screen = NSScreen.screens.first(where: { $0.frame.intersects(character) }) ?? NSScreen.main {
+            let frame = CompanionPlacement.panelFrame(character: character, visible: screen.visibleFrame,
+                                                      size: panel.frame.size)
+            panel.setFrameOrigin(frame.origin)
+            return
+        }
         let savedOrigin = Self.loadSavedPanelOrigin()
         if let origin = savedOrigin,
            NSScreen.screens.contains(where: { $0.frame.contains(origin) }) {

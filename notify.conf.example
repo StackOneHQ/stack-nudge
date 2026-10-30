@@ -57,6 +57,24 @@
 # Default: cyan
 #STACKNUDGE_THEME=violet
 
+# What floats on the desktop: pill (the compact widget), companion (a character
+# that takes the pill's place; click it to open the panel beside it, drag it
+# anywhere, right-click for its menu) or off. Also settable in Settings →
+# Appearance → Floating widget. Set here, uncommented, so new installs start
+# with the companion. A config that predates this key is migrated on first
+# load: STACKNUDGE_COMPANION=true gives companion, else STACKNUDGE_COMPACT_MODE
+# (on unless false) gives pill, else off.
+# Default when unset and nothing to migrate: pill
+STACKNUDGE_FLOATING_WIDGET=companion
+
+# Character size: small, medium or large.
+# Default: medium
+#STACKNUDGE_COMPANION_SIZE=large
+
+# A count badge at the character's corner for events waiting on you.
+# Default: true
+#STACKNUDGE_COMPANION_BADGE=false
+
 # Use the terminal tab's title as the session name when nothing stronger is set
 # (a rename in the Sessions pane, or a name set inside the agent, both still
 # win). Off by default: a tab title is whatever the program in the pane wrote,

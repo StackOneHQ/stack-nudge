@@ -633,13 +633,20 @@ struct SettingsView: View {
         case .downloadVoiceModel: voiceModelDownloadRow(index: nav.index(of: .downloadVoiceModel))
 
         // Appearance
-        case .widget:        row(.widget, label: "Widget", kind: .toggle, value: nav.compactMode ? "On" : "Off")
+        case .floatingWidget: row(.floatingWidget, label: "Floating widget", kind: .cycle, value: nav.floatingWidget.label)
         case .snapToCorners: row(.snapToCorners, label: "Snap to corners", kind: .toggle, value: nav.compactSnap ? "On" : "Off", enabled: nav.compactMode)
         case .widgetCorner:  row(.widgetCorner, label: "Widget corner", kind: .cycle, value: nav.compactCorner.label, enabled: nav.compactMode && nav.compactSnap)
         case .widgetOpacity: row(.widgetOpacity, label: "Widget opacity", kind: .cycle, value: "\(Int(nav.compactAlpha * 100))%", enabled: nav.compactMode)
         case .widgetContent: row(.widgetContent, label: "Widget type", kind: .cycle, value: nav.compactContent.label, enabled: nav.compactMode)
         case .mascot:        row(.mascot, label: "Mascot", kind: .cycle, value: nav.mascot.label, enabled: nav.compactMode)
         case .theme:         row(.theme, label: "Accent color", kind: .cycle, value: nav.theme.label, enabled: nav.compactMode)
+
+        // Companion
+        case .companionTurnOn: row(.companionTurnOn, label: "Turn on companion", kind: .action, value: "")
+        case .companionSize: row(.companionSize, label: "Size", kind: .cycle, value: nav.companionSize.label, enabled: nav.companionEnabled)
+        case .companionBadge: row(.companionBadge, label: "Count badge", kind: .toggle, value: nav.companionBadge ? "On" : "Off", enabled: nav.companionEnabled)
+        case .companionPreviewPose: row(.companionPreviewPose, label: "Preview pose", kind: .cycle, value: nav.companionPreviewPose?.label ?? "Live", enabled: nav.companionEnabled)
+        case .companionResetPosition: row(.companionResetPosition, label: "Reset position", kind: .action, value: "", enabled: nav.companionEnabled)
 
         // Usage
         case .quotaTracking:  row(.quotaTracking, label: "Quota tracking", kind: .toggle, value: nav.quotaTrackingEnabled ? "On" : "Off")
@@ -867,7 +874,15 @@ struct SettingsView: View {
             .onTapGesture { nav.settingsCategory = category }
     }
 
-    private var detailRows: some View {
+    @ViewBuilder private var detailRows: some View {
+        if nav.settingsCategory == .companion, !nav.companionEnabled {
+            Text("The companion is off. Turn it on with Floating widget in Appearance.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 6)
+        }
         ForEach(nav.rows(in: nav.settingsCategory), id: \.self) { id in
             settingRow(id)
         }
