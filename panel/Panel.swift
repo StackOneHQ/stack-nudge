@@ -3823,7 +3823,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     // The keys that mean one thing on every page (see AGENTS.md, Keyboard
     // navigation): Esc cancels a text field or, outside one, hides the panel,
-    // ⌘←/→ step through the tabs, and ⌫ in an empty text field cancels it too.
+    // ⌘←/→ step through the tabs, ⌘, opens Settings, and ⌫ in an empty text
+    // field cancels it too.
     func panelHandlesGlobalKey(_ event: NSEvent, fieldEditor: NSTextView?) -> Bool {
         let recording = nav.recordingHotkey || nav.recordingSpeakHotkey
         switch globalKeys.route(event, recording: recording, fieldEditor: fieldEditor) {
@@ -3837,6 +3838,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             guard let target = Self.stepTabTarget(from: nav.mode, by: delta, in: nav.orderedTabs)
             else { return false }
             if target != nav.mode { nav.mode = target }
+        case .openSettings:
+            guard Self.canOpenSettings(mode: nav.mode,
+                                       permissionsReturnMode: nav.permissionsReturnMode,
+                                       orderedTabs: nav.orderedTabs)
+            else { return false }
+            nav.mode = .settings
         case .cancelField:
             cancelField()
         case nil:
@@ -3927,11 +3934,21 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         return tabs.indices.contains(index + delta) ? tabs[index + delta] : mode
     }
 
+    // Where ⌘, and the menu's Settings… may take over the screen. Same rule as
+    // ⌘←/→: setup, the update screens and Permissions opened from setup have
+    // no tab strip, and leaving them would strand setup until a relaunch.
+    static func canOpenSettings(mode: PanelMode, permissionsReturnMode: PanelMode,
+                                orderedTabs: [PanelMode]) -> Bool {
+        if mode == .permissions, permissionsReturnMode == .bootstrap { return false }
+        return stepTabTarget(from: mode, by: 0, in: orderedTabs) != nil
+    }
+
     enum GlobalKeyAction: Equatable {
         // A repeat of a key that already ended something; see GlobalKeyRouter.
         case swallowRepeat
         case hide
         case stepTab(Int)
+        case openSettings
         case cancelField
     }
 
@@ -3954,6 +3971,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return .stepTab(-1)
         case KeyCode.rightArrow where modifiers == .command && !recording:
             return .stepTab(1)
+        case KeyCode.comma where modifiers == .command && !recording && !isRepeat:
+            return .openSettings
         case KeyCode.delete where modifiers.isEmpty && inEmptyField == true && !isRepeat:
             return .cancelField
         default:
@@ -5120,6 +5139,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         } else {
             showPanel()
         }
+    }
+
+    // Straight to Settings from outside the panel (the menu bar menu),
+    // optionally on one category, rather than open-the-panel-then-find-the-tab.
+    // On setup or an update screen it only brings the panel up, as ⌘, does.
+    func showSettings(category: SettingsCategory? = nil) {
+        if Self.canOpenSettings(mode: nav.mode,
+                                permissionsReturnMode: nav.permissionsReturnMode,
+                                orderedTabs: nav.orderedTabs) {
+            nav.mode = .settings
+            if let category { nav.settingsCategory = category }
+        }
+        showPanel()
     }
 
     func showPanel() {
