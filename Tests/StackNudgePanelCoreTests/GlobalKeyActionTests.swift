@@ -115,6 +115,27 @@ final class GlobalKeyActionTests: XCTestCase {
         XCTAssertNil(PanelController.stepTabTarget(from: .updating, by: -1, in: tabs))
     }
 
+    private func canOpenSettings(_ mode: PanelMode,
+                                 returningTo returnMode: PanelMode = .settings) -> Bool {
+        PanelController.canOpenSettings(mode: mode, permissionsReturnMode: returnMode,
+                                        orderedTabs: [.events, .sessions, .settings])
+    }
+
+    // From a tab or a Settings sub-page, ⌘, and the menu go straight to Settings.
+    func test_settingsOpensFromATabOrSubPage() {
+        XCTAssertTrue(canOpenSettings(.sessions))
+        XCTAssertTrue(canOpenSettings(.phrases))
+        XCTAssertTrue(canOpenSettings(.permissions))
+    }
+
+    // Leaving setup or an install in progress would strand it until a relaunch.
+    func test_settingsStaysShutOnSetupAndUpdateScreens() {
+        XCTAssertFalse(canOpenSettings(.bootstrap))
+        XCTAssertFalse(canOpenSettings(.updating))
+        XCTAssertFalse(canOpenSettings(.postUpdate))
+        XCTAssertFalse(canOpenSettings(.permissions, returningTo: .bootstrap))
+    }
+
     func test_ordinaryKeysPassThrough() {
         XCTAssertNil(action(0))
         XCTAssertNil(action(0, inEmptyField: true))

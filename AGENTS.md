@@ -16,6 +16,7 @@ These are handled once, in `panelHandlesGlobalKey`, which `FloatingPanel.sendEve
 |-----|---------|
 | `Esc` | In a text field, or while a shortcut is being recorded, cancel it. Everywhere else, hide the panel: on every page, in every state, including setup, update and uninstall screens. Nothing else. |
 | `⌘←` / `⌘→` | Previous / next top-level tab, without wrapping. Left alone only while recording a hotkey, so the combo can be recorded. |
+| `⌘,` | Open Settings, as in any Mac app. Works from a text field too; not while recording a hotkey, or on the setup and update screens. |
 | `⌫` in an empty text field | Cancel the field, as `Esc` does. |
 
 Cancelling a field puts it back the way it was before you started and hands the keyboard back to its page. Recording a shortcut counts as editing one: cancelling keeps the old shortcut. A search, filter or new-entry field empties. A field holding a value goes back to that value: a rename keeps the old name, an extension config field its saved value. `cancelField` in `Panel.swift` does this per page, so a page that adds a text field adds its case there.

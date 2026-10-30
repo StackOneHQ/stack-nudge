@@ -3799,7 +3799,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     // The keys that mean one thing on every page (see AGENTS.md, Keyboard
     // navigation): Esc cancels a text field or, outside one, hides the panel,
-    // ⌘←/→ step through the tabs, ⌘, opens Settings, and ⌫ in an empty text field cancels it too.
+    // ⌘←/→ step through the tabs, ⌘, opens Settings, and ⌫ in an empty text
+    // field cancels it too.
     func panelHandlesGlobalKey(_ event: NSEvent, fieldEditor: NSTextView?) -> Bool {
         let mods = event.modifierFlags.intersection([.command, .control, .option, .shift])
         let recording = nav.recordingHotkey || nav.recordingSpeakHotkey
@@ -3830,9 +3831,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             else { return false }
             if target != nav.mode { nav.mode = target }
         case .openSettings:
-            // Same rule as ⌘←/→: setup and the update screens have no tab strip.
-            guard Self.stepTabTarget(from: nav.mode, by: 0, in: nav.orderedTabs) != nil,
-                  !(nav.mode == .permissions && nav.permissionsReturnMode == .bootstrap)
+            guard Self.canOpenSettings(mode: nav.mode,
+                                       permissionsReturnMode: nav.permissionsReturnMode,
+                                       orderedTabs: nav.orderedTabs)
             else { return false }
             nav.mode = .settings
         case .cancelField:
@@ -3880,6 +3881,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
               let index = tabs.firstIndex(of: anchor)
         else { return nil }
         return tabs.indices.contains(index + delta) ? tabs[index + delta] : mode
+    }
+
+    // Where ⌘, and the menu's Settings… may take over the screen. Same rule as
+    // ⌘←/→: setup, the update screens and Permissions opened from setup have
+    // no tab strip, and leaving them would strand setup until a relaunch.
+    static func canOpenSettings(mode: PanelMode, permissionsReturnMode: PanelMode,
+                                orderedTabs: [PanelMode]) -> Bool {
+        if mode == .permissions, permissionsReturnMode == .bootstrap { return false }
+        return stepTabTarget(from: mode, by: 0, in: orderedTabs) != nil
     }
 
     enum GlobalKeyAction: Equatable {
@@ -5073,9 +5083,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     // Straight to Settings from outside the panel (the menu bar menu),
     // optionally on one category, rather than open-the-panel-then-find-the-tab.
+    // On setup or an update screen it only brings the panel up, as ⌘, does.
     func showSettings(category: SettingsCategory? = nil) {
-        nav.mode = .settings
-        if let category { nav.settingsCategory = category }
+        if Self.canOpenSettings(mode: nav.mode,
+                                permissionsReturnMode: nav.permissionsReturnMode,
+                                orderedTabs: nav.orderedTabs) {
+            nav.mode = .settings
+            if let category { nav.settingsCategory = category }
+        }
         showPanel()
     }
 
