@@ -68,13 +68,28 @@ PARENT_CASES = [
 EXPECTED_CASE_COUNT = 16
 
 
-def start_stand_in(agent, argv):
+# The codex stand-in. It reads none of its arguments, so any codex argv runs
+# as given. A system tool won't do: an interpreter parses `-c` and `--model`
+# as its own options, and macOS 15's yes writes a newline over the end of
+# argv[1], which ps then shows merged with argv[2].
+CODEX_STAND_IN_C = "#include <unistd.h>\nint main(void) { for (;;) pause(); }\n"
+
+
+def build_codex_stand_in(workdir):
+    source = os.path.join(workdir, "codex.c")
+    binary = os.path.join(workdir, "codex")
+    with open(source, "w", encoding="utf-8") as source_file:
+        source_file.write(CODEX_STAND_IN_C)
+    subprocess.run(["cc", "-o", binary, source], check=True)
+    return binary
+
+
+def start_stand_in(agent, argv, codex_binary):
     """Start a sleeping process whose `ps -o args=` reads like the agent's."""
     if agent == "codex":
         # The codex check reads the words after the program, so the argv has
-        # to start right there, under argv[0] "codex". yes parses no options,
-        # and blocks once the pipe nobody reads is full.
-        return subprocess.Popen(["codex", *argv], executable="/usr/bin/yes", stdout=subprocess.PIPE)
+        # to start right there, under argv[0] "codex".
+        return subprocess.Popen(["codex", *argv], executable=codex_binary)
     # The claude check matches the flags anywhere, so a python stand-in will do.
     return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)", *argv])
 
@@ -119,8 +134,9 @@ def main():
     workdir = tempfile.mkdtemp(prefix="stack-nudge-test-headless-")
     passed = 0
     try:
+        codex_binary = build_codex_stand_in(workdir)
         for name, agent, argv, event, env, expected in CASES:
-            stand_in = start_stand_in(agent, argv)
+            stand_in = start_stand_in(agent, argv, codex_binary)
             try:
                 actual = harness.posted_title(agent, {}, dict(env, NUDGE_AGENT_PID=str(stand_in.pid)),
                                               expected is not None, False, event)
