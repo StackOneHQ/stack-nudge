@@ -177,6 +177,33 @@ private struct NudgeEventDTO: Decodable {
     // Populated only for Claude Code hook events; nil for other agents.
     let claude_session_id: String?
     let transcript_path: String?
+    // Feed fields, for scripts posting their own events. All optional; an
+    // agent hook sends none of them.
+    let source: String?
+    let tag: String?
+    let severity: String?
+    let url: String?
+    let repo: String?
+    let pr: Int?
+    let key: String?
+
+    // Same trust boundary as the FIFO path: whatever opens this goes through
+    // NSWorkspace, so only web links pass, never file:// or an app scheme.
+    static func validatedURL(_ raw: String?) -> URL? {
+        guard let raw, let url = URL(string: raw),
+              let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http",
+              url.host?.isEmpty == false
+        else { return nil }
+        return url
+    }
+
+    // A script may call itself github or calendar, but never an agent: an
+    // agent event is what Allow/Deny and focus act on, and those need the
+    // hook's own fields.
+    static func feedSource(_ raw: String?) -> EventSource {
+        guard let raw, let source = EventSource(rawValue: raw), source != .agent else { return .agent }
+        return source
+    }
 
     // Only accept a fifo_path that looks like one of our permission FIFOs AND
     // is actually a FIFO on disk. The socket is a trust boundary: any same-uid
@@ -195,16 +222,19 @@ private struct NudgeEventDTO: Decodable {
     }
 
     func toNudgeEvent() -> NudgeEvent {
-        NudgeEvent(
+        let isFeed = Self.feedSource(source) != .agent
+        return NudgeEvent(
             agent: agent,
-            kind: NudgeKind(rawWireValue: event),
+            // A feed is never a prompt, whatever it claims, so it also loses
+            // the fields that make a prompt answerable.
+            kind: isFeed ? .other : NudgeKind(rawWireValue: event),
             title: title,
             message: message,
             projectPath: project_path,
             bundleID: bundle_id,
             windowTitle: window_title,
             ipcHook: ipc_hook,
-            hasActionButton: has_action_button ?? false,
+            hasActionButton: !isFeed && (has_action_button ?? false),
             timestamp: timestamp.map { Date(timeIntervalSince1970: $0) } ?? Date(),
             agentPID: agent_pid,
             shellPID: shell_pid,
@@ -213,14 +243,21 @@ private struct NudgeEventDTO: Decodable {
             termProgram: term_program,
             sessionID: session_id,
             itermTabName: iterm_tab_name,
-            fifoPath: Self.validatedFifoPath(fifo_path),
-            hookPID: AttentionPolicy.validHookPID(hook_pid),
+            fifoPath: isFeed ? nil : Self.validatedFifoPath(fifo_path),
+            hookPID: isFeed ? nil : AttentionPolicy.validHookPID(hook_pid),
             voiceMessage: voice_message,
             voiceTemplate: voice_template,
             soundName: sound_name,
             bypassMute: bypass_mute ?? false,
             claudeSessionID: claude_session_id,
-            transcriptPath: transcript_path
+            transcriptPath: transcript_path,
+            source: Self.feedSource(source),
+            tag: tag,
+            severity: severity.flatMap(EventSeverity.init(rawValue:)) ?? .info,
+            url: Self.validatedURL(url),
+            repo: repo,
+            pr: pr,
+            key: key
         )
     }
 }
