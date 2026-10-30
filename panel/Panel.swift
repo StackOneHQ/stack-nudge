@@ -1404,13 +1404,20 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // Re-apply window layout whenever compact-mode state flips. Covers
         // both the persistent toggle (Settings → "Compact widget") and the
         // transient expanded flag (widget click → expand).
+        //
+        // Deferred a turn: @Published sinks run in willSet, and the Widget
+        // toggle sets compactMode and then compactExpanded. Laid out inline,
+        // the second sink saw pill mode with the stale expanded flag and
+        // shrank the window to a pill around the full panel.
         nav.$compactMode
             .removeDuplicates()
             .dropFirst()  // initial value applied via applyCompactLayout on launch
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.applyCompactLayout() }
             .store(in: &cancellables)
         nav.$compactExpanded
             .removeDuplicates()
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.applyCompactLayout() }
             .store(in: &cancellables)
         // Cadence follows these flags wherever they flip, not just at the call
@@ -1566,9 +1573,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             // full-panel-sized window.
             if nav.compactMode, !nav.compactExpanded {
                 nav.compactExpanded = true
-                // applyCompactLayout already ran via the Combine sink;
-                // call again here so the synchronous setFrame is committed
-                // before the mode flip below schedules SwiftUI work.
+                // The Combine sinks lay out a turn later, so this call is the
+                // only layout before the mode flip below: it commits the
+                // synchronous setFrame before SwiftUI work is scheduled.
                 applyCompactLayout()
             }
             nav.postUpdateVersion = result.version.isEmpty ? "?" : result.version
