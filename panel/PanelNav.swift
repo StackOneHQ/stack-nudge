@@ -551,6 +551,9 @@ final class PanelNav: ObservableObject {
     @Published var githubSignedIn: Bool = false
     // Live device-flow state for the in-panel "Connect GitHub" card.
     @Published var githubSignIn: GithubSignIn = .idle
+    // Set when a new sign-in's token didn't save and the older one is still in
+    // use. The card is gone by then (still signed in), so Settings shows it.
+    @Published var githubSignInNote: String?
     // Wired by PanelController — start/cancel the device-flow sign-in.
     var startGithubSignIn:  (() -> Void)?
     var cancelGithubSignIn: (() -> Void)?
@@ -693,6 +696,7 @@ final class PanelNav: ObservableObject {
         GitHubAuth.clearToken()
         githubSignedIn = false
         githubSignIn = .idle
+        githubSignInNote = nil
         pullRequestByBranch = [:]
         if let url = URL(string: "https://github.com/settings/applications") {
             NSWorkspace.shared.open(url)

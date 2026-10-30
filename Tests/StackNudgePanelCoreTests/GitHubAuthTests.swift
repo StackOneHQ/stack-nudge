@@ -78,6 +78,44 @@ final class GitHubAuthTests: XCTestCase {
         XCTAssertEqual(message?.contains(GitHubAuth.keychainService), true)
     }
 
+    // MARK: - store
+
+    // Records which Keychain calls store made, in order, and what each returns.
+    private final class KeychainCalls {
+        var log: [String] = []
+        var updateStatus: OSStatus = errSecSuccess
+        var addStatus: OSStatus = errSecSuccess
+
+        func store(_ token: String) -> OSStatus {
+            GitHubAuth.store(
+                token: token,
+                update: { _ in self.log.append("update"); return self.updateStatus },
+                add: { _ in self.log.append("add"); return self.addStatus })
+        }
+    }
+
+    func test_store_updateSucceeds_neverAdds() {
+        let keychain = KeychainCalls()
+        XCTAssertEqual(keychain.store("t"), errSecSuccess)
+        XCTAssertEqual(keychain.log, ["update"])
+    }
+
+    func test_store_noItemYet_addsAndReturnsTheAddStatus() {
+        let keychain = KeychainCalls()
+        keychain.updateStatus = errSecItemNotFound
+        keychain.addStatus = errSecAuthFailed
+        XCTAssertEqual(keychain.store("t"), errSecAuthFailed)
+        XCTAssertEqual(keychain.log, ["update", "add"])
+    }
+
+    // Any other update failure is the answer: adding would only hit errSecDuplicateItem.
+    func test_store_refusedUpdate_returnedWithoutAnAdd() {
+        let keychain = KeychainCalls()
+        keychain.updateStatus = errSecAuthFailed
+        XCTAssertEqual(keychain.store("t"), errSecAuthFailed)
+        XCTAssertEqual(keychain.log, ["update"])
+    }
+
     // MARK: - completeSignIn
 
     // Stands in for the Keychain item: what store writes is what read returns,

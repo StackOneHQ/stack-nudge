@@ -663,7 +663,12 @@ struct SettingsView: View {
         case .slackStop:       row(.slackStop, label: "Also notify on finished turns", kind: .toggle, value: nav.slackNotifyOnStop ? "On" : "Off", enabled: slackReady && nav.slackEnabled)
         case .githubLinks:     row(.githubLinks, label: "GitHub PR links", kind: .toggle, value: nav.githubLinkingEnabled ? "On" : "Off")
         case .hideShipped:     row(.hideShipped, label: "Hide shipped", kind: .toggle, value: nav.hideShippedTickets ? "On" : "Off", enabled: nav.githubLinkingEnabled)
-        case .disconnectGithub: row(.disconnectGithub, label: "Disconnect GitHub…", kind: .action, value: nav.githubSignedIn ? "Signed in" : "", enabled: nav.githubSignedIn)
+        case .disconnectGithub:
+            row(.disconnectGithub, label: "Disconnect GitHub…", kind: .action, value: nav.githubSignedIn ? "Signed in" : "", enabled: nav.githubSignedIn)
+            if let note = nav.githubSignInNote {
+                Text(note).font(.caption).foregroundStyle(.orange)
+                    .padding(.horizontal, 14).padding(.top, 2)
+            }
 
         // Panel
         case .hotkey:

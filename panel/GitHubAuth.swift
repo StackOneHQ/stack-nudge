@@ -63,18 +63,27 @@ enum GitHubAuth {
     // The Keychain's status, so a failed save is reported instead of the panel
     // claiming a sign-in that left no token behind (a rebuilt app with a new
     // signature can be refused an item an older build created).
-    @discardableResult
-    static func store(token: String) -> OSStatus {
-        let query = baseQuery(returningData: false)
+    // `update` and `add` default to the real Keychain calls; tests swap them
+    // to pin the order.
+    static func store(
+        token: String,
+        update: (Data) -> OSStatus = { data in
+            SecItemUpdate(baseQuery(returningData: false) as CFDictionary,
+                          [kSecValueData as String: data] as CFDictionary)
+        },
+        add: (Data) -> OSStatus = { data in
+            var item = baseQuery(returningData: false)
+            item[kSecValueData as String] = data
+            return SecItemAdd(item as CFDictionary, nil)
+        }
+    ) -> OSStatus {
         let data = Data(token.utf8)
         // Update in place, adding only when there is no item yet. Deleting
         // first would lose a working token whenever the add then failed, and
         // a refused delete turned every retry into errSecDuplicateItem.
-        var status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        var status = update(data)
         if status == errSecItemNotFound {
-            var add = query
-            add[kSecValueData as String] = data
-            status = SecItemAdd(add as CFDictionary, nil)
+            status = add(data)
         }
         if status != errSecSuccess {
             log("saving the GitHub token failed (OSStatus \(status))")
