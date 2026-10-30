@@ -789,6 +789,7 @@ struct PanelContentView: View {
 
     private var primaryActionLabel: String? {
         guard let event = store.selectedEvent else { return nil }
+        if event.isFeed { return event.url == nil ? "Done" : "Open" }
         return event.kind == .permission ? "Approve" : "Open editor"
     }
 
@@ -816,7 +817,8 @@ private struct HistoryRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: record.kind == "permission" ? "hand.raised.fill" : "checkmark.circle")
+            Image(systemName: record.source.flatMap(EventSource.init(rawValue:)).map(FeedStyle.sourceSymbol)
+                  ?? (record.kind == "permission" ? "hand.raised.fill" : "checkmark.circle"))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .frame(width: 14)
@@ -988,7 +990,10 @@ struct EventRow: View {
     // "Code Helper (Renderer)" reads as terminal-developer noise; "Code"
     // reads as "this came from VSCode". Returns nil when we don't know
     // the terminal, so the chip silently vanishes for those events.
+    // A feed has no terminal; the chip names where it came from instead
+    // ("GitHub · stack-nudge#42").
     private var terminalLabel: String? {
+        if event.isFeed { return FeedStyle.chip(for: event) }
         guard let raw = event.terminalApp?.trimmingCharacters(in: .whitespaces),
               !raw.isEmpty else { return nil }
         switch raw {
@@ -1018,11 +1023,13 @@ struct EventRow: View {
 
     private var glyph: String {
         if isSnoozed { return "moon.zzz.fill" }
+        if event.isFeed { return FeedStyle.symbol(for: event) }
         return event.kind == .permission ? "questionmark.circle.fill" : "checkmark.circle.fill"
     }
 
     private var glyphColor: Color {
         if isSnoozed { return .gray }
+        if event.isFeed { return FeedStyle.color(for: event.severity) }
         return event.kind == .permission ? .orange : .green
     }
 }
@@ -3086,8 +3093,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         content.userInfo = ["eventID": event.id.uuidString]
 
         let center = UNUserNotificationCenter.current()
-        center.removeAllDeliveredNotifications()
-        let req = UNNotificationRequest(identifier: UUID().uuidString,
+        // Agent banners clear the stack so only the live prompt shows. A feed
+        // banner must not: it would wipe a permission banner's Allow/Deny. A
+        // keyed feed reuses its key, so its newer banner replaces the older.
+        if !event.isFeed { center.removeAllDeliveredNotifications() }
+        let identifier = event.isFeed ? (event.key.map { "feed:\($0)" } ?? UUID().uuidString) : UUID().uuidString
+        let req = UNNotificationRequest(identifier: identifier,
                                         content: content, trigger: nil)
         center.add(req, withCompletionHandler: nil)
     }
@@ -3608,6 +3619,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // agent never hangs to its 550s timeout. Only a body tap goes on to
         // focus the editor.
         store.remove(id: event.id)
+        // A feed has no window to raise; its banner opens its link.
+        if event.isFeed {
+            if let url = event.url { NSWorkspace.shared.open(url) }
+            return
+        }
         if let fifo = event.fifoPath {
             let reply = Self.bannerReply(to: response.actionIdentifier)
             DispatchQueue.global(qos: .userInitiated).async { Self.writeFIFO(fifo, reply) }
@@ -4881,6 +4897,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         guard let event = store.selectedEvent else { return }
         let sendApproval = approve && event.hasActionButton
         store.remove(id: event.id)
+
+        // A feed event opens its link; one without a link is simply done.
+        if event.isFeed {
+            if let url = event.url {
+                hidePanel()
+                NSWorkspace.shared.open(url)
+            } else if store.events.isEmpty {
+                hidePanel()
+            }
+            return
+        }
 
         // Approve a blocking permission by writing "allow" to its FIFO; the agent
         // then skips its own prompt. This path doesn't hand focus to the editor,
