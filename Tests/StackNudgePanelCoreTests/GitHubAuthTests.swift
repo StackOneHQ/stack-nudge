@@ -72,4 +72,64 @@ final class GitHubAuthTests: XCTestCase {
         XCTAssertNotNil(GitHubAuth.saveFailure(status: errSecSuccess, expected: "t", readBack: nil))
         XCTAssertNotNil(GitHubAuth.saveFailure(status: errSecSuccess, expected: "t", readBack: "old"))
     }
+
+    func test_saveFailure_refusedWriteNamesTheKeychainItem() {
+        let message = GitHubAuth.saveFailure(status: errSecDuplicateItem, expected: "t", readBack: nil)
+        XCTAssertEqual(message?.contains(GitHubAuth.keychainService), true)
+    }
+
+    // MARK: - completeSignIn
+
+    // Stands in for the Keychain item: what store writes is what read returns,
+    // unless a test makes the save refuse.
+    private final class FakeKeychain {
+        var saved: String?
+        var storeStatus: OSStatus = errSecSuccess
+
+        func store(_ token: String) -> OSStatus {
+            if storeStatus == errSecSuccess { saved = token }
+            return storeStatus
+        }
+        func read() -> String? { saved }
+
+        func completeSignIn(_ token: String) -> GitHubAuth.SignInSave {
+            GitHubAuth.completeSignIn(token: token, store: store, read: read)
+        }
+    }
+
+    func test_completeSignIn_savedAndReadBack_isSaved() {
+        let keychain = FakeKeychain()
+        XCTAssertEqual(keychain.completeSignIn("new"), .saved)
+        XCTAssertEqual(keychain.saved, "new")
+    }
+
+    func test_completeSignIn_refusedSave_failsWithItsStatus() {
+        let keychain = FakeKeychain()
+        keychain.storeStatus = errSecAuthFailed
+        guard case .failed(let message) = keychain.completeSignIn("new") else {
+            return XCTFail("a refused save with no token behind it must not sign in")
+        }
+        XCTAssertTrue(message.contains("OSStatus \(errSecAuthFailed)"))
+    }
+
+    // A failed save must not delete a working token; the panel stays signed in on it.
+    func test_completeSignIn_refusedSave_keepsOlderToken() {
+        let keychain = FakeKeychain()
+        keychain.saved = "old"
+        keychain.storeStatus = errSecAuthFailed
+        XCTAssertEqual(keychain.completeSignIn("new"), .keptOlderToken)
+        XCTAssertEqual(keychain.saved, "old")
+    }
+
+    // The store reports success but nothing reads back.
+    func test_completeSignIn_nothingReadsBack_fails() {
+        let result = GitHubAuth.completeSignIn(token: "new", store: { _ in errSecSuccess }, read: { nil })
+        guard case .failed = result else { return XCTFail("expected .failed, got \(result)") }
+    }
+
+    // The store reports success but the older token is what reads back.
+    func test_completeSignIn_staleReadBack_keepsOlderToken() {
+        let result = GitHubAuth.completeSignIn(token: "new", store: { _ in errSecSuccess }, read: { "old" })
+        XCTAssertEqual(result, .keptOlderToken)
+    }
 }

@@ -2765,11 +2765,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                     guard case .awaitingApproval = self.nav.githubSignIn else { return }
                     switch result {
                     case .token(let token):
-                        let status = GitHubAuth.store(token: token)
                         // Signed in only once the token reads back: a save the
                         // Keychain refused must not look like success.
-                        if let failure = GitHubAuth.saveFailure(status: status, expected: token,
-                                                                readBack: GitHubAuth.token()) {
+                        if case .failed(let failure) = GitHubAuth.completeSignIn(token: token) {
                             self.nav.githubSignedIn = false
                             self.nav.githubSignIn = .failed(failure)
                             return

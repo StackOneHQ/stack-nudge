@@ -65,12 +65,19 @@ enum GitHubAuth {
     // signature can be refused an item an older build created).
     @discardableResult
     static func store(token: String) -> OSStatus {
-        SecItemDelete(baseQuery(returningData: false) as CFDictionary)  // replace any existing
-        var add = baseQuery(returningData: false)
-        add[kSecValueData as String] = Data(token.utf8)
-        let status = SecItemAdd(add as CFDictionary, nil)
+        let query = baseQuery(returningData: false)
+        let data = Data(token.utf8)
+        // Update in place, adding only when there is no item yet. Deleting
+        // first would lose a working token whenever the add then failed, and
+        // a refused delete turned every retry into errSecDuplicateItem.
+        var status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if status == errSecItemNotFound {
+            var add = query
+            add[kSecValueData as String] = data
+            status = SecItemAdd(add as CFDictionary, nil)
+        }
         if status != errSecSuccess {
-            FileHandle.standardError.write(Data("stack-nudge: saving the GitHub token failed (OSStatus \(status))\n".utf8))
+            log("saving the GitHub token failed (OSStatus \(status))")
         }
         return status
     }
@@ -79,12 +86,40 @@ enum GitHubAuth {
     // to tell the user. Sign-in counts as done only on nil.
     static func saveFailure(status: OSStatus, expected: String, readBack: String?) -> String? {
         guard status == errSecSuccess else {
-            return "Couldn't save the token to the Keychain (OSStatus \(status)). Try again."
+            return "Couldn't save the token to the Keychain (OSStatus \(status)). Try again, "
+                + "or remove the \(keychainService) item in Keychain Access first."
         }
         guard readBack == expected else {
             return "Couldn't read the token back from the Keychain. Try again."
         }
         return nil
+    }
+
+    enum SignInSave: Equatable {
+        case saved
+        case keptOlderToken
+        case failed(String)
+    }
+
+    // Saves a fresh device-flow token and says whether the panel is signed in.
+    // A failed save leaves any older token in place rather than deleting a
+    // working session, and counts as signed in on it: the PR refresh and the
+    // next launch go by whether a token reads back, so the card must agree.
+    static func completeSignIn(
+        token: String,
+        store: (String) -> OSStatus = { GitHubAuth.store(token: $0) },
+        read: () -> String? = GitHubAuth.token
+    ) -> SignInSave {
+        let status = store(token)
+        let readBack = read()
+        guard let failure = saveFailure(status: status, expected: token, readBack: readBack) else {
+            return .saved
+        }
+        guard readBack == nil else {
+            log("the new GitHub token didn't save; staying signed in on the older one")
+            return .keptOlderToken
+        }
+        return .failed(failure)
     }
 
     static func clearToken() {
@@ -167,6 +202,10 @@ enum GitHubAuth {
     }
 
     // MARK: - Helpers
+
+    private static func log(_ message: String) {
+        FileHandle.standardError.write(Data("stack-nudge: \(message)\n".utf8))
+    }
 
     private static func formPOST(_ url: URL, _ params: [String: String]) -> URLRequest {
         var request = URLRequest(url: url)
