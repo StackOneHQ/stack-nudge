@@ -254,7 +254,11 @@ Rows are ordered busy-first, then by most-recent activity. Status label reads `b
 | `⏎` | Focus the session's source terminal |
 | `n` | Rename the selected session inline |
 | `⌘⌫` | Send SIGTERM to the agent process |
+| `o` | Resume a recent Claude Code session (one that isn't running) in a new terminal window |
+| `t` | Start a new Claude Code session in one of your repos, in a new terminal window |
 | `Esc` | Hide the panel |
+
+`o` lists your 15 newest Claude Code transcripts from `~/.claude/projects`, by project and title. `t` lists the git repos directly under `STACKNUDGE_CHECKOUTS_ROOT` when it's set, or else the folders of your recent sessions. Both open Ghostty when it's installed and Terminal.app otherwise; `STACKNUDGE_SESSION_TERMINAL` (`ghostty`, `terminal` or `iterm`) picks one. Both open a menu at the panel's top-left that you drive with `↑ ↓` and `⏎`; `Esc` closes the menu, and the panel stays.
 
 #### Usage tab
 

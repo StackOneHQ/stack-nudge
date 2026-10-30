@@ -74,6 +74,14 @@
 # Default: tag
 #STACKNUDGE_SUBAGENT_NUDGES=off
 
+# Sessions tab: where `t` (new session) looks for repos, one level down. Unset,
+# it offers the folders of your recent Claude Code sessions instead.
+#STACKNUDGE_CHECKOUTS_ROOT=~/code
+
+# The terminal `o` (resume) and `t` (new session) open: ghostty, terminal or
+# iterm. Default: Ghostty when installed, else Terminal.app.
+#STACKNUDGE_SESSION_TERMINAL=iterm
+
 # Fair-usage budget for pi, in tokens per day, per lane. pi enforces no quota
 # of its own — API models bill per token against your keys, local models are
 # free — so these are your own allowances and nothing cuts you off at them. The

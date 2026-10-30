@@ -21,6 +21,7 @@ private enum KeyCode {
     static let space:     UInt16 = 49
     static let tab:       UInt16 = 48
     static let oKey:      UInt16 = 31
+    static let tKey:      UInt16 = 17
     static let sKey:      UInt16 = 1
     static let rKey:      UInt16 = 15
     static let delete:    UInt16 = 51
@@ -3922,6 +3923,25 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                              isRepeat: event.isARepeat)
     }
 
+    enum SessionLaunchKeyAction: Equatable {
+        case resume
+        case newSession
+        case ignoreRepeat
+    }
+
+    // O and T on the Sessions page. Plain keys only, so ⌘T and friends stay with
+    // the app, and autorepeat is swallowed because each press reads transcripts
+    // off disk and then opens a menu.
+    static func sessionLaunchKeyAction(for event: NSEvent) -> SessionLaunchKeyAction? {
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        guard modifiers.isEmpty else { return nil }
+        switch event.keyCode {
+        case KeyCode.oKey: return event.isARepeat ? .ignoreRepeat : .resume
+        case KeyCode.tKey: return event.isARepeat ? .ignoreRepeat : .newSession
+        default:           return nil
+        }
+    }
+
     // The tab ⌘←/→ lands on. A sub-page steps from the tab it belongs to, so
     // ⌘← on Phrases goes to the tab before Settings. The mode itself comes
     // back at either end of the strip, so the key is still used up there; nil
@@ -4171,7 +4191,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             }
         }
 
-        // Sessions mode: ↑/↓ select, Enter focus, ⌘⌫ kill, N rename.
+        // Sessions mode: ↑/↓ select, Enter focus, ⌘⌫ kill, N rename, O resume, T new.
         // While the rename TextField is active, every key flows through to
         // SwiftUI; the field handles Enter via .onSubmit, and ⌫ on an empty
         // name cancels (panelHandlesGlobalKey).
@@ -4181,6 +4201,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             // Kill: see destructiveKeyAction. No confirmation, so never R.
             switch Self.destructiveKeyAction(for: event) {
             case .act:          killSelectedSession(); return true
+            case .ignoreRepeat: return true
+            case nil:           break
+            }
+            switch Self.sessionLaunchKeyAction(for: event) {
+            case .resume:       showResumeMenu(); return true
+            case .newSession:   showNewSessionMenu(); return true
             case .ignoreRepeat: return true
             case nil:           break
             }
@@ -4963,6 +4989,98 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         let pids = sessions.sessions.map(\.pid)
         let idx = sessions.selectedPID.flatMap(pids.firstIndex(of:)) ?? 0
         sessions.selectedPID = pids[max(idx - 1, 0)]
+    }
+
+    // MARK: - Resume / new session
+
+    // O: the newest Claude Code sessions not already running, to resume in a
+    // terminal window. Transcripts are read off the main thread.
+    private func showResumeMenu() {
+        let running = Set(sessions.sessions.compactMap(\.claudeSessionID))
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let recent = RecentSessions.load(excluding: running)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                let items = recent.map { session in
+                    SessionMenuItem(title: "\(session.project) · \(session.title)",
+                                    detail: RelativeTime.string(session.date)) { [weak self] in
+                        self?.launch(cwd: session.cwd, command: SessionLauncher.resumeCommand(session))
+                    }
+                }
+                self.popUpSessionMenu(heading: "Resume a session", items: items,
+                                      empty: "No recent Claude Code sessions")
+            }
+        }
+    }
+
+    // T: a new Claude Code session in a repo. The repos under
+    // STACKNUDGE_CHECKOUTS_ROOT when set, else the folders of recent sessions,
+    // which are the repos actually worked in.
+    private func showNewSessionMenu() {
+        let root = ConfigFile.read()["STACKNUDGE_CHECKOUTS_ROOT"].map { ($0 as NSString).expandingTildeInPath }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let folders: [String]
+            if let root, !root.isEmpty {
+                folders = SessionLauncher.repos(in: root).map { "\(root)/\($0)" }
+            } else {
+                var seen = Set<String>()
+                folders = RecentSessions.load(limit: 40).map(\.cwd).filter { seen.insert($0).inserted }
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                let items = folders.map { folder in
+                    SessionMenuItem(title: (folder as NSString).lastPathComponent,
+                                    detail: (folder as NSString).abbreviatingWithTildeInPath) { [weak self] in
+                        self?.launch(cwd: folder, command: "claude")
+                    }
+                }
+                self.popUpSessionMenu(heading: "New session in", items: items,
+                                      empty: "No repos found; set STACKNUDGE_CHECKOUTS_ROOT")
+            }
+        }
+    }
+
+    private func launch(cwd: String, command: String) {
+        let terminal = SessionLauncher.terminal(configured: ConfigFile.read()["STACKNUDGE_SESSION_TERMINAL"])
+        hidePanel()
+        SessionLauncher.open(cwd: cwd, command: command, in: terminal)
+    }
+
+    private struct SessionMenuItem {
+        let title: String
+        let detail: String
+        let action: () -> Void
+    }
+
+    private final class MenuAction: NSObject {
+        let run: () -> Void
+        init(_ run: @escaping () -> Void) { self.run = run }
+        @objc func fire() { run() }
+    }
+
+    // At the panel's top-left, so a keyboard-opened menu appears where the
+    // eye already is rather than wherever the pointer was left.
+    private func popUpSessionMenu(heading: String, items: [SessionMenuItem], empty: String) {
+        let menu = NSMenu()
+        let title = NSMenuItem(title: heading, action: nil, keyEquivalent: "")
+        title.isEnabled = false
+        menu.addItem(title)
+        let targets = items.map { MenuAction($0.action) }
+        if items.isEmpty {
+            let none = NSMenuItem(title: empty, action: nil, keyEquivalent: "")
+            none.isEnabled = false
+            menu.addItem(none)
+        }
+        for (item, target) in zip(items, targets) {
+            let entry = NSMenuItem(title: item.title, action: #selector(MenuAction.fire), keyEquivalent: "")
+            entry.target = target
+            entry.toolTip = item.detail
+            menu.addItem(entry)
+        }
+        guard let view = panel.contentView else { return }
+        withExtendedLifetime(targets) {
+            _ = menu.popUp(positioning: menu.items.dropFirst().first, at: NSPoint(x: 16, y: view.bounds.height - 48), in: view)
+        }
     }
 
     // ⌘↑/↓ — jump to the first / last session.
