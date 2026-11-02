@@ -35,8 +35,6 @@ final class ExtensionManifestTests: XCTestCase {
         XCTAssertTrue(m.refresh.whileFocusedOnly)
     }
 
-    // A manifest with no tab block still contributes a tab; the name is a
-    // better label than the id, which is a path component.
     // The widget has room for one chip, so it is opt-in: an extension that
     // never asked for it can't take it.
     func testTheWidgetGlanceIsOffUnlessAsked() {
@@ -46,6 +44,8 @@ final class ExtensionManifestTests: XCTestCase {
             """)?.glance, true)
     }
 
+    // A manifest with no tab block still contributes a tab; the name is a
+    // better label than the id, which is a path component.
     func testTabLabelFallsBackToTheName() {
         XCTAssertEqual(manifest(minimal)?.tab.label, "Token Derby")
         XCTAssertEqual(manifest(minimal)?.tabEntry, ExtensionTab(id: "derby", label: "Token Derby"))
