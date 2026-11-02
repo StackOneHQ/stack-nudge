@@ -4,6 +4,20 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [2.3.0](https://github.com/StackOneHQ/stack-nudge/compare/v2.2.1...v2.3.0) (2026-10-30)
+
+
+### Features
+
+* **extensions:** add a Pylon tab for customer responses waiting on us ([#225](https://github.com/StackOneHQ/stack-nudge/issues/225)) ([a982d22](https://github.com/StackOneHQ/stack-nudge/commit/a982d22469926280560ea0a25025d2ad5f30ac89))
+* **panel:** Settings… in the menu bar menu and ⌘, to open Settings ([#227](https://github.com/StackOneHQ/stack-nudge/issues/227)) ([d1d88c8](https://github.com/StackOneHQ/stack-nudge/commit/d1d88c8f178759c991d91dba9b66357699d2fe35))
+
+
+### Bug Fixes
+
+* **panel:** swallow a held key after recording a shortcut ([#226](https://github.com/StackOneHQ/stack-nudge/issues/226)) ([19b18d4](https://github.com/StackOneHQ/stack-nudge/commit/19b18d495e9a513e72adce5d97ffa653f3c18f16))
+* **widget:** turning the widget on no longer squeezes the panel into a pill ([#228](https://github.com/StackOneHQ/stack-nudge/issues/228)) ([cf6d472](https://github.com/StackOneHQ/stack-nudge/commit/cf6d472719babe2a5587143049f4b964af572eb3))
+
 ## [2.2.1](https://github.com/StackOneHQ/stack-nudge/compare/v2.2.0...v2.2.1) (2026-10-29)
 
 
