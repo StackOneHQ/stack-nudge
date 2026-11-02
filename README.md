@@ -136,7 +136,7 @@ If you'd rather not click banners with the mouse, stack-nudge runs a small float
 
 The panel is installed and registered as a launchd agent by `./install.sh` — no opt-in needed. To run quietly without macOS banners, toggle **Settings → Banner notifications** off (panel-only mode).
 
-Default hotkey is `cmd+opt+n`. Hit it from anywhere to summon the panel; hit it again while focused to hide. Switch tabs with `Cmd+1` (Events), `Cmd+2` (Sessions), `Cmd+3` (Usage), `Cmd+4` (Outcomes), `Cmd+5` (Settings), or click them. Banner and panel can run together, alone, or both off; the sound and voice still fire as passive signals.
+Default hotkey is `cmd+opt+n`. Hit it from anywhere to summon the panel; hit it again while focused to hide. Switch tabs with `Cmd+1` (Events), `Cmd+2` (Sessions), `Cmd+3` (Usage), `Cmd+4` (Outcomes), `Cmd+5` (Settings), or click them; `Cmd+,` also opens Settings, and so does **Settings…** in the menu bar menu. Banner and panel can run together, alone, or both off; the sound and voice still fire as passive signals.
 
 These keys work the same on every page, including while a text field has focus:
 
@@ -144,6 +144,7 @@ These keys work the same on every page, including while a text field has focus:
 |-----|--------|
 | `Esc` | Hide the panel. In a text field it cancels the field instead: a filter, search or new phrase empties and hands the keyboard back to the page, a rename or config field keeps its saved value. While a shortcut is being recorded it cancels that and keeps the old one, and `Esc` with a modifier is recorded as the shortcut. The footer's last hint shows which. |
 | `⌘←` / `⌘→` | Previous / next tab. From a sub-page, the tabs either side of the one it belongs to. Not while recording a hotkey, where they do nothing (a shortcut can't use an arrow), and not on the setup screen or Permissions opened from it, which have no tabs. |
+| `⌘,` | Open Settings, as in any Mac app. Works from a text field too; not while recording a hotkey, or on the setup and update screens. |
 | `⌫` in an empty text field | Cancel the field, as `Esc` does. A fresh press only: holding `⌫` to clear a field stops once it's empty. |
 
 Outside a text field, `←` is back a level on sub-pages and detail panes: out of a detail pane, or from a sub-page to the page it belongs under. The exception is picking a value in Settings, where `←` / `→` step the value.
@@ -362,6 +363,7 @@ When the panel daemon is running, a bell icon appears in your menu bar. The same
 | `Voice notifications` | Toggles spoken notifications. Enabling speaks *"Voice notifications enabled"*. |
 | `Mute notifications ▸` | Submenu (For 15m / 30m / 1h / 2h) to silence all nudges for a set time. While muted the item becomes `Resume notifications` and the menu-bar icon shows a `bell.slash` + countdown. |
 | `Show panel` | Brings the floating panel up (handy when no events are queued) |
+| `Settings…` (⌘,) | Opens the panel straight on Settings |
 | `Check permissions…` | Opens the Permissions page in the panel (see below) |
 | `Open config file…` | Opens `~/.stack-nudge/config` in your default editor |
 | `Quit stack-nudge panel` | Exits the daemon |
