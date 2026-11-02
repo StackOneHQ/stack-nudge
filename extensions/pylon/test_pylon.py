@@ -393,6 +393,52 @@ class Rows(unittest.TestCase):
         self.assertEqual(len(doc["rows"]), 2)
         self.assertIn("showing 2 of 3", doc["header"]["title"])
 
+    # A key means the same thing on every page of StackNudge. M is mute on its
+    # list pages and R is refresh on Usage, so the filter takes F and sync R.
+    def test_the_keys_keep_stacknudges_meanings(self):
+        keys = {a["id"]: a["key"] for a in pylon.document([], NOW, False, "ok")["actions"]}
+        self.assertEqual(keys, {"refresh": "r", "mine": "f"})
+        row = pylon.row_for(item(), NOW)
+        self.assertEqual(row["actions"], [{"id": "open", "label": "Open in Pylon", "key": "return"}])
+
+    # Modelled on real sign-offs and asks from a live queue, names changed.
+    def test_a_customer_signing_off_is_a_close_not_work(self):
+        def reply(text, customer=True, note=False, kind="reply"):
+            return dict(item(kind=kind, left_minutes=60), preview={
+                "who": "Dana", "at": stamp(NOW), "text": text, "note": note, "customer": customer})
+        for text in ("Yep, sounds good. Thanks Sam!", "Alright, thanks Sam!", "nice",
+                     "Great thank you v muchly", "Thanks @Alex Rivera",
+                     "Hi Robin, no further action for now"):
+            self.assertTrue(pylon.signed_off(reply(text)), text)
+        for text in ("MCP creator coming out this week?", "We are all in US ET",
+                     "Did mine anonymously as well", "Thanks, but it still fails on the second sync. " * 4):
+            self.assertFalse(pylon.signed_off(reply(text)), text)
+        # Only the customer's own last word counts, and only where a reply is owed.
+        self.assertFalse(pylon.signed_off(reply("Thanks!", customer=False)))
+        self.assertFalse(pylon.signed_off(reply("Thanks!", note=True)))
+        self.assertTrue(pylon.signed_off(reply("Thanks!", kind="eng")))
+        self.assertFalse(pylon.signed_off(dict(item(), preview={
+            "who": "Dana", "at": stamp(NOW), "text": "Thanks!", "note": False, "customer": True})))
+
+    def test_a_close_is_grey_sorts_below_the_work_and_isnt_owed(self):
+        closing = dict(item(number=1, kind="reply", left_minutes=30), preview={
+            "who": "Dana", "at": stamp(NOW), "text": "Thanks!", "note": False, "customer": True})
+        owed = item(number=2, kind="reply", left_minutes=90)
+        doc = pylon.document([closing, owed], NOW, False, "ok")
+        rows = {r["id"]: r for r in doc["rows"]}
+        self.assertEqual((rows["issue-1"]["value"], rows["issue-1"]["track"]["tint"]),
+                         ("close?", pylon.GREY))
+        self.assertEqual([r["id"] for r in doc["rows"]], ["issue-2", "issue-1"])
+        self.assertEqual(doc["header"]["badge"]["text"], "1 OWED")
+
+    def test_a_preview_says_whether_the_customer_sent_it(self):
+        users = {ALEX: {"name": "Alex Rivera", "email": "alex@example.com"}}
+        self.assertTrue(pylon.preview_of([message("Dana", "<p>thanks</p>", 5)], users)["customer"])
+        self.assertFalse(pylon.preview_of([message(ALEX, "<p>on it</p>", 5)], users)["customer"])
+        bot = {"id": "m", "timestamp": stamp(NOW), "message_html": "<p>passing this on</p>",
+               "author": {"user": {"id": "user-bot"}, "name": "Support AI"}}
+        self.assertFalse(pylon.preview_of([bot], users)["customer"])
+
     def test_titles_are_one_line(self):
         self.assertEqual(pylon.text("Sync\nfailing\t again"), "Sync failing again")
 
@@ -893,6 +939,42 @@ class EndToEnd(unittest.TestCase):
         self.assertTrue(footnotes["issue-1"].startswith("Alex"))
         self.assertTrue(footnotes["issue-2"].startswith("yours"))
         self.assertIn(" · ours", footnotes["issue-3"])  # no preview, so the stage comes first
+
+    def test_an_out_of_office_owners_issues_are_ours(self):
+        routes = workspace()
+        routes[("GET", "/users")]["data"][1]["status"] = "out_of_office"
+        data = routes[("POST", "/issues/search")]["data"]
+        # Alex's issue, twenty-five minutes left: an owner's stage, so only
+        # Alex would hear — unless Alex is away.
+        data[1]["first_response_breach_time"] = stamp(NOW + timedelta(minutes=25))
+        data[1]["created_at"] = stamp(NOW - timedelta(minutes=5))
+        _, doc = self.run_once(_FakePylon(routes))
+        footnotes = {r["id"]: r["footnote"] for r in doc["rows"]}
+        self.assertTrue(footnotes["issue-2"].startswith("ours (Alex away)"))
+        self.assertIn("Pylon #2 · 25m left", [b[0] for b in self.banners])
+
+    def test_a_present_owners_early_stages_are_theirs_alone(self):
+        routes = workspace()
+        data = routes[("POST", "/issues/search")]["data"]
+        data[1]["first_response_breach_time"] = stamp(NOW + timedelta(minutes=25))
+        data[1]["created_at"] = stamp(NOW - timedelta(minutes=5))
+        self.run_once(_FakePylon(routes))
+        self.assertNotIn("Pylon #2 · 25m left", [b[0] for b in self.banners])
+
+    def test_a_preview_cached_before_the_customer_field_is_fetched_again(self):
+        routes = workspace()
+        fake = _FakePylon(routes)
+        self.run_once(fake)
+        with open(pylon._state_path) as handle:
+            state = json.load(handle)
+        for entry in state["previews"].values():
+            entry.pop("v", None)
+            entry.pop("customer", None)
+        with open(pylon._state_path, "w") as handle:
+            json.dump(state, handle)
+        fake.requests.clear()
+        self.run_once(fake, argv=["--action", "refresh"])
+        self.assertEqual(sorted(message_calls(fake)), ["issue-1", "issue-2", "issue-3"])
 
     def test_a_refused_user_list_keeps_the_last_one(self):
         routes = workspace()

@@ -13,6 +13,10 @@ a row an extension can colour.
   shown whether or not an SLA is running, and never reminded about, because
   the next move is engineering's.
 
+A reply owed or an engineering ticket whose last word is the customer signing
+off ("thanks", "sounds good") turns grey and reads "close?": still listed, but
+below the real work and left out of the badge's count.
+
 Each row's footnote is the latest message on the issue — who, how long ago,
 and its first line — so the list says what's going on without opening
 anything.
@@ -45,7 +49,7 @@ The SLA is each issue's own window as Pylon sets it, from opening to its
 first-response deadline. On a 30-minute SLA that is "instantly, then 10, 20
 and 25 minutes in", the escalation this was built for. An issue with no owner
 is "ours": it goes to everyone at every stage, because its owner is then the
-whole team. Out of hours, Pylon pushes the deadline to the next business
+whole team. So does one whose owner's Pylon status is out of office. Out of hours, Pylon pushes the deadline to the next business
 morning, so the window is long and its reminders are spread across it; a
 laptop that slept through some gets one banner for the latest, not one each.
 
@@ -121,6 +125,22 @@ PREVIEWS_PER_POLL = 8
 PREVIEW_RESERVE = 2.5
 MESSAGE_PAGES = 3
 PREVIEW_CHARS = 200
+# Bumped when a preview gains a field, so cached ones are fetched again rather
+# than read without it: a preview's cache otherwise lives until its thread moves.
+PREVIEW_VERSION = 2
+
+# A customer's last word that reads like signing off, on a ticket we'd
+# otherwise owe a reply on, makes the row a "close?" rather than work. Short
+# and without a question, because a long message that happens to say thanks
+# usually says something else too.
+SIGN_OFFS = ("thank", "thx", "cheers", "sounds good", "all good", "no further action",
+             "perfect", "great", "nice", "awesome", "brilliant", "lovely",
+             "appreciate", "got it", "that works", "will do")
+SIGN_OFF_CHARS = 160
+
+# A Pylon user status meaning "don't count on me". Their tickets are the team's
+# while it lasts.
+AWAY_STATUSES = ("out_of_office",)
 
 # States in which nothing is owed by us: the customer has the ball, somebody
 # parked it on purpose, or it is done.
@@ -133,7 +153,9 @@ NOT_ON_US = ["closed", "waiting_on_customer", "on_hold"]
 ENGINEERING_STATES = ("waiting_on_engineering",)
 
 ME_TTL = 24 * 3600
-USERS_TTL = 24 * 3600
+# Hourly rather than daily: the list carries each person's status, and an
+# out-of-office owner should hand their tickets to the team the same day.
+USERS_TTL = 3600
 ACCOUNTS_TTL = 6 * 3600
 
 # (share of the SLA window still left, who hears about it), first to last.
@@ -165,6 +187,8 @@ MAX_BANNERS = 3
 # blue for a reply owed, purple for a ticket with engineering.
 GREEN, AMBER, RED = "#7FD1B9", "#E8A87C", "#E5534B"
 BLUE, PURPLE = "#6FA8DC", "#A78BDB"
+# A "close?": still listed, but the customer has said they're done.
+GREY = "#9AA0A6"
 
 _state_path = "state.json"
 
@@ -345,11 +369,28 @@ def sort_key(item):
     first, then the longest quiet, since those are the ones to chase."""
     if item["kind"] == "first":
         return (0, item["left"]) if item["left"] > 0 else (1, -item["left"])
+    # A "close?" sorts below the real work in its group.
+    closing = 1 if signed_off(item) else 0
     if item["kind"] == "reply":
-        return (2, item["left"])
+        return (2, closing, item["left"])
     latest = parse_time(item["latest"])
-    return (3, item["left"] if item["due"] else float("inf"),
+    return (3, closing, item["left"] if item["due"] else float("inf"),
             latest.timestamp() if latest else 0)
+
+
+def signed_off(item):
+    """Whether the last word on a reply owed, or a ticket with engineering, is
+    the customer signing off. A hint, not a verdict: the row stays, shown as
+    "close?", because closing is a person's call."""
+    preview = item.get("preview")
+    if item["kind"] not in ("reply", "eng") or not preview:
+        return False
+    if preview.get("note") or not preview.get("customer"):
+        return False
+    words = (preview.get("text") or "").lower()
+    if not words or "?" in words or len(words) > SIGN_OFF_CHARS:
+        return False
+    return any(phrase in words for phrase in SIGN_OFFS)
 
 
 def row_for(item, now):
@@ -387,6 +428,8 @@ def row_for(item, now):
             fill = 1.0
             notes = ["reply overdue"]
         tint = BLUE
+        if signed_off(item):
+            row["value"], tint = "close?", GREY
     else:
         due = item["due"]
         latest = parse_time(item["latest"])
@@ -399,6 +442,8 @@ def row_for(item, now):
         # Solid, not a countdown: there is no deadline of ours to run down.
         fill, tint = 1.0, PURPLE
         notes = ["with engineering"]
+        if signed_off(item):
+            row["value"], tint = "close?", GREY
     row["track"] = {"fill": round(min(max(fill, 0.0), 1.0), 4), "tint": tint}
 
     preview = item.get("preview")
@@ -436,7 +481,7 @@ def header_for(items, mine_only, identity="ok", notes=()):
     ours = [i for i in items if i["mine"] or i["unowned"]]
     live = [i for i in ours if i["kind"] == "first" and i["left"] > 0]
     late = [i for i in ours if i["kind"] == "first" and i["left"] <= 0]
-    owed = [i for i in ours if i["kind"] == "reply"]
+    owed = [i for i in ours if i["kind"] == "reply" and not signed_off(i)]
     if late:
         badge = {"text": "%d LATE" % len(late), "tone": "danger"}
     elif live:
@@ -486,7 +531,9 @@ def document(items, now, mine_only, identity="ok", notes=()):
         "rows": [row_for(i, now) for i in shown],
         "actions": [
             {"id": "refresh", "label": "Sync now", "key": "r"},
-            {"id": "mine", "label": "Everyone" if mine_only else "Mine only", "key": "m"},
+            # F, for filter, not M: on StackNudge's list pages M is mute, and
+            # a key should mean the same thing on every page.
+            {"id": "mine", "label": "Everyone" if mine_only else "Mine only", "key": "f"},
         ],
     }
 
@@ -720,7 +767,8 @@ def load_users(api, state, now_ts):
     for user in (payload or {}).get("data") or []:
         if isinstance(user, dict) and user.get("id"):
             by_id[str(user["id"])] = {"name": text(user.get("name")),
-                                      "email": (user.get("email") or "").lower()}
+                                      "email": (user.get("email") or "").lower(),
+                                      "status": text(user.get("status"))}
     state["users"] = {"at": now_ts, "by_id": by_id}
     return by_id
 
@@ -797,7 +845,8 @@ def load_messages(api, issue_id):
 
 
 def preview_of(messages, users):
-    """The latest message as {who, at, text, note}, or None for an empty thread."""
+    """The latest message as {who, at, text, note, customer}, or None for an
+    empty thread. `customer` is false for anything a teammate or a bot sent."""
     latest = None
     for message in messages:
         at = parse_time(message.get("timestamp"))
@@ -819,6 +868,7 @@ def preview_of(messages, users):
         "at": at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "text": plain(message.get("message_html"))[:PREVIEW_CHARS],
         "note": bool(message.get("is_private")),
+        "customer": not user,
     }
 
 
@@ -834,7 +884,8 @@ def attach_previews(api, state, items, shown, users, fetch=True):
     cache = _dict(state.get("previews"))
     latest = {i["id"]: i["latest"] for i in items}
     kept = {key: entry for key, entry in cache.items()
-            if isinstance(entry, dict) and key in latest and entry.get("latest") == latest[key]}
+            if isinstance(entry, dict) and key in latest and entry.get("latest") == latest[key]
+            and entry.get("v") == PREVIEW_VERSION}
     fetched, stop = 0, not fetch
     for item in shown:
         if item["id"] in kept:
@@ -857,7 +908,8 @@ def attach_previews(api, state, items, shown, users, fetch=True):
             # A history cut short is shown but not marked current, so the next
             # sync fetches it again rather than keeping what may not be the
             # latest message.
-            kept[item["id"]] = dict(preview or {}, latest=item["latest"] if complete else None)
+            kept[item["id"]] = dict(preview or {}, latest=item["latest"] if complete else None,
+                                    v=PREVIEW_VERSION)
     for item in items:
         entry = kept.get(item["id"])
         item["preview"] = entry if entry and entry.get("who") else None
@@ -885,9 +937,15 @@ def item_for(issue, waiting, now, accounts, users, me):
         # The owner's email as well as the id, so "yours" still works for a
         # token that can't list users and so can't turn an email into an id.
         mine = email == account.get("owner_email")
-    unowned = not owner_id
+    # An owner who is out of office can't take the instant ping, so the issue
+    # is the team's until they're back — and the footnote says why.
+    away = (not mine and bool(owner_id)
+            and (users.get(owner_id) or {}).get("status") in AWAY_STATUSES)
+    unowned = not owner_id or away
     if mine:
         who = "yours"
+    elif away:
+        who = "ours (%s away)" % first_name(owner_id, users)
     elif unowned:
         who = "ours"
     else:
