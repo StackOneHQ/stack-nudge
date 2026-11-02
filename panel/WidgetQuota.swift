@@ -80,6 +80,14 @@ struct WidgetQuota: Equatable {
                      pi: PiQuotaSnapshot?) -> WidgetQuota {
         switch client {
         case .claude:
+            // A verified Ultra account has no session window: the usage API
+            // reports `five_hour: null`. The week is then the window that blocks
+            // you first, so it takes the inner ring, and with it the countdown
+            // and the border, as Codex's weekly-only window already does.
+            if claude?.fiveHour == nil, let week = claude?.sevenDay {
+                return WidgetQuota(client: .claude, short: week, long: nil,
+                                   shortLabel: ringLabel(week, fallback: "7d"), longLabel: "7d")
+            }
             return WidgetQuota(client: .claude,
                                short: claude?.fiveHour, long: claude?.sevenDay,
                                shortLabel: "5h", longLabel: "7d")
