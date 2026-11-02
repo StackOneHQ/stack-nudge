@@ -29,6 +29,32 @@ final class CompactGlanceTests: XCTestCase {
         XCTAssertEqual(shown?.more, 2)
     }
 
+    // Driven through the real entry point, as the chip calls it. The window
+    // must already be expanding when the mode flips, or the tab renders into
+    // the pill's frame; and it is the transient expand, not leaving widget mode.
+    func testAClickOpensTheTabOnTheTransientExpand() {
+        let nav = PanelNav()
+        var modeWhenExpanded: PanelMode?
+        var exitedCompact = false
+        nav.actions = SettingsActions(
+            checkPermissions: {}, openConfig: {}, editPhrases: {},
+            browseExtensions: {}, openExtension: { _ in },
+            openReleaseNotes: {}, checkForUpdates: {}, beginUpdate: {}, runUpdate: {},
+            beginUninstall: {}, runUninstall: {}, runBootstrap: {}, quit: {},
+            expandFromCompact: { modeWhenExpanded = nav.mode },
+            exitCompactMode: { exitedCompact = true },
+            muteFor: { _ in }, resumeNotifications: {},
+            applyEventHistorySetting: {}, clearEventHistory: {},
+            pasteSlackSetup: {}, detectSlackUser: {}, sendSlackTest: {})
+        nav.mode = .events
+
+        nav.openGlance("pylon")
+
+        XCTAssertEqual(modeWhenExpanded, .events, "expanded before the mode flipped")
+        XCTAssertEqual(nav.mode, .extensionTab("pylon"))
+        XCTAssertFalse(exitedCompact, "a chip must not cost somebody their widget")
+    }
+
     func testAmongEqualsTabOrderWins() {
         XCTAssertEqual(CompactView.glanceToShow([glance("radar", .warning),
                                                  glance("pylon", .warning)])?.glance.id,

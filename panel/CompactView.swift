@@ -371,11 +371,8 @@ struct CompactView: View {
         return GlanceShown(glance: shown, more: glances.count - 1)
     }
 
-    // An extension's urgent badge. Tapping it opens that extension's tab with
-    // the transient expand: the expand button leaves widget mode for good, and
-    // a chip asking to be looked at shouldn't cost somebody their widget. The
-    // window expands before the mode flips, so the tab renders into a
-    // panel-sized frame rather than the pill's — the order postUpdate uses.
+    // An extension's urgent badge. A click opens that extension's tab without
+    // leaving widget mode: see PanelNav.openGlance.
     //
     // Sheds detail rather than truncating it. With the sessions headline and
     // gauge beside it the pill leaves about 120pt, which cut "Pylon 2 DUE 12m"
@@ -386,8 +383,7 @@ struct CompactView: View {
             let glance = shown.glance
             let tint: Color = glance.tone == .danger ? .red : .orange
             Button {
-                nav.actions?.expandFromCompact()
-                nav.mode = .extensionTab(glance.id)
+                nav.openGlance(glance.id)
             } label: {
                 ViewThatFits(in: .horizontal) {
                     glanceChip(shown, tint: tint, label: true, trailing: true)

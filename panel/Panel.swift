@@ -4431,31 +4431,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // passed on — an extension tab must never be able to answer a
         // permission prompt on the Events tab by accident.
         if case .extensionTab(let id) = nav.mode {
-            // ⌘R first, because the plain guard below returns on anything with
-            // a modifier. An earlier version put this after it and said in a
-            // comment that it came before — so the key did nothing while the
-            // footer advertised it, which is the one failure an untestable
-            // switch buried in a method is good at hiding. The ordering lives
-            // in isForceRefresh now, where a test can see it.
-            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
-            if Self.isForceRefresh(keyCode: event.keyCode, modifiers: mods,
-                                   isRepeat: event.isARepeat) {
-                extensions.forceRefresh(id)
-                return true
-            }
-            guard plain else { return false }
-            switch event.keyCode {
-            case KeyCode.upArrow:
-                extensions.moveSelection(on: id, by: -1)
-            case KeyCode.downArrow:
-                extensions.moveSelection(on: id, by: 1)
-            case KeyCode.returnKey, KeyCode.numpadEnter:
-                extensions.handle(key: "return", on: id)
-            default:
-                if let typed = event.charactersIgnoringModifiers?.lowercased(),
-                   typed.count == 1 {
-                    extensions.handle(key: typed, on: id)
-                }
+            // The routing, ordering and repeat handling all live in
+            // extensionTabKeyAction, where a test can see them.
+            switch Self.extensionTabKeyAction(for: event) {
+            case .forceRefresh:     extensions.forceRefresh(id)
+            case .move(let delta):  extensions.moveSelection(on: id, by: delta)
+            case .run(let key):     extensions.handle(key: key, on: id)
+            case .swallow:          break
+            case .passThrough:      return false
             }
             return true
         }
@@ -4662,6 +4645,57 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         modifiers.intersection([.command, .control, .option, .shift]) == [.command]
             && keyCode == KeyCode.rKey
             && !isRepeat
+    }
+
+    // What a key does on an extension's tab.
+    enum ExtensionTabKeyAction: Equatable {
+        case forceRefresh
+        case move(Int)
+        // One of the document's bindings: "return", or a single character.
+        case run(String)
+        // The tab's key but nothing to do: an unbound key, or a held one.
+        case swallow
+        // A combination the tab doesn't own, left to AppKit and the app's menu.
+        case passThrough
+    }
+
+    // ⌘R comes first, because the plain-key check below turns away anything
+    // with a modifier. An earlier version put it after that check while a
+    // comment said it came before, so the key did nothing while the footer
+    // advertised it.
+    //
+    // Every document binding spawns the extension, so a held ⏎ or letter is
+    // swallowed after its first press: the branch used to hand the extension
+    // one invocation per autorepeat, and holding ⏎ on a row that opens a link
+    // opened it over and over. The arrows only move the selection and keep
+    // their repeat.
+    static func extensionTabKeyAction(keyCode: UInt16, characters: String?,
+                                      modifiers: NSEvent.ModifierFlags,
+                                      isRepeat: Bool) -> ExtensionTabKeyAction {
+        let modifiers = modifiers.intersection([.command, .control, .option, .shift])
+        if isForceRefresh(keyCode: keyCode, modifiers: modifiers, isRepeat: isRepeat) {
+            return .forceRefresh
+        }
+        guard modifiers.isEmpty else { return .passThrough }
+        switch keyCode {
+        case KeyCode.upArrow:   return .move(-1)
+        case KeyCode.downArrow: return .move(1)
+        default:                break
+        }
+        guard !isRepeat else { return .swallow }
+        if keyCode == KeyCode.returnKey || keyCode == KeyCode.numpadEnter { return .run("return") }
+        if let typed = characters?.lowercased(), typed.count == 1 { return .run(typed) }
+        return .swallow
+    }
+
+    // What the tab calls, so the modifier masking and the repeat flag can't be
+    // got wrong at the call site. Arrows arrive with .function and
+    // .numericPad set, caps lock with .capsLock; none of them count.
+    static func extensionTabKeyAction(for event: NSEvent) -> ExtensionTabKeyAction {
+        extensionTabKeyAction(keyCode: event.keyCode,
+                              characters: event.charactersIgnoringModifiers,
+                              modifiers: event.modifierFlags,
+                              isRepeat: event.isARepeat)
     }
 
     // What a key does on the extensions browser. Pure and beside

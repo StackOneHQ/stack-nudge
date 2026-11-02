@@ -1099,6 +1099,16 @@ final class PanelNav: ObservableObject {
     // scheduled refresh.
     @Published var extensionGlances: [ExtensionGlance] = []
 
+    // A click on the widget's chip: that extension's tab, on the transient
+    // expand. The expand button leaves widget mode for good, and a chip asking
+    // to be looked at shouldn't cost somebody their widget. The window expands
+    // before the mode flips, so the tab renders into a panel-sized frame rather
+    // than the pill's: the order postUpdate uses.
+    func openGlance(_ id: String) {
+        actions?.expandFromCompact()
+        mode = .extensionTab(id)
+    }
+
     // The tab order, and the only source of it: ⌘-number, ←/→ and the strip all
     // read this, so a tab can't be drawn fifth and answer to ⌘6.
     var orderedTabs: [PanelMode] {
