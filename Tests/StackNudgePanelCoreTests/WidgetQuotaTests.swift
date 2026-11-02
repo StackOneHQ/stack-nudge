@@ -198,11 +198,13 @@ final class WidgetQuotaTests: XCTestCase {
         XCTAssertEqual(q.countdownTarget, soon)
     }
 
+    // Only a per-model week: nothing for either ring, so nothing to count down to.
     func test_countdownNilWhenShortWindowMissing() {
-        let codex = CodexQuotaSnapshot(primary: nil,
-                                       secondary: QuotaTier(utilization: 30, resetsAt: later),
-                                       planType: "plus")
-        XCTAssertNil(make(.codex, codex: codex).countdownTarget)
+        let opusOnly = QuotaSnapshot(fiveHour: nil, sevenDay: nil,
+                                     sevenDayOpus: QuotaTier(utilization: 30, resetsAt: later,
+                                                             windowLength: QuotaWindow.sevenDays),
+                                     sevenDaySonnet: nil, planType: "max")
+        XCTAssertNil(make(.claude, claude: opusOnly).countdownTarget)
     }
 
     // MARK: - Labelling

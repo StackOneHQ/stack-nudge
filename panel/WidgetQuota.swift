@@ -20,9 +20,10 @@ struct WidgetQuota: Equatable {
 
     var hasData: Bool { short != nil || long != nil }
 
-    // Border urgency, pulse rate and the pill's refresh cadence all key off
-    // the short window alone — that's the one that blocks you first, and it
-    // preserves the pre-multi-client behaviour where those read `fiveHour`.
+    // Border urgency, pulse rate and the pill's redraw interval all key off
+    // the short window alone — that's the one that blocks you first. It holds
+    // the week when that's all a client reports (Codex weekly-only, Claude
+    // Ultra), so a high week keeps the pill urgent until the weekly reset.
     var shortUtilization: Double { short?.utilization ?? 0 }
 
     // The mascot's stress signal instead keys off whichever window is tighter,
