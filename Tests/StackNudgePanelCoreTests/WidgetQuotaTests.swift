@@ -84,6 +84,18 @@ final class WidgetQuotaTests: XCTestCase {
         XCTAssertEqual(q.longLabel, "7d")
     }
 
+    // Ultra has no session window. Left in the outer ring, the week drew a
+    // sliver round an empty gauge with "—" where the countdown goes.
+    func test_claude_weekOnly_takesTheInnerRing() {
+        let q = make(.claude, claude: claudeSnapshot(seven: 12))
+        XCTAssertEqual(q.short?.utilization, 12)
+        XCTAssertNil(q.long)
+        XCTAssertEqual(q.shortLabel, "7d")
+        XCTAssertEqual(q.countdownTarget, later)
+        XCTAssertTrue(q.ringDescription.contains("7d weekly quota"))
+        XCTAssertFalse(q.ringDescription.contains("session"))
+    }
+
     func test_codex_mapsPrimaryAndSecondary() {
         let codex = CodexQuotaSnapshot(primary: QuotaTier(utilization: 82, resetsAt: soon),
                                        secondary: QuotaTier(utilization: 30, resetsAt: later),
@@ -186,8 +198,13 @@ final class WidgetQuotaTests: XCTestCase {
         XCTAssertEqual(q.countdownTarget, soon)
     }
 
+    // Only a per-model week: nothing for either ring, so nothing to count down to.
     func test_countdownNilWhenShortWindowMissing() {
-        XCTAssertNil(make(.claude, claude: claudeSnapshot(seven: 12)).countdownTarget)
+        let opusOnly = QuotaSnapshot(fiveHour: nil, sevenDay: nil,
+                                     sevenDayOpus: QuotaTier(utilization: 30, resetsAt: later,
+                                                             windowLength: QuotaWindow.sevenDays),
+                                     sevenDaySonnet: nil, planType: "max")
+        XCTAssertNil(make(.claude, claude: opusOnly).countdownTarget)
     }
 
     // MARK: - Labelling
