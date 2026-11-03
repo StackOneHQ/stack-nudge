@@ -266,6 +266,20 @@ class Banners(unittest.TestCase):
                          ["/usr/bin/open", "https://app.usepylon.com/issues?issueNumber=1"])
         self.assertEqual(run.call_args[1]["env"], {"PATH": "/usr/bin:/bin", "HOME": "/Users/test"})
 
+    def test_a_child_env_leaves_out_what_the_host_did_not_set(self):
+        with mock.patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True):
+            self.assertEqual(pylon._child_env(), {"PATH": "/usr/bin"})
+
+    def test_a_banner_with_a_nul_byte_is_dropped_rather_than_ending_the_run(self):
+        with mock.patch.object(pylon.subprocess, "Popen",
+                               side_effect=ValueError("embedded null byte")):
+            pylon._post_banner("t", "s", "a\x00b", "Ping")
+
+    def test_a_link_with_a_nul_byte_is_dropped_rather_than_ending_the_run(self):
+        with mock.patch.object(pylon.subprocess, "run",
+                               side_effect=ValueError("embedded null byte")):
+            pylon._open_url("https://app.usepylon.com/a\x00b")
+
     def test_a_banner_is_posted_detached_and_never_waited_for(self):
         # Waiting cost up to three seconds a banner, inside the host's kill
         # window; its own session keeps it alive if the host kills the run.
