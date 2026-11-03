@@ -74,13 +74,16 @@ def issue(number=1, **overrides):
 
 
 def item(left_minutes=30, mine=True, unowned=False, number=1, snoozed=False, kind="first",
-         window_minutes=30):
-    due = NOW + timedelta(minutes=left_minutes)
+         window_minutes=30, engineering=False, quiet_minutes=0):
+    """A built row item. `left_minutes=None` means no deadline at all, which
+    only a ticket with engineering can have."""
+    due = NOW + timedelta(minutes=left_minutes) if left_minutes is not None else None
     return {
         "id": "issue-%d" % number, "number": number, "title": "Workday sync failing",
         "account": "Acme", "link": None, "source": "slack", "kind": kind,
-        "due": due, "left": left_minutes * 60.0, "window": window_minutes * 60.0,
-        "mine": mine, "unowned": unowned,
+        "due": due, "left": left_minutes * 60.0 if due else None,
+        "window": window_minutes * 60.0, "latest": stamp(NOW - timedelta(minutes=quiet_minutes)),
+        "mine": mine, "unowned": unowned, "engineering": engineering or kind == "eng",
         "who": "yours" if mine else ("ours" if unowned else "Alex"),
         "snoozed": snoozed,
     }
@@ -121,6 +124,17 @@ class Classification(unittest.TestCase):
             state="waiting_on_you", first_response_time=stamp(NOW),
             next_reply={"time": None, "breach_time": stamp(NOW + timedelta(hours=2))}))
         self.assertEqual(waiting, {"kind": "reply", "due": NOW + timedelta(hours=2)})
+
+    def test_a_ticket_with_engineering_is_shown_with_or_without_an_sla(self):
+        quiet = issue(state="waiting_on_engineering", first_response_time=stamp(NOW))
+        self.assertEqual(pylon.classify(quiet), {"kind": "eng", "due": None})
+        owed = issue(state="waiting_on_engineering", first_response_time=stamp(NOW),
+                     next_reply={"time": None, "breach_time": stamp(NOW + timedelta(hours=2))})
+        self.assertEqual(pylon.classify(owed), {"kind": "eng", "due": NOW + timedelta(hours=2)})
+
+    def test_a_first_response_still_owed_outranks_engineering(self):
+        # The customer needs to hear something before engineering's answer.
+        self.assertEqual(pylon.classify(issue(state="waiting_on_engineering"))["kind"], "first")
 
     def test_a_met_reply_sla_means_nothing_is_owed(self):
         waiting = pylon.classify(issue(
@@ -222,6 +236,10 @@ class Escalation(unittest.TestCase):
     def test_the_ledger_only_keeps_issues_still_waiting(self):
         _, ledger = pylon.plan_banners([item(number=2)], {"issue-1": 3, "issue-2": 1})
         self.assertEqual(ledger, {"issue-2": 1})
+
+    def test_tickets_with_engineering_never_banner(self):
+        banners, ledger = pylon.plan_banners([item(left_minutes=None, kind="eng")], {})
+        self.assertEqual((banners, ledger), ([], {}))
 
     def test_replies_owed_never_banner(self):
         banners, ledger = pylon.plan_banners([item(left_minutes=-5, kind="reply")], {})
@@ -328,6 +346,44 @@ class Rows(unittest.TestCase):
         self.assertEqual([r["id"] for r in rows],
                          ["issue-3", "issue-1", "issue-4", "issue-2", "issue-5"])
 
+    def test_each_kind_has_its_own_bar_colour(self):
+        rows = {r["id"]: r for r in pylon.document(
+            [item(number=1, left_minutes=20),
+             item(number=2, kind="reply", left_minutes=30, window_minutes=120),
+             item(number=3, kind="eng", left_minutes=None, quiet_minutes=5 * 24 * 60)],
+            NOW, False, "ok")["rows"]}
+        self.assertEqual(rows["issue-1"]["track"]["tint"], pylon.GREEN)
+        # A reply's bar fills toward its deadline, like a first response's.
+        self.assertEqual(rows["issue-2"]["track"], {"fill": 0.75, "tint": pylon.BLUE})
+        # Engineering's is solid: there's no deadline of ours to run down.
+        self.assertEqual(rows["issue-3"]["track"], {"fill": 1.0, "tint": pylon.PURPLE})
+        self.assertEqual(rows["issue-3"]["value"], "quiet 5d")
+        self.assertIn("with engineering", rows["issue-3"]["footnote"])
+
+    def test_engineering_is_said_in_words_too_not_only_in_colour(self):
+        row = pylon.row_for(dict(item(kind="eng", left_minutes=None), preview={
+            "who": "Dana", "at": stamp(NOW - timedelta(hours=3)), "text": "any news?", "note": False}), NOW)
+        self.assertEqual(row["footnote"], "yours · with engineering · Dana, 3h ago: any news?")
+        first = pylon.row_for(item(left_minutes=20, engineering=True), NOW)
+        self.assertIn("with engineering", first["footnote"])
+        self.assertEqual(first["track"]["tint"], pylon.GREEN)
+
+    def test_engineering_comes_last_with_the_longest_quiet_first(self):
+        items = [item(number=1, kind="eng", left_minutes=None, quiet_minutes=60),
+                 item(number=2, kind="reply", left_minutes=90),
+                 item(number=3, kind="eng", left_minutes=None, quiet_minutes=10 * 24 * 60),
+                 item(number=4, kind="eng", left_minutes=120),
+                 item(number=5, left_minutes=25)]
+        rows = pylon.document(items, NOW, False, "ok")["rows"]
+        self.assertEqual([r["id"] for r in rows],
+                         ["issue-5", "issue-2", "issue-4", "issue-3", "issue-1"])
+
+    def test_mine_only_hides_other_peoples_engineering_tickets(self):
+        items = [item(number=1, kind="eng", left_minutes=None, mine=False),
+                 item(number=2, kind="eng", left_minutes=None)]
+        rows = pylon.document(items, NOW, True, "ok")["rows"]
+        self.assertEqual([r["id"] for r in rows], ["issue-2"])
+
     def test_the_bar_and_its_colour_are_shares_of_the_window(self):
         rows = {r["id"]: r for r in pylon.document(
             [item(number=1, left_minutes=120, window_minutes=240),
@@ -376,6 +432,60 @@ class Rows(unittest.TestCase):
             doc = pylon.document(items, NOW, False, "ok")
         self.assertEqual(len(doc["rows"]), 2)
         self.assertIn("showing 2 of 3", doc["header"]["title"])
+
+    # A key means the same thing on every page of StackNudge. M is mute on its
+    # list pages and R is refresh on Usage, so the filter takes F and sync R.
+    def test_the_keys_keep_stacknudges_meanings(self):
+        keys = {a["id"]: a["key"] for a in pylon.document([], NOW, False, "ok")["actions"]}
+        self.assertEqual(keys, {"refresh": "r", "mine": "f"})
+        row = pylon.row_for(item(), NOW)
+        self.assertEqual(row["actions"], [{"id": "open", "label": "Open in Pylon", "key": "return"}])
+
+    # Modelled on real sign-offs and asks from a live queue, names changed.
+    def test_a_customer_signing_off_is_a_close_not_work(self):
+        def reply(text, customer=True, note=False, kind="reply"):
+            return dict(item(kind=kind, left_minutes=60), preview={
+                "who": "Dana", "at": stamp(NOW), "text": text, "note": note, "customer": customer})
+        for text in ("Yep, sounds good. Thanks Sam!", "Alright, thanks Sam!", "nice",
+                     "Great thank you v muchly", "Thanks @Alex Rivera",
+                     "Hi Robin, no further action for now"):
+            self.assertTrue(pylon.signed_off(reply(text)), text)
+        for text in ("MCP creator coming out this week?", "We are all in US ET",
+                     "Did mine anonymously as well", "Thanks, but it still fails on the second sync. " * 4):
+            self.assertFalse(pylon.signed_off(reply(text)), text)
+        # Only the customer's own last word counts, and only where a reply is owed.
+        self.assertFalse(pylon.signed_off(reply("Thanks!", customer=False)))
+        self.assertFalse(pylon.signed_off(reply("Thanks!", note=True)))
+        self.assertTrue(pylon.signed_off(reply("Thanks!", kind="eng")))
+        self.assertFalse(pylon.signed_off(dict(item(), preview={
+            "who": "Dana", "at": stamp(NOW), "text": "Thanks!", "note": False, "customer": True})))
+
+    def test_a_close_is_grey_sorts_below_the_work_and_isnt_owed(self):
+        closing = dict(item(number=1, kind="reply", left_minutes=30), preview={
+            "who": "Dana", "at": stamp(NOW), "text": "Thanks!", "note": False, "customer": True})
+        owed = item(number=2, kind="reply", left_minutes=90)
+        doc = pylon.document([closing, owed], NOW, False, "ok")
+        rows = {r["id"]: r for r in doc["rows"]}
+        self.assertEqual((rows["issue-1"]["value"], rows["issue-1"]["track"]["tint"]),
+                         ("close?", pylon.GREY))
+        self.assertEqual([r["id"] for r in doc["rows"]], ["issue-2", "issue-1"])
+        self.assertEqual(doc["header"]["badge"]["text"], "1 OWED")
+
+    def test_a_preview_says_whether_the_customer_sent_it(self):
+        users = {ALEX: {"name": "Alex Rivera", "email": "alex@example.com"}}
+        self.assertTrue(pylon.preview_of([message("Dana", "<p>thanks</p>", 5)], users)["customer"])
+        self.assertFalse(pylon.preview_of([message(ALEX, "<p>on it</p>", 5)], users)["customer"])
+        bot = {"id": "m", "timestamp": stamp(NOW), "message_html": "<p>passing this on</p>",
+               "author": {"user": {"id": "user-bot"}, "name": "Support AI"}}
+        self.assertFalse(pylon.preview_of([bot], users)["customer"])
+        # A Linear or Jira sync posting into the thread: no user, no contact,
+        # just a name. Not having a user doesn't make it a customer, so its
+        # "Thanks!" is no sign-off.
+        synced = {"id": "m", "timestamp": stamp(NOW), "message_html": "<p>Thanks!</p>",
+                  "source": "linear", "is_private": False,
+                  "author": {"name": "Linear", "avatar_url": ""}}
+        self.assertFalse(pylon.preview_of([synced], users)["customer"])
+        self.assertFalse(pylon.signed_off({"kind": "reply", "preview": pylon.preview_of([synced], users)}))
 
     def test_titles_are_one_line(self):
         self.assertEqual(pylon.text("Sync\nfailing\t again"), "Sync failing again")
@@ -570,13 +680,18 @@ class EndToEnd(unittest.TestCase):
         fake = _FakePylon(workspace())
         self.run_once(fake)
         search = next(r[3] for r in fake.requests if r[2] == "/issues/search")
-        state_filter, window = search["filter"]["subfilters"]
+        state_filter, either = search["filter"]["subfilters"]
         self.assertEqual(state_filter, {"field": "state", "operator": "not_in",
                                         "values": ["closed", "waiting_on_customer", "on_hold"]})
+        window, engineering = either["subfilters"]
+        self.assertEqual(either["operator"], "or")
         # Windowed on the latest message, not on creation: a customer writing
         # today on an old thread is owed a reply today.
         self.assertEqual(window["field"], "latest_message_activity_at")
         self.assertEqual(window["value"], stamp(NOW - timedelta(days=pylon.LOOKBACK_DAYS)))
+        # ...or with engineering, however long it has been quiet.
+        self.assertEqual(engineering, {"field": "state", "operator": "in",
+                                       "values": ["waiting_on_engineering"]})
 
     def test_notifications_off_keeps_the_tab_and_drops_the_banners(self):
         env = dict(self.env, **{pylon.NOTIFY_KEY: "off"})
@@ -846,6 +961,20 @@ class EndToEnd(unittest.TestCase):
     def test_a_blocked_read_cannot_outlast_the_host(self):
         self.assertLess(pylon.TOTAL_BUDGET + pylon.MAX_PER_REQUEST, pylon.HOST_TIMEOUT)
 
+    def test_a_quiet_ticket_with_engineering_shows_and_pings_nobody(self):
+        routes = workspace()
+        routes[("POST", "/issues/search")]["data"].append(issue(
+            9, account={"id": "acct-mine"}, state="waiting_on_engineering",
+            first_response_time=stamp(NOW - timedelta(days=12)), first_response_breach_time=None,
+            latest_message_time=stamp(NOW - timedelta(days=12))))
+        status, doc = self.run_once(_FakePylon(routes))
+        rows = {r["id"]: r for r in doc["rows"]}
+        self.assertEqual(status, 0)
+        self.assertEqual(rows["issue-9"]["track"]["tint"], pylon.PURPLE)
+        self.assertEqual(rows["issue-9"]["value"], "quiet 12d")
+        self.assertEqual([r["id"] for r in doc["rows"]][-1], "issue-9")
+        self.assertNotIn("Pylon #9", " ".join(b[0] for b in self.banners))
+
     # --- Ownership --------------------------------------------------------
 
     def test_the_assignee_is_the_owner_and_the_account_owner_stands_in(self):
@@ -858,6 +987,42 @@ class EndToEnd(unittest.TestCase):
         self.assertTrue(footnotes["issue-1"].startswith("Alex"))
         self.assertTrue(footnotes["issue-2"].startswith("yours"))
         self.assertIn(" · ours", footnotes["issue-3"])  # no preview, so the stage comes first
+
+    def test_an_out_of_office_owners_issues_are_ours(self):
+        routes = workspace()
+        routes[("GET", "/users")]["data"][1]["status"] = "out_of_office"
+        data = routes[("POST", "/issues/search")]["data"]
+        # Alex's issue, twenty-five minutes left: an owner's stage, so only
+        # Alex would hear — unless Alex is away.
+        data[1]["first_response_breach_time"] = stamp(NOW + timedelta(minutes=25))
+        data[1]["created_at"] = stamp(NOW - timedelta(minutes=5))
+        _, doc = self.run_once(_FakePylon(routes))
+        footnotes = {r["id"]: r["footnote"] for r in doc["rows"]}
+        self.assertTrue(footnotes["issue-2"].startswith("ours (Alex away)"))
+        self.assertIn("Pylon #2 · 25m left", [b[0] for b in self.banners])
+
+    def test_a_present_owners_early_stages_are_theirs_alone(self):
+        routes = workspace()
+        data = routes[("POST", "/issues/search")]["data"]
+        data[1]["first_response_breach_time"] = stamp(NOW + timedelta(minutes=25))
+        data[1]["created_at"] = stamp(NOW - timedelta(minutes=5))
+        self.run_once(_FakePylon(routes))
+        self.assertNotIn("Pylon #2 · 25m left", [b[0] for b in self.banners])
+
+    def test_a_preview_cached_before_the_customer_field_is_fetched_again(self):
+        routes = workspace()
+        fake = _FakePylon(routes)
+        self.run_once(fake)
+        with open(pylon._state_path) as handle:
+            state = json.load(handle)
+        for entry in state["previews"].values():
+            entry.pop("v", None)
+            entry.pop("customer", None)
+        with open(pylon._state_path, "w") as handle:
+            json.dump(state, handle)
+        fake.requests.clear()
+        self.run_once(fake, argv=["--action", "refresh"])
+        self.assertEqual(sorted(message_calls(fake)), ["issue-1", "issue-2", "issue-3"])
 
     def test_a_refused_user_list_keeps_the_last_one(self):
         routes = workspace()

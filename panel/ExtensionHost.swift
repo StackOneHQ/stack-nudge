@@ -1,5 +1,20 @@
 import Foundation
 
+// What the widget shows for an extension that opted in: its header badge while
+// the tone is worth interrupting for, the trailing text beside it, and the tab
+// label so the chip says whose it is. Derived from the document the tab already
+// renders, so an extension has nothing new to produce.
+struct ExtensionGlance: Equatable, Identifiable {
+    let id: String
+    let label: String
+    let text: String
+    let tone: ExtensionDocument.Tone
+    let trailing: String?
+    // The extension has stopped refreshing: see ExtensionHost.glance. Drawn
+    // dimmed, and `trailing` has already gone.
+    var stale = false
+}
+
 // Per-extension pane state, and the one place that decides when to spawn.
 // Separate from PanelNav because nav is already large and this is genuinely its
 // own concern: nav owns which tab you're looking at, this owns what's in it.
@@ -73,6 +88,10 @@ final class ExtensionHost: ObservableObject {
     private let runner: (ExtensionManifest, String?, String?) -> ExtensionRuntime.Fetch
     private let onTabsChanged: ([ExtensionTab]) -> Void
     private let onRefusalsChanged: (Int) -> Void
+    private let onGlancesChanged: ([ExtensionGlance]) -> Void
+    // What was last published, so an unchanged glance doesn't redraw the widget
+    // on every scheduled refresh.
+    private var publishedGlances: [ExtensionGlance] = []
     private let background: (@escaping () -> Void) -> Void
     private let toMain: (@escaping () -> Void) -> Void
 
@@ -85,6 +104,7 @@ final class ExtensionHost: ObservableObject {
     // test can assert on the in-flight gate rather than on a race with it.
     init(onTabsChanged: @escaping ([ExtensionTab]) -> Void = { _ in },
          onRefusalsChanged: @escaping (Int) -> Void = { _ in },
+         onGlancesChanged: @escaping ([ExtensionGlance]) -> Void = { _ in },
          background: @escaping (@escaping () -> Void) -> Void
              = { DispatchQueue.global(qos: .utility).async(execute: $0) },
          toMain: @escaping (@escaping () -> Void) -> Void
@@ -93,6 +113,7 @@ final class ExtensionHost: ObservableObject {
              = { ExtensionRuntime.fetch($0, action: $1, row: $2) }) {
         self.onTabsChanged = onTabsChanged
         self.onRefusalsChanged = onRefusalsChanged
+        self.onGlancesChanged = onGlancesChanged
         self.background = background
         self.toMain = toMain
         self.runner = runner
@@ -127,6 +148,7 @@ final class ExtensionHost: ObservableObject {
         panes = panes.filter { live.contains($0.key) }
         onTabsChanged(manifests.map(\.tabEntry))
         onRefusalsChanged(refused.count)
+        publishGlances()
     }
 
     // MARK: - Invocation
@@ -235,6 +257,10 @@ final class ExtensionHost: ObservableObject {
                          visible: visibleTab == manifest.id, now: now) {
             refresh(manifest.id)
         }
+        // A glance goes stale with time as well as with failures, and an
+        // extension that isn't being polled sends nothing that would notice.
+        // Publishing only on change keeps this from redrawing the widget.
+        publishGlances(now: now)
     }
 
     // MARK: - Selection and keys
@@ -335,5 +361,46 @@ final class ExtensionHost: ObservableObject {
             pane.status = .broken(why)
         }
         panes[id] = pane
+        publishGlances()
+    }
+
+    // MARK: - Glances
+
+    // How many of its own intervals a glance's document may go without a
+    // successful refresh before the chip says so.
+    static let glanceStaleAfterIntervals = 2
+
+    // Only warning and danger. A glance is a request to be looked at, and
+    // "CLEAR" or a neutral count on the widget all day is how a chip turns
+    // into wallpaper.
+    //
+    // Kept through a failed refresh, like the document it comes from: the tab
+    // marks that document stale rather than dropping it. But once a couple of
+    // intervals have passed without a good one, whether the extension is failing
+    // or nothing is polling it, the glance is marked stale and loses `trailing`:
+    // a countdown frozen on the widget for hours is wrong. Dimmed rather than
+    // dropped, because a chip that vanishes reads as "all clear".
+    static func glance(for manifest: ExtensionManifest, pane: Pane,
+                       now: Date = Date()) -> ExtensionGlance? {
+        guard manifest.glance, let header = pane.document?.header, let badge = header.badge,
+              badge.tone == .warning || badge.tone == .danger else { return nil }
+        let limit = TimeInterval(glanceStaleAfterIntervals * reopenFloor(manifest))
+        let stale = pane.updatedAt.map { now.timeIntervalSince($0) > limit } ?? false
+        return ExtensionGlance(id: manifest.id, label: manifest.tab.label, text: badge.text,
+                               tone: badge.tone, trailing: stale ? nil : header.trailing,
+                               stale: stale)
+    }
+
+    var glances: [ExtensionGlance] { glances(now: Date()) }
+
+    func glances(now: Date) -> [ExtensionGlance] {
+        manifests.compactMap { Self.glance(for: $0, pane: pane($0.id), now: now) }
+    }
+
+    private func publishGlances(now: Date = Date()) {
+        let current = glances(now: now)
+        guard current != publishedGlances else { return }
+        publishedGlances = current
+        onGlancesChanged(current)
     }
 }

@@ -4,6 +4,13 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [2.4.0](https://github.com/StackOneHQ/stack-nudge/compare/v2.3.0...v2.4.0) (2026-11-03)
+
+
+### Features
+
+* **extensions:** show urgent badges on the widget and colour-code Pylon rows ([#232](https://github.com/StackOneHQ/stack-nudge/issues/232)) ([3f9f8eb](https://github.com/StackOneHQ/stack-nudge/commit/3f9f8ebcbb865645194f0751e6dc8d6c28780fa1))
+
 ## [2.3.0](https://github.com/StackOneHQ/stack-nudge/compare/v2.2.1...v2.3.0) (2026-10-30)
 
 
