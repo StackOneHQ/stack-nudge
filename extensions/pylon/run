@@ -462,18 +462,25 @@ _APPLESCRIPT = (
 )
 
 
+_CHILD_ENV_KEYS = ("PATH", "HOME")
+
+
+def _child_env():
+    return {key: os.environ[key] for key in _CHILD_ENV_KEYS if key in os.environ}
+
+
 def _post_banner(title, subtitle, body, sound):
     args = ["/usr/bin/osascript"]
     for line in _APPLESCRIPT:
         args += ["-e", line]
-    args += [body, title, subtitle, sound]
+    args += ["--", body, title, subtitle, sound]
     # Detached and not waited for. Waiting cost up to three seconds a banner,
     # which could push a run into the host's kill after the banners had gone
     # out but before the ledger was saved — and the next run sent them again. A
     # session of its own keeps the banner alive if the host kills this run.
     try:
         subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True)
+                         stderr=subprocess.DEVNULL, start_new_session=True, env=_child_env())
     except (OSError, subprocess.SubprocessError):
         pass
 
@@ -482,7 +489,7 @@ def _open_url(url):
     try:
         subprocess.run(["/usr/bin/open", url], stdin=subprocess.DEVNULL,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                       timeout=3, check=False)
+                       timeout=3, check=False, env=_child_env())
     except (OSError, subprocess.SubprocessError):
         pass
 
