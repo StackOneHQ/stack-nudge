@@ -7,9 +7,9 @@ import XCTest
 @MainActor
 final class ExtensionHostTests: XCTestCase {
 
-    private func manifest(_ id: String, refresh: String = "{}") -> ExtensionManifest {
+    private func manifest(_ id: String, refresh: String = "{}", glance: Bool = false) -> ExtensionManifest {
         guard case .success(let m) = ExtensionManifest.parse(Data("""
-            {"id":"\(id)","name":"\(id)","version":"1","schema":1,"refresh":\(refresh)}
+            {"id":"\(id)","name":"\(id)","version":"1","schema":1,"refresh":\(refresh),"glance":\(glance)}
             """.utf8)) else { fatalError("fixture manifest didn't parse") }
         return m
     }
@@ -281,6 +281,121 @@ final class ExtensionHostTests: XCTestCase {
 
         host.tick(visibleTab: "derby", now: now)
         XCTAssertEqual(recorder.calls.map(\.id), ["derby"])
+    }
+
+    // MARK: - Glances
+
+    private func badged(_ tone: String, text: String = "2 DUE", trailing: String? = "12m") -> ExtensionDocument {
+        let trail = trailing.map { ",\"trailing\":\"\($0)\"" } ?? ""
+        return document("""
+            {"schema":1,"state":"ok","header":{"title":"Pylon","badge":{"text":"\(text)","tone":"\(tone)"}\(trail)},"rows":[]}
+            """)
+    }
+
+    private func pane(showing document: ExtensionDocument?) -> ExtensionHost.Pane {
+        var pane = ExtensionHost.Pane()
+        pane.document = document
+        return pane
+    }
+
+    func testAnOptedInExtensionsUrgentBadgeIsAGlance() {
+        XCTAssertEqual(ExtensionHost.glance(for: manifest("pylon", glance: true),
+                                            pane: pane(showing: badged("danger"))),
+                       ExtensionGlance(id: "pylon", label: "pylon", text: "2 DUE",
+                                       tone: .danger, trailing: "12m"))
+        XCTAssertEqual(ExtensionHost.glance(for: manifest("pylon", glance: true),
+                                            pane: pane(showing: badged("warning", trailing: nil)))?.tone,
+                       .warning)
+    }
+
+    // A glance is a request to be looked at. "CLEAR" or a neutral count on the
+    // widget all day is how a chip turns into wallpaper.
+    func testOnlyWarningAndDangerBecomeGlances() {
+        for tone in ["neutral", "success"] {
+            XCTAssertNil(ExtensionHost.glance(for: manifest("pylon", glance: true),
+                                              pane: pane(showing: badged(tone))), tone)
+        }
+    }
+
+    func testAnExtensionThatDidNotOptInHasNoGlance() {
+        XCTAssertNil(ExtensionHost.glance(for: manifest("derby"), pane: pane(showing: badged("danger"))))
+    }
+
+    func testNoDocumentMeansNoGlance() {
+        XCTAssertNil(ExtensionHost.glance(for: manifest("pylon", glance: true), pane: pane(showing: nil)))
+    }
+
+    // Every scheduled refresh lands in finish(). Republishing an unchanged
+    // glance each time would redraw the widget every minute for nothing.
+    func testGlancesArePublishedWhenTheyChangeAndOnlyThen() {
+        var published: [[ExtensionGlance]] = []
+        let host = ExtensionHost(onGlancesChanged: { published.append($0) },
+                                 background: { $0() }, toMain: { $0() },
+                                 runner: { _, _, _ in .transient("stub") })
+        host.load(.init(installed: [manifest("pylon", glance: true), manifest("derby")]))
+        host.finish("pylon", .ok(badged("danger")))
+        host.finish("pylon", .ok(badged("danger")))
+        host.finish("derby", .ok(badged("danger")))
+        host.finish("pylon", .ok(badged("success", text: "CLEAR", trailing: nil)))
+        XCTAssertEqual(published.map { $0.map(\.id) }, [["pylon"], []])
+    }
+
+    // A failed refresh keeps the document on screen, marked stale; the glance
+    // it came from stays with it rather than vanishing over one bad poll.
+    func testAGlanceSurvivesATransientFailure() {
+        let (host, _, _) = host([manifest("pylon", glance: true)])
+        host.finish("pylon", .ok(badged("danger")))
+        host.finish("pylon", .transient("exited 1"))
+        XCTAssertEqual(host.glances.map(\.id), ["pylon"])
+        XCTAssertEqual(host.glances.first?.stale, false, "one bad poll is ordinary")
+    }
+
+    // Two intervals without a good refresh and the countdown beside the badge
+    // has stopped meaning anything. The badge stays, dimmed: a chip that
+    // vanished would read as "all clear".
+    func testAGlanceGoesStaleTwoIntervalsAfterItsLastGoodRefresh() {
+        let pylon = manifest("pylon", refresh: #"{"intervalSeconds":60}"#, glance: true)
+        var pane = pane(showing: badged("danger"))
+        let refreshed = Date(timeIntervalSince1970: 1_000_000)
+        pane.updatedAt = refreshed
+
+        let current = ExtensionHost.glance(for: pylon, pane: pane, now: refreshed + 120)
+        XCTAssertEqual(current?.stale, false)
+        XCTAssertEqual(current?.trailing, "12m")
+
+        let stale = ExtensionHost.glance(for: pylon, pane: pane, now: refreshed + 121)
+        XCTAssertEqual(stale?.stale, true)
+        XCTAssertEqual(stale?.text, "2 DUE")
+        XCTAssertNil(stale?.trailing, "a countdown that has stopped is wrong")
+    }
+
+    // An extension nobody is polling sends nothing that would republish its
+    // glance, so the ticker is what notices it going stale; and only once.
+    func testTheTickerNoticesAGlanceGoingStale() {
+        var published: [[ExtensionGlance]] = []
+        let host = ExtensionHost(onGlancesChanged: { published.append($0) },
+                                 background: { $0() }, toMain: { $0() },
+                                 runner: { _, _, _ in .transient("stub") })
+        host.load(.init(installed: [manifest(
+            "pylon", refresh: #"{"intervalSeconds":60,"whileFocusedOnly":true}"#, glance: true)]))
+        host.finish("pylon", .ok(badged("danger")))
+
+        host.tick(visibleTab: nil, now: Date() + 60)
+        host.tick(visibleTab: nil, now: Date() + 180)
+        host.tick(visibleTab: nil, now: Date() + 240)
+
+        XCTAssertEqual(published.map { $0.map(\.stale) }, [[false], [true]])
+    }
+
+    func testRemovingAnExtensionRemovesItsGlance() {
+        var published: [[ExtensionGlance]] = []
+        let host = ExtensionHost(onGlancesChanged: { published.append($0) },
+                                 background: { $0() }, toMain: { $0() },
+                                 runner: { _, _, _ in .transient("stub") })
+        host.load(.init(installed: [manifest("pylon", glance: true)]))
+        host.finish("pylon", .ok(badged("danger")))
+        host.load(.init(installed: []))
+        XCTAssertEqual(published.last, [])
     }
 
     func testAnUnboundKeyIsNotHandled() {

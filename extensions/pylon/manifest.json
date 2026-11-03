@@ -1,8 +1,8 @@
 {
   "id": "pylon",
   "name": "Pylon",
-  "description": "Customer issues waiting on a response, and a nudge before the first-response SLA runs out.",
-  "version": "1.0.0",
+  "description": "Customer issues waiting on a response or with engineering, colour-coded, and a nudge before the first-response SLA runs out.",
+  "version": "1.1.0",
   "schema": 1,
   "tab": {
     "label": "Pylon"
@@ -40,5 +40,6 @@
     "onOpen": true,
     "intervalSeconds": 60,
     "whileFocusedOnly": false
-  }
+  },
+  "glance": true
 }
