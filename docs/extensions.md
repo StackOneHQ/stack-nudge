@@ -198,10 +198,15 @@ your tab without leaving widget mode. There is room for one chip: the most
 severe wins, first in tab order among equals, and a `+N` counts the rest.
 
 It is the same badge your tab shows, so there is nothing new to send, but keep
-it short. The pill is narrow: when the chip doesn't fit it drops your label,
-then `trailing`, and only then truncates the badge text.
+it short. The pill is narrow and its session headline comes first: when the
+chip doesn't fit it drops your label, then `trailing`, then the badge text,
+leaving a dot in the badge's colour. The tooltip always has all of it.
+
 A glance only stays current while you are polled, so it pairs with
-`whileFocusedOnly: false`. Hosts that predate the field ignore it.
+`whileFocusedOnly: false`. If two of your intervals pass without a successful
+refresh, whether your script is failing or nothing is polling it, the chip dims
+and drops `trailing`: a countdown that has stopped is wrong. Hosts that predate
+the field ignore it.
 
 ### `rows`
 

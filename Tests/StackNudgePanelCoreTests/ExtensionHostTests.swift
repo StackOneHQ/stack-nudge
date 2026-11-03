@@ -347,6 +347,44 @@ final class ExtensionHostTests: XCTestCase {
         host.finish("pylon", .ok(badged("danger")))
         host.finish("pylon", .transient("exited 1"))
         XCTAssertEqual(host.glances.map(\.id), ["pylon"])
+        XCTAssertEqual(host.glances.first?.stale, false, "one bad poll is ordinary")
+    }
+
+    // Two intervals without a good refresh and the countdown beside the badge
+    // has stopped meaning anything. The badge stays, dimmed: a chip that
+    // vanished would read as "all clear".
+    func testAGlanceGoesStaleTwoIntervalsAfterItsLastGoodRefresh() {
+        let pylon = manifest("pylon", refresh: #"{"intervalSeconds":60}"#, glance: true)
+        var pane = pane(showing: badged("danger"))
+        let refreshed = Date(timeIntervalSince1970: 1_000_000)
+        pane.updatedAt = refreshed
+
+        let current = ExtensionHost.glance(for: pylon, pane: pane, now: refreshed + 120)
+        XCTAssertEqual(current?.stale, false)
+        XCTAssertEqual(current?.trailing, "12m")
+
+        let stale = ExtensionHost.glance(for: pylon, pane: pane, now: refreshed + 121)
+        XCTAssertEqual(stale?.stale, true)
+        XCTAssertEqual(stale?.text, "2 DUE")
+        XCTAssertNil(stale?.trailing, "a countdown that has stopped is wrong")
+    }
+
+    // An extension nobody is polling sends nothing that would republish its
+    // glance, so the ticker is what notices it going stale; and only once.
+    func testTheTickerNoticesAGlanceGoingStale() {
+        var published: [[ExtensionGlance]] = []
+        let host = ExtensionHost(onGlancesChanged: { published.append($0) },
+                                 background: { $0() }, toMain: { $0() },
+                                 runner: { _, _, _ in .transient("stub") })
+        host.load(.init(installed: [manifest(
+            "pylon", refresh: #"{"intervalSeconds":60,"whileFocusedOnly":true}"#, glance: true)]))
+        host.finish("pylon", .ok(badged("danger")))
+
+        host.tick(visibleTab: nil, now: Date() + 60)
+        host.tick(visibleTab: nil, now: Date() + 180)
+        host.tick(visibleTab: nil, now: Date() + 240)
+
+        XCTAssertEqual(published.map { $0.map(\.stale) }, [[false], [true]])
     }
 
     func testRemovingAnExtensionRemovesItsGlance() {

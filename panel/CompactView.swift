@@ -71,7 +71,10 @@ struct CompactView: View {
                 HStack(spacing: 10) {
                     gaugeCluster
                     separator
+                    // Ahead of the glance chip, which sheds down to a dot to
+                    // make room for it.
                     headline
+                        .layoutPriority(1)
                     sessionBadge
                     Spacer(minLength: 0)
                     extensionGlance
@@ -338,6 +341,9 @@ struct CompactView: View {
                     .font(.system(size: 11, weight: .semibold).monospacedDigit())
                     .foregroundStyle(.primary)
             }
+            // A count never truncates. The headline beside it has the layout
+            // priority and would otherwise take the digits' room too.
+            .fixedSize()
         }
     }
 
@@ -355,6 +361,22 @@ struct CompactView: View {
     // Passive muted signal on the pill — a dimmed bell.slash while a timed
     // mute is active, nothing otherwise. Reads nav.muteTick so it clears the
     // instant the mute lifts (the controller's timer bumps it).
+    @ViewBuilder private var muteIndicator: some View {
+        let _ = nav.muteTick
+        if nav.isMuted {
+            Image(systemName: "bell.slash.fill")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .help("Notifications muted")
+        }
+    }
+
+    private var separator: some View {
+        Rectangle()
+            .fill(Color.secondary.opacity(0.22))
+            .frame(width: 1, height: 22)
+    }
+
     // MARK: - Extension glance
 
     // The one glance there's room for on the pill: the most severe, first in
@@ -371,13 +393,30 @@ struct CompactView: View {
         return GlanceShown(glance: shown, more: glances.count - 1)
     }
 
+    // Everything the chip would say with room to say it, for the tooltip and
+    // VoiceOver, whatever it has had to shed to fit.
+    static func glanceDescription(_ glance: ExtensionGlance) -> String {
+        var parts = ["\(glance.label): \(glance.text)"]
+        if let trailing = glance.trailing { parts.append(trailing) }
+        if glance.stale { parts.append("not refreshed lately") }
+        return parts.joined(separator: ", ")
+    }
+
     // An extension's urgent badge. A click opens that extension's tab without
     // leaving widget mode: see PanelNav.openGlance.
     //
-    // Sheds detail rather than truncating it. With the sessions headline and
-    // gauge beside it the pill leaves about 120pt, which cut "Pylon 2 DUE 12m"
-    // to "Pyl… 2 D… 12m": the label goes first, then the countdown, and only
-    // the last resort truncates. The tooltip always carries all of it.
+    // Sheds detail rather than truncating it: the label goes first, then the
+    // countdown, then the badge text, leaving a dot in the badge's colour. The
+    // headline has the layout priority, since the pill is for sessions first,
+    // and at the pill's real 290pt beside a session name the dot is often all
+    // that fits. The tooltip and the accessibility label carry everything.
+    //
+    // No width cap: a `.frame(maxWidth:)` grows to whatever it is offered, up
+    // to the cap, so it takes width the headline needs even when the chip
+    // itself is showing only a dot.
+    //
+    // A stale glance, from an extension that has stopped refreshing, is dimmed
+    // and has already lost its countdown: see ExtensionHost.glance.
     @ViewBuilder private var extensionGlance: some View {
         if let shown = Self.glanceToShow(nav.extensionGlances) {
             let glance = shown.glance
@@ -389,64 +428,48 @@ struct CompactView: View {
                     glanceChip(shown, tint: tint, label: true, trailing: true)
                     glanceChip(shown, tint: tint, label: false, trailing: true)
                     glanceChip(shown, tint: tint, label: false, trailing: false)
+                    glanceChip(shown, tint: tint, label: false, trailing: false, badge: false)
                 }
-                .frame(maxWidth: 170)
+                .opacity(glance.stale ? 0.5 : 1)
                 .contentShape(Capsule())
             }
             .buttonStyle(.plain)
-            .layoutPriority(1)
-            .help("\(glance.label): \(glance.text)"
-                  + (glance.trailing.map { " · \($0)" } ?? "") + ". Click to open its tab.")
-            .accessibilityLabel("\(glance.label): \(glance.text)"
-                                + (glance.trailing.map { ", \($0)" } ?? ""))
+            .help(Self.glanceDescription(glance) + ". Click to open its tab.")
+            .accessibilityLabel(Self.glanceDescription(glance))
         }
     }
 
-    private func glanceChip(_ shown: GlanceShown, tint: Color,
-                            label: Bool, trailing: Bool) -> some View {
+    private func glanceChip(_ shown: GlanceShown, tint: Color, label: Bool,
+                            trailing: Bool, badge: Bool = true) -> some View {
         HStack(spacing: 4) {
             Circle()
                 .fill(tint)
                 .frame(width: 6, height: 6)
-            if label {
-                Text(shown.glance.label)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-            Text(shown.glance.text)
-                .font(.system(size: 10, weight: .semibold).monospacedDigit())
-                .foregroundStyle(.primary)
-            if trailing, let text = shown.glance.trailing {
-                Text(text)
-                    .font(.system(size: 10).monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-            if shown.more > 0 {
-                Text("+\(shown.more)")
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.tertiary)
+            if badge {
+                if label {
+                    Text(shown.glance.label)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                Text(shown.glance.text)
+                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(.primary)
+                if trailing, let text = shown.glance.trailing {
+                    Text(text)
+                        .font(.system(size: 10).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                if shown.more > 0 {
+                    Text("+\(shown.more)")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.tertiary)
+                }
             }
         }
         .lineLimit(1)
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .background(Capsule().fill(tint.opacity(0.16)))
-    }
-
-    @ViewBuilder private var muteIndicator: some View {
-        let _ = nav.muteTick
-        if nav.isMuted {
-            Image(systemName: "bell.slash.fill")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .help("Notifications muted")
-        }
-    }
-
-    private var separator: some View {
-        Rectangle()
-            .fill(Color.secondary.opacity(0.22))
-            .frame(width: 1, height: 22)
     }
 
     // MARK: - Background + outer glow

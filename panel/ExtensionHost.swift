@@ -10,6 +10,9 @@ struct ExtensionGlance: Equatable, Identifiable {
     let text: String
     let tone: ExtensionDocument.Tone
     let trailing: String?
+    // The extension has stopped refreshing: see ExtensionHost.glance. Drawn
+    // dimmed, and `trailing` has already gone.
+    var stale = false
 }
 
 // Per-extension pane state, and the one place that decides when to spawn.
@@ -254,6 +257,10 @@ final class ExtensionHost: ObservableObject {
                          visible: visibleTab == manifest.id, now: now) {
             refresh(manifest.id)
         }
+        // A glance goes stale with time as well as with failures, and an
+        // extension that isn't being polled sends nothing that would notice.
+        // Publishing only on change keeps this from redrawing the widget.
+        publishGlances(now: now)
     }
 
     // MARK: - Selection and keys
@@ -359,23 +366,39 @@ final class ExtensionHost: ObservableObject {
 
     // MARK: - Glances
 
+    // How many of its own intervals a glance's document may go without a
+    // successful refresh before the chip says so.
+    static let glanceStaleAfterIntervals = 2
+
     // Only warning and danger. A glance is a request to be looked at, and
     // "CLEAR" or a neutral count on the widget all day is how a chip turns
-    // into wallpaper. Kept through a failed refresh, like the document it
-    // comes from: the tab marks that document stale rather than dropping it.
-    static func glance(for manifest: ExtensionManifest, pane: Pane) -> ExtensionGlance? {
+    // into wallpaper.
+    //
+    // Kept through a failed refresh, like the document it comes from: the tab
+    // marks that document stale rather than dropping it. But once a couple of
+    // intervals have passed without a good one, whether the extension is failing
+    // or nothing is polling it, the glance is marked stale and loses `trailing`:
+    // a countdown frozen on the widget for hours is wrong. Dimmed rather than
+    // dropped, because a chip that vanishes reads as "all clear".
+    static func glance(for manifest: ExtensionManifest, pane: Pane,
+                       now: Date = Date()) -> ExtensionGlance? {
         guard manifest.glance, let header = pane.document?.header, let badge = header.badge,
               badge.tone == .warning || badge.tone == .danger else { return nil }
+        let limit = TimeInterval(glanceStaleAfterIntervals * reopenFloor(manifest))
+        let stale = pane.updatedAt.map { now.timeIntervalSince($0) > limit } ?? false
         return ExtensionGlance(id: manifest.id, label: manifest.tab.label, text: badge.text,
-                               tone: badge.tone, trailing: header.trailing)
+                               tone: badge.tone, trailing: stale ? nil : header.trailing,
+                               stale: stale)
     }
 
-    var glances: [ExtensionGlance] {
-        manifests.compactMap { Self.glance(for: $0, pane: pane($0.id)) }
+    var glances: [ExtensionGlance] { glances(now: Date()) }
+
+    func glances(now: Date) -> [ExtensionGlance] {
+        manifests.compactMap { Self.glance(for: $0, pane: pane($0.id), now: now) }
     }
 
-    private func publishGlances() {
-        let current = glances
+    private func publishGlances(now: Date = Date()) {
+        let current = glances(now: now)
         guard current != publishedGlances else { return }
         publishedGlances = current
         onGlancesChanged(current)

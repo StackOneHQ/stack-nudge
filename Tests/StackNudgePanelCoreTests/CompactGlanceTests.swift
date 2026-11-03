@@ -55,6 +55,17 @@ final class CompactGlanceTests: XCTestCase {
         XCTAssertFalse(exitedCompact, "a chip must not cost somebody their widget")
     }
 
+    // The chip is often just a dot, so the tooltip and VoiceOver carry what it
+    // shed, and say when what they're reading has stopped refreshing.
+    func testTheDescriptionCarriesWhatTheChipSheds() {
+        let due = ExtensionGlance(id: "pylon", label: "Pylon", text: "2 DUE",
+                                  tone: .warning, trailing: "12m")
+        XCTAssertEqual(CompactView.glanceDescription(due), "Pylon: 2 DUE, 12m")
+        let stale = ExtensionGlance(id: "pylon", label: "Pylon", text: "2 DUE",
+                                    tone: .warning, trailing: nil, stale: true)
+        XCTAssertEqual(CompactView.glanceDescription(stale), "Pylon: 2 DUE, not refreshed lately")
+    }
+
     func testAmongEqualsTabOrderWins() {
         XCTAssertEqual(CompactView.glanceToShow([glance("radar", .warning),
                                                  glance("pylon", .warning)])?.glance.id,
