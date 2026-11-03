@@ -184,6 +184,11 @@ SOUNDS = {OWNER_STAGE: "Ping", TEAM_STAGE: "Sosumi", BREACH_STAGE: "Basso"}
 # bannered. Without it the first run after install pings every stale issue in
 # the workspace at once.
 SILENT_AFTER_BREACH = 60 * 60
+# A first response missed longer ago than this has left the SLA's day. It
+# moves behind `a` with the follow-ups and out of the badge, so a ticket Pylon
+# never saw answered (one moved to engineering a year ago, say) doesn't hold
+# the default view and the widget red for good.
+STALE_FIRST = 24 * 3600
 # More banners than this in one run collapse into a single summary.
 MAX_BANNERS = 3
 
@@ -505,9 +510,9 @@ def said(preview, now):
 def header_for(items, mine_only, identity="ok", notes=()):
     # First responses only: they're the SLA, and the badge is what reaches
     # the widget. Replies owed and engineering tickets are behind `a`.
-    ours = [i for i in items if i["mine"] or i["unowned"]]
-    live = [i for i in ours if i["kind"] == "first" and i["left"] > 0]
-    late = [i for i in ours if i["kind"] == "first" and i["left"] <= 0]
+    ours = [i for i in items if (i["mine"] or i["unowned"]) and current_first(i)]
+    live = [i for i in ours if i["left"] > 0]
+    late = [i for i in ours if i["left"] <= 0]
     if late:
         badge = {"text": "%d LATE" % len(late), "tone": "danger"}
     elif live:
@@ -532,18 +537,25 @@ def header_for(items, mine_only, identity="ok", notes=()):
     return header
 
 
+def current_first(item):
+    """A first response still owed, and not missed longer ago than
+    STALE_FIRST."""
+    return item["kind"] == "first" and item["left"] > -STALE_FIRST
+
+
 def visible(items, mine_only, everything=False):
     """The rows to draw, in order.
 
-    By default only first responses: the SLA, and the only rows that remind.
-    `everything` adds replies owed and tickets with engineering.
+    By default only current first responses: the SLA, and the only rows that
+    remind. `everything` adds replies owed, tickets with engineering and first
+    responses missed long ago.
 
     "Mine" still shows every first response: the first-response SLA is the
     team's, and everyone is pinged before it breaches, so hiding a teammate's
     would hide the one thing you may be asked to catch. Only the other kinds
     on other people's accounts are filtered out."""
     return sorted((i for i in items
-                   if (everything or i["kind"] == "first")
+                   if (everything or current_first(i))
                    and (not mine_only or i["mine"] or i["unowned"] or i["kind"] == "first")),
                   key=sort_key)
 

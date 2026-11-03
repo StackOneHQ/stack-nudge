@@ -471,6 +471,21 @@ class Rows(unittest.TestCase):
         self.assertEqual(next(a["label"] for a in doc["actions"] if a["id"] == "all"),
                          "First responses only")
 
+    def test_a_first_response_missed_long_ago_moves_behind_a(self):
+        # Pylon never saw these answered (moved to engineering months ago),
+        # so they'd hold the default view and the widget red for good.
+        items = [item(number=1, left_minutes=-23 * 60),
+                 item(number=2, left_minutes=-300 * 24 * 60)]
+        doc = pylon.document(items, NOW, False, "ok")
+        self.assertEqual([r["id"] for r in doc["rows"]], ["issue-1"])
+        self.assertIn("1 more on A", doc["header"]["title"])
+        self.assertEqual(doc["header"]["badge"], {"text": "1 LATE", "tone": "danger"})
+        doc = pylon.document([items[1]], NOW, False, "ok")
+        self.assertEqual((doc["rows"], doc["header"]["badge"]["text"]), ([], "CLEAR"))
+        doc = pylon.document(items, NOW, False, "ok", everything=True)
+        self.assertEqual([r["id"] for r in doc["rows"]], ["issue-1", "issue-2"])
+        self.assertEqual(doc["rows"][1]["value"], "late 300d")
+
     def test_the_badge_counts_first_responses_only(self):
         # Replies owed are behind A, so they don't hold the badge off CLEAR.
         doc = pylon.document([item(kind="reply", left_minutes=-30)], NOW, False, "ok",
@@ -639,8 +654,8 @@ def workspace():
             issue(1, account={"id": "acct-mine"}),
             issue(2, account={"id": "acct-alex"}, created_at=stamp(NOW - timedelta(minutes=26)),
                   first_response_breach_time=stamp(NOW + timedelta(minutes=4))),
-            issue(3, account=None, created_at=stamp(NOW - timedelta(days=3, minutes=30)),
-                  first_response_breach_time=stamp(NOW - timedelta(days=3))),
+            issue(3, account=None, created_at=stamp(NOW - timedelta(hours=3, minutes=30)),
+                  first_response_breach_time=stamp(NOW - timedelta(hours=3))),
             issue(4, first_response_breach_time=None, tags=["proactive-nudge"]),
             issue(7, account={"id": "acct-feedback"}),
         ], "pagination": {"has_next_page": False}},
@@ -690,7 +705,7 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("yours", footnotes["issue-1"])
         self.assertIn("Alex", footnotes["issue-2"])
         self.assertIn("ours", footnotes["issue-3"])
-        # Mine at 30 left, Alex's at 4 left (a team stage). The three-day-old
+        # Mine at 30 left, Alex's at 4 left (a team stage). The three-hour-old
         # breach is on screen and silent.
         self.assertEqual(sorted(b[0] for b in self.banners),
                          ["Pylon #1 · 30m left", "Pylon #2 · 4m left"])
