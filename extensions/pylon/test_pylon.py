@@ -151,44 +151,64 @@ class Classification(unittest.TestCase):
 
 
 class Escalation(unittest.TestCase):
-    """The schedule this was built for: the owner instantly,
-    again at 10 and 20 minutes, everyone at 25, and everyone at the breach."""
+    """Fixed times before Pylon's deadline: the owner 30 minutes before it,
+    everyone 5 minutes before it, and everyone at the breach. On a 30-minute
+    SLA that is the owner when it opens, everyone at 25 minutes and at 30."""
 
-    def test_the_owner_hears_instantly_then_at_10_20_25_and_the_breach(self):
-        self.assertEqual(timeline(mine=True), {0: 1, 10: 2, 20: 3, 25: 4, 30: 5})
+    def test_the_owner_hears_when_it_opens_then_at_25_and_the_breach(self):
+        self.assertEqual(timeline(mine=True), {0: 1, 25: 2, 30: 3})
 
     def test_everyone_else_hears_at_25_minutes_and_at_the_breach(self):
-        self.assertEqual(timeline(mine=False), {25: 4, 30: 5})
+        self.assertEqual(timeline(mine=False), {25: 2, 30: 3})
 
     def test_an_issue_nobody_owns_goes_to_everyone_at_every_stage(self):
-        self.assertEqual(timeline(mine=False, unowned=True),
-                         {0: 1, 10: 2, 20: 3, 25: 4, 30: 5})
+        self.assertEqual(timeline(mine=False, unowned=True), {0: 1, 25: 2, 30: 3})
 
     def test_a_late_poll_sends_one_banner_not_one_per_missed_stage(self):
-        banners, _ = pylon.plan_banners([item(left_minutes=4)], {"issue-1": 1})
-        self.assertEqual([stage for stage, _ in banners], [4])
+        banners, _ = pylon.plan_banners([item(left_minutes=-1)], {"issue-1": 1})
+        self.assertEqual([stage for stage, _ in banners], [3])
 
-    def test_the_stages_scale_with_the_issues_own_sla(self):
-        # Nothing assumes 30 minutes: a 4-hour SLA is reminded at the same
-        # shares of its window — 80, 160 and 200 minutes in.
-        self.assertEqual(timeline(mine=True, sla_minutes=240),
-                         {0: 1, 80: 2, 160: 3, 200: 4, 240: 5})
-        self.assertEqual(timeline(mine=False, sla_minutes=240), {200: 4, 240: 5})
+    def test_a_longer_sla_is_reminded_at_the_same_minutes_before_its_deadline(self):
+        # Nothing scales with the SLA's length: a 4-hour SLA reminds its owner
+        # at 30 minutes left and everyone at 5, like a 30-minute one.
+        self.assertEqual(timeline(mine=True, sla_minutes=240), {210: 1, 235: 2, 240: 3})
+        self.assertEqual(timeline(mine=False, sla_minutes=240), {235: 2, 240: 3})
 
-    def test_twenty_minutes_left_is_the_twenty_minute_reminder_exactly(self):
-        # 2/3 of 1800 s is 1199.9999999999998 in floating point.
-        self.assertEqual(pylon.stage_for(20 * 60, 30 * 60), 2)
-        self.assertEqual(pylon.stage_for(20 * 60 + 1, 30 * 60), 1)
+    def test_the_thresholds_are_inclusive_to_the_second(self):
+        self.assertEqual(pylon.stage_for(30 * 60, (1800, 300)), 1)
+        self.assertEqual(pylon.stage_for(30 * 60 + 1, (1800, 300)), 0)
+        self.assertEqual(pylon.stage_for(5 * 60, (1800, 300)), 2)
+        self.assertEqual(pylon.stage_for(0, (1800, 300)), 3)
 
-    def test_an_out_of_hours_issue_is_reminded_across_its_stretched_window(self):
-        # Opened at 22:00, due 09:30: the owner hears when it opens, and the
-        # team only in the last sixth of the window, not overnight.
-        banners, _ = pylon.plan_banners([item(left_minutes=690, window_minutes=690)], {})
-        self.assertEqual([stage for stage, _ in banners], [1])
-        self.assertEqual(pylon.stage_for(116 * 60, 690 * 60), 3)
-        self.assertEqual(pylon.stage_for(115 * 60, 690 * 60), 4)
+    def test_an_out_of_hours_issue_waits_for_its_deadline_morning(self):
+        # Opened at 18:00 on Friday, due at 09:30 on Monday: nothing over the
+        # weekend, the owner at 09:00 and everyone at 09:25 on Monday.
+        weekend = 63 * 60 + 30
+        banners, _ = pylon.plan_banners(
+            [item(left_minutes=weekend, window_minutes=weekend)], {})
+        self.assertEqual(banners, [])
+        heard = timeline(mine=True, sla_minutes=weekend)
+        self.assertEqual(heard, {weekend - 30: 1, weekend - 5: 2, weekend: 3})
 
-    def test_the_window_is_measured_from_the_issue_opening_to_pylons_deadline(self):
+    def test_the_lead_times_are_settings(self):
+        with mock.patch.dict(os.environ, {pylon.OWNER_KEY: "60", pylon.TEAM_KEY: "10"}):
+            self.assertEqual(pylon.lead_times(), (3600, 600))
+            self.assertEqual(timeline(mine=True, sla_minutes=90), {30: 1, 80: 2, 90: 3})
+
+    def test_unreadable_lead_times_fall_back_to_the_defaults(self):
+        with mock.patch.dict(os.environ, {pylon.OWNER_KEY: "half an hour", pylon.TEAM_KEY: ""}):
+            self.assertEqual(pylon.lead_times(), (1800, 300))
+        with mock.patch.dict(os.environ, {pylon.OWNER_KEY: "-5", pylon.TEAM_KEY: "99999"}):
+            self.assertEqual(pylon.lead_times(), (24 * 3600, 24 * 3600))
+
+    def test_the_owner_never_hears_later_than_the_team(self):
+        # A team lead time longer than the owner's moves the owner's up to it,
+        # and the owner then gets the team's reminder, once.
+        with mock.patch.dict(os.environ, {pylon.OWNER_KEY: "5", pylon.TEAM_KEY: "15"}):
+            self.assertEqual(pylon.lead_times(), (900, 900))
+            self.assertEqual(timeline(mine=True), {15: 2, 30: 3})
+
+    def test_the_window_still_sizes_the_bar_from_opening_to_the_deadline(self):
         opened = issue(created_at=stamp(NOW - timedelta(hours=1)),
                        first_response_breach_time=stamp(NOW + timedelta(hours=3)))
         made = pylon.item_for(opened, pylon.classify(opened), NOW, {}, {}, (None, None))
@@ -201,11 +221,11 @@ class Escalation(unittest.TestCase):
         banners, ledger = pylon.plan_banners([item(left_minutes=-3 * 60)], {})
         self.assertEqual(banners, [])
         # Recorded, so it stays quiet on every later poll too.
-        self.assertEqual(ledger, {"issue-1": 5})
+        self.assertEqual(ledger, {"issue-1": 3})
 
     def test_a_fresh_breach_on_first_sight_is_still_bannered(self):
         banners, _ = pylon.plan_banners([item(left_minutes=-5)], {})
-        self.assertEqual([stage for stage, _ in banners], [5])
+        self.assertEqual([stage for stage, _ in banners], [3])
 
     def test_a_snoozed_issue_is_not_bannered(self):
         banners, _ = pylon.plan_banners([item(left_minutes=4, snoozed=True)], {})
@@ -217,8 +237,8 @@ class Escalation(unittest.TestCase):
         _, ledger = pylon.plan_banners([item(left_minutes=-20, snoozed=True)], {"issue-1": 1})
         self.assertEqual(ledger, {"issue-1": 1})
         banners, ledger = pylon.plan_banners([item(left_minutes=-25)], ledger)
-        self.assertEqual([stage for stage, _ in banners], [5])
-        self.assertEqual(ledger, {"issue-1": 5})
+        self.assertEqual([stage for stage, _ in banners], [3])
+        self.assertEqual(ledger, {"issue-1": 3})
 
     def test_an_unknown_you_does_not_use_up_the_owners_stages(self):
         # Until "you" can be resolved, an issue that is really yours looks like
@@ -228,10 +248,10 @@ class Escalation(unittest.TestCase):
         banners, ledger = pylon.plan_banners([theirs], {}, know_me=False)
         self.assertEqual((banners, ledger), ([], {"issue-1": 0}))
         banners, ledger = pylon.plan_banners([item(left_minutes=17)], ledger)
-        self.assertEqual([stage for stage, _ in banners], [2])
+        self.assertEqual([stage for stage, _ in banners], [1])
         # Team stages are everyone's, known or not, so those are spent.
         _, ledger = pylon.plan_banners([item(left_minutes=4, mine=False)], {}, know_me=False)
-        self.assertEqual(ledger, {"issue-1": 4})
+        self.assertEqual(ledger, {"issue-1": 2})
 
     def test_the_ledger_only_keeps_issues_still_waiting(self):
         _, ledger = pylon.plan_banners([item(number=2)], {"issue-1": 3, "issue-2": 1})
@@ -308,12 +328,12 @@ class Banners(unittest.TestCase):
         popen.return_value.communicate.assert_not_called()
 
     def test_banner_names_the_issue_the_time_left_and_whose_it_is(self):
-        title, subtitle, body, sound = pylon.banner_text(2, item(left_minutes=20))
-        self.assertEqual(title, "Pylon #1 · 20m left")
+        title, subtitle, body, sound = pylon.banner_text(1, item(left_minutes=30))
+        self.assertEqual(title, "Pylon #1 · 30m left")
         self.assertEqual(subtitle, "Acme · yours")
         self.assertEqual(body, "Workday sync failing")
         self.assertEqual(sound, "Ping")
-        title, subtitle, _, _ = pylon.banner_text(5, item(left_minutes=0, mine=False))
+        title, subtitle, _, _ = pylon.banner_text(3, item(left_minutes=0, mine=False))
         self.assertEqual(title, "Pylon #1 · first response missed")
         self.assertEqual(subtitle, "Acme · Alex")
 
@@ -342,7 +362,7 @@ class Rows(unittest.TestCase):
             item(number=4, left_minutes=-10),
             item(number=5, left_minutes=60, kind="reply"),
         ]
-        rows = pylon.document(items, NOW, False, True)["rows"]
+        rows = pylon.document(items, NOW, False, True, everything=True)["rows"]
         self.assertEqual([r["id"] for r in rows],
                          ["issue-3", "issue-1", "issue-4", "issue-2", "issue-5"])
 
@@ -351,7 +371,7 @@ class Rows(unittest.TestCase):
             [item(number=1, left_minutes=20),
              item(number=2, kind="reply", left_minutes=30, window_minutes=120),
              item(number=3, kind="eng", left_minutes=None, quiet_minutes=5 * 24 * 60)],
-            NOW, False, "ok")["rows"]}
+            NOW, False, "ok", everything=True)["rows"]}
         self.assertEqual(rows["issue-1"]["track"]["tint"], pylon.GREEN)
         # A reply's bar fills toward its deadline, like a first response's.
         self.assertEqual(rows["issue-2"]["track"], {"fill": 0.75, "tint": pylon.BLUE})
@@ -374,22 +394,24 @@ class Rows(unittest.TestCase):
                  item(number=3, kind="eng", left_minutes=None, quiet_minutes=10 * 24 * 60),
                  item(number=4, kind="eng", left_minutes=120),
                  item(number=5, left_minutes=25)]
-        rows = pylon.document(items, NOW, False, "ok")["rows"]
+        rows = pylon.document(items, NOW, False, "ok", everything=True)["rows"]
         self.assertEqual([r["id"] for r in rows],
                          ["issue-5", "issue-2", "issue-4", "issue-3", "issue-1"])
 
     def test_mine_only_hides_other_peoples_engineering_tickets(self):
         items = [item(number=1, kind="eng", left_minutes=None, mine=False),
                  item(number=2, kind="eng", left_minutes=None)]
-        rows = pylon.document(items, NOW, True, "ok")["rows"]
+        rows = pylon.document(items, NOW, True, "ok", everything=True)["rows"]
         self.assertEqual([r["id"] for r in rows], ["issue-2"])
 
-    def test_the_bar_and_its_colour_are_shares_of_the_window(self):
+    def test_the_bar_fills_over_the_window_and_turns_amber_when_everyone_is_told(self):
         rows = {r["id"]: r for r in pylon.document(
             [item(number=1, left_minutes=120, window_minutes=240),
-             item(number=2, left_minutes=60, window_minutes=240)], NOW, False, "ok")["rows"]}
+             item(number=2, left_minutes=6, window_minutes=240),
+             item(number=3, left_minutes=5, window_minutes=240)], NOW, False, "ok")["rows"]}
         self.assertEqual(rows["issue-1"]["track"], {"fill": 0.5, "tint": pylon.GREEN})
-        self.assertEqual(rows["issue-2"]["track"]["tint"], pylon.AMBER)
+        self.assertEqual(rows["issue-2"]["track"]["tint"], pylon.GREEN)
+        self.assertEqual(rows["issue-3"]["track"]["tint"], pylon.AMBER)
 
     def test_values_and_bars_follow_the_clock(self):
         rows = {r["id"]: r for r in pylon.document(
@@ -408,7 +430,7 @@ class Rows(unittest.TestCase):
                  item(number=3, mine=False, unowned=True, kind="reply", left_minutes=90),
                  # Somebody else's first response stays: the team catches those.
                  item(number=4, mine=False, left_minutes=12)]
-        rows = pylon.document(items, NOW, True, True)["rows"]
+        rows = pylon.document(items, NOW, True, True, everything=True)["rows"]
         self.assertEqual([r["id"] for r in rows], ["issue-4", "issue-1", "issue-3"])
 
     def test_the_badge_says_the_worst_thing_that_is_yours(self):
@@ -416,7 +438,8 @@ class Rows(unittest.TestCase):
             return pylon.document(items, NOW, False, True)["header"]["badge"]
         self.assertEqual(badge([]), {"text": "CLEAR", "tone": "success"})
         self.assertEqual(badge([item(left_minutes=25)]), {"text": "1 DUE", "tone": "warning"})
-        self.assertEqual(badge([item(left_minutes=8)]), {"text": "1 DUE", "tone": "danger"})
+        self.assertEqual(badge([item(left_minutes=6)]), {"text": "1 DUE", "tone": "warning"})
+        self.assertEqual(badge([item(left_minutes=5)]), {"text": "1 DUE", "tone": "danger"})
         self.assertEqual(badge([item(left_minutes=-1)]), {"text": "1 LATE", "tone": "danger"})
         # Somebody else's late issue isn't yours to be red about.
         self.assertEqual(badge([item(left_minutes=-1, mine=False)])["text"], "CLEAR")
@@ -433,11 +456,32 @@ class Rows(unittest.TestCase):
         self.assertEqual(len(doc["rows"]), 2)
         self.assertIn("showing 2 of 3", doc["header"]["title"])
 
+    def test_the_tab_opens_on_first_responses_and_says_what_else_is_waiting(self):
+        items = [item(number=1, left_minutes=20),
+                 item(number=2, kind="reply", left_minutes=60),
+                 item(number=3, kind="eng", left_minutes=None)]
+        doc = pylon.document(items, NOW, False, "ok")
+        self.assertEqual([r["id"] for r in doc["rows"]], ["issue-1"])
+        self.assertIn("2 more on A", doc["header"]["title"])
+        self.assertEqual(next(a["label"] for a in doc["actions"] if a["id"] == "all"),
+                         "All waiting")
+        doc = pylon.document(items, NOW, False, "ok", everything=True)
+        self.assertEqual([r["id"] for r in doc["rows"]], ["issue-1", "issue-2", "issue-3"])
+        self.assertNotIn("more on A", doc["header"]["title"])
+        self.assertEqual(next(a["label"] for a in doc["actions"] if a["id"] == "all"),
+                         "First responses only")
+
+    def test_the_badge_counts_first_responses_only(self):
+        # Replies owed are behind A, so they don't hold the badge off CLEAR.
+        doc = pylon.document([item(kind="reply", left_minutes=-30)], NOW, False, "ok",
+                             everything=True)
+        self.assertEqual(doc["header"]["badge"], {"text": "CLEAR", "tone": "success"})
+
     # A key means the same thing on every page of StackNudge. M is mute on its
     # list pages and R is refresh on Usage, so the filter takes F and sync R.
     def test_the_keys_keep_stacknudges_meanings(self):
         keys = {a["id"]: a["key"] for a in pylon.document([], NOW, False, "ok")["actions"]}
-        self.assertEqual(keys, {"refresh": "r", "mine": "f"})
+        self.assertEqual(keys, {"refresh": "r", "mine": "f", "all": "a"})
         row = pylon.row_for(item(), NOW)
         self.assertEqual(row["actions"], [{"id": "open", "label": "Open in Pylon", "key": "return"}])
 
@@ -460,16 +504,15 @@ class Rows(unittest.TestCase):
         self.assertFalse(pylon.signed_off(dict(item(), preview={
             "who": "Dana", "at": stamp(NOW), "text": "Thanks!", "note": False, "customer": True})))
 
-    def test_a_close_is_grey_sorts_below_the_work_and_isnt_owed(self):
+    def test_a_close_is_grey_and_sorts_below_the_work(self):
         closing = dict(item(number=1, kind="reply", left_minutes=30), preview={
             "who": "Dana", "at": stamp(NOW), "text": "Thanks!", "note": False, "customer": True})
         owed = item(number=2, kind="reply", left_minutes=90)
-        doc = pylon.document([closing, owed], NOW, False, "ok")
+        doc = pylon.document([closing, owed], NOW, False, "ok", everything=True)
         rows = {r["id"]: r for r in doc["rows"]}
         self.assertEqual((rows["issue-1"]["value"], rows["issue-1"]["track"]["tint"]),
                          ("close?", pylon.GREY))
         self.assertEqual([r["id"] for r in doc["rows"]], ["issue-2", "issue-1"])
-        self.assertEqual(doc["header"]["badge"]["text"], "1 OWED")
 
     def test_a_preview_says_whether_the_customer_sent_it(self):
         users = {ALEX: {"name": "Alex Rivera", "email": "alex@example.com"}}
@@ -747,11 +790,47 @@ class EndToEnd(unittest.TestCase):
             first_response_time=stamp(NOW), first_response_breach_time=None,
             next_reply={"time": None, "breach_time": stamp(NOW + timedelta(hours=2))}))
         fake = _FakePylon(routes)
+        self.run_once(fake, argv=["--action", "all"])
         _, doc = self.run_once(fake, argv=["--action", "mine"])
         # Alex's reply owed goes; every first response, Alex's included, stays.
         self.assertEqual([r["id"] for r in doc["rows"]], ["issue-2", "issue-1", "issue-3"])
         _, doc = self.run_once(fake, argv=["--action", "mine"])
         self.assertEqual(len(doc["rows"]), 4)
+
+    def test_a_toggles_everything_and_is_remembered(self):
+        routes = workspace()
+        routes[("POST", "/issues/search")]["data"].append(issue(
+            8, account={"id": "acct-alex"}, state="waiting_on_you",
+            first_response_time=stamp(NOW), first_response_breach_time=None,
+            next_reply={"time": None, "breach_time": stamp(NOW + timedelta(hours=2))}))
+        fake = _FakePylon(routes)
+        _, doc = self.run_once(fake)
+        self.assertNotIn("issue-8", [r["id"] for r in doc["rows"]])
+        self.assertIn("1 more on A", doc["header"]["title"])
+        _, doc = self.run_once(fake, argv=["--action", "all"])
+        self.assertIn("issue-8", [r["id"] for r in doc["rows"]])
+        _, doc = self.run_once(fake)
+        self.assertIn("issue-8", [r["id"] for r in doc["rows"]])
+        _, doc = self.run_once(fake, argv=["--action", "all"])
+        self.assertNotIn("issue-8", [r["id"] for r in doc["rows"]])
+
+    def test_an_update_from_the_old_stages_sends_nothing_on_its_own(self):
+        # 1.1 kept five stages per issue; their numbers mean something else
+        # now. What's already crossed counts as dealt with, and the next stage
+        # each issue reaches is reminded as usual.
+        fake = _FakePylon(workspace())
+        self.run_once(fake)
+        with open(pylon._state_path) as handle:
+            state = json.load(handle)
+        state.pop("ledger_version")
+        state["notified"] = {"issue-1": 1, "issue-2": 1, "issue-3": 5}
+        with open(pylon._state_path, "w") as handle:
+            json.dump(state, handle)
+        self.banners.clear()
+        self.run_once(fake)
+        self.assertEqual(self.banners, [])
+        self.run_once(fake, now=NOW + timedelta(minutes=25))
+        self.assertIn("Pylon #1 · 5m left", [b[0] for b in self.banners])
 
     def test_rows_say_who_spoke_last_how_long_ago_and_what_they_said(self):
         _, doc = self.run_once(_FakePylon(workspace()))
@@ -857,18 +936,18 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual([r[2] for r in fake.requests], ["/issues/search"])
 
     def test_reminders_fire_on_the_minute_between_syncs_after_checking_pylon(self):
-        # Synced once an hour, and the owner's 20-minute reminder still lands
-        # at ten minutes in — after asking Pylon whether it's still owed.
+        # Synced once an hour, and everyone's 5-minute reminder still lands at
+        # 25 minutes in — after asking Pylon whether it's still owed.
         env = dict(self.env, **{pylon.SYNC_KEY: "60"})
         fake = _FakePylon(workspace())
         self.run_once(fake, env=env)
         self.banners.clear()
         fake.requests.clear()
-        self.run_once(fake, env=env, now=NOW + timedelta(minutes=10))
+        self.run_once(fake, env=env, now=NOW + timedelta(minutes=25))
         self.assertEqual([r[2] for r in fake.requests], ["/issues/search"])
-        # Alex's issue breached in the same ten minutes: everyone hears that too.
+        # Alex's issue breached in the meantime: everyone hears that too.
         self.assertEqual(sorted(b[0] for b in self.banners),
-                         ["Pylon #1 · 20m left", "Pylon #2 · first response missed"])
+                         ["Pylon #1 · 5m left", "Pylon #2 · first response missed"])
 
     def test_an_issue_answered_since_the_last_sync_is_not_reminded_about(self):
         env = dict(self.env, **{pylon.SYNC_KEY: "60"})
@@ -889,8 +968,8 @@ class EndToEnd(unittest.TestCase):
         self.run_once(fake, env=env)
         routes[("POST", "/issues/search")] = http_error(503)
         self.banners.clear()
-        _, doc = self.run_once(fake, env=env, now=NOW + timedelta(minutes=10))
-        self.assertIn("Pylon #1 · 20m left", [b[0] for b in self.banners])
+        _, doc = self.run_once(fake, env=env, now=NOW + timedelta(minutes=25))
+        self.assertIn("Pylon #1 · 5m left", [b[0] for b in self.banners])
         self.assertIn("sync failed", doc["header"]["title"])
 
     def test_a_failed_sync_is_not_retried_in_the_same_run(self):
@@ -900,9 +979,9 @@ class EndToEnd(unittest.TestCase):
         routes[("POST", "/issues/search")] = http_error(503)
         fake.requests.clear()
         self.banners.clear()
-        self.run_once(fake, now=NOW + timedelta(minutes=10))  # sync due, and reminders due
+        self.run_once(fake, now=NOW + timedelta(minutes=25))  # sync due, and reminders due
         self.assertEqual([r[2] for r in fake.requests], ["/issues/search"])
-        self.assertIn("Pylon #1 · 20m left", [b[0] for b in self.banners])
+        self.assertIn("Pylon #1 · 5m left", [b[0] for b in self.banners])
 
     def test_the_ledger_is_saved_before_any_banner_is_posted(self):
         # So a run the host kills after posting can't post them again.
@@ -917,7 +996,7 @@ class EndToEnd(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()):
             pylon.main([], now=NOW)
         self.assertTrue(saved)
-        self.assertEqual(saved[0], {"issue-1": 1, "issue-2": 4, "issue-3": 5})
+        self.assertEqual(saved[0], {"issue-1": 1, "issue-2": 2, "issue-3": 3})
 
     def test_a_failed_sync_keeps_drawing_the_last_snapshot(self):
         routes = workspace()
@@ -967,7 +1046,7 @@ class EndToEnd(unittest.TestCase):
             9, account={"id": "acct-mine"}, state="waiting_on_engineering",
             first_response_time=stamp(NOW - timedelta(days=12)), first_response_breach_time=None,
             latest_message_time=stamp(NOW - timedelta(days=12))))
-        status, doc = self.run_once(_FakePylon(routes))
+        status, doc = self.run_once(_FakePylon(routes), argv=["--action", "all"])
         rows = {r["id"]: r for r in doc["rows"]}
         self.assertEqual(status, 0)
         self.assertEqual(rows["issue-9"]["track"]["tint"], pylon.PURPLE)

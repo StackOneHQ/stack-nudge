@@ -1,8 +1,8 @@
 {
   "id": "pylon",
   "name": "Pylon",
-  "description": "Customer issues waiting on a response or with engineering, colour-coded, and a nudge before the first-response SLA runs out.",
-  "version": "1.1.1",
+  "description": "Customers waiting on a first response, with a nudge to the owner and then the team before Pylon's SLA runs out. Replies owed and tickets with engineering are one key away.",
+  "version": "1.2.0",
   "schema": 1,
   "tab": {
     "label": "Pylon"
@@ -28,6 +28,18 @@
       "label": "Sync every (minutes)",
       "help": "How often to ask Pylon for changes, 1 to 60. A new ticket appears at the next sync. Countdowns update every minute, and Pylon is checked again before any reminder, so answered tickets don't ping. Press r in the tab to sync now.",
       "placeholder": "3"
+    },
+    {
+      "key": "STACKNUDGE_EXT_PYLON_OWNER_MINUTES",
+      "label": "Remind the owner (minutes before the deadline)",
+      "help": "When the issue's owner gets a banner, counted back from Pylon's first-response deadline. The owner is the assignee, or the account owner until somebody is assigned. 30 means as soon as it opens on a 30-minute SLA. Out of hours the deadline is next morning, so this is next morning too.",
+      "placeholder": "30"
+    },
+    {
+      "key": "STACKNUDGE_EXT_PYLON_TEAM_MINUTES",
+      "label": "Remind everyone (minutes before the deadline)",
+      "help": "When everyone running the Pylon tab gets a banner, counted back from the deadline. Everyone gets another at the breach. 5 means 25 minutes in on a 30-minute SLA.",
+      "placeholder": "5"
     },
     {
       "key": "STACKNUDGE_EXT_PYLON_NOTIFY",
