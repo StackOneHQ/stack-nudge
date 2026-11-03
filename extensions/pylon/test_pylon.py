@@ -258,6 +258,46 @@ class Banners(unittest.TestCase):
         self.assertIn(hostile, args)
         self.assertNotIn(hostile, " ".join(scripts))
 
+    def test_banner_text_is_never_read_as_an_osascript_option(self):
+        with mock.patch.object(pylon.subprocess, "Popen") as popen:
+            pylon._post_banner("-l JavaScript", "-s o", "-e return 1", "-i")
+        script = [flag for line in pylon._APPLESCRIPT for flag in ("-e", line)]
+        self.assertEqual(popen.call_args[0][0],
+                         ["/usr/bin/osascript", *script,
+                          "--", "-e return 1", "-l JavaScript", "-s o", "-i"])
+
+    def test_a_banner_is_spawned_without_the_extension_settings(self):
+        env = {"PATH": "/usr/bin:/bin", "HOME": "/Users/test", pylon.TOKEN_KEY: "secret",
+               pylon.EMAIL_KEY: "me@example.com", "STACKNUDGE_EXT_ID": "pylon"}
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(pylon.subprocess, "Popen") as popen:
+            pylon._post_banner("t", "s", "b", "Ping")
+        self.assertEqual(popen.call_args[1]["env"], {"PATH": "/usr/bin:/bin", "HOME": "/Users/test"})
+
+    def test_a_link_is_opened_without_the_extension_settings(self):
+        env = {"PATH": "/usr/bin:/bin", "HOME": "/Users/test", pylon.TOKEN_KEY: "secret",
+               "STACKNUDGE_EXT_ID": "pylon"}
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(pylon.subprocess, "run") as run:
+            pylon._open_url("https://app.usepylon.com/issues?issueNumber=1")
+        self.assertEqual(run.call_args[0][0],
+                         ["/usr/bin/open", "https://app.usepylon.com/issues?issueNumber=1"])
+        self.assertEqual(run.call_args[1]["env"], {"PATH": "/usr/bin:/bin", "HOME": "/Users/test"})
+
+    def test_a_child_env_leaves_out_what_the_host_did_not_set(self):
+        with mock.patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True):
+            self.assertEqual(pylon._child_env(), {"PATH": "/usr/bin"})
+
+    def test_a_banner_with_a_nul_byte_is_dropped_rather_than_ending_the_run(self):
+        with mock.patch.object(pylon.subprocess, "Popen",
+                               side_effect=ValueError("embedded null byte")):
+            pylon._post_banner("t", "s", "a\x00b", "Ping")
+
+    def test_a_link_with_a_nul_byte_is_dropped_rather_than_ending_the_run(self):
+        with mock.patch.object(pylon.subprocess, "run",
+                               side_effect=ValueError("embedded null byte")):
+            pylon._open_url("https://app.usepylon.com/a\x00b")
+
     def test_a_banner_is_posted_detached_and_never_waited_for(self):
         # Waiting cost up to three seconds a banner, inside the host's kill
         # window; its own session keeps it alive if the host kills the run.

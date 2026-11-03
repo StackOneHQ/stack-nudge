@@ -2,7 +2,7 @@
   "id": "pylon",
   "name": "Pylon",
   "description": "Customer issues waiting on a response or with engineering, colour-coded, and a nudge before the first-response SLA runs out.",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "schema": 1,
   "tab": {
     "label": "Pylon"
