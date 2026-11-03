@@ -134,8 +134,8 @@ final class ProcessOutputTests: XCTestCase {
     func test_run_aChattyGrandchildDoesNotMakeTheChildsOutputPartial() throws {
         let script = try fixture("""
             #!/bin/sh
-            (while true; do echo more; sleep 0.05; done) &
             echo start
+            (while true; do echo more; sleep 0.05; done) &
             exit 0
             """)
         let completion = ProcessOutput.run("/bin/sh", [script], timeout: 10)
