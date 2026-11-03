@@ -125,9 +125,10 @@ PREVIEWS_PER_POLL = 8
 PREVIEW_RESERVE = 2.5
 MESSAGE_PAGES = 3
 PREVIEW_CHARS = 200
-# Bumped when a preview gains a field, so cached ones are fetched again rather
-# than read without it: a preview's cache otherwise lives until its thread moves.
-PREVIEW_VERSION = 2
+# Bumped when a preview gains a field or one changes meaning, so cached ones are
+# fetched again rather than read wrongly: a preview's cache otherwise lives until
+# its thread moves.
+PREVIEW_VERSION = 3
 
 # A customer's last word that reads like signing off, on a ticket we'd
 # otherwise owe a reply on, makes the row a "close?" rather than work. Short
@@ -846,7 +847,11 @@ def load_messages(api, issue_id):
 
 def preview_of(messages, users):
     """The latest message as {who, at, text, note, customer}, or None for an
-    empty thread. `customer` is false for anything a teammate or a bot sent."""
+    empty thread.
+
+    `customer` is true only for an author Pylon has as a contact. A teammate is
+    a `user` instead, and an integration posting into the thread, such as a
+    Linear or Jira sync, is neither: just a name."""
     latest = None
     for message in messages:
         at = parse_time(message.get("timestamp"))
@@ -857,6 +862,7 @@ def preview_of(messages, users):
     at, message = latest
     author = message.get("author") if isinstance(message.get("author"), dict) else {}
     user = author.get("user") if isinstance(author.get("user"), dict) else {}
+    contact = author.get("contact") if isinstance(author.get("contact"), dict) else {}
     # A teammate by first name, the way the owner column reads; a customer by
     # whatever name Pylon has for them, which for email is often the address.
     if str(user.get("id")) in users:
@@ -868,7 +874,7 @@ def preview_of(messages, users):
         "at": at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "text": plain(message.get("message_html"))[:PREVIEW_CHARS],
         "note": bool(message.get("is_private")),
-        "customer": not user,
+        "customer": bool(contact.get("id")),
     }
 
 

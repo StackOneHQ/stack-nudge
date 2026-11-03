@@ -438,6 +438,14 @@ class Rows(unittest.TestCase):
         bot = {"id": "m", "timestamp": stamp(NOW), "message_html": "<p>passing this on</p>",
                "author": {"user": {"id": "user-bot"}, "name": "Support AI"}}
         self.assertFalse(pylon.preview_of([bot], users)["customer"])
+        # A Linear or Jira sync posting into the thread: no user, no contact,
+        # just a name. Not having a user doesn't make it a customer, so its
+        # "Thanks!" is no sign-off.
+        synced = {"id": "m", "timestamp": stamp(NOW), "message_html": "<p>Thanks!</p>",
+                  "source": "linear", "is_private": False,
+                  "author": {"name": "Linear", "avatar_url": ""}}
+        self.assertFalse(pylon.preview_of([synced], users)["customer"])
+        self.assertFalse(pylon.signed_off({"kind": "reply", "preview": pylon.preview_of([synced], users)}))
 
     def test_titles_are_one_line(self):
         self.assertEqual(pylon.text("Sync\nfailing\t again"), "Sync failing again")
