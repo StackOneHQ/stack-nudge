@@ -4,6 +4,19 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [2.5.0](https://github.com/StackOneHQ/stack-nudge/compare/v2.4.1...v2.5.0) (2026-11-05)
+
+
+### Features
+
+* **events:** feed events from scripts beside agent events ([#235](https://github.com/StackOneHQ/stack-nudge/issues/235)) ([de171e6](https://github.com/StackOneHQ/stack-nudge/commit/de171e6c86f919ed4e17919734c6dad443b9c327))
+
+
+### Bug Fixes
+
+* **github:** a sign-in whose token didn't save no longer reads as signed in ([#230](https://github.com/StackOneHQ/stack-nudge/issues/230)) ([f92b742](https://github.com/StackOneHQ/stack-nudge/commit/f92b7420a15aaa97c0a912916011e6dfb0a50338))
+* **notify:** leave headless agent runs alone ([#229](https://github.com/StackOneHQ/stack-nudge/issues/229)) ([f38f398](https://github.com/StackOneHQ/stack-nudge/commit/f38f3982e53cb324d91c7b0d37697a6a7fe8b6d6))
+
 ## [2.4.1](https://github.com/StackOneHQ/stack-nudge/compare/v2.4.0...v2.4.1) (2026-11-03)
 
 
