@@ -58,6 +58,11 @@ struct PresenceTracker {
     private(set) var lastSeen: Date?
     private(set) var recent: [Int] = []
     private var weakSince: Date?
+    // Whether a weak signal may send you away. Off after you've been away
+    // until the phone is heard close again: a phone charging in the next room
+    // keeps advertising weakly, and without this every pause after you came
+    // back would lock the screen again.
+    private var weakArmed = true
 
     init(rule: Rule = Rule()) { self.rule = rule }
 
@@ -80,7 +85,8 @@ struct PresenceTracker {
             weakSince = nil
             return
         }
-        if let avg = averageRSSI, avg <= rule.weakRSSI {
+        if rssi >= rule.backRSSI { weakArmed = true }
+        if weakArmed, let avg = averageRSSI, avg <= rule.weakRSSI {
             if weakSince == nil { weakSince = now }
         } else {
             weakSince = nil
@@ -106,6 +112,7 @@ struct PresenceTracker {
             recent.removeAll()
             weakSince = nil
             lastSeen = nil
+            weakArmed = false
         }
         return state
     }
