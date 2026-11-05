@@ -74,6 +74,14 @@
 # Default: tag
 #STACKNUDGE_SUBAGENT_NUDGES=off
 
+# Nudges from a headless agent run: `claude -p` / `--print` or `codex exec` /
+# `e` / `review`, a script driving the agent with nobody at a terminal. Off by
+# default: such a run's prompts can't be answered by a person, and holding its
+# hook stalls the script, so the agent's own permission setting decides
+# instead. "on" treats them like any other session.
+# Default: off
+#STACKNUDGE_HEADLESS_NUDGES=on
+
 # Fair-usage budget for pi, in tokens per day, per lane. pi enforces no quota
 # of its own — API models bill per token against your keys, local models are
 # free — so these are your own allowances and nothing cuts you off at them. The

@@ -130,6 +130,9 @@ jobs:
       - name: notify.sh permission-blocking tests
         run: python3 scripts/test-notify-permission-blocking.py
 
+      - name: notify.sh headless tests
+        run: python3 scripts/test-notify-headless.py
+
       # install.sh's hook helpers: the code that removes entries from agent configs.
       - name: install.sh hook wiring tests
         run: python3 scripts/test-hook-wiring.py
