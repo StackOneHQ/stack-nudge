@@ -1125,6 +1125,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         self?.nav.extensionGlances = glances
     })
     private var listener: EventListener?
+    private let proximity = ProximityMonitor()
     private var menuBar: MenuBarController?
     private var updateChecker: UpdateChecker?
     private var updater: Updater?
@@ -1197,6 +1198,30 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private static let panelDefaultSize = NSSize(width: 600, height: 320)
     private static let panelMinWidth:  CGFloat = 560
     private static let panelMinHeight: CGFloat = 260
+
+    // Settings → Away. The monitor scans only while it's on, since starting it
+    // is what asks for Bluetooth permission. Leaving locks the screen when the
+    // user asked for that; isAway is published for whatever wants it next.
+    private func wireAwayDetection() {
+        proximity.onNearbyChange = { [weak self] devices in self?.nav.nearbyDevices = devices }
+        proximity.onStateChange = { [weak self] state in
+            guard let self else { return }
+            self.nav.isAway = state == .away
+            NSLog("stack-nudge: away detection: %@", state == .away ? "away" : "present")
+            if state == .away && self.nav.awayLock { ScreenLock.lock() }
+        }
+        nav.$awayDeviceID
+            .removeDuplicates()
+            .sink { [weak self] id in self?.proximity.target = id.flatMap(UUID.init(uuidString:)) }
+            .store(in: &cancellables)
+        nav.$awayEnabled
+            .removeDuplicates()
+            .sink { [weak self] on in
+                guard let self else { return }
+                if on { self.proximity.start() } else { self.proximity.stop(); self.nav.nearbyDevices = [] }
+            }
+            .store(in: &cancellables)
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Pre-1.7 users had `stack-nudge.app` in ~/Applications/. If we're
@@ -1456,6 +1481,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             .removeDuplicates()
             .sink { [weak self] value in self?.store.maxEventsPerSession = value }
             .store(in: &cancellables)
+        wireAwayDetection()
         applyCompactLayout()
 
         // If a previous panel instance was pkilled mid-update by install.sh,

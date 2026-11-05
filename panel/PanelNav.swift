@@ -176,6 +176,7 @@ enum SettingsRow: Hashable {
     case voiceEnabled, voice, voiceSpeed, speakHotkey, downloadVoiceModel
     case quotaTracking, quotaAlerts, alertThreshold, pollFrequency, contextAlert, showRemaining
     case piApiBudget, piLocalBudget
+    case awayEnabled, awayDevice, awayLock
     case githubLinks, hideShipped, disconnectGithub
     case historyPerSession
     case editPhrases, checkPermissions, openConfig, releaseNotes, checkUpdates, uninstall, quit
@@ -216,6 +217,7 @@ extension SettingsRow: CaseIterable {
         .voiceEnabled, .voice, .voiceSpeed, .speakHotkey, .downloadVoiceModel,
         .quotaTracking, .quotaAlerts, .alertThreshold, .pollFrequency,
         .contextAlert, .showRemaining, .piApiBudget, .piLocalBudget,
+        .awayEnabled, .awayDevice, .awayLock,
         .githubLinks, .hideShipped, .disconnectGithub,
         .historyPerSession,
         .editPhrases, .checkPermissions, .openConfig, .releaseNotes,
@@ -1022,6 +1024,17 @@ final class PanelNav: ObservableObject {
     @Published var quotaAlertsEnabled:   Bool = true
     @Published var quotaShowRemaining:   Bool = false
 
+    // Away detection (Settings → Away). Off until asked for: turning it on is
+    // what asks for Bluetooth permission. The phone is remembered by its
+    // CoreBluetooth identifier, with its name kept for the row while it's out
+    // of range. isAway and nearbyDevices come from the ProximityMonitor.
+    @Published var awayEnabled: Bool = false
+    @Published var awayLock: Bool = true
+    @Published var awayDeviceID: String? = nil
+    @Published var awayDeviceName: String? = nil
+    @Published var nearbyDevices: [NearbyDevice] = []
+    @Published var isAway: Bool = false
+
     // Which Settings category the sidebar has selected, and whether focus has
     // stepped into its rows. Changing category resets the row selection, or the
     // index would point into the previous category's list.
@@ -1325,6 +1338,8 @@ final class PanelNav: ObservableObject {
             return [.quotaTracking, .quotaAlerts, .alertThreshold,
                     .pollFrequency, .contextAlert, .showRemaining,
                     .piApiBudget, .piLocalBudget]
+        case .away:
+            return [.awayEnabled, .awayDevice, .awayLock]
         case .integrations:
             return [.slackPaste, .slackIdentity, .slackTest,
                     .slackEnabled, .slackIdle, .slackDetail, .slackStop,
@@ -1481,6 +1496,10 @@ final class PanelNav: ObservableObject {
         quotaTrackingEnabled = ConfigFile.bool(config, "STACKNUDGE_QUOTA_TRACKING", default: true)
         quotaAlertsEnabled   = ConfigFile.bool(config, "STACKNUDGE_QUOTA_ALERTS",   default: true)
         quotaShowRemaining   = ConfigFile.bool(config, "STACKNUDGE_QUOTA_SHOW_REMAINING", default: false)
+        awayEnabled    = ConfigFile.bool(config, "STACKNUDGE_AWAY", default: false)
+        awayLock       = ConfigFile.bool(config, "STACKNUDGE_AWAY_LOCK", default: true)
+        awayDeviceID   = config["STACKNUDGE_AWAY_DEVICE"].flatMap { $0.isEmpty ? nil : $0 }
+        awayDeviceName = config["STACKNUDGE_AWAY_DEVICE_NAME"].flatMap { $0.isEmpty ? nil : $0 }
         // Coerce out-of-list values to the nearest valid threshold so a
         // hand-edited config can't desync the cycle row's selection.
         let rawThreshold = Int(config["STACKNUDGE_QUOTA_THRESHOLD"] ?? "") ?? 80
@@ -1821,7 +1840,8 @@ final class PanelNav: ObservableObject {
              .soundEnabled, .voiceEnabled,
              .quotaTracking, .quotaAlerts, .showRemaining,
              .githubLinks, .hideShipped, .eventHistory,
-             .slackEnabled, .slackDetail, .slackStop:
+             .slackEnabled, .slackDetail, .slackStop,
+             .awayEnabled, .awayLock:
             return false
         case .permissions, .update, .hotkey, .speakHotkey, .downloadVoiceModel:
             return false
@@ -1832,7 +1852,7 @@ final class PanelNav: ObservableObject {
              .alertThreshold, .pollFrequency,
              .contextAlert, .piApiBudget, .piLocalBudget,
              .historyPerSession,
-             .slackIdle:
+             .slackIdle, .awayDevice:
             return true
         }
     }
@@ -1866,6 +1886,33 @@ final class PanelNav: ObservableObject {
         compactFreeOrigin = p
         ConfigFile.write(key: "STACKNUDGE_COMPACT_POS",
                          value: CompactPlacement.formatPosition(p))
+    }
+
+    // The phone picker steps through what the scan has heard, strongest first,
+    // with the saved phone kept in the list while it's out of range so stepping
+    // past it doesn't lose it.
+    var awayDeviceChoices: [(id: String, name: String)] {
+        var list = nearbyDevices.map { (id: $0.id.uuidString, name: $0.name) }
+        if let id = awayDeviceID, !list.contains(where: { $0.id == id }) {
+            list.insert((id: id, name: awayDeviceName ?? "Saved device"), at: 0)
+        }
+        return list
+    }
+
+    func stepAwayDevice(forward: Bool) {
+        let list = awayDeviceChoices
+        guard !list.isEmpty else { return }
+        let idx = list.firstIndex(where: { $0.id == awayDeviceID })
+        let next: Int
+        if let idx {
+            next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+        } else {
+            next = forward ? 0 : list.count - 1
+        }
+        awayDeviceID = list[next].id
+        awayDeviceName = list[next].name
+        ConfigFile.write(key: "STACKNUDGE_AWAY_DEVICE", value: list[next].id)
+        ConfigFile.write(key: "STACKNUDGE_AWAY_DEVICE_NAME", value: list[next].name)
     }
 
     // Settings "GitHub PR links" toggle. Persists STACKNUDGE_GITHUB; on enable
@@ -2045,6 +2092,14 @@ final class PanelNav: ObservableObject {
             ConfigFile.write(key: "STACKNUDGE_QUOTA_SHOW_REMAINING", value: quotaShowRemaining ? "true" : "false")
         case .githubLinks:
             toggleGithubLinking()
+        case .awayEnabled:
+            awayEnabled.toggle()
+            ConfigFile.write(key: "STACKNUDGE_AWAY", value: awayEnabled ? "true" : "false")
+        case .awayLock:
+            awayLock.toggle()
+            ConfigFile.write(key: "STACKNUDGE_AWAY_LOCK", value: awayLock ? "true" : "false")
+        case .awayDevice:
+            stepAwayDevice(forward: forward)
         case .hideShipped:
             toggleHideShipped()
         case .slackEnabled:
@@ -2156,8 +2211,8 @@ struct ExtensionTab: Equatable, Identifiable {
 // subjects — "Toggles" held ten rows spanning notifications, panel behaviour and
 // session naming, while "Hotkey" was a category of one.
 enum SettingsCategory: String, CaseIterable {
-    case notifications, voice, appearance, usage, integrations, extensions, panel, events, actions,
-         about
+    case notifications, voice, appearance, usage, away, integrations, extensions, panel, events,
+         actions, about
 
     // Kept short: the sidebar is ~120pt.
     var label: String {
@@ -2166,6 +2221,7 @@ enum SettingsCategory: String, CaseIterable {
         case .voice:         return "Voice"
         case .appearance:    return "Appearance"
         case .usage:         return "Usage"
+        case .away:          return "Away"
         case .integrations:  return "Integrations"
         case .extensions:    return "Extensions"
         case .panel:         return "Panel"

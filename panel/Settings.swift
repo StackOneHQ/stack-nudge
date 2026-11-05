@@ -334,6 +334,19 @@ struct SettingsView: View {
 
     // Delivery needs both halves, so every row past setup keys off this rather
     // than the token alone.
+    // The chosen phone, and whether the scan currently hears it. Before one is
+    // chosen, says whether there's anything to choose from yet.
+    private var awayDeviceLabel: String {
+        guard let id = nav.awayDeviceID else {
+            return nav.nearbyDevices.isEmpty ? "Scanning…" : "Choose…"
+        }
+        let name = nav.awayDeviceName ?? "Saved device"
+        guard let seen = nav.nearbyDevices.first(where: { $0.id.uuidString == id }) else {
+            return "\(name) · not in range"
+        }
+        return "\(name) · \(seen.rssi) dBm"
+    }
+
     private var slackReady: Bool {
         nav.slackTokenPresent && nav.slackMemberID != nil
     }
@@ -652,6 +665,11 @@ struct SettingsView: View {
         // the Usage tab bars them against nothing else. The week is seven of them.
         case .piApiBudget:    row(.piApiBudget, label: "Pi API budget / day", kind: .cycle, value: PiBudget.label(nav.piApiBudgetDaily), enabled: nav.quotaTrackingEnabled)
         case .piLocalBudget:  row(.piLocalBudget, label: "Pi local budget / day", kind: .cycle, value: PiBudget.label(nav.piLocalBudgetDaily), enabled: nav.quotaTrackingEnabled)
+
+        // Away
+        case .awayEnabled: row(.awayEnabled, label: "Away detection", kind: .toggle, value: nav.awayEnabled ? "On" : "Off")
+        case .awayDevice:  row(.awayDevice, label: "Phone", kind: .cycle, value: awayDeviceLabel, enabled: nav.awayEnabled)
+        case .awayLock:    row(.awayLock, label: "Lock screen when away", kind: .toggle, value: nav.awayLock ? "On" : "Off", enabled: nav.awayEnabled)
 
         // Integrations
         case .slackPaste:      row(.slackPaste, label: "Paste Slack setup", kind: .action, value: slackPasteValue)

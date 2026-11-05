@@ -234,6 +234,6 @@ build_app "$APP" "stack-nudge" \
   panel/*.swift \
   shared/*.swift \
   -framework Foundation -framework AppKit -framework SwiftUI -framework Carbon \
-  -framework UserNotifications
+  -framework UserNotifications -framework CoreBluetooth
 echo "  Built $APP"
 echo "  Binary: $(file "$APP/Contents/MacOS/stack-nudge")"
