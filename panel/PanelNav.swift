@@ -1033,6 +1033,7 @@ final class PanelNav: ObservableObject {
     @Published var awayDeviceID: String? = nil
     @Published var awayDeviceName: String? = nil
     @Published var nearbyDevices: [NearbyDevice] = []
+    @Published var awayBluetoothIssue: String? = nil
     @Published var isAway: Bool = false
     // How long after you leave before you count as away: Mac idle this long and
     // the phone gone (see PresenceTracker.Rule.waiting).
@@ -1894,11 +1895,15 @@ final class PanelNav: ObservableObject {
                          value: CompactPlacement.formatPosition(p))
     }
 
-    // The phone picker steps through what the scan has heard, strongest first,
-    // with the saved phone kept in the list while it's out of range so stepping
-    // past it doesn't lose it.
+    // The phone picker steps through what the scan has heard, in name order
+    // rather than by signal: the scan republishes every 2 s and readings swing
+    // by 15 dB, so a signal order would shuffle under the arrow keys. The saved
+    // phone stays in the list while it's out of range so stepping past it
+    // doesn't lose it.
     var awayDeviceChoices: [(id: String, name: String)] {
-        var list = nearbyDevices.map { (id: $0.id.uuidString, name: $0.name) }
+        var list = nearbyDevices
+            .sorted { ($0.name, $0.id.uuidString) < ($1.name, $1.id.uuidString) }
+            .map { (id: $0.id.uuidString, name: $0.name) }
         if let id = awayDeviceID, !list.contains(where: { $0.id == id }) {
             list.insert((id: id, name: awayDeviceName ?? "Saved device"), at: 0)
         }

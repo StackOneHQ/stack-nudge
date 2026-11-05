@@ -66,6 +66,36 @@ final class PresenceTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.state, .present)
     }
 
+    // The phone went quiet for good (left at home, battery dead). It locks
+    // once; after you come back on input, pausing mustn't lock again until the
+    // phone is heard.
+    func test_phoneGoneForGood_locksOnce_notAfterEveryPause() {
+        var tracker = deskTracker()
+        XCTAssertEqual(tracker.evaluate(now: at(60), idle: 60), .away)
+        XCTAssertEqual(tracker.evaluate(now: at(61), idle: 0), .present)
+        XCTAssertEqual(tracker.evaluate(now: at(300), idle: 200), .present)
+        // Heard again, then gone again: away is back on the table.
+        tracker.observe(rssi: -70, at: at(310))
+        XCTAssertEqual(tracker.evaluate(now: at(400), idle: 200), .away)
+    }
+
+    // Back on one strong reading while the window still holds weak ones must
+    // not flip straight back to away on the next tick.
+    func test_backOnStrongAdvert_doesNotFlapBackToAway() {
+        var tracker = deskTracker()
+        for (i, rssi) in [-90, -91, -92, -90, -93].enumerated() {
+            tracker.observe(rssi: rssi, at: at(22 + Double(i)))
+        }
+        tracker.observe(rssi: -92, at: at(40))
+        XCTAssertEqual(tracker.evaluate(now: at(40), idle: 60), .away)
+        for (i, rssi) in [-90, -90, -90, -88].enumerated() {
+            tracker.observe(rssi: rssi, at: at(41 + Double(i)))
+        }
+        tracker.observe(rssi: -78, at: at(46))
+        XCTAssertEqual(tracker.state, .present)
+        XCTAssertEqual(tracker.evaluate(now: at(48), idle: 80), .present)
+    }
+
     func test_neverSeen_isNeverAway() {
         var tracker = PresenceTracker()
         XCTAssertEqual(tracker.evaluate(now: at(600), idle: 600), .present)
@@ -94,17 +124,18 @@ final class PresenceRuleWaitTests: XCTestCase {
         XCTAssertEqual(rule.weakFor, 10)
     }
 
-    func test_tenSecondWait_locksAboutFifteenSecondsAfterThePhoneGoesQuiet() {
+    func test_tenSecondWait_locksTwentySecondsAfterThePhoneGoesQuiet() {
         var tracker = PresenceTracker(rule: .waiting(10))
         let t0 = Date(timeIntervalSince1970: 1_000_000)
         tracker.observe(rssi: -70, at: t0)
-        XCTAssertEqual(tracker.evaluate(now: t0.addingTimeInterval(12), idle: 12), .present)
-        XCTAssertEqual(tracker.evaluate(now: t0.addingTimeInterval(15), idle: 15), .away)
+        XCTAssertEqual(tracker.evaluate(now: t0.addingTimeInterval(16), idle: 16), .present,
+                       "a 14 s gap between adverts at the desk isn't leaving")
+        XCTAssertEqual(tracker.evaluate(now: t0.addingTimeInterval(20), idle: 20), .away)
     }
 
     func test_everyWaitOptionIsAValidRule() {
         for s in PanelNav.awayWaitOptions {
-            XCTAssertGreaterThanOrEqual(PresenceTracker.Rule.waiting(TimeInterval(s)).missingAfter, 15)
+            XCTAssertGreaterThanOrEqual(PresenceTracker.Rule.waiting(TimeInterval(s)).missingAfter, 20)
         }
     }
 }

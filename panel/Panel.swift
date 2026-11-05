@@ -1204,6 +1204,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // user asked for that; isAway is published for whatever wants it next.
     private func wireAwayDetection() {
         proximity.onNearbyChange = { [weak self] devices in self?.nav.nearbyDevices = devices }
+        proximity.onBluetoothIssue = { [weak self] issue in self?.nav.awayBluetoothIssue = issue }
         proximity.onStateChange = { [weak self] state in
             guard let self else { return }
             self.nav.isAway = state == .away
@@ -1222,7 +1223,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             .removeDuplicates()
             .sink { [weak self] on in
                 guard let self else { return }
-                if on { self.proximity.start() } else { self.proximity.stop(); self.nav.nearbyDevices = [] }
+                if on {
+                    self.proximity.start()
+                } else {
+                    self.proximity.stop()
+                    self.nav.nearbyDevices = []
+                    self.nav.awayBluetoothIssue = nil
+                }
             }
             .store(in: &cancellables)
     }
