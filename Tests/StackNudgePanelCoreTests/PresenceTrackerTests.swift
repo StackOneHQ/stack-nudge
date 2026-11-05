@@ -93,7 +93,26 @@ final class PresenceTrackerTests: XCTestCase {
         }
         tracker.observe(rssi: -78, at: at(46))
         XCTAssertEqual(tracker.state, .present)
-        XCTAssertEqual(tracker.evaluate(now: at(48), idle: 80), .present)
+        // Past weakFor from when the weak run started (41 s): the old code went
+        // straight back to away here.
+        XCTAssertEqual(tracker.evaluate(now: at(52), idle: 80), .present)
+    }
+
+    // The phone charges in the next room, advertising weakly but steadily.
+    // It locks once; after you come back on input, pauses mustn't lock again
+    // until the phone has been close.
+    func test_phoneWeakInNextRoom_locksOnce_notAfterEveryPause() {
+        var tracker = deskTracker()
+        // The average is down to -88 by 34 s; 10 s of that is leaving.
+        for s in stride(from: 22.0, through: 46, by: 3) { tracker.observe(rssi: -88, at: at(s)) }
+        XCTAssertEqual(tracker.evaluate(now: at(46), idle: 60), .away)
+        XCTAssertEqual(tracker.evaluate(now: at(47), idle: 0), .present)
+        for s in stride(from: 49.0, through: 120, by: 3) { tracker.observe(rssi: -88, at: at(s)) }
+        XCTAssertEqual(tracker.evaluate(now: at(120), idle: 70), .present)
+        // Close again, then off to the next room: away again.
+        tracker.observe(rssi: -66, at: at(125))
+        for s in stride(from: 128.0, through: 160, by: 3) { tracker.observe(rssi: -90, at: at(s)) }
+        XCTAssertEqual(tracker.evaluate(now: at(160), idle: 70), .away)
     }
 
     func test_neverSeen_isNeverAway() {
