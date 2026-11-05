@@ -156,3 +156,33 @@ final class ResignKeyOutcomeTests: XCTestCase {
         XCTAssertEqual(outcome(.postUpdate), .hide)
     }
 }
+
+// Leaving the update screen.
+final class DismissPostUpdateTests: XCTestCase {
+
+    func test_theWidgetGoesBackToThePill() {
+        let nav = PanelNav()
+        nav.compactMode = true
+        nav.compactExpanded = true
+        nav.postUpdateVersion = "2.5.0"
+        nav.mode = .postUpdate
+
+        nav.dismissPostUpdate()
+
+        XCTAssertEqual(nav.mode, .events)
+        XCTAssertNil(nav.postUpdateVersion)
+        XCTAssertFalse(nav.compactExpanded)
+    }
+
+    func test_withoutTheWidgetThePanelStaysOnEvents() {
+        let nav = PanelNav()
+        nav.compactMode = false
+        nav.compactExpanded = false
+        nav.mode = .postUpdate
+
+        nav.dismissPostUpdate()
+
+        XCTAssertEqual(nav.mode, .events)
+        XCTAssertFalse(nav.compactExpanded)
+    }
+}
