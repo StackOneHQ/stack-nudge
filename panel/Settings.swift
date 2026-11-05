@@ -332,11 +332,10 @@ struct SettingsView: View {
         nav.contextAlertThresholdK == 0 ? "Off" : "\(nav.contextAlertThresholdK)K"
     }
 
-    // Delivery needs both halves, so every row past setup keys off this rather
-    // than the token alone.
     // The chosen phone, and whether the scan currently hears it. Before one is
     // chosen, says whether there's anything to choose from yet.
     private var awayDeviceLabel: String {
+        if let issue = nav.awayBluetoothIssue { return issue }
         guard let id = nav.awayDeviceID else {
             return nav.nearbyDevices.isEmpty ? "Scanning…" : "Choose…"
         }
@@ -352,6 +351,8 @@ struct SettingsView: View {
         return s < 60 ? "\(s) s" : "\(s / 60) min"
     }
 
+    // Delivery needs both halves, so every row past setup keys off this rather
+    // than the token alone.
     private var slackReady: Bool {
         nav.slackTokenPresent && nav.slackMemberID != nil
     }

@@ -39,10 +39,10 @@ struct PresenceTracker {
         var backRSSI: Int = -80
 
         // The rule for a chosen wait (Settings → Away → Lock after): that long
-        // idle, and the phone gone for as long. Silence never counts below 15 s
+        // idle, and the phone gone for as long. Silence never counts below 20 s
         // whatever the wait, because a phone on the desk was measured going 14 s
-        // between advertisements; any shorter and reading something would lock
-        // you out.
+        // between advertisements, and the decision only runs every 2 s; any
+        // closer and reading something would lock you out.
         static func waiting(_ seconds: TimeInterval) -> Rule {
             var rule = Rule()
             rule.idleAtLeast = seconds
@@ -50,7 +50,7 @@ struct PresenceTracker {
             rule.weakFor = min(rule.weakFor, seconds)
             return rule
         }
-        static let minimumSilence: TimeInterval = 15
+        static let minimumSilence: TimeInterval = 20
     }
 
     var rule = Rule()
@@ -72,7 +72,14 @@ struct PresenceTracker {
         lastSeen = now
         recent.append(rssi)
         if recent.count > rule.window { recent.removeFirst(recent.count - rule.window) }
-        if state == .away && rssi >= rule.backRSSI { state = .present }
+        if state == .away && rssi >= rule.backRSSI {
+            // Back on a strong reading. Start the average over from it, or the
+            // weak readings still in the window would send you straight back.
+            state = .present
+            recent = [rssi]
+            weakSince = nil
+            return
+        }
         if let avg = averageRSSI, avg <= rule.weakRSSI {
             if weakSince == nil { weakSince = now }
         } else {
@@ -92,9 +99,13 @@ struct PresenceTracker {
         let weak = weakSince.map { now.timeIntervalSince($0) >= rule.weakFor } ?? false
         if missing || weak {
             state = .away
-            // The readings that sent you away shouldn't hold you there.
+            // The readings that sent you away shouldn't hold you there, and the
+            // silence shouldn't send you away again: after input brings you
+            // back, away needs the phone heard afresh. Otherwise a phone left at
+            // home or switched off would lock the screen after every pause.
             recent.removeAll()
             weakSince = nil
+            lastSeen = nil
         }
         return state
     }
@@ -130,6 +141,8 @@ enum PairedDevices {
 final class ProximityMonitor: NSObject, CBCentralManagerDelegate {
     var onStateChange: (PresenceState) -> Void = { _ in }
     var onNearbyChange: ([NearbyDevice]) -> Void = { _ in }
+    // Why the scan can't run, for the Phone row, or nil while it can.
+    var onBluetoothIssue: (String?) -> Void = { _ in }
 
     var target: UUID? {
         didSet { if target != oldValue { tracker = PresenceTracker(rule: tracker.rule) } }
@@ -173,6 +186,17 @@ final class ProximityMonitor: NSObject, CBCentralManagerDelegate {
         }
     }
 
+    static func issue(for state: CBManagerState) -> String? {
+        switch state {
+        case .poweredOn:              return nil
+        case .poweredOff:             return "Bluetooth is off"
+        case .unauthorized:           return "Bluetooth not allowed"
+        case .unsupported:            return "No Bluetooth LE"
+        case .resetting, .unknown:    return nil
+        @unknown default:             return nil
+        }
+    }
+
     private func tick() {
         // No phone chosen yet: nothing to judge, and never away.
         guard target != nil else { return }
@@ -184,7 +208,19 @@ final class ProximityMonitor: NSObject, CBCentralManagerDelegate {
     }
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        guard central.state == .poweredOn else { return }
+        onBluetoothIssue(Self.issue(for: central.state))
+        guard central.state == .poweredOn else {
+            // Nothing heard while Bluetooth is off says nothing about where the
+            // phone is, so forget it rather than count the silence.
+            tracker = PresenceTracker(rule: tracker.rule)
+            nearby = [:]
+            onNearbyChange([])
+            if lastReported != .present {
+                lastReported = .present
+                onStateChange(.present)
+            }
+            return
+        }
         // Duplicates on: each advertisement is a reading, not just the first.
         central.scanForPeripherals(withServices: nil,
                                    options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
