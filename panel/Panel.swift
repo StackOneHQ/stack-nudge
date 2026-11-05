@@ -191,11 +191,7 @@ struct PanelContentView: View {
             } else if nav.mode == .postUpdate {
                 // Full-screen takeover, no tab strip — matches welcome's
                 // single-purpose first-launch feel.
-                PostUpdateView(nav: nav, onDismiss: {
-                    nav.postUpdateVersion = nil
-                    nav.postUpdateNotes = nil
-                    nav.mode = .events
-                })
+                PostUpdateView(nav: nav, onDismiss: { nav.dismissPostUpdate() })
             } else if nav.mode == .permissions, nav.permissionsReturnMode == .bootstrap {
                 // Opened from setup, which has no tab strip: without one here
                 // too, the only way on is back to setup.
@@ -4835,9 +4831,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 nav.acceptCompanionOffer()
             case .dismiss:
                 globalKeys.swallowRepeats(of: event.keyCode)
-                nav.postUpdateVersion = nil
-                nav.postUpdateNotes = nil
-                nav.mode = .events
+                nav.dismissPostUpdate()
             case .swallow:              break
             }
             return true
