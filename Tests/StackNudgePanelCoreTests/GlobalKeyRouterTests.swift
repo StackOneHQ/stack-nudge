@@ -148,4 +148,11 @@ final class ResignKeyOutcomeTests: XCTestCase {
         XCTAssertEqual(outcome(.permissions), .stay)
         XCTAssertEqual(outcome(.permissions, compact: true, expanded: true), .stay)
     }
+
+    // The pill can't draw these screens, so the widget keeps them full size.
+    func test_theWidgetKeepsTheUpdateScreenAndWizardUp() {
+        XCTAssertEqual(outcome(.postUpdate, compact: true, expanded: true), .stay)
+        XCTAssertEqual(outcome(.bootstrap, compact: true, expanded: true), .stay)
+        XCTAssertEqual(outcome(.postUpdate), .hide)
+    }
 }

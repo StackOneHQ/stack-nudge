@@ -1649,6 +1649,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             // the widget collapse still happens via Esc / hotkey / explicit
             // user gestures, but auto-collapse on focus loss is suppressed.
             if pinned { return .stay }
+            // The pill never draws the update screen or the first-launch
+            // wizard, so collapsing would squeeze them into its frame. They
+            // stay up until the user leaves them.
+            if mode == .postUpdate || mode == .bootstrap { return .stay }
             return compactExpanded ? .collapse : .stay
         }
         return pinned ? .stay : .hide
