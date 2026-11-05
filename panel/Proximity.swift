@@ -1,5 +1,6 @@
 import Foundation
 import CoreBluetooth
+import IOBluetooth
 
 // Whether you're at the Mac, judged from your phone's Bluetooth LE
 // advertisements and how long the Mac has gone without input.
@@ -105,6 +106,22 @@ struct NearbyDevice: Equatable, Identifiable {
     let name: String
     var rssi: Int
     var lastSeen: Date
+
+    // Only devices paired with this Mac are offered. CoreBluetooth gives no
+    // public way from a scan result to a pairing, so it goes by the name the
+    // pairing recorded, which is also the name a paired phone advertises.
+    // Besides keeping the list short, a paired device is the only kind whose
+    // identifier macOS keeps stable as its address rotates.
+    static func pairedOnly(_ devices: [NearbyDevice], pairedNames: Set<String>) -> [NearbyDevice] {
+        devices.filter { pairedNames.contains($0.name) }
+    }
+}
+
+enum PairedDevices {
+    static func names() -> Set<String> {
+        let paired = (IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice]) ?? []
+        return Set(paired.compactMap { $0.name }.filter { !$0.isEmpty })
+    }
 }
 
 // Scans while away detection is on, feeds the chosen device's advertisements to
@@ -130,6 +147,8 @@ final class ProximityMonitor: NSObject, CBCentralManagerDelegate {
     private var timer: Timer?
     private var lastReported: PresenceState = .present
     private var lastNearbyPublish = Date.distantPast
+    private var pairedNames: Set<String> = []
+    private var pairedNamesAt = Date.distantPast
 
     var isRunning: Bool { central != nil }
 
@@ -191,7 +210,13 @@ final class ProximityMonitor: NSObject, CBCentralManagerDelegate {
         if now.timeIntervalSince(lastNearbyPublish) >= 2 {
             lastNearbyPublish = now
             nearby = nearby.filter { now.timeIntervalSince($0.value.lastSeen) < 60 }
-            onNearbyChange(nearby.values.sorted { $0.rssi > $1.rssi })
+            // Re-read now and then, so a phone paired after turning this on shows up.
+            if now.timeIntervalSince(pairedNamesAt) >= 30 {
+                pairedNames = PairedDevices.names()
+                pairedNamesAt = now
+            }
+            let offered = NearbyDevice.pairedOnly(Array(nearby.values), pairedNames: pairedNames)
+            onNearbyChange(offered.sorted { $0.rssi > $1.rssi })
         }
     }
 }
