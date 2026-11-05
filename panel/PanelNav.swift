@@ -176,7 +176,7 @@ enum SettingsRow: Hashable {
     case voiceEnabled, voice, voiceSpeed, speakHotkey, downloadVoiceModel
     case quotaTracking, quotaAlerts, alertThreshold, pollFrequency, contextAlert, showRemaining
     case piApiBudget, piLocalBudget
-    case awayEnabled, awayDevice, awayLock
+    case awayEnabled, awayDevice, awayWait, awayLock
     case githubLinks, hideShipped, disconnectGithub
     case historyPerSession
     case editPhrases, checkPermissions, openConfig, releaseNotes, checkUpdates, uninstall, quit
@@ -217,7 +217,7 @@ extension SettingsRow: CaseIterable {
         .voiceEnabled, .voice, .voiceSpeed, .speakHotkey, .downloadVoiceModel,
         .quotaTracking, .quotaAlerts, .alertThreshold, .pollFrequency,
         .contextAlert, .showRemaining, .piApiBudget, .piLocalBudget,
-        .awayEnabled, .awayDevice, .awayLock,
+        .awayEnabled, .awayDevice, .awayWait, .awayLock,
         .githubLinks, .hideShipped, .disconnectGithub,
         .historyPerSession,
         .editPhrases, .checkPermissions, .openConfig, .releaseNotes,
@@ -1034,6 +1034,10 @@ final class PanelNav: ObservableObject {
     @Published var awayDeviceName: String? = nil
     @Published var nearbyDevices: [NearbyDevice] = []
     @Published var isAway: Bool = false
+    // How long after you leave before you count as away: Mac idle this long and
+    // the phone gone (see PresenceTracker.Rule.waiting).
+    @Published var awayWaitSeconds: Int = 30
+    static let awayWaitOptions = [10, 15, 20, 30, 45, 60, 120]
 
     // Which Settings category the sidebar has selected, and whether focus has
     // stepped into its rows. Changing category resets the row selection, or the
@@ -1339,7 +1343,7 @@ final class PanelNav: ObservableObject {
                     .pollFrequency, .contextAlert, .showRemaining,
                     .piApiBudget, .piLocalBudget]
         case .away:
-            return [.awayEnabled, .awayDevice, .awayLock]
+            return [.awayEnabled, .awayDevice, .awayWait, .awayLock]
         case .integrations:
             return [.slackPaste, .slackIdentity, .slackTest,
                     .slackEnabled, .slackIdle, .slackDetail, .slackStop,
@@ -1498,6 +1502,8 @@ final class PanelNav: ObservableObject {
         quotaShowRemaining   = ConfigFile.bool(config, "STACKNUDGE_QUOTA_SHOW_REMAINING", default: false)
         awayEnabled    = ConfigFile.bool(config, "STACKNUDGE_AWAY", default: false)
         awayLock       = ConfigFile.bool(config, "STACKNUDGE_AWAY_LOCK", default: true)
+        awayWaitSeconds = Int(config["STACKNUDGE_AWAY_WAIT"] ?? "")
+            .flatMap { Self.awayWaitOptions.contains($0) ? $0 : nil } ?? 30
         awayDeviceID   = config["STACKNUDGE_AWAY_DEVICE"].flatMap { $0.isEmpty ? nil : $0 }
         awayDeviceName = config["STACKNUDGE_AWAY_DEVICE_NAME"].flatMap { $0.isEmpty ? nil : $0 }
         // Coerce out-of-list values to the nearest valid threshold so a
@@ -1852,7 +1858,7 @@ final class PanelNav: ObservableObject {
              .alertThreshold, .pollFrequency,
              .contextAlert, .piApiBudget, .piLocalBudget,
              .historyPerSession,
-             .slackIdle, .awayDevice:
+             .slackIdle, .awayDevice, .awayWait:
             return true
         }
     }
@@ -2100,6 +2106,12 @@ final class PanelNav: ObservableObject {
             ConfigFile.write(key: "STACKNUDGE_AWAY_LOCK", value: awayLock ? "true" : "false")
         case .awayDevice:
             stepAwayDevice(forward: forward)
+        case .awayWait:
+            let list = Self.awayWaitOptions
+            let idx = list.firstIndex(of: awayWaitSeconds) ?? 3
+            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+            awayWaitSeconds = list[next]
+            ConfigFile.write(key: "STACKNUDGE_AWAY_WAIT", value: String(awayWaitSeconds))
         case .hideShipped:
             toggleHideShipped()
         case .slackEnabled:

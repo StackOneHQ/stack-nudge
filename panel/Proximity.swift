@@ -36,6 +36,20 @@ struct PresenceTracker {
         var idleAtLeast: TimeInterval = 45
         // A reading at least this strong brings you back.
         var backRSSI: Int = -80
+
+        // The rule for a chosen wait (Settings → Away → Lock after): that long
+        // idle, and the phone gone for as long. Silence never counts below 15 s
+        // whatever the wait, because a phone on the desk was measured going 14 s
+        // between advertisements; any shorter and reading something would lock
+        // you out.
+        static func waiting(_ seconds: TimeInterval) -> Rule {
+            var rule = Rule()
+            rule.idleAtLeast = seconds
+            rule.missingAfter = max(seconds, minimumSilence)
+            rule.weakFor = min(rule.weakFor, seconds)
+            return rule
+        }
+        static let minimumSilence: TimeInterval = 15
     }
 
     var rule = Rule()
@@ -102,6 +116,12 @@ final class ProximityMonitor: NSObject, CBCentralManagerDelegate {
 
     var target: UUID? {
         didSet { if target != oldValue { tracker = PresenceTracker(rule: tracker.rule) } }
+    }
+
+    // Changing the wait keeps what's been heard, so it applies at once.
+    var rule: PresenceTracker.Rule {
+        get { tracker.rule }
+        set { tracker.rule = newValue }
     }
 
     private var central: CBCentralManager?

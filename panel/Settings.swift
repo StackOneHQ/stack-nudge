@@ -347,6 +347,11 @@ struct SettingsView: View {
         return "\(name) · \(seen.rssi) dBm"
     }
 
+    private var awayWaitLabel: String {
+        let s = nav.awayWaitSeconds
+        return s < 60 ? "\(s) s" : "\(s / 60) min"
+    }
+
     private var slackReady: Bool {
         nav.slackTokenPresent && nav.slackMemberID != nil
     }
@@ -669,6 +674,7 @@ struct SettingsView: View {
         // Away
         case .awayEnabled: row(.awayEnabled, label: "Away detection", kind: .toggle, value: nav.awayEnabled ? "On" : "Off")
         case .awayDevice:  row(.awayDevice, label: "Phone", kind: .cycle, value: awayDeviceLabel, enabled: nav.awayEnabled)
+        case .awayWait:    row(.awayWait, label: "Lock after", kind: .cycle, value: awayWaitLabel, enabled: nav.awayEnabled)
         case .awayLock:    row(.awayLock, label: "Lock screen when away", kind: .toggle, value: nav.awayLock ? "On" : "Off", enabled: nav.awayEnabled)
 
         // Integrations

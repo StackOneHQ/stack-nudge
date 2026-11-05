@@ -1210,6 +1210,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             NSLog("stack-nudge: away detection: %@", state == .away ? "away" : "present")
             if state == .away && self.nav.awayLock { ScreenLock.lock() }
         }
+        nav.$awayWaitSeconds
+            .removeDuplicates()
+            .sink { [weak self] s in self?.proximity.rule = .waiting(TimeInterval(s)) }
+            .store(in: &cancellables)
         nav.$awayDeviceID
             .removeDuplicates()
             .sink { [weak self] id in self?.proximity.target = id.flatMap(UUID.init(uuidString:)) }

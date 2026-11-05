@@ -77,3 +77,34 @@ final class PresenceTrackerTests: XCTestCase {
         XCTAssertNil(tracker.lastSeen)
     }
 }
+
+final class PresenceRuleWaitTests: XCTestCase {
+    func test_wait_setsIdleAndSilence() {
+        let rule = PresenceTracker.Rule.waiting(45)
+        XCTAssertEqual(rule.idleAtLeast, 45)
+        XCTAssertEqual(rule.missingAfter, 45)
+    }
+
+    // A desk gap of 14 s was measured, so a short wait still won't call a phone
+    // lying beside you "gone" while you read.
+    func test_shortWait_keepsTheSilenceFloor() {
+        let rule = PresenceTracker.Rule.waiting(10)
+        XCTAssertEqual(rule.idleAtLeast, 10)
+        XCTAssertEqual(rule.missingAfter, PresenceTracker.Rule.minimumSilence)
+        XCTAssertEqual(rule.weakFor, 10)
+    }
+
+    func test_tenSecondWait_locksAboutFifteenSecondsAfterThePhoneGoesQuiet() {
+        var tracker = PresenceTracker(rule: .waiting(10))
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        tracker.observe(rssi: -70, at: t0)
+        XCTAssertEqual(tracker.evaluate(now: t0.addingTimeInterval(12), idle: 12), .present)
+        XCTAssertEqual(tracker.evaluate(now: t0.addingTimeInterval(15), idle: 15), .away)
+    }
+
+    func test_everyWaitOptionIsAValidRule() {
+        for s in PanelNav.awayWaitOptions {
+            XCTAssertGreaterThanOrEqual(PresenceTracker.Rule.waiting(TimeInterval(s)).missingAfter, 15)
+        }
+    }
+}
