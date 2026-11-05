@@ -108,3 +108,20 @@ final class PresenceRuleWaitTests: XCTestCase {
         }
     }
 }
+
+final class NearbyDevicePairedTests: XCTestCase {
+    func test_onlyPairedDevicesAreOffered() {
+        let now = Date()
+        let devices = [
+            NearbyDevice(id: UUID(), name: "Alex's Pixel 9", rssi: -70, lastSeen: now),
+            NearbyDevice(id: UUID(), name: "50\" Crystal UHD", rssi: -45, lastSeen: now),
+        ]
+        let offered = NearbyDevice.pairedOnly(devices, pairedNames: ["Alex's Pixel 9", "Headphones"])
+        XCTAssertEqual(offered.map(\.name), ["Alex's Pixel 9"])
+    }
+
+    func test_nothingPaired_offersNothing() {
+        let d = NearbyDevice(id: UUID(), name: "Someone's Pixel", rssi: -60, lastSeen: Date())
+        XCTAssertTrue(NearbyDevice.pairedOnly([d], pairedNames: []).isEmpty)
+    }
+}
