@@ -17,6 +17,11 @@ struct EventRecord: Codable, Equatable, Identifiable {
     let message: String
     let project: String?
     let session: String?
+    // Feed events only, and optional so every line written before they
+    // existed still parses (load drops a line that fails to decode).
+    var source: String? = nil
+    var tag: String? = nil
+    var url: String? = nil
 
     // Stable within a load: the log is append-only and read in order, so the
     // index is enough for SwiftUI identity without persisting a UUID per line.
@@ -33,7 +38,7 @@ struct EventRecord: Codable, Equatable, Identifiable {
         let q = needle.folding(options: [.caseInsensitive, .diacriticInsensitive],
                                locale: nil)
         guard !q.isEmpty else { return true }
-        for field in [message, title, agent, projectName ?? ""] {
+        for field in [message, title, agent, projectName ?? "", source ?? "", tag ?? ""] {
             if field.folding(options: [.caseInsensitive, .diacriticInsensitive],
                              locale: nil).contains(q) { return true }
         }
