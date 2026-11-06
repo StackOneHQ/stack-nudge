@@ -99,6 +99,26 @@ validate_one() {
     *)       fail "$id: unknown mode '$mode'" || rc=1 ;;
   esac
 
+  # Mirrors ExtensionCapability: the host refuses a manifest naming anything
+  # else, so a typo here would ship an extension no host will load. Caught in
+  # CI instead.
+  local bad_capability
+  bad_capability="$(python3 -c '
+import json, sys
+known = {"bluetooth", "signal:presence", "event:idle", "event:panel",
+         "event:session", "event:nudge", "feed"}
+caps = json.load(open(sys.argv[1])).get("capabilities", [])
+if not isinstance(caps, list):
+    print("(not a list)")
+else:
+    for c in caps:
+        if not isinstance(c, str) or c not in known:
+            print(c)
+            break
+' "$manifest")"
+  [[ -z "$bad_capability" ]] \
+    || fail "$id: unknown capability '$bad_capability'" || rc=1
+
   # Constrained like the id is. It becomes part of an asset filename and is
   # interpolated into shell, so "non-empty" was never a sufficient check.
   version="$(manifest_field "$manifest" version)"
