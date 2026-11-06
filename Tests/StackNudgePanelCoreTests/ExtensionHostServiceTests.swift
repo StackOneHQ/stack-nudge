@@ -24,13 +24,14 @@ final class ExtensionHostServiceTests: XCTestCase {
         return m
     }
 
-    private func host() -> ExtensionHost {
+    private func host(signals: SignalRegistry = SignalRegistry()) -> ExtensionHost {
         ExtensionHost(background: { $0() }, toMain: { $0() },
                       runner: { [unowned self] manifest, _, _ in
                           self.fetches.append(manifest.id)
                           return .transient("stub")
                       },
                       tiers: { [unowned self] in self.tiers },
+                      signals: signals,
                       makeSupervisor: { [unowned self] manifest, granted, onEvent in
                           ServiceSupervisor.fake(id: manifest.id, granted: granted,
                                                  spawner: self.spawner, scheduler: self.clock,
@@ -182,18 +183,55 @@ final class ExtensionHostServiceTests: XCTestCase {
         XCTAssertNil(host.signals.holders[.presence])
     }
 
-    // The first one keeps it; the second isn't told it has it.
-    func testASecondExtensionAskingForAHeldSignalIsNotGrantedIt() {
+    // With nobody on record, the first by id gets it, whatever order they
+    // were found in, and the second isn't told it has it.
+    func testWithNoRecordTheSignalGoesToTheFirstByID() {
+        tiers = ["away": .trusted, "radar": .trusted]
+        for order in [["away", "radar"], ["radar", "away"]] {
+            spawner = FakeSpawner()
+            let host = host()
+            host.load(.init(installed: order.map { manifest($0, capabilities: ["signal:presence"]) }))
+            XCTAssertEqual(host.signals.holders[.presence], "away", "\(order)")
+            XCTAssertEqual(hello(spawner.spawned("radar")[0]), [])
+            XCTAssertEqual(host.signals.refusals["radar"],
+                           .heldByAnother(signal: "presence", holder: "away"))
+        }
+    }
+
+    // On record, the holder keeps it across a relaunch even though another
+    // extension would come first by id.
+    func testTheRecordedHolderKeepsTheSignal() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("signals-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let path = dir.appendingPathComponent(".signals.json").path
+        try #"{"presence":"radar"}"#.write(toFile: path, atomically: true, encoding: .utf8)
+
+        tiers = ["away": .trusted, "radar": .trusted]
+        let host = host(signals: SignalRegistry(path: path))
+        host.load(.init(installed: [manifest("away", capabilities: ["signal:presence"]),
+                                    manifest("radar", capabilities: ["signal:presence"])]))
+        XCTAssertEqual(host.signals.holders[.presence], "radar")
+        XCTAssertEqual(hello(spawner.spawned("radar")[0]), ["signal:presence"])
+        XCTAssertEqual(hello(spawner.spawned("away")[0]), [])
+    }
+
+    // The holder removed: the record goes, and the one that was refused is
+    // restarted with the signal it asked for.
+    func testRemovingTheHolderHandsTheSignalToTheNextOne() {
         tiers = ["away": .trusted, "radar": .trusted]
         let host = host()
         host.load(.init(installed: [manifest("away", capabilities: ["signal:presence"]),
-                                    manifest("radar", capabilities: ["signal:presence", "event:idle"])]))
-        let holder = host.signals.holders[.presence]
-        let other = holder == "away" ? "radar" : "away"
-        XCTAssertNotNil(holder)
-        XCTAssertEqual(hello(spawner.spawned(other)[0])?.contains("signal:presence"), false)
-        XCTAssertEqual(host.signals.refusals[other],
-                       .heldByAnother(signal: "presence", holder: holder ?? ""))
+                                    manifest("radar", capabilities: ["signal:presence"])]))
+        spawner.spawned.forEach { $0.ready() }
+        host.load(.init(installed: [manifest("radar", capabilities: ["signal:presence"])]))
+        XCTAssertNil(host.signals.holders[.presence])
+        XCTAssertEqual(spawner.spawned("radar")[0].types.last, "stop")
+        spawner.spawned("away")[0].exit(.exited(0))
+        spawner.spawned("radar")[0].exit(.exited(0))
+        XCTAssertEqual(spawner.spawned("radar").count, 2)
+        XCTAssertEqual(hello(spawner.spawned("radar")[1]), ["signal:presence"])
+        XCTAssertEqual(host.signals.holders[.presence], "radar")
     }
 
     func testACrashResetsTheSignalToNeutral() {
@@ -297,5 +335,81 @@ final class ExtensionHostServiceTests: XCTestCase {
         host.load(.init(installed: [manifest("away"), manifest("radar")]))
         XCTAssertEqual(spawner.spawned.count, 2)
         XCTAssertEqual(host.services, [:])
+    }
+
+    // MARK: - Tab keys
+
+    func testAServiceTabOffersNoRefreshOrActionsUntilItBreaksThenRetry() {
+        XCTAssertEqual(ExtensionHost.tabKeys(mode: .view, state: nil), .view)
+        XCTAssertEqual(ExtensionHost.tabKeys(mode: .service, state: .running),
+                       .init(refresh: nil, actions: false))
+        XCTAssertEqual(ExtensionHost.tabKeys(mode: .service, state: .restarting(after: 4)),
+                       .init(refresh: nil, actions: false))
+        XCTAssertEqual(ExtensionHost.tabKeys(mode: .service, state: .broken(.exited(1))),
+                       .init(refresh: "Retry", actions: false))
+    }
+
+    // Retry on a broken service starts a new process with a clean slate: one
+    // more crash restarts it rather than counting as the sixth.
+    func testRetryingABrokenServiceStartsItAfreshWithANewCrashWindow() {
+        tiers = ["away": .service]
+        let host = host()
+        host.load(.init(installed: [manifest("away")]))
+        host.forceRefresh("away")
+        XCTAssertEqual(spawner.spawned.count, 1, "⌘R does nothing on a running service")
+        for _ in 0..<5 {
+            spawner.last.exit(.exited(2))
+            if case .restarting(let delay) = host.services["away"] { clock.advance(delay) }
+        }
+        XCTAssertEqual(host.services["away"], .broken(.exited(2)))
+        XCTAssertEqual(host.tabKeys("away").refresh, "Retry")
+        host.forceRefresh("away")
+        XCTAssertEqual(spawner.spawned.count, 6)
+        XCTAssertEqual(host.services["away"], .starting)
+        XCTAssertNil(host.tabKeys("away").refresh)
+        spawner.last.exit(.exited(2))
+        XCTAssertEqual(host.services["away"], .restarting(after: 1))
+    }
+
+    // MARK: - Quitting, on real queues
+
+    // Supervisors that run on their own queue, as in the app. Quitting must
+    // keep each one alive until its stop has finished: released early, it
+    // deinits and SIGKILLs its process instead of sending `stop`. Inline
+    // hops, as every other test here uses, can't see that.
+    func testQuittingAsksEachServiceToStopEvenWhenSupervisorsRunOnTheirOwnQueue() {
+        tiers = ["away": .service, "radar": .service]
+        spawner.exitOnStop = true
+        let queue = DispatchQueue(label: "host-quit-test")
+        let lock = NSLock()
+        var mainHops = 0
+        let host = ExtensionHost(
+            background: { $0() },
+            // Never run: main is what's blocked in the wait, and nothing the
+            // stop needs may depend on it.
+            toMain: { _ in lock.lock(); mainHops += 1; lock.unlock() },
+            runner: { _, _, _ in .transient("stub") },
+            tiers: { [unowned self] in self.tiers },
+            makeSupervisor: { [spawner, clock] manifest, granted, onEvent in
+                ServiceSupervisor(id: manifest.id, directory: "/extensions/\(manifest.id)",
+                                  granted: granted, environment: [:],
+                                  executable: { "/extensions/\(manifest.id)/run" },
+                                  spawner: spawner, scheduler: clock,
+                                  perform: { queue.async(execute: $0) }, onEvent: onEvent)
+            })
+        host.load(.init(installed: [manifest("away"), manifest("radar")]))
+        queue.sync {}
+        let processes = queue.sync { spawner.spawned }
+        XCTAssertEqual(processes.count, 2)
+
+        let began = Date()
+        host.stopServices(waitingUpTo: 5)
+        XCTAssertLessThan(Date().timeIntervalSince(began), 1, "a stop completion never came")
+        queue.sync {}
+        for process in processes {
+            XCTAssertEqual(process.types, ["hello", "stop"])
+            XCTAssertEqual(process.signals, [])
+        }
+        lock.lock(); XCTAssertGreaterThan(mainHops, 0); lock.unlock()
     }
 }

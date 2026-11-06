@@ -89,7 +89,7 @@ final class ExtensionHost: ObservableObject {
     @Published private(set) var services: [String: ServiceSupervisor.State] = [:]
 
     // Signals the service extensions hold. Nothing in the app reacts to one yet.
-    let signals = SignalRegistry()
+    let signals: SignalRegistry
 
     private let runner: (ExtensionManifest, String?, String?) -> ExtensionRuntime.Fetch
     private let onTabsChanged: ([ExtensionTab]) -> Void
@@ -112,6 +112,9 @@ final class ExtensionHost: ObservableObject {
         // every load, so a change of tier restarts the process with the new
         // grant rather than leaving it running on the old one.
         let allowed: [ExtensionCapability]
+        // What it was actually given: `allowed` less any signal another
+        // extension holds.
+        let granted: [ExtensionCapability]
         let supervisor: ServiceSupervisor
         // Which supervisor an event came from. An old one still winding down
         // after an update shares the id with its replacement.
@@ -145,6 +148,9 @@ final class ExtensionHost: ObservableObject {
          runner: @escaping (ExtensionManifest, String?, String?) -> ExtensionRuntime.Fetch
              = { ExtensionRuntime.fetch($0, action: $1, row: $2) },
          tiers: @escaping () -> [String: ExtensionTier] = { ExtensionTiers.read() },
+         // In memory unless given a path. The app passes the real record; a
+         // test that builds a host never writes to the user's.
+         signals: SignalRegistry = SignalRegistry(),
          makeSupervisor: @escaping SupervisorFactory = { manifest, granted, onEvent in
              ServiceSupervisor.live(manifest: manifest,
                                     directory: ExtensionRuntime.directory(for: manifest.id) ?? "",
@@ -158,6 +164,7 @@ final class ExtensionHost: ObservableObject {
         self.runner = runner
         self.tiers = tiers
         self.makeSupervisor = makeSupervisor
+        self.signals = signals
     }
 
     func pane(_ id: String) -> Pane { panes[id] ?? Pane() }
@@ -210,6 +217,12 @@ final class ExtensionHost: ObservableObject {
             wanted[manifest.id] = (manifest, ExtensionTier.grants(for: manifest,
                                                                   tier: tiers[manifest.id] ?? .view))
         }
+        // A recorded holder that is gone, refused, or no longer granted the
+        // signal gives it up, so the next one in line can have it.
+        let wanted = self.wanted
+        signals.forgetHolders { signal, id in
+            wanted[id]?.allowed.contains(signal.capability) == true
+        }
         reconcileServices()
     }
 
@@ -256,7 +269,12 @@ final class ExtensionHost: ObservableObject {
     // is the opposite, and without it an extension declaring no actions of its
     // own has no way to refresh at all — the floor would otherwise have taken
     // away the switch-away-and-back that used to serve as one.
-    func forceRefresh(_ id: String) { refresh(id, superseding: true) }
+    func forceRefresh(_ id: String) {
+        // On a service, ⌘R is offered only once it has given up, and means
+        // try again. See `tabKeys`.
+        if manifest(id)?.mode == .service { return retryService(id) }
+        refresh(id, superseding: true)
+    }
 
     // How stale a pane must be before coming on screen refetches it.
     //
@@ -478,19 +496,59 @@ final class ExtensionHost: ObservableObject {
 
     // MARK: - Services
 
+    // Which keys an extension's tab answers, for the router and the footer to
+    // agree on. A view's ⌘R refetches and its document's actions run it. A
+    // service has neither: its documents arrive by themselves, and its actions
+    // would need a message the protocol doesn't have yet. Its ⌘R comes back
+    // only once it is broken, as the way to try again.
+    struct TabKeys: Equatable {
+        // The ⌘R hint's label, or nil when ⌘R does nothing here.
+        var refresh: String?
+        var actions: Bool
+
+        static let view = TabKeys(refresh: "Refresh", actions: true)
+    }
+
+    static func tabKeys(mode: ExtensionManifest.Mode, state: ServiceSupervisor.State?) -> TabKeys {
+        guard mode == .service else { return .view }
+        if case .broken? = state { return TabKeys(refresh: "Retry", actions: false) }
+        return TabKeys(refresh: nil, actions: false)
+    }
+
+    func tabKeys(_ id: String) -> TabKeys {
+        Self.tabKeys(mode: manifest(id)?.mode ?? .view, state: services[id])
+    }
+
+    // A fresh supervisor, so a fresh crash window: the user has asked, and
+    // presumably fixed whatever it was.
+    private func retryService(_ id: String) {
+        guard case .broken? = services[id] else { return }
+        stopService(id)
+    }
+
     // Brings the running supervisors in line with what is installed: stops
-    // what was removed or changed (an update, a new tier), and starts what is
-    // missing once any predecessor has gone.
+    // what was removed or changed (an update, a new tier, a signal it was
+    // refused that has since come free), and starts what is missing once any
+    // predecessor has gone.
+    //
+    // Started in id order, so that when nobody has a signal on record, which
+    // extension gets it is the same every launch rather than whatever order a
+    // dictionary happened to iterate in. Once given, the record decides.
     private func reconcileServices() {
         guard !shuttingDown else { return }
         for (id, service) in running {
+            let signalCameFree = AppSignal.allCases.contains {
+                service.allowed.contains($0.capability) && !service.granted.contains($0.capability)
+                    && signals.holders[$0] == nil
+            }
             guard let want = wanted[id], want.manifest == service.manifest,
-                  want.allowed == service.allowed else {
+                  want.allowed == service.allowed, !signalCameFree else {
                 stopService(id)
                 continue
             }
         }
-        for (id, want) in wanted where running[id] == nil && stopping[id] == nil {
+        for id in wanted.keys.sorted() where running[id] == nil && stopping[id] == nil {
+            guard let want = wanted[id] else { continue }
             startService(want.manifest, allowed: want.allowed)
         }
     }
@@ -511,7 +569,8 @@ final class ExtensionHost: ObservableObject {
         let supervisor = makeSupervisor(manifest, granted) { [weak self] event in
             self?.toMain { self?.serviceEvent(event, from: id, token: token) }
         }
-        running[id] = Service(manifest: manifest, allowed: allowed, supervisor: supervisor, token: token)
+        running[id] = Service(manifest: manifest, allowed: allowed, granted: granted,
+                              supervisor: supervisor, token: token)
         services[id] = .stopped
         supervisor.start()
     }
@@ -523,6 +582,9 @@ final class ExtensionHost: ObservableObject {
         // said must not keep acting.
         signals.release(id)
         services[id] = nil
+        // Held here until the stop completes. This is the supervisor's only
+        // strong reference, and letting go of it early would skip the polite
+        // stop for the SIGKILL in its deinit.
         stopping[id] = service.supervisor
         service.supervisor.stop { [weak self] in
             self?.toMain {
@@ -539,19 +601,21 @@ final class ExtensionHost: ObservableObject {
     func stopServices(waitingUpTo timeout: TimeInterval = 6) {
         shuttingDown = true
         wanted = [:]
+        // Every supervisor is held until the wait is over: the stop runs on
+        // its own queue, and one released before then would deinit and kill
+        // its process outright instead of asking it to stop.
+        let supervisors = running.values.map(\.supervisor) + Array(stopping.values)
+        for id in running.keys { signals.release(id) }
+        running = [:]
+        services = [:]
         let group = DispatchGroup()
-        for (id, service) in running {
-            signals.release(id)
-            group.enter()
-            service.supervisor.stop { group.leave() }
-        }
-        for supervisor in stopping.values {
+        for supervisor in supervisors {
             group.enter()
             supervisor.stop { group.leave() }
         }
-        running = [:]
-        services = [:]
-        _ = group.wait(timeout: .now() + timeout)
+        withExtendedLifetime(supervisors) {
+            _ = group.wait(timeout: .now() + timeout)
+        }
     }
 
     private func serviceEvent(_ event: ServiceSupervisor.Event, from id: String, token: UUID) {

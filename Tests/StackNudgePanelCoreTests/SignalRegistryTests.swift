@@ -72,15 +72,71 @@ final class SignalRegistryTests: XCTestCase {
         XCTAssertEqual(changes, ["presence=away", "presence=present"])
     }
 
-    // Stopped, disabled, removed, or the grant gone: neutral, and the signal is
-    // free for somebody else.
-    func testReleasingResetsToNeutralAndFreesTheSignal() {
+    // Stopped for an update or a quit: neutral, but it stays the holder, so
+    // its replacement gets the signal back rather than whoever asks first.
+    func testReleasingResetsToNeutralButKeepsTheHolder() {
         registry.claim(.presence, by: "away")
         _ = registry.set("presence", to: "away", from: "away")
         registry.release("away")
         XCTAssertEqual(registry.value(.presence), "present")
+        XCTAssertEqual(registry.holders[.presence], "away")
+        XCTAssertFalse(registry.claim(.presence, by: "rival"))
+    }
+
+    // Removed, refused, or the grant gone: neutral, and free for somebody else.
+    func testForgettingAHolderResetsToNeutralAndFreesTheSignal() {
+        registry.claim(.presence, by: "away")
+        _ = registry.set("presence", to: "away", from: "away")
+        registry.forgetHolders { _, id in id != "away" }
+        XCTAssertEqual(registry.value(.presence), "present")
         XCTAssertNil(registry.holders[.presence])
         XCTAssertTrue(registry.claim(.presence, by: "rival"))
+        XCTAssertEqual(changes, ["presence=away", "presence=present"])
+    }
+
+    // MARK: - The record
+
+    private func recordPath() -> String {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("signals-\(UUID().uuidString)/.signals.json").path
+        addTeardownBlock {
+            try? FileManager.default.removeItem(atPath: (path as NSString).deletingLastPathComponent)
+        }
+        return path
+    }
+
+    // The first holder is written down, and a registry built from the record
+    // after a relaunch honours it whoever asks first.
+    func testTheHolderIsRecordedAndHonouredAfterARelaunch() throws {
+        let path = recordPath()
+        XCTAssertTrue(SignalRegistry(path: path).claim(.presence, by: "away"))
+        let data = try XCTUnwrap(FileManager.default.contents(atPath: path))
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), #"{"presence":"away"}"#)
+
+        let relaunched = SignalRegistry(path: path)
+        XCTAssertEqual(relaunched.holders[.presence], "away")
+        XCTAssertFalse(relaunched.claim(.presence, by: "rival"))
+        XCTAssertTrue(relaunched.claim(.presence, by: "away"))
+    }
+
+    func testForgettingAHolderClearsTheRecord() {
+        let path = recordPath()
+        let registry = SignalRegistry(path: path)
+        registry.claim(.presence, by: "away")
+        registry.forgetHolders { _, _ in false }
+        XCTAssertNil(SignalRegistry(path: path).holders[.presence])
+    }
+
+    // An unreadable record, or one naming a signal or an id this host can't
+    // use, means nobody holds anything yet. Never a crash, never a stray holder.
+    func testABrokenRecordReadsAsNobodyHolding() throws {
+        let path = recordPath()
+        try FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent,
+                                                withIntermediateDirectories: true)
+        try "nope".write(toFile: path, atomically: true, encoding: .utf8)
+        XCTAssertEqual(SignalRegistry(path: path).holders, [:])
+        try #"{"presence":"../x","mute":"away"}"#.write(toFile: path, atomically: true, encoding: .utf8)
+        XCTAssertEqual(SignalRegistry(path: path).holders, [:])
     }
 
     // Saying the same thing again isn't a change, so a reaction isn't repeated.

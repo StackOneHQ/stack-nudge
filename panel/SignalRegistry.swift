@@ -37,7 +37,15 @@ enum AppSignal: String, CaseIterable {
 // asking is refused, and the reason is kept for Settings to show. Holding
 // survives a crash and restart, so a flaky holder doesn't hand the signal to
 // whichever extension restarts first, but its value doesn't: see `reset`.
+//
+// Holding also survives a relaunch. Who holds what is recorded in a host-owned
+// file, so which of two extensions gets a signal doesn't come down to which one
+// happened to start first this time. The record is dropped only when the holder
+// can no longer hold it at all (see `forgetHolders`), not when it is merely
+// stopped for an update or a quit.
 final class SignalRegistry {
+
+    static let defaultPath = "\(ExtensionRuntime.root)/.signals.json"
 
     enum Refusal: Error, Equatable {
         case unknownSignal(String)
@@ -68,6 +76,15 @@ final class SignalRegistry {
     // isn't repeated for an extension that says "away" every second.
     var onChange: (AppSignal, String) -> Void = { _, _ in }
 
+    // Where the holders are recorded. nil keeps them in memory only, which is
+    // what tests use so they never touch the real file.
+    private let path: String?
+
+    init(path: String? = nil) {
+        self.path = path
+        holders = path.map(Self.readRecord) ?? [:]
+    }
+
     func value(_ signal: AppSignal) -> String { current[signal] ?? signal.neutral }
 
     var values: [AppSignal: String] {
@@ -82,11 +99,28 @@ final class SignalRegistry {
             refusals[id] = .heldByAnother(signal: signal.rawValue, holder: holder)
             return false
         }
-        holders[signal] = id
+        if holders[signal] != id {
+            holders[signal] = id
+            writeRecord()
+        }
         if case .heldByAnother(let name, _)? = refusals[id], name == signal.rawValue {
             refusals[id] = nil
         }
         return true
+    }
+
+    // Drops every recorded holder that `keep` says can no longer hold its
+    // signal: removed, refused, or demoted out of the grant. Its value goes
+    // back to neutral with it, and the signal is free to claim.
+    func forgetHolders(except keep: (AppSignal, String) -> Bool) {
+        let gone = holders.filter { !keep($0.key, $0.value) }
+        guard !gone.isEmpty else { return }
+        for (signal, id) in gone {
+            update(signal, to: signal.neutral)
+            holders[signal] = nil
+            refusals[id] = nil
+        }
+        writeRecord()
     }
 
     // A `signal` message from an extension. Names and values are checked against
@@ -116,12 +150,39 @@ final class SignalRegistry {
         }
     }
 
-    // The holder stopped for good: it was disabled, removed, updated, or lost
-    // the grant. Neutral, and the signal is free for the next one to claim.
+    // The holder's process stopped: an update, a change of grant, a quit.
+    // Neutral, but it stays the holder, so its replacement claims it back
+    // rather than racing every other extension for it.
     func release(_ id: String) {
         reset(id)
-        holders = holders.filter { $0.value != id }
         refusals[id] = nil
+    }
+
+    // MARK: - The record
+
+    // {"presence": "away"}. Missing or unreadable reads as nobody holding
+    // anything, which only means the next claim decides again.
+    private static func readRecord(_ path: String) -> [AppSignal: String] {
+        guard let data = FileManager.default.contents(atPath: path),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return [:] }
+        var holders: [AppSignal: String] = [:]
+        for (name, value) in object {
+            guard let signal = AppSignal(rawValue: name), let id = value as? String,
+                  ExtensionManifest.isValidID(id) else { continue }
+            holders[signal] = id
+        }
+        return holders
+    }
+
+    private func writeRecord() {
+        guard let path else { return }
+        let object = Dictionary(uniqueKeysWithValues: holders.map { ($0.key.rawValue, $0.value) })
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: .sortedKeys)
+        else { return }
+        try? FileManager.default.createDirectory(
+            atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        try? data.write(to: URL(fileURLWithPath: path), options: .atomic)
     }
 
     private func refuse(_ refusal: Refusal, for id: String) -> Refusal? {
