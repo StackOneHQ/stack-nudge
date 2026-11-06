@@ -85,4 +85,41 @@ final class ExtensionTabKeyTests: XCTestCase {
         XCTAssertEqual(PanelController.extensionTabKeyAction(for: event(15, "r", .capsLock)),
                        .run("r"))
     }
+
+    // MARK: - Service tabs
+
+    private func service(_ keyCode: UInt16, _ characters: String? = nil,
+                         _ modifiers: NSEvent.ModifierFlags = [],
+                         broken: Bool = false) -> PanelController.ExtensionTabKeyAction {
+        PanelController.extensionTabKeyAction(
+            keyCode: keyCode, characters: characters, modifiers: modifiers, isRepeat: false,
+            keys: ExtensionHost.tabKeys(mode: .service, state: broken ? .broken(.exited(1)) : .running))
+    }
+
+    // A running service's tab has no refresh and no actions, so ⌘R and the
+    // document's letters are swallowed, not run and not passed on. The
+    // arrows still move the selection.
+    func test_aRunningServiceTabSwallowsRefreshAndActions() {
+        XCTAssertEqual(service(15, "r", .command), .swallow)
+        XCTAssertEqual(service(0, "a"), .swallow)
+        XCTAssertEqual(service(36, "\r"), .swallow)
+        XCTAssertEqual(service(126), .move(-1))
+        XCTAssertEqual(service(125), .move(1))
+        XCTAssertEqual(service(36, "\r", .command), .passThrough)
+    }
+
+    // Broken, ⌘R is Retry. Actions stay off.
+    func test_aBrokenServiceTabTakesCommandRAsRetry() {
+        XCTAssertEqual(service(15, "r", .command, broken: true), .forceRefresh)
+        XCTAssertEqual(service(0, "a", broken: true), .swallow)
+    }
+
+    // A view's tab is exactly what it was.
+    func test_aViewTabIsUnchanged() {
+        XCTAssertEqual(ExtensionHost.tabKeys(mode: .view, state: .broken(.exited(1))), .view)
+        XCTAssertEqual(PanelController.extensionTabKeyAction(
+            keyCode: 15, characters: "r", modifiers: .command, isRepeat: false, keys: .view), .forceRefresh)
+        XCTAssertEqual(PanelController.extensionTabKeyAction(
+            keyCode: 0, characters: "a", modifiers: [], isRepeat: false, keys: .view), .run("a"))
+    }
 }

@@ -192,7 +192,7 @@ final class ExtensionInstallTests: XCTestCase {
         let asset = publish("derby-1.0.0.tar.gz", payload)
         let side = publish("derby-1.0.0.tar.gz.sha256", sidecar(for: payload, name: "derby-1.0.0.tar.gz"))
         let e = entry(sha: ExtensionInstaller.sha256Hex(payload))
-        let future = Data("{\"id\":\"derby\",\"name\":\"D\",\"version\":\"1\",\"schema\":2}".utf8)
+        let future = Data("{\"id\":\"derby\",\"name\":\"D\",\"version\":\"1\",\"schema\":3}".utf8)
 
         let result = install(e,
                              assets: ["derby-1.0.0.tar.gz": asset,

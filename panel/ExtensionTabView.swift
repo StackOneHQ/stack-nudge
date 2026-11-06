@@ -326,8 +326,12 @@ struct ExtensionTabView: View {
         PageFooter {
             // Advertised because it is the only refresh an extension that
             // declares no actions has, now that coming on screen is floored to
-            // the manifest's own interval.
-            FooterHint(label: "Refresh", keys: ["⌘R"])
+            // the manifest's own interval. A service has none until it breaks,
+            // when the same key becomes Retry: see ExtensionHost.tabKeys,
+            // which the key router reads too.
+            if let refresh = host.tabKeys(id).refresh {
+                FooterHint(label: refresh, keys: ["⌘R"])
+            }
             if let document = pane.document, !document.rows.isEmpty {
                 FooterHint(label: "Select", keys: ["↑", "↓"])
             }
@@ -361,7 +365,7 @@ struct ExtensionTabView: View {
     }
 
     private var hintedActions: [ExtensionDocument.Action] {
-        guard let document = pane.document else { return [] }
+        guard host.tabKeys(id).actions, let document = pane.document else { return [] }
         return Self.hintedActions(in: document, selectedRow: pane.selectedRow)
     }
 

@@ -15,6 +15,18 @@ struct ExtensionManifest: Equatable {
         let whileFocusedOnly: Bool
 
         static let never = Refresh(onOpen: true, intervalSeconds: nil, whileFocusedOnly: true)
+        // What a service extension gets whatever it declared. Its process
+        // pushes documents when it has something to say, so there is nothing
+        // for the host to poll, and spawning `run` as a one-shot fetch would
+        // start a second copy of a program written to stay up.
+        static let pushed = Refresh(onOpen: false, intervalSeconds: nil, whileFocusedOnly: true)
+    }
+
+    // How the host runs `run`. A view extension is spawned per fetch and prints
+    // one document; a service is kept running and talks the line protocol in
+    // ServiceProtocol. See docs/design/service-extensions.md.
+    enum Mode: String, Equatable {
+        case view, service
     }
 
     // A config key the extension declares. A bare string is the original form
@@ -56,6 +68,11 @@ struct ExtensionManifest: Equatable {
     // extension that never asked for it shouldn't be able to take it. Last and
     // defaulted, so every existing memberwise construction stays valid.
     var glance = false
+    // Also last and defaulted, for the same reason as `glance`.
+    var mode: Mode = .view
+    // What the extension asks the app for, in manifest order without repeats.
+    // Asking is not having: see ExtensionTier.grants for what it is given.
+    var capabilities: [ExtensionCapability] = []
 
     var tabEntry: ExtensionTab { ExtensionTab(id: id, label: tab.label) }
 
@@ -64,7 +81,21 @@ struct ExtensionManifest: Equatable {
     // The schema the host speaks. A document or manifest declaring anything
     // else is refused with its number quoted rather than coerced: additive
     // fields are the only compatible change, so a bump means "this host can't".
+    //
+    // This is the *document* schema, and it is what STACKNUDGE_EXT_SCHEMA
+    // tells a script. Manifests have their own range below: a service manifest
+    // says 2 so that an older host, which checks for 1, refuses it with a
+    // reason instead of running it as a view and waiting for a document that
+    // never comes. Passing the manifest number to the script would tell a view
+    // extension on schema 2 to print a document schema this host can't read.
     static let supportedSchema = 1
+
+    // The manifest schemas this host reads. 1 is every view extension; 2 is
+    // what service mode needs, and a view extension may say it too.
+    static let supportedManifestSchemas = 1...2
+
+    // The lowest manifest schema that may declare `"mode": "service"`.
+    static let serviceManifestSchema = 2
 
     // Floor on a manifest-declared poll interval. Each tick is a process spawn,
     // so an extension asking for 1s would be spawning a script sixty times a
@@ -153,15 +184,24 @@ struct ExtensionManifest: Equatable {
         case invalidID(String)
         case invalidRunPath(String)
         case invalidConfigKey(String)
+        case unknownMode(String)
+        case serviceNeedsSchema(Int)    // "mode": "service" on a schema 1 manifest
+        case unknownCapability(String)
 
         var message: String {
             switch self {
             case .malformed(let why):        return why
-            case .unsupportedSchema(let n):  return "needs manifest schema \(n); this version reads \(supportedSchema)"
+            case .unsupportedSchema(let n):
+                return "needs manifest schema \(n); this version reads up to \(supportedManifestSchemas.upperBound)"
             case .invalidID(let id):         return "invalid id \"\(id)\""
             case .invalidRunPath(let run):   return "invalid run path \"\(run)\""
             case .invalidConfigKey(let key):
                 return "config key \"\(key)\" is outside \(configPrefix)*"
+            case .unknownMode(let mode):     return "unknown mode \"\(mode)\""
+            case .serviceNeedsSchema(let n):
+                return "service mode needs manifest schema \(serviceManifestSchema), not \(n)"
+            case .unknownCapability(let name):
+                return "unknown capability \"\(name)\""
             }
         }
     }
@@ -179,7 +219,7 @@ struct ExtensionManifest: Equatable {
         // Schema first: a newer manifest may well fail the field checks below
         // for reasons that are none of its business, and "invalid id" would be
         // a misleading thing to say about a manifest we simply can't read.
-        guard decoded.schema == supportedSchema else {
+        guard supportedManifestSchemas.contains(decoded.schema) else {
             return .failure(.unsupportedSchema(decoded.schema))
         }
         guard isValidID(decoded.id) else { return .failure(.invalidID(decoded.id)) }
@@ -195,6 +235,28 @@ struct ExtensionManifest: Equatable {
             return .failure(.invalidConfigKey(stray.key))
         }
 
+        let modeName = decoded.mode ?? Mode.view.rawValue
+        guard let mode = Mode(rawValue: modeName) else { return .failure(.unknownMode(modeName)) }
+        // Refused rather than quietly run as a view: a schema 1 manifest is one
+        // an older host also reads, and there it would be a view extension that
+        // never prints. The number is the signal to both hosts, so it has to be
+        // right.
+        if mode == .service, decoded.schema < serviceManifestSchema {
+            return .failure(.serviceNeedsSchema(decoded.schema))
+        }
+        // An unknown capability is refused, not dropped. A capability is a
+        // request a reviewer reads and the install prompt will list, so one
+        // this host doesn't know is either a typo that would silently cost the
+        // extension a feature, or something from a newer host that this one
+        // can't honour. Either way the author should hear about it.
+        var capabilities: [ExtensionCapability] = []
+        for name in decoded.capabilities ?? [] {
+            guard let capability = ExtensionCapability(rawValue: name) else {
+                return .failure(.unknownCapability(name))
+            }
+            if !capabilities.contains(capability) { capabilities.append(capability) }
+        }
+
         return .success(ExtensionManifest(
             id: decoded.id,
             name: decoded.name,
@@ -204,11 +266,15 @@ struct ExtensionManifest: Equatable {
             run: run,
             requires: decoded.requires ?? [],
             config: config,
-            refresh: Refresh(onOpen: decoded.refresh?.onOpen ?? true,
-                             intervalSeconds: decoded.refresh?.intervalSeconds
-                                 .map { max($0, minimumIntervalSeconds) },
-                             whileFocusedOnly: decoded.refresh?.whileFocusedOnly ?? true),
-            glance: decoded.glance ?? false))
+            refresh: mode == .service
+                ? .pushed
+                : Refresh(onOpen: decoded.refresh?.onOpen ?? true,
+                          intervalSeconds: decoded.refresh?.intervalSeconds
+                              .map { max($0, minimumIntervalSeconds) },
+                          whileFocusedOnly: decoded.refresh?.whileFocusedOnly ?? true),
+            glance: decoded.glance ?? false,
+            mode: mode,
+            capabilities: capabilities))
     }
 
     // The decoder's own description names the field, which is the one thing a
@@ -243,6 +309,8 @@ struct ExtensionManifest: Equatable {
         let config: [ConfigKey]?
         let refresh: Refresh?
         let glance: Bool?
+        let mode: String?
+        let capabilities: [String]?
     }
 }
 
@@ -278,5 +346,30 @@ extension ExtensionManifest.ConfigKey: Codable {
         try container.encodeIfPresent(label, forKey: .label)
         try container.encodeIfPresent(help, forKey: .help)
         try container.encodeIfPresent(placeholder, forKey: .placeholder)
+    }
+}
+
+// What an extension may ask the app for. The app can only enforce what passes
+// through it (signals, events and feed events) and refuses those unless they
+// were granted. `bluetooth` is a declaration for review and the install prompt,
+// not a gate: a child process inherits the app's TCC access whether it declared
+// it or not.
+enum ExtensionCapability: String, CaseIterable, Equatable {
+    case bluetooth
+    case signalPresence = "signal:presence"
+    case eventIdle = "event:idle"
+    case eventPanel = "event:panel"
+    case eventSession = "event:session"
+    case eventNudge = "event:nudge"
+    case feed
+
+    // The capability that gates an `event` or `signal` message by its name, so
+    // the supervisor can check one without a table of its own.
+    static func event(_ name: String) -> ExtensionCapability? {
+        ExtensionCapability(rawValue: "event:\(name)")
+    }
+
+    static func signal(_ name: String) -> ExtensionCapability? {
+        ExtensionCapability(rawValue: "signal:\(name)")
     }
 }

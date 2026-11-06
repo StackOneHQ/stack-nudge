@@ -1130,7 +1130,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         self?.refreshInstalledExtensions()
     }, onGlancesChanged: { [weak self] glances in
         self?.nav.extensionGlances = glances
-    })
+    }, signals: SignalRegistry(path: SignalRegistry.defaultPath))
     private var listener: EventListener?
     private var menuBar: MenuBarController?
     private var updateChecker: UpdateChecker?
@@ -3837,6 +3837,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // audio that was triggered by us — the original bug that motivated
         // moving the bell from notify.sh into the app.
         Speaker.stopAllAudio()
+        // Service extensions run until told otherwise, so they are told, and
+        // the quit waits for them rather than leaving them running unowned.
+        extensions.stopServices()
     }
 
     // MARK: - PanelKeyDelegate
@@ -4486,7 +4489,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         if case .extensionTab(let id) = nav.mode {
             // The routing, ordering and repeat handling all live in
             // extensionTabKeyAction, where a test can see them.
-            switch Self.extensionTabKeyAction(for: event) {
+            switch Self.extensionTabKeyAction(for: event, keys: extensions.tabKeys(id)) {
             case .forceRefresh:     extensions.forceRefresh(id)
             case .move(let delta):  extensions.moveSelection(on: id, by: delta)
             case .run(let key):     extensions.handle(key: key, on: id)
@@ -4722,12 +4725,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // one invocation per autorepeat, and holding ⏎ on a row that opens a link
     // opened it over and over. The arrows only move the selection and keep
     // their repeat.
+    //
+    // `keys` is what this tab answers (ExtensionHost.tabKeys), the same value
+    // its footer is drawn from. A key the tab doesn't answer is swallowed, not
+    // passed on: it is still this tab's key, just one with nothing to do.
     static func extensionTabKeyAction(keyCode: UInt16, characters: String?,
                                       modifiers: NSEvent.ModifierFlags,
-                                      isRepeat: Bool) -> ExtensionTabKeyAction {
+                                      isRepeat: Bool,
+                                      keys: ExtensionHost.TabKeys = .view) -> ExtensionTabKeyAction {
         let modifiers = modifiers.intersection([.command, .control, .option, .shift])
         if isForceRefresh(keyCode: keyCode, modifiers: modifiers, isRepeat: isRepeat) {
-            return .forceRefresh
+            return keys.refresh == nil ? .swallow : .forceRefresh
         }
         guard modifiers.isEmpty else { return .passThrough }
         switch keyCode {
@@ -4735,7 +4743,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         case KeyCode.downArrow: return .move(1)
         default:                break
         }
-        guard !isRepeat else { return .swallow }
+        guard !isRepeat, keys.actions else { return .swallow }
         if keyCode == KeyCode.returnKey || keyCode == KeyCode.numpadEnter { return .run("return") }
         if let typed = characters?.lowercased(), typed.count == 1 { return .run(typed) }
         return .swallow
@@ -4744,11 +4752,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // What the tab calls, so the modifier masking and the repeat flag can't be
     // got wrong at the call site. Arrows arrive with .function and
     // .numericPad set, caps lock with .capsLock; none of them count.
-    static func extensionTabKeyAction(for event: NSEvent) -> ExtensionTabKeyAction {
+    static func extensionTabKeyAction(for event: NSEvent,
+                                      keys: ExtensionHost.TabKeys = .view) -> ExtensionTabKeyAction {
         extensionTabKeyAction(keyCode: event.keyCode,
                               characters: event.charactersIgnoringModifiers,
                               modifiers: event.modifierFlags,
-                              isRepeat: event.isARepeat)
+                              isRepeat: event.isARepeat,
+                              keys: keys)
     }
 
     // What a key does on the extensions browser. Pure and beside

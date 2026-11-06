@@ -62,7 +62,7 @@ with open(sys.argv[1]) as fh:
 
 validate_one() {
   local dir="$1" rc=0
-  local id manifest run_rel run_path declared_id schema version
+  local id manifest run_rel run_path declared_id schema mode version
 
   id="$(basename "$dir")"
   manifest="$dir/manifest.json"
@@ -86,8 +86,38 @@ validate_one() {
   [[ "$id" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] \
     || fail "$id: id is not ^[a-z0-9][a-z0-9-]{0,31}\$" || rc=1
 
+  # Mirrors ExtensionManifest.supportedManifestSchemas: 1 for a view, 2 for
+  # anything that needs service mode (a view may say 2 as well). Service mode
+  # on 1 is refused because an older host reads 1 and would run it as a view.
   schema="$(manifest_field "$manifest" schema)"
-  [[ "$schema" == "1" ]] || fail "$id: schema is '$schema', expected 1" || rc=1
+  mode="$(manifest_field "$manifest" mode)"
+  [[ "$schema" == "1" || "$schema" == "2" ]] \
+    || fail "$id: schema is '$schema', expected 1 or 2" || rc=1
+  case "$mode" in
+    ""|view) ;;
+    service) [[ "$schema" == "2" ]] || fail "$id: mode 'service' needs schema 2" || rc=1 ;;
+    *)       fail "$id: unknown mode '$mode'" || rc=1 ;;
+  esac
+
+  # Mirrors ExtensionCapability: the host refuses a manifest naming anything
+  # else, so a typo here would ship an extension no host will load. Caught in
+  # CI instead.
+  local bad_capability
+  bad_capability="$(python3 -c '
+import json, sys
+known = {"bluetooth", "signal:presence", "event:idle", "event:panel",
+         "event:session", "event:nudge", "feed"}
+caps = json.load(open(sys.argv[1])).get("capabilities", [])
+if not isinstance(caps, list):
+    print("(not a list)")
+else:
+    for c in caps:
+        if not isinstance(c, str) or c not in known:
+            print(c)
+            break
+' "$manifest")"
+  [[ -z "$bad_capability" ]] \
+    || fail "$id: unknown capability '$bad_capability'" || rc=1
 
   # Constrained like the id is. It becomes part of an asset filename and is
   # interpolated into shell, so "non-empty" was never a sufficient check.

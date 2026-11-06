@@ -6,6 +6,9 @@ import Foundation
 // of three recent bugs in this app (a wedged daemon, a hook that outlived its
 // prompt, a FIFO that outlived its hook), and a process that only exists for
 // the duration of one call has none of those failure modes.
+//
+// Service extensions are the exception, and they live in ServiceSupervisor so
+// this path stays exactly as simple as it was for every view extension.
 enum ExtensionRuntime {
 
     static let root = ("~/.stack-nudge/extensions" as NSString).expandingTildeInPath
@@ -153,6 +156,34 @@ enum ExtensionRuntime {
         guard let dir = directory ?? Self.directory(for: manifest.id) else {
             return .missing("invalid id \"\(manifest.id)\"")
         }
+        guard let executable = resolveExecutable(manifest, in: dir, fileManager: fileManager)
+        else { return .missing("\(manifest.run) is missing or not executable") }
+
+        guard let completion = spawn(executable,
+                                     arguments(action: action, row: row),
+                                     dir,
+                                     environment(for: manifest))
+        else { return .transient("didn't finish within \(Int(timeout))s") }
+
+        return classify(completion)
+    }
+
+    // The service-mode environment: the view one, unchanged, plus the mode.
+    // Built on top of `environment` rather than beside it so the two can't
+    // drift: whatever a view extension may not see, a service may not either.
+    static func serviceEnvironment(for manifest: ExtensionManifest,
+                                   config: [String: String] = ConfigFile.read(),
+                                   home: String = NSHomeDirectory()) -> [String: String] {
+        var env = environment(for: manifest, config: config, home: home)
+        env["\(ExtensionManifest.configPrefix)MODE"] = ExtensionManifest.Mode.service.rawValue
+        return env
+    }
+
+    // `run` resolved to the file that will actually execute, or nil when it
+    // escapes the package or can't be executed. Shared by the one-shot fetch
+    // and the service supervisor, so a service gets the same containment.
+    static func resolveExecutable(_ manifest: ExtensionManifest, in dir: String,
+                                  fileManager: FileManager = .default) -> String? {
         // Symlinks are resolved on both sides before comparing. `standardized`
         // is purely lexical — it collapses "." and ".." textually and never
         // touches the filesystem — so a prefix test over it proves only that the
@@ -175,15 +206,8 @@ enum ExtensionRuntime {
             .resolvingSymlinksInPath().path
         guard executable.hasPrefix(root + "/"),
               fileManager.isExecutableFile(atPath: executable)
-        else { return .missing("\(manifest.run) is missing or not executable") }
-
-        guard let completion = spawn(executable,
-                                     arguments(action: action, row: row),
-                                     dir,
-                                     environment(for: manifest))
-        else { return .transient("didn't finish within \(Int(timeout))s") }
-
-        return classify(completion)
+        else { return nil }
+        return executable
     }
 
     // A non-zero exit is transient even when stdout parsed, because a script
