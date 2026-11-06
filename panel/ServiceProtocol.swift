@@ -104,6 +104,14 @@ enum ServiceProtocol {
     }
 
     static func decode(_ line: Data) -> Inbound {
+        // Only a document may be longer than a control line, and a line that
+        // doesn't so much as mention one can't be a document, so it is refused
+        // here without parsing up to 8 MB of it first. One that does mention it
+        // is parsed, and its real type checked below. (A type spelled with
+        // \u escapes would be refused too; nothing prints it that way.)
+        if line.count > maxLineBytes, line.range(of: Data(#""document""#.utf8)) == nil {
+            return .oversized(bytes: line.count)
+        }
         guard let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any]
         else { return .invalid("not a JSON object") }
         guard let type = object["type"] as? String else { return .invalid("no \"type\"") }

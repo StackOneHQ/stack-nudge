@@ -305,6 +305,22 @@ final class ServiceSupervisorTests: XCTestCase {
         XCTAssertEqual(documents, [])
     }
 
+    // A supervisor released while its stop is still waiting on the process
+    // kills it, and completes the stop rather than dropping it, so a caller
+    // waiting on that completion isn't left hanging.
+    func testASupervisorReleasedMidStopKillsAndStillCompletes() {
+        var s: ServiceSupervisor? = supervisor()
+        s?.start()
+        spawner.last.ready()
+        var completions = 0
+        s?.stop { completions += 1 }
+        XCTAssertEqual(completions, 0)
+        current = nil
+        s = nil
+        XCTAssertEqual(completions, 1)
+        XCTAssertEqual(spawner.last.signals, [SIGKILL])
+    }
+
     // MARK: - Messages
 
     func testDocumentsAndGrantedSignalsAndFeedAreDelivered() {
@@ -361,6 +377,22 @@ final class ServiceSupervisorTests: XCTestCase {
         spawner.last.output(Data((flood.prefix(5).joined(separator: "\n") + "\n").utf8))
         XCTAssertEqual(documents.count, 24)
         XCTAssertEqual(degradations.count, 1)
+    }
+
+    // A pong is never charged: a service flooding the host loses messages,
+    // but answering a ping in the middle of the flood still keeps it alive.
+    func testAPongInAFloodStillCountsSoTheFloodIsNotTakenForAHang() {
+        let s = running()
+        clock.advance(30)
+        let ping = spawner.last.messages.last { $0["type"] as? String == "ping" }
+        let id = ping?["id"] as? Int ?? -1
+        var lines = (0..<40).map { #"{"type":"document","document":{"schema":1,"header":{"title":"\#($0)"}}}"# }
+        lines.append(#"{"type":"pong","id":\#(id)}"#)
+        spawner.last.output(Data((lines.joined(separator: "\n") + "\n").utf8))
+        XCTAssertTrue(s.degraded)
+        clock.advance(10)
+        XCTAssertEqual(spawner.last.signals, [])
+        XCTAssertEqual(s.state, .running)
     }
 
     func testAnOversizedControlLineIsDroppedAndMarksItDegraded() {
@@ -456,5 +488,60 @@ final class ServiceSupervisorTests: XCTestCase {
         }
         if alive { kill(child, SIGKILL) }
         XCTAssertFalse(alive, "the extension's child outlived it")
+    }
+
+    // A `run` that backgrounds a helper and dies at once. The exit can beat
+    // the spawner to recording the process group, and the group has to be
+    // cleaned up regardless, or the helper runs on with nobody to stop it.
+    func testAHelperLeftByAServiceThatExitsAtOnceIsKilled() throws {
+        let shell = "/bin/sh"
+        guard FileManager.default.isExecutableFile(atPath: shell) else { return }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("service-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let pidFile = dir.appendingPathComponent("child.pid").path
+        let run = dir.appendingPathComponent("run")
+        try """
+            #!/bin/sh
+            sleep 300 >/dev/null 2>&1 &
+            echo $! > "\(pidFile)"
+            exit 1
+            """.write(to: run, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: run.path)
+
+        let exited = DispatchSemaphore(value: 0)
+        let lock = NSLock()
+        var termination: ServiceSupervisor.Termination?
+        let process = try LiveServiceSpawner().spawn(
+            executable: run.path, directory: dir.path, environment: ["PATH": "/usr/bin:/bin"],
+            onOutput: { _ in },
+            onExit: { t in lock.lock(); termination = t; lock.unlock(); exited.signal() })
+        XCTAssertEqual(exited.wait(timeout: .now() + 10), .success, "never exited")
+        withExtendedLifetime(process) {}
+        lock.lock(); XCTAssertEqual(termination, .exited(1)); lock.unlock()
+
+        let child = Self.pid(in: pidFile)
+        XCTAssertGreaterThan(child, 0)
+        XCTAssertTrue(Self.waitUntilGone(child), "the helper outlived the service")
+    }
+
+    private static func pid(in file: String) -> pid_t {
+        pid_t((try? String(contentsOfFile: file, encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0
+    }
+
+    // Polls, since an orphan killed by signal is reaped by launchd a moment
+    // later. Kills it outright on the way out if it is still there, so a
+    // failing test doesn't leave a `sleep` behind either.
+    private static func waitUntilGone(_ pid: pid_t) -> Bool {
+        guard pid > 0 else { return false }
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            if kill(pid, 0) != 0 { return true }
+            usleep(20_000)
+        }
+        kill(pid, SIGKILL)
+        return false
     }
 }

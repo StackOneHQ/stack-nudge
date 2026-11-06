@@ -64,6 +64,8 @@ final class FakeProcess: ServiceProcess {
     private let onExit: (ServiceSupervisor.Termination) -> Void
     private(set) var written: [Data] = []
     private(set) var signals: [Int32] = []
+    // Behaves like a well-written service: reading `stop` and leaving.
+    var exitsOnStop = false
 
     init(executable: String, environment: [String: String],
          onOutput: @escaping (Data) -> Void,
@@ -74,7 +76,10 @@ final class FakeProcess: ServiceProcess {
         self.onExit = onExit
     }
 
-    func write(_ data: Data) { written.append(data) }
+    func write(_ data: Data) {
+        written.append(data)
+        if exitsOnStop, types.last == "stop" { exit(.exited(0)) }
+    }
     func signal(_ signal: Int32) { signals.append(signal) }
 
     // What the host sent, one decoded object per line.
@@ -109,6 +114,7 @@ final class FakeSpawner: ServiceSpawner {
 
     private(set) var spawned: [FakeProcess] = []
     var refuse = false
+    var exitOnStop = false
 
     var last: FakeProcess { spawned[spawned.count - 1] }
 
@@ -124,6 +130,7 @@ final class FakeSpawner: ServiceSpawner {
         if refuse { throw Refused() }
         let process = FakeProcess(executable: executable, environment: environment,
                                   onOutput: onOutput, onExit: onExit)
+        process.exitsOnStop = exitOnStop
         spawned.append(process)
         return process
     }

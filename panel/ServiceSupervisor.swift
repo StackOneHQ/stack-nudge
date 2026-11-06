@@ -197,9 +197,19 @@ final class ServiceSupervisor {
 
     // A supervisor going away with its child still running would orphan the
     // child, and a service is written to run until told otherwise. The host
-    // always stops one first; this is the backstop if that was missed.
+    // keeps one until its stop has finished; this is the backstop if that was
+    // missed, or if a quit stopped waiting.
+    //
+    // Nothing races this. Every block on the queue and every callback holds
+    // the supervisor weakly and re-checks, and one that got a strong reference
+    // would be the last release itself, so deinit runs only once nobody else
+    // can touch these properties. A stop still waiting is completed rather than
+    // dropped, so whoever is waiting on it hears back.
     deinit {
         process?.signal(SIGKILL)
+        let completions = stopCompletions
+        stopCompletions = []
+        completions.forEach { $0() }
     }
 
     // MARK: - Entry points
@@ -364,13 +374,22 @@ final class ServiceSupervisor {
             case .oversized(let bytes):
                 degrade("dropped a \(bytes)-byte line")
             case .line(let line):
-                // Before parsing, so a flood costs a counter rather than a JSON
-                // parse per line.
+                // A large line with no allowance left is dropped unparsed, so a
+                // flood of big documents costs a counter rather than a parse
+                // each. Small lines are parsed first, because a pong is exempt:
+                // charging it would let a service that floods the host be
+                // killed as a hang, when what it has done is lose messages.
+                if line.count > ServiceProtocol.maxLineBytes, !hasToken() {
+                    degrade("more than \(Int(timing.messagesPerSecond)) messages a second")
+                    continue
+                }
+                let inbound = ServiceProtocol.decode(line)
+                if case .message(.pong) = inbound { handle(inbound); continue }
                 guard takeToken() else {
                     degrade("more than \(Int(timing.messagesPerSecond)) messages a second")
                     continue
                 }
-                handle(ServiceProtocol.decode(line))
+                handle(inbound)
             }
         }
     }
@@ -477,11 +496,15 @@ final class ServiceSupervisor {
 
     // MARK: - Limits
 
-    private func takeToken() -> Bool {
+    private func hasToken() -> Bool {
         let now = scheduler.now()
         tokens = min(timing.messageBurst, tokens + max(now - tokensAt, 0) * timing.messagesPerSecond)
         tokensAt = now
-        guard tokens >= 1 else { return false }
+        return tokens >= 1
+    }
+
+    private func takeToken() -> Bool {
+        guard hasToken() else { return false }
         tokens -= 1
         return true
     }
@@ -628,6 +651,9 @@ final class LiveServiceProcess: ServiceProcess {
     private var pid: pid_t = 0
     private var group: pid_t = -1
     private var terminated = false
+    // Opened once the pid and group are recorded. The exit can arrive before
+    // `started` has run, and cleaning up the group needs to know which group.
+    private let launched = DispatchSemaphore(value: 0)
 
     init(task: Process, input: Pipe, output: Pipe,
          onOutput: @escaping (Data) -> Void,
@@ -668,16 +694,23 @@ final class LiveServiceProcess: ServiceProcess {
         return true
     }
 
+    // Recorded whether or not the child has already exited. A `run` that
+    // starts `helper &` and dies at once has to have its group cleaned up just
+    // the same, and skipping this when the exit won the race used to orphan
+    // the helper.
     fileprivate func started() {
         lock.lock()
-        defer { lock.unlock() }
-        guard !terminated else { return }
         pid = task.processIdentifier
-        // Foundation starts the child in a group of its own. Read back rather
-        // than assumed, and ours is never used: killpg on our own group would
-        // take out the app.
-        let childGroup = getpgid(pid)
+        // Foundation spawns the child as the leader of a new process group, so
+        // the group's id is the child's pid. Read back while the child is
+        // there to ask; once it has been reaped getpgid fails, and the pid is
+        // the answer. Ours is never used: killpg on our own group would take
+        // out the app.
+        let readBack = getpgid(pid)
+        let childGroup = readBack > 0 ? readBack : pid
         group = childGroup > 0 && childGroup != getpgrp() ? childGroup : -1
+        lock.unlock()
+        launched.signal()
     }
 
     fileprivate func abandon() {
@@ -734,6 +767,9 @@ final class LiveServiceProcess: ServiceProcess {
 
     // On the io queue, after any read already queued there.
     private func finish(_ termination: ServiceSupervisor.Termination) {
+        // `started` runs straight after `run` returns, so this is a wait of
+        // moments at most, and only when the child died first.
+        launched.wait()
         // Whatever the child wrote is in the pipe by now, so reading until
         // EAGAIN has seen all of it, even with a grandchild holding the write
         // end open. Bounded, because such a grandchild could keep it fed.

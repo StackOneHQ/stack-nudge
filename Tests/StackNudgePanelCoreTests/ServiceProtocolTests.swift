@@ -107,6 +107,14 @@ final class ServiceProtocolTests: XCTestCase {
         }
     }
 
+    // Mentioning a document isn't being one: the quick check lets this through
+    // to the parser, and the parsed type still decides.
+    func testALargeControlLineThatMentionsADocumentIsStillOversized() {
+        let padding = String(repeating: "x", count: ServiceProtocol.maxLineBytes)
+        let signal = #"{"type":"signal","name":"presence","value":"away","note":"document","pad":"\#(padding)"}"#
+        XCTAssertEqual(decode(signal), .oversized(bytes: signal.utf8.count))
+    }
+
     // MARK: - Splitting
 
     func testALineSplitAcrossReadsIsReassembled() {
