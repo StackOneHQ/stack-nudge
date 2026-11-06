@@ -1035,8 +1035,9 @@ final class PanelNav: ObservableObject {
     @Published var nearbyDevices: [NearbyDevice] = []
     @Published var awayBluetoothIssue: String? = nil
     @Published var isAway: Bool = false
-    // How long after you leave before you count as away: Mac idle this long and
-    // the phone gone (see PresenceTracker.Rule.waiting).
+    // How long the Mac must go untouched before you can count as away. The
+    // phone must also be silent for at least PresenceTracker.Rule.minimumSilence
+    // (see PresenceTracker.Rule.waiting).
     @Published var awayWaitSeconds: Int = 30
     static let awayWaitOptions = [10, 15, 20, 30, 45, 60, 120]
 
