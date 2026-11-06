@@ -3837,6 +3837,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // audio that was triggered by us — the original bug that motivated
         // moving the bell from notify.sh into the app.
         Speaker.stopAllAudio()
+        // Service extensions run until told otherwise, so they are told, and
+        // the quit waits for them rather than leaving them running unowned.
+        extensions.stopServices()
     }
 
     // MARK: - PanelKeyDelegate
