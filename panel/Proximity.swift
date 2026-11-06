@@ -8,11 +8,16 @@ import IOBluetooth
 // Why advertisements, not a connection: a paired phone advertises over LE
 // under a stable identifier (macOS resolves its rotating address through the
 // pairing), whether or not its screen is on, so a passive scan sees it without
-// connecting to anything or installing anything on the phone. Measured on a
-// Galaxy S25+ at a desk: an advertisement every 2–14 s at about -62 to -80
-// dBm, the same with the screen locked, and none at all a few rooms away. The
+// connecting to anything or installing anything on the phone. The
 // classic-Bluetooth route (IOBluetooth's connection state and rawRSSI) reported
-// the phone connected at a fixed -46 the whole time it was gone.
+// the phone connected at a fixed -46 the whole time it was gone, and an LE
+// connection to the paired phone by identifier timed out every time.
+//
+// Measured on a Galaxy S25+: in use at the desk, an advertisement every 2–14 s.
+// Lying idle on the desk, gaps of 66 and 75 s within ten minutes, and readings
+// anywhere from -41 to -99 dBm. Walking out, the last readings before silence
+// were -86 to -93, no weaker than the idle desk. So signal strength can't tell
+// leaving from lying still, and only a long silence means gone.
 
 enum PresenceState: Equatable {
     case present
@@ -20,77 +25,45 @@ enum PresenceState: Equatable {
 }
 
 // The decision, as a value with no Bluetooth in it, so a test can drive it
-// with timestamps. Away takes the phone being gone *and* the Mac being idle:
-// single readings swing by 15 dB with the phone lying still, and nobody wants
-// the screen locking under them while they type.
+// with timestamps. Away takes the phone being silent *and* the Mac being idle,
+// so the screen never locks under someone who's typing.
 struct PresenceTracker {
     struct Rule: Equatable {
-        // No advertisement for this long means the phone is out of range. The
-        // longest gap measured at the desk was 14 s.
-        var missingAfter: TimeInterval = 30
-        // Or the recent average is this weak, for this long.
-        var weakRSSI: Int = -85
-        var weakFor: TimeInterval = 10
-        // How many recent readings the average is over.
-        var window: Int = 5
+        // No advertisement for this long means the phone is out of range.
+        var missingAfter: TimeInterval = minimumSilence
         // And nobody has touched the Mac for this long.
         var idleAtLeast: TimeInterval = 45
         // A reading at least this strong brings you back.
         var backRSSI: Int = -80
 
-        // The rule for a chosen wait (Settings → Away → Lock after): that long
-        // idle, and the phone gone for as long. Silence never counts below 20 s
-        // whatever the wait, because a phone on the desk was measured going 14 s
-        // between advertisements, and the decision only runs every 2 s; any
-        // closer and reading something would lock you out.
+        // The rule for a chosen wait (Settings → Away → Idle for): that long
+        // idle, and the phone silent for as long, but never less than
+        // minimumSilence.
         static func waiting(_ seconds: TimeInterval) -> Rule {
             var rule = Rule()
             rule.idleAtLeast = seconds
             rule.missingAfter = max(seconds, minimumSilence)
-            rule.weakFor = min(rule.weakFor, seconds)
             return rule
         }
-        static let minimumSilence: TimeInterval = 20
+        // An idle phone on the desk went 75 s without advertising; 20 s, the
+        // old floor, locked the screen under the user dozens of times a day.
+        // That 75 s comes from one ten-minute recording of one phone, so raise
+        // this if a longer gap turns up.
+        static let minimumSilence: TimeInterval = 120
     }
 
     var rule = Rule()
     private(set) var state: PresenceState = .present
     private(set) var lastSeen: Date?
-    private(set) var recent: [Int] = []
-    private var weakSince: Date?
-    // Whether a weak signal may send you away. Off after you've been away
-    // until the phone is heard close again: a phone charging in the next room
-    // keeps advertising weakly, and without this every pause after you came
-    // back would lock the screen again.
-    private var weakArmed = true
 
     init(rule: Rule = Rule()) { self.rule = rule }
-
-    var averageRSSI: Int? {
-        recent.isEmpty ? nil : recent.reduce(0, +) / recent.count
-    }
 
     // One advertisement from the phone.
     mutating func observe(rssi: Int, at now: Date) {
         // CoreBluetooth reports 127 when it has no reading.
         guard rssi < 0 else { return }
         lastSeen = now
-        recent.append(rssi)
-        if recent.count > rule.window { recent.removeFirst(recent.count - rule.window) }
-        if state == .away && rssi >= rule.backRSSI {
-            // Back on a strong reading. Start the average over from it, or the
-            // weak readings still in the window would send you straight back.
-            state = .present
-            recent = [rssi]
-            weakSince = nil
-            return
-        }
-        if rssi >= rule.backRSSI { weakArmed = true }
-        if weakArmed, let avg = averageRSSI, avg <= rule.weakRSSI {
-            if weakSince == nil { weakSince = now }
-        } else {
-            weakSince = nil
-        }
+        if state == .away && rssi >= rule.backRSSI { state = .present }
     }
 
     // Called on a timer. Input on the Mac always means you're there.
@@ -101,18 +74,12 @@ struct PresenceTracker {
             return state
         }
         guard state == .present else { return state }
-        let missing = lastSeen.map { now.timeIntervalSince($0) >= rule.missingAfter } ?? false
-        let weak = weakSince.map { now.timeIntervalSince($0) >= rule.weakFor } ?? false
-        if missing || weak {
+        if let lastSeen, now.timeIntervalSince(lastSeen) >= rule.missingAfter {
             state = .away
-            // The readings that sent you away shouldn't hold you there, and the
-            // silence shouldn't send you away again: after input brings you
-            // back, away needs the phone heard afresh. Otherwise a phone left at
-            // home or switched off would lock the screen after every pause.
-            recent.removeAll()
-            weakSince = nil
-            lastSeen = nil
-            weakArmed = false
+            // After input brings you back, away needs the phone heard afresh.
+            // Otherwise a phone left at home or switched off would lock the
+            // screen after every pause.
+            self.lastSeen = nil
         }
         return state
     }
