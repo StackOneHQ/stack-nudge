@@ -1040,8 +1040,8 @@ struct UpdateConfirmView: View {
 
 // Welcome-style screen shown automatically on the first launch after a
 // successful update. Mirrors WelcomeView's layout (scrollable body + action
-// bar) so the visual language stays consistent. Closes by Enter or "Got it"
-// click, both of which set nav.mode = .events.
+// bar) so the visual language stays consistent. Enter presses the focused
+// button (Got it until Tab moves to Turn on); Got it sets nav.mode = .events.
 struct PostUpdateView: View {
 
     @ObservedObject var nav: PanelNav
@@ -1052,6 +1052,7 @@ struct PostUpdateView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     header
+                    if nav.showCompanionOffer { companionOffer }
                     if let notes = nav.postUpdateNotes, !notes.isEmpty {
                         Text("What's new")
                             .font(.caption.weight(.semibold))
@@ -1075,6 +1076,37 @@ struct PostUpdateView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
+    // Shown once: leaving the screen counts as having seen it, whichever way
+    // the user leaves.
+    private var companionOffer: some View {
+        HStack(alignment: .center, spacing: 12) {
+            CharacterLayerHost(skin: CompanionSkins.skin(id: CompanionSkins.defaultID), mode: .idle,
+                               still: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+                               size: CGSize(width: 54, height: 60), active: true)
+                .frame(width: 54, height: 60)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Meet Stacky").font(.subheadline.weight(.semibold))
+                Text("Stacky floats on your desktop in place of the pill and reacts to your agents. Click Stacky for the panel, drag it anywhere. Change it any time in Settings → Companion.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button("Turn on") { nav.acceptCompanionOffer() }
+                .padding(2)
+                .overlay(focusRing(nav.postUpdateFocus == .turnOn, radius: 7))
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+        .onDisappear { nav.markCompanionOffered() }
+    }
+
+    // The ring Settings rows use for the selection.
+    private func focusRing(_ focused: Bool, radius: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
+            .strokeBorder(Color.accentColor.opacity(focused ? 0.6 : 0), lineWidth: 1.5)
+    }
+
     private var header: some View {
         HStack(spacing: 10) {
             Image(systemName: "checkmark.seal.fill")
@@ -1093,6 +1125,9 @@ struct PostUpdateView: View {
 
     private var actionBar: some View {
         HStack(spacing: 10) {
+            if nav.showCompanionOffer {
+                FooterHint(label: "Move", keys: ["Tab"])
+            }
             Spacer()
             Button {
                 onDismiss()
@@ -1109,6 +1144,7 @@ struct PostUpdateView: View {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color.accentColor.opacity(0.25))
             )
+            .overlay(focusRing(!nav.showCompanionOffer || nav.postUpdateFocus == .gotIt, radius: 6))
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
