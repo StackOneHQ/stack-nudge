@@ -189,8 +189,8 @@ decides which it **asks for**.
 
 The tier comes from the **index**, not the manifest, so an extension can't
 promote itself. The host records the tier at install, in a host-owned file under
-`~/.stack-nudge` that the extension can't write to through its manifest. That's
-new: there's no install record today, and the installed version is read from
+`~/.stack-nudge`. An extension runs as the user and could edit that file, so like
+everything else here it relies on review, not containment. The file is new: there's no install record today, and the installed version is read from
 the manifest itself. The host re-checks the tier on every index fetch: a
 demotion revokes the capabilities at once and restarts the process with the
 smaller grant. An extension on disk with no index entry, put there by hand, gets
