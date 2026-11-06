@@ -138,15 +138,15 @@ final class ExtensionManifestTests: XCTestCase {
     // happens to trip first — otherwise the message would blame the wrong thing.
     func testANewerSchemaIsRefusedBeforeAnythingElseIsJudged() {
         let json = """
-            {"id":"NOT VALID","name":"D","version":"1","schema":2}
+            {"id":"NOT VALID","name":"D","version":"1","schema":3}
             """
-        XCTAssertEqual(parse(json), .failure(.unsupportedSchema(2)))
+        XCTAssertEqual(parse(json), .failure(.unsupportedSchema(3)))
     }
 
     func testTheUnsupportedSchemaMessageQuotesBothNumbers() {
         let message = ExtensionManifest.ParseFailure.unsupportedSchema(7).message
         XCTAssertTrue(message.contains("7"), message)
-        XCTAssertTrue(message.contains("\(ExtensionManifest.supportedSchema)"), message)
+        XCTAssertTrue(message.contains("\(ExtensionManifest.supportedManifestSchemas.upperBound)"), message)
     }
 
     // MARK: - Malformed
@@ -336,5 +336,102 @@ final class ExtensionManifestTests: XCTestCase {
         XCTAssertTrue(text.contains("\"label\":\"B\""), text)
         XCTAssertEqual(try JSONDecoder().decode([ExtensionManifest.ConfigKey].self, from: data),
                        keys)
+    }
+
+    // MARK: - Service mode
+
+    private func service(_ fields: String, schema: Int = 2) -> Result<ExtensionManifest, ExtensionManifest.ParseFailure> {
+        parse("""
+            {"id":"away","name":"Away","version":"1","schema":\(schema)\(fields)}
+            """)
+    }
+
+    func testAViewIsTheDefaultModeAndAsksForNothing() {
+        guard let m = manifest(minimal) else { return }
+        XCTAssertEqual(m.mode, .view)
+        XCTAssertEqual(m.capabilities, [])
+    }
+
+    // Schema 2 isn't only for services: a view may say it and stays a view.
+    func testAViewExtensionMaySaySchemaTwo() {
+        guard case .success(let m) = service("") else { return XCTFail("schema 2 view refused") }
+        XCTAssertEqual(m.schema, 2)
+        XCTAssertEqual(m.mode, .view)
+    }
+
+    func testAServiceDeclaresItsModeAndCapabilities() {
+        guard case .success(let m) = service(#","mode":"service","capabilities":["bluetooth","signal:presence","event:idle"]"#)
+        else { return XCTFail("service manifest refused") }
+        XCTAssertEqual(m.mode, .service)
+        XCTAssertEqual(m.capabilities, [.bluetooth, .signalPresence, .eventIdle])
+    }
+
+    // On schema 1 an older host would read it too, and run it as a view that
+    // never prints. The bump is the signal, so service mode without it is refused.
+    func testServiceModeNeedsSchemaTwo() {
+        XCTAssertEqual(service(#","mode":"service""#, schema: 1), .failure(.serviceNeedsSchema(1)))
+        let message = ExtensionManifest.ParseFailure.serviceNeedsSchema(1).message
+        XCTAssertTrue(message.contains("2"), message)
+    }
+
+    func testAnUnknownModeIsRefused() {
+        XCTAssertEqual(service(#","mode":"daemon""#), .failure(.unknownMode("daemon")))
+    }
+
+    // Every capability the host knows, by the name a manifest uses for it.
+    func testEveryKnownCapabilityIsAccepted() {
+        let names = ["bluetooth", "signal:presence", "event:idle", "event:panel",
+                     "event:session", "event:nudge", "feed"]
+        let list = names.map { "\"\($0)\"" }.joined(separator: ",")
+        guard case .success(let m) = service(#","mode":"service","capabilities":["# + list + "]")
+        else { return XCTFail("known capabilities refused") }
+        XCTAssertEqual(m.capabilities.map(\.rawValue), names)
+        XCTAssertEqual(Set(names), Set(ExtensionCapability.allCases.map(\.rawValue)))
+    }
+
+    // A typo or a newer host's capability is refused out loud, naming it,
+    // rather than dropped and leaving the extension without a feature.
+    func testAnUnknownCapabilityIsRefusedByName() {
+        XCTAssertEqual(service(#","mode":"service","capabilities":["event:idle","signal:mute"]"#),
+                       .failure(.unknownCapability("signal:mute")))
+        XCTAssertTrue(ExtensionManifest.ParseFailure.unknownCapability("signal:mute").message
+            .contains("signal:mute"))
+    }
+
+    func testARepeatedCapabilityIsKeptOnce() {
+        guard case .success(let m) = service(#","mode":"service","capabilities":["feed","event:idle","feed"]"#)
+        else { return XCTFail("refused") }
+        XCTAssertEqual(m.capabilities, [.feed, .eventIdle])
+    }
+
+    func testCapabilitiesThatArentStringsAreMalformed() {
+        guard case .failure(.malformed) = service(#","mode":"service","capabilities":[1]"#) else {
+            return XCTFail("expected malformed")
+        }
+    }
+
+    // A service pushes its documents, so whatever refresh it declares, the host
+    // never polls it or spawns it on open.
+    func testRefreshIsIgnoredForAService() {
+        guard case .success(let m) = service(
+            #","mode":"service","refresh":{"onOpen":true,"intervalSeconds":30,"whileFocusedOnly":false}"#)
+        else { return XCTFail("refused") }
+        XCTAssertEqual(m.refresh, .pushed)
+        XCTAssertFalse(m.refresh.onOpen)
+        XCTAssertNil(m.refresh.intervalSeconds)
+    }
+
+    // The schema a script is told is the document's, never the manifest's: a
+    // view on manifest schema 2 must not go printing a schema 2 document.
+    func testTheScriptIsToldTheDocumentSchemaNotTheManifests() {
+        guard case .success(let m) = service(#","mode":"service""#) else { return XCTFail("refused") }
+        let env = ExtensionRuntime.serviceEnvironment(for: m, config: [:], home: "/Users/x")
+        XCTAssertEqual(env["STACKNUDGE_EXT_SCHEMA"], "\(ExtensionManifest.supportedSchema)")
+        XCTAssertEqual(env["STACKNUDGE_EXT_SCHEMA"], "1")
+        XCTAssertEqual(env["STACKNUDGE_EXT_MODE"], "service")
+        // Otherwise exactly the view environment.
+        var view = env
+        view["STACKNUDGE_EXT_MODE"] = nil
+        XCTAssertEqual(view, ExtensionRuntime.environment(for: m, config: [:], home: "/Users/x"))
     }
 }

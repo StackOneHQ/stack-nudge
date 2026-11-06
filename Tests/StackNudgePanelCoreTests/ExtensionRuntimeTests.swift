@@ -101,14 +101,14 @@ final class ExtensionRuntimeTests: XCTestCase {
     // could say "update Stack Nudge" was unreachable from production.
     func testANewerSchemaIsReportedRatherThanSilentlySkipped() throws {
         try install("derby", manifest: """
-            {"id":"derby","name":"Derby","version":"1","schema":2}
+            {"id":"derby","name":"Derby","version":"1","schema":3}
             """)
         let discovery = ExtensionRuntime.discover(in: root)
         XCTAssertEqual(discovery.installed, [])
         XCTAssertEqual(discovery.refused.map(\.id), ["derby"])
         guard let reason = discovery.refused.first?.reason else { return }
-        XCTAssertTrue(reason.contains("2"), reason)
-        XCTAssertTrue(reason.contains("\(ExtensionManifest.supportedSchema)"), reason)
+        XCTAssertTrue(reason.contains("3"), reason)
+        XCTAssertTrue(reason.contains("\(ExtensionManifest.supportedManifestSchemas.upperBound)"), reason)
     }
 
     func testAManifestClaimingAnotherIDSaysSo() throws {

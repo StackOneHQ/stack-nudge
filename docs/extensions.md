@@ -42,7 +42,7 @@ does not buy.
 | `id` | yes | `^[a-z0-9][a-z0-9-]{0,31}$`, and **must equal the directory name**. It becomes a path component, so it is validated before it is ever used as one. |
 | `name` | yes | Human-readable. Used as the tab label when `tab.label` is absent. |
 | `version` | yes | Yours to manage; the host only records it. |
-| `schema` | yes | Must be `1`. Anything else is refused outright — see [Versioning](#versioning). |
+| `schema` | yes | `1`. (`2` is also read, for service mode below.) Anything else is refused outright — see [Versioning](#versioning). |
 | `tab.label` | no | Defaults to `name`. Trimmed, capped at 16 characters, falls back to `id` if empty. |
 | `run` | no | Defaults to `./run`. Relative to the extension directory, no `..`, no absolute or `~` paths. |
 | `requires` | no | Interpreters the extension needs. Checked at install time by **running** each one, not by resolving it. |
@@ -54,6 +54,15 @@ does not buy.
 
 A manifest that fails any of these is **refused**, and the reason is reported —
 it does not silently produce a missing tab.
+
+> **Service mode (not yet for general use).** A manifest with `"schema": 2` may
+> also declare `"mode": "service"` and a `capabilities` list, which makes `run` a
+> long-running process the host supervises and talks to over stdin and stdout,
+> instead of a one-shot script. The host supports it, but nothing grants it yet,
+> and the details may still change: see
+> [docs/design/service-extensions.md](design/service-extensions.md), which is
+> pending review. A view extension can ignore all of this and keep saying
+> `"schema": 1`.
 
 ## Configuration
 
@@ -111,7 +120,7 @@ Your script gets exactly this, and nothing else:
 PATH                    a minimal system PATH
 HOME
 STACKNUDGE_EXT_ID       your id
-STACKNUDGE_EXT_SCHEMA   the schema this host speaks
+STACKNUDGE_EXT_SCHEMA   the document schema this host speaks
                         + any STACKNUDGE_EXT_* keys you declared in `config`
 ```
 
@@ -293,7 +302,7 @@ failed halfway may have printed a partial document.
 
 The host refuses any `schema` it does not speak, rather than guessing. A refused
 extension is listed in **Settings → Extensions** with the reason, so
-"needs manifest schema 2; this version reads 1" reaches the person who can act on
+"needs manifest schema 3; this version reads up to 2" reaches the person who can act on
 it rather than only the log. Read
 `STACKNUDGE_EXT_SCHEMA` to find out what this host can read before you print.
 
@@ -328,7 +337,8 @@ a failure rather than a pass.
 yourself. It refuses:
 
 - a manifest that doesn't parse, or whose `id` disagrees with the directory name
-- an `id` outside `^[a-z0-9][a-z0-9-]{0,31}$`, or a `schema` that isn't 1
+- an `id` outside `^[a-z0-9][a-z0-9-]{0,31}$`, or a `schema` that isn't 1 or 2
+  (and `"mode": "service"` on anything but 2)
 - a `run` path that is absolute or contains `..`
 - a `run` file that is missing, not a regular file, or not executable
 - **any symlink or non-regular file anywhere in the package**
