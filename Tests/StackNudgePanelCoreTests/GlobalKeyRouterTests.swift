@@ -148,4 +148,41 @@ final class ResignKeyOutcomeTests: XCTestCase {
         XCTAssertEqual(outcome(.permissions), .stay)
         XCTAssertEqual(outcome(.permissions, compact: true, expanded: true), .stay)
     }
+
+    // The pill can't draw these screens, so the widget keeps them full size.
+    func test_theWidgetKeepsTheUpdateScreenAndWizardUp() {
+        XCTAssertEqual(outcome(.postUpdate, compact: true, expanded: true), .stay)
+        XCTAssertEqual(outcome(.bootstrap, compact: true, expanded: true), .stay)
+        XCTAssertEqual(outcome(.postUpdate), .hide)
+    }
+}
+
+// Leaving the update screen.
+final class DismissPostUpdateTests: XCTestCase {
+
+    func test_theWidgetGoesBackToThePill() {
+        let nav = PanelNav()
+        nav.compactMode = true
+        nav.compactExpanded = true
+        nav.postUpdateVersion = "2.5.0"
+        nav.mode = .postUpdate
+
+        nav.dismissPostUpdate()
+
+        XCTAssertEqual(nav.mode, .events)
+        XCTAssertNil(nav.postUpdateVersion)
+        XCTAssertFalse(nav.compactExpanded)
+    }
+
+    func test_withoutTheWidgetThePanelStaysOnEvents() {
+        let nav = PanelNav()
+        nav.compactMode = false
+        nav.compactExpanded = false
+        nav.mode = .postUpdate
+
+        nav.dismissPostUpdate()
+
+        XCTAssertEqual(nav.mode, .events)
+        XCTAssertFalse(nav.compactExpanded)
+    }
 }
