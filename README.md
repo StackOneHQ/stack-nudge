@@ -82,17 +82,17 @@ Press `⌘⌥N` from anywhere. `⌘1`…`⌘9` or `⌘←` / `⌘→` switch tab
 | **Sessions** | Every running agent: busy or idle, its terminal tab, and for Claude Code how full its context is. `⏎` focuses it, `N` renames, `M` mutes just that session. |
 | **Usage** | Claude, Codex, Antigravity and pi quota, with a warning when you're spending faster than the window resets, and alerts at a threshold you pick. |
 | **Outcomes** | How much of your agents' token spend ended up shipped (pushed or merged), by ticket and by agent. |
-| **Settings** | Everything above, plus voice, the compact widget, Slack and extensions. `⌘,` opens it. |
+| **Settings** | Everything above, plus voice, the floating widget, Slack and extensions. `⌘,` opens it. |
 
 <p align="center">
   <img src="assets/screenshots/sessions.png" width="49%" alt="The Sessions tab: four agent sessions across repos, busy and idle" />
   <img src="assets/screenshots/outcomes.png" width="49%" alt="The Outcomes tab: share of token spend that shipped, and the top tickets" />
 </p>
 
-When you're not using the panel it collapses to a pill showing your quota, the reset countdown and your agents at a glance. **Settings → Appearance → Widget** turns that off:
+When you're not using the panel, a floating widget stays on the desktop. New installs get the **companion**, an animated character whose pose follows your agents (busy, waiting on you, a quota running hot, muted) and that opens the panel when clicked. Or pick the **pill** in **Settings → Appearance → Floating widget**, which shows your quota, the reset countdown and your agents at a glance:
 
 <p align="center">
-  <img src="assets/screenshots/widget.png" width="290" alt="The compact widget: a quota ring, the reset countdown and the busiest session" />
+  <img src="assets/screenshots/widget.png" width="290" alt="The pill widget: a quota ring, the reset countdown and the busiest session" />
 </p>
 
 The whole panel, key by key, is in **[docs/panel.md](docs/panel.md)**.

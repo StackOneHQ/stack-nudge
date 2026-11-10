@@ -110,6 +110,7 @@ make uninstall           # remove app, hooks, launchd agents, ~/.stack-nudge/
 Source layout:
 
 - `panel/` — the single persistent `StackNudge.app` binary: hotkey, floating NSPanel, socket listener for incoming events, macOS banner posting via `UNUserNotificationCenter`, sessions list, settings and its Permissions page, auto-updater, quota probe, extension host
+- `panel/Companion/` — the companion character and its skin engine. The art is baked PNG parts and a manifest per skin, committed under `assets/skins/` and copied into the app bundle by `build.sh`; building the app needs no extra tooling.
 - `notify.sh` — the shell entry point every agent hook invokes; on macOS posts events to the running app via Unix-domain socket, on Linux/Windows handles audio + libnotify directly
 - `hook-manifest.json` — which agent events get wired to `notify.sh`
 - `hooks/` — the Claude Code plugin hooks and the pi extension
