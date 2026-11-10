@@ -160,7 +160,8 @@ final class SignalRegistry {
 
     // MARK: - The record
 
-    // {"presence": "away"}. Missing or unreadable reads as nobody holding
+    // {"presence": "desk-sensor"}: each signal and the id of the extension
+    // holding it. Missing or unreadable reads as nobody holding
     // anything, which only means the next claim decides again.
     private static func readRecord(_ path: String) -> [AppSignal: String] {
         guard let data = FileManager.default.contents(atPath: path),
