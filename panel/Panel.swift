@@ -1093,6 +1093,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func refreshInstalledExtensions() {
         nav.installedExtensions = extensionCatalog.settingsRows(installed: extensions.manifests,
                                                                 refused: extensions.refused)
+        refreshBrowseValue()
+    }
+
+    private func refreshBrowseValue() {
+        let value = ExtensionCatalog.browseRowValue(load: extensionCatalog.load,
+                                                    catalogue: extensionCatalog.entries,
+                                                    installed: nav.installedExtensions)
+        if nav.browseExtensionsValue != value { nav.browseExtensionsValue = value }
     }
 
     private lazy var extensionCatalog: ExtensionCatalog = ExtensionCatalog(
@@ -1292,6 +1300,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         nav.onExtensionConfigChanged = { [weak self] id in self?.extensions.configChanged(id) }
         nav.onUpdateExtension = { [weak self] id in self?.updateExtension(id) }
         nav.onCancelUpdateConfirmation = { [weak self] in self?.extensionCatalog.cancelConfirmation() }
+        // A failed or started load changes what the Browse row says too, not
+        // only a successful one.
+        extensionCatalog.$load
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshBrowseValue() }
+            .store(in: &cancellables)
         extensionCatalog.$confirming
             .sink { [weak self] id in self?.nav.extensionConfirming = id }
             .store(in: &cancellables)
@@ -4402,11 +4416,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             // three lists plus a sort and a filter, and it ran on every key
             // event including the ones this branch doesn't handle.
             func visibleRows() -> [ExtensionRow] {
-                ExtensionCatalog.matching(
+                ExtensionCatalog.browseRows(
                     ExtensionCatalog.rows(catalogue: extensionCatalog.entries,
                                           installed: extensions.manifests,
                                           refused: extensions.refused),
-                    query: extensionCatalog.query)
+                    query: extensionCatalog.query).shown
             }
             let onlyCommand = mods.intersection([.command, .control, .option, .shift]) == [.command]
 
@@ -5200,11 +5214,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             permissions.selectEdge(top: top)
         case .extensions:
             extensionCatalog.selectEdge(
-                among: ExtensionCatalog.matching(
+                among: ExtensionCatalog.browseRows(
                     ExtensionCatalog.rows(catalogue: extensionCatalog.entries,
                                           installed: extensions.manifests,
                                           refused: extensions.refused),
-                    query: extensionCatalog.query),
+                    query: extensionCatalog.query).shown,
                 top: top)
         default:
             return false  // modal / single-purpose screens have nothing to jump

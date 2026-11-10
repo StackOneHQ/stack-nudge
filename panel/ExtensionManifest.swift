@@ -92,6 +92,9 @@ struct ExtensionManifest: Equatable {
     // Asking is not having: see ExtensionTier.grants for what it is given.
     var capabilities: [ExtensionCapability] = []
     var surfaces: [Surface] = [.tab]
+    // One line for the Extensions list. From the manifest on disk, which is
+    // what's installed; the index's copy is only for what isn't.
+    var description: String = ""
 
     var tabEntry: ExtensionTab { ExtensionTab(id: id, label: tab.label) }
     var hasTab: Bool { surfaces.contains(.tab) }
@@ -318,7 +321,8 @@ struct ExtensionManifest: Equatable {
             glance: decoded.glance ?? false,
             mode: mode,
             capabilities: capabilities,
-            surfaces: surfaces))
+            surfaces: surfaces,
+            description: (decoded.description ?? "").trimmingCharacters(in: .whitespacesAndNewlines)))
     }
 
     // The decoder's own description names the field, which is the one thing a
@@ -356,6 +360,7 @@ struct ExtensionManifest: Equatable {
         let mode: String?
         let capabilities: [String]?
         let surfaces: [String]?
+        let description: String?
     }
 }
 

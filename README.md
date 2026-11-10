@@ -558,12 +558,12 @@ control is that nothing installs which did not come through a reviewed PR here.
 See **[docs/extensions.md](docs/extensions.md)** for the manifest, the view
 document, and what a reviewer should check.
 
-**Settings → Extensions** lists what's installed: name, a one-line description, and a status (Update x.y, Running, Present / Away, Broken, Tab ⌘N…). `→` or `⏎` opens an extension's page: its status, its settings, what it's allowed, where it appears, and **Update** / **Remove**. **Browse extensions**, the last row, opens the catalogue:
+**Settings → Extensions** lists what's installed: name, a one-line description, and a status (Update x.y, Running, Present / Away, Broken, Tab ⌘N…). `→` or `⏎` opens an extension's page: its status, its settings, what it's allowed, where it appears, and **Update** / **Remove**. **Browse extensions**, the last row, says how many are available and opens the catalogue: updates first, then what you haven't installed, ten at a time until you search, which matches names and descriptions.
 
 | Key | On the browse page |
 |-----|--------|
 | `↑ ↓` / `⌘↑ ⌘↓` | Select / first or last |
-| `⏎` | Install, update, or open an installed one's page. Anything above the `view` tier asks first: `⏎` again confirms |
+| `⏎` | Install or update, or open an installed one's page in Settings → Extensions. Anything that would get more than the `view` tier asks first: `⏎` again confirms (a held `⏎` never does) |
 | `⌘⏎` | Open an installed one's page (when `⏎` is busy updating) |
 | `/`, or just type | Search |
 | `⌘R` | Reload the catalogue |

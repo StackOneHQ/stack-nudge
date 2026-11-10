@@ -8,6 +8,9 @@ enum SettingsKind {
     // Trailing reflects mute state: a plain bell when idle, bell.slash +
     // countdown while muted, matching the header bell / menu-bar glyph.
     case mute
+    // An action that can't be undone: drawn in the warning colour with its
+    // shortcut, and no chevron, since it opens nothing.
+    case destructive
 }
 
 struct SettingsView: View {
@@ -17,6 +20,9 @@ struct SettingsView: View {
     private static let scrollTopID = "settings-detail-top"
 
     @ObservedObject var nav: PanelNav
+    // False only for ScreenshotRenderer's fixtures: appearing reads the
+    // config file and probes the machine, which a fixture must not.
+    var runsOnAppear = true
 
     // Hook-script freshness, sampled on appear (two small file reads) rather than
     // recomputed every render. Surfaced in hookScriptRow.
@@ -66,6 +72,7 @@ struct SettingsView: View {
         .onChange(of: nav.extensionTextFocusRequests) { _ in extensionFieldFocused = true }
         .onChange(of: nav.extensionTextEdit == nil) { ended in if ended { extensionFieldFocused = false } }
         .onAppear {
+            guard runsOnAppear else { return }
             // Matching UsageView: never land back inside the detail from a
             // previous visit, where ↑↓ move rows rather than categories and the
             // attention-row count may have changed while away, unless this is
@@ -524,24 +531,22 @@ struct SettingsView: View {
     private func extensionPageHeader(_ id: String) -> some View {
         let row = nav.installedExtensions.first { $0.id == id }
         let status = row?.refusedReason ?? nav.extensionStatus[id]
-        return VStack(alignment: .leading, spacing: 4) {
+        // The page's title and its status, as the list row showed them, so
+        // stepping in reads as the same thing opened up.
+        return VStack(alignment: .leading, spacing: 2) {
             Text(nav.label(for: .extensionPage(id)))
-                .font(.callout.weight(.medium))
+                .font(.subheadline.weight(.semibold))
             Text(status ?? "No status yet")
-                .font(.subheadline)
-                .foregroundStyle(row?.refusedReason != nil ? Color.orange
-                                 : status == nil ? .secondary : .primary)
-            if nav.presenceHolderID == id {
-                Text("Lock screen when away is StackNudge's own setting: what it does when "
-                     + "\(nav.label(for: .extensionPage(id))) says you've gone.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+                .font(.caption)
+                .foregroundStyle(row?.refusedReason != nil ? Color.orange : .secondary)
+                .lineLimit(2)
+                .help(status ?? "")
         }
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.top, 2)
+        .padding(.bottom, 8)
     }
 
     // Read-only lines under a page's rows: what it was allowed, in plain
@@ -558,7 +563,8 @@ struct SettingsView: View {
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10)
-        .padding(.top, 8)
+        .padding(.top, 6)
+        .padding(.bottom, 6)
     }
 
     // A text key being typed into, in place of its row.
@@ -625,29 +631,6 @@ struct SettingsView: View {
     // rows(in:) and missing from its group would be keyboard-selectable and
     // invisible, and no test could see it. Exhaustive, so a new row has to be
     // given a home here too.
-    // Both numbers, not one instead of the other. Three working extensions and
-    // one stale directory used to read "1 not loaded", with no sign the other
-    // three existed.
-    private var extensionsRowValue: String {
-        Self.extensionsRowValue(installed: nav.extensionTabs.count,
-                                updates: nav.installedExtensions.filter(\.updateAvailable).count,
-                                refused: nav.refusedExtensionCount)
-    }
-
-    // Pure, so the summary is testable without a view. The first test for this
-    // asserted the `updateAvailable` flags on hand-built rows and never touched
-    // the counting at all — it passed while the production path handed every
-    // row a nil availableVersion and the count was permanently zero.
-    //
-    // Updates are counted for the same reason refusals already were: this row
-    // is the only thing anyone sees without opening the browser, and an update
-    // visible only once you go looking is one nobody takes.
-    static func extensionsRowValue(installed: Int, updates: Int, refused: Int) -> String {
-        var parts = [installed == 0 ? "None" : "\(installed) installed"]
-        if updates > 0 { parts.append("\(updates) update\(updates == 1 ? "" : "s")") }
-        if refused > 0 { parts.append("\(refused) not loaded") }
-        return parts.joined(separator: " · ")
-    }
 
     // One line per installed extension: icon, name, its one-line
     // description, and a short status on the right (see ExtensionListStatus).
@@ -674,7 +657,9 @@ struct SettingsView: View {
                 Spacer(minLength: 8)
                 if let status = nav.extensionListStatus[id], !status.isEmpty {
                     Text(status).font(.caption.monospacedDigit())
-                        .foregroundStyle(status.hasPrefix("Update") ? Color.accentColor : .secondary)
+                        .foregroundStyle(status.hasPrefix("Update") ? Color.accentColor
+                                         : ["Broken", "Not loaded"].contains(status) ? Color.orange
+                                         : .secondary)
                         .lineLimit(1)
                 }
                 Image(systemName: "chevron.right")
@@ -699,7 +684,7 @@ struct SettingsView: View {
 
     // Not a row: nothing to select. The Browse row follows it.
     private var noExtensionsNote: some View {
-        Text("No extensions installed")
+        Text("No extensions installed \u{2014} Browse to add one")
             .font(.caption)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -756,7 +741,8 @@ struct SettingsView: View {
 
         // An extension's own page. The lock row is the app's, shown on the
         // page of whichever extension holds presence.
-        case .awayLock:       row(.awayLock, label: "Lock screen when away", kind: .toggle, value: nav.awayLock ? "On" : "Off")
+        case .awayLock:       row(.awayLock, label: "Lock screen when away", kind: .toggle, value: nav.awayLock ? "On" : "Off",
+                                  detail: "StackNudge's own setting, applied when this extension says you've gone.")
         case .extensionSetting(let id, let key):
             if let declared = nav.extensionConfigKey(id, key) {
                 if let edit = nav.extensionTextEdit, edit.id == id, edit.key == key {
@@ -771,15 +757,18 @@ struct SettingsView: View {
                 }
             }
         case .extensionUpdate(let id):
+            // The read-only lines sit above the actions, which come last.
+            extensionPageTrailer(id)
             let version = nav.installedExtensions.first { $0.id == id }?.availableVersion ?? ""
             row(.extensionUpdate(id),
                 label: nav.extensionConfirming == id ? "Confirm update to \(version)" : "Update to \(version)",
                 kind: .action, value: "",
                 detail: nav.extensionConfirming == id
-                    ? "It asks for more than before. Update again to confirm." : nil)
+                    ? "It asks for more than before. Press ⏎ again to update." : nil)
         // ⌘⌫, not ⏎: see PanelNav.activate. The value says so.
         case .extensionRemove(let id):
-            row(.extensionRemove(id), label: "Remove", kind: .action, value: "⌘⌫")
+            if !nav.settingsRows.contains(.extensionUpdate(id)) { extensionPageTrailer(id) }
+            row(.extensionRemove(id), label: "Remove", kind: .destructive, value: "⌘⌫")
 
         // Integrations
         case .slackPaste:      row(.slackPaste, label: "Paste Slack setup", kind: .action, value: slackPasteValue)
@@ -828,7 +817,7 @@ struct SettingsView: View {
         // The count is the useful part at a glance; a refusal is worth surfacing
         // here too, since the whole point of the sub-page is that it explains one.
         case .browseExtensions: row(.browseExtensions, label: "Browse extensions", kind: .action,
-                                    value: extensionsRowValue)
+                                    value: nav.browseExtensionsValue)
         case .checkPermissions: row(.checkPermissions, label: "Check permissions…", kind: .action, value: "")
         case .openConfig:       row(.openConfig, label: "Open config file…", kind: .action, value: "")
         case .releaseNotes:     row(.releaseNotes, label: "View release notes…", kind: .action, value: "")
@@ -852,6 +841,8 @@ struct SettingsView: View {
     // matching this order; the mute and hook-script notices are readouts with
     // nothing to open, so they render here without taking a keyboard slot.
     @ViewBuilder private var settingsBanners: some View {
+        let any = nav.isMuted || !nav.unwiredAgents.isEmpty || !nav.recentlyWiredAgents.isEmpty
+            || !nav.missingPermissions.isEmpty || nav.updateAvailable != nil || hookScriptStale
         VStack(alignment: .leading, spacing: 10) {
             muteBanner
             if !nav.unwiredAgents.isEmpty {
@@ -870,7 +861,9 @@ struct SettingsView: View {
             }
         }
         .padding(.horizontal, 14)
-        .padding(.top, 12)
+        // No room taken when there's nothing to say, so every category's
+        // first row sits at the same height.
+        .padding(.top, any ? 12 : 0)
     }
 
     // Left column: the category list, with the version pinned under it.
@@ -941,9 +934,6 @@ struct SettingsView: View {
                             extensionPageHeader(id)
                         }
                         detailRows
-                        if case .extensionPage(let id) = nav.settingsCategory {
-                            extensionPageTrailer(id)
-                        }
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 12)
@@ -1043,7 +1033,7 @@ struct SettingsView: View {
             // row is as deliberate as the old page's Remove button was.
             if case .extensionRemove(let extensionID) = id {
                 nav.onRemoveExtension(extensionID)
-            } else if kind == .action || kind == .toggle || kind == .mute {
+            } else if kind == .action || kind == .toggle || kind == .mute || kind == .destructive {
                 nav.activate()
             }
         }
@@ -1067,12 +1057,17 @@ private struct SettingsRowView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(label)
                     .font(.subheadline)
-                    .foregroundStyle(selected ? Color.primary : Color.primary.opacity(0.85))
+                    .foregroundStyle(kind == .destructive ? Color.orange
+                                     : selected ? Color.primary : Color.primary.opacity(0.85))
                 if let detail, !detail.isEmpty {
+                    // One line, the whole of it on hover, and all of it on
+                    // the selected row, where it's being read.
                     Text(detail)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(selected ? nil : 1)
+                        .fixedSize(horizontal: false, vertical: selected)
+                        .help(detail)
                 }
             }
             Spacer()
@@ -1099,6 +1094,8 @@ private struct SettingsRowView: View {
                 if picking { Image(systemName: "chevron.left").font(.caption.weight(.semibold)) }
                 Text(value)
                     .font(.subheadline.monospaced())
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 if picking { Image(systemName: "chevron.right").font(.caption.weight(.semibold)) }
             }
             .foregroundStyle(picking ? Color.accentColor : selected ? Color.primary : .secondary)
@@ -1115,6 +1112,10 @@ private struct SettingsRowView: View {
                     .font(.callout)
                     .foregroundStyle(value.isEmpty ? Color.secondary : Color.accentColor)
             }
+        case .destructive:
+            Text(value)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         case .action:
             HStack(spacing: 8) {
                 if !value.isEmpty {

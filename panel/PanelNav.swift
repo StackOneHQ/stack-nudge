@@ -1108,6 +1108,8 @@ final class PanelNav: ObservableObject {
     var onRemoveExtension: (String) -> Void = { _ in }
     // The short status on each Extensions list row, from PanelController.
     @Published var extensionListStatus: [String: String] = [:]
+    // The Browse row's trailing text (ExtensionCatalog.browseRowValue).
+    @Published var browseExtensionsValue: String = ""
 
     // A text key being typed into on its row: the extension, the key and the
     // text so far. Saved on ⏎; Esc, or ⌫ in an empty field, puts it back.
@@ -2341,8 +2343,14 @@ final class PanelNav: ObservableObject {
             return value == "true" ? "On" : "Off"
         case .text:
             return value
-        case .choice, .number, .dynamic:
+        case .choice, .number:
             return extensionPickerOptions(id, declared).first { $0.value == value }?.label ?? value
+        // A service's labels carry live detail (a signal strength) that is
+        // for choosing; once chosen, the row shows the value itself.
+        case .dynamic:
+            let picking = extensionPick?.id == id && extensionPick?.key == key
+            let option = extensionPickerOptions(id, declared).first { $0.value == value }
+            return picking ? (option?.label ?? value) : (value == Self.unsetValue ? (option?.label ?? "") : value)
         }
     }
 

@@ -689,11 +689,79 @@ final class ExtensionCatalogTests: XCTestCase {
 
     func testTheConfirmationTextSaysHowToConfirmForEveryTier() {
         for tier in [ExtensionTier.service, .trusted] {
-            XCTAssertTrue(ExtensionCatalog.confirmationText(for: tier).hasSuffix("Install again to confirm."))
+            XCTAssertTrue(ExtensionCatalog.confirmationText(for: tier).hasSuffix("Confirm to install."))
             XCTAssertTrue(ExtensionCatalog.confirmationText(for: tier, updating: true)
-                .hasSuffix("Update again to confirm."))
+                .hasSuffix("Confirm to update."))
         }
         XCTAssertEqual(ExtensionCatalog.confirmationText(for: .view), "")
+    }
+
+    private func installedManifest(_ id: String, version: String = "1.0.0",
+                                   description: String = "") -> ExtensionManifest {
+        guard case .success(let m) = ExtensionManifest.parse(Data("""
+            {"id":"\(id)","name":"\(id.capitalized)","version":"\(version)","schema":1,
+             "description":"\(description)"}
+            """.utf8)) else { fatalError("fixture manifest didn't parse") }
+        return m
+    }
+
+    // Settings lists what's installed; the catalogue is the browser's.
+    func testSettingsListsInstalledAndRefusedOnly() {
+        let c = ExtensionCatalog(fetchCatalogue: { .success([self.entry("derby"), self.entry("pylon"),
+                                                              self.entry("system")]) },
+                                 background: { $0() }, toMain: { $0() })
+        c.reload()
+        let rows = c.settingsRows(installed: [installedManifest("away")],
+                                  refused: [.init(id: "broken", reason: "needs schema 9")])
+        XCTAssertEqual(rows.map(\.id).sorted(), ["away", "broken"])
+    }
+
+    // An installed extension describes itself from its manifest on disk, so
+    // one the index doesn't list (or lists differently) still has its line.
+    func testAnInstalledExtensionsDescriptionComesFromItsManifest() {
+        let away = installedManifest("away", description: "Locks the Mac when your phone leaves")
+        XCTAssertEqual(ExtensionCatalog.rows(catalogue: [], installed: [away], refused: []).first?.description,
+                       "Locks the Mac when your phone leaves")
+        var published = entry("away")
+        published = .init(id: "away", name: "Away", version: "1.0.0", description: "Index text",
+                          asset: published.asset, sha256: "abc", requires: [], config: [])
+        XCTAssertEqual(ExtensionCatalog.rows(catalogue: [published], installed: [away], refused: [])
+                        .first?.description, "Locks the Mac when your phone leaves")
+        XCTAssertEqual(ExtensionCatalog.rows(catalogue: [published], installed: [installedManifest("away")],
+                                             refused: []).first?.description,
+                       "Index text", "an empty manifest description falls back to the index")
+        XCTAssertEqual(ExtensionCatalog.rows(catalogue: [published], installed: [], refused: [])
+                        .first?.description, "Index text")
+    }
+
+    // The browser: updates first, then not installed, then installed, ten at
+    // most until you search; a search shows every match.
+    func testTheBrowserRanksCapsAndSearches() {
+        let entries = (1...14).map { entry(String(format: "ext%02d", $0)) }
+            + [entry("derby", version: "2.0.0")]
+        let rows = ExtensionCatalog.rows(catalogue: entries,
+                                         installed: [installedManifest("ext03"), installedManifest("derby")],
+                                         refused: [])
+        let browse = ExtensionCatalog.browseRows(rows, query: "")
+        XCTAssertEqual(browse.shown.count, 10)
+        XCTAssertEqual(browse.more, 5)
+        XCTAssertEqual(browse.shown.first?.id, "derby", "the update comes first")
+        XCTAssertFalse(browse.shown.contains { $0.id == "ext03" }, "installed come last, past the cap")
+        XCTAssertEqual(browse.shown[1].id, "ext01")
+
+        let found = ExtensionCatalog.browseRows(rows, query: "EXT1")
+        XCTAssertEqual(found.shown.map(\.id), ["ext10", "ext11", "ext12", "ext13", "ext14"])
+        XCTAssertEqual(found.more, 0)
+        XCTAssertTrue(ExtensionCatalog.browseRows(rows, query: "nothing like it").shown.isEmpty)
+    }
+
+    func testSearchMatchesNameAndDescriptionIgnoringCaseAndDiacritics() {
+        let rows = [ExtensionRow(id: "a", name: "Café Radar", description: "", installedVersion: nil,
+                                 availableVersion: "1", refusedReason: nil, requires: [], config: []),
+                    ExtensionRow(id: "b", name: "Other", description: "Locks the MAC", installedVersion: nil,
+                                 availableVersion: "1", refusedReason: nil, requires: [], config: [])]
+        XCTAssertEqual(ExtensionCatalog.matching(rows, query: "cafe").map(\.id), ["a"])
+        XCTAssertEqual(ExtensionCatalog.matching(rows, query: "mac").map(\.id), ["b"])
     }
 
     // "Needs X" only for what this Mac lacks, probed once per name.
