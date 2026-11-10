@@ -1,10 +1,11 @@
 import AppKit
 import SwiftUI
 
-// Dev-only: renders the Extensions pages from fixture state into PNGs, for
-// reviewers to see each screen without installing anything.
+// Dev-only: renders the panel from fixture state into PNGs: the README's
+// pictures (`readme`) and the Extensions pages (`extensions`), for reviewers
+// to see each screen without installing anything.
 //
-//     StackNudge.app/Contents/MacOS/stack-nudge --render-screenshots <dir>
+//     StackNudge.app/Contents/MacOS/stack-nudge --render-screenshots <dir> [readme|extensions]
 //
 // The real SwiftUI views, at the panel's default size, in dark appearance, in
 // an offscreen window captured with cacheDisplay, which needs no Screen
@@ -23,34 +24,46 @@ enum ScreenshotRenderer {
         let args = CommandLine.arguments
         guard let i = args.firstIndex(of: flag) else { return }
         let directory = i + 1 < args.count ? args[i + 1] : FileManager.default.currentDirectoryPath
+        // Both sets unless one is named. A name that matches neither is a
+        // typo, not an empty set.
+        let set = i + 2 < args.count ? args[i + 2] : nil
+        if let set, !scenarios.contains(where: { $0.set == set }) {
+            FileHandle.standardError.write(Data("render-screenshots: unknown set \(set); use readme or extensions\n".utf8))
+            exit(2)
+        }
         NSApplication.shared.setActivationPolicy(.prohibited)
         do {
             try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
-            for scenario in scenarios {
+            for scenario in scenarios where set == nil || scenario.set == set {
                 let path = (directory as NSString).appendingPathComponent(scenario.name + ".png")
                 try render(scenario, to: path)
                 print(path)
             }
-            exit(0)
         } catch {
             FileHandle.standardError.write(Data("render-screenshots: \(error)\n".utf8))
+            // exit() skips defer, so the fixtures' scratch files go by hand.
+            try? FileManager.default.removeItem(at: scratchRoot)
             exit(1)
         }
+        try? FileManager.default.removeItem(at: scratchRoot)
+        exit(0)
     }
 
     // MARK: - Scenarios
 
     struct Scenario {
         let name: String
+        var set = "extensions"
         // Taller than the panel's default where the point of the picture is
         // below the fold (the "N more" line under ten rows).
         var height: CGFloat = ScreenshotRenderer.size.height
+        var width: CGFloat = ScreenshotRenderer.size.width
         // Builds the view; the second closure, run once it is on screen, puts
         // it in the state the picture is of (a pick started, a row selected).
         let make: () -> (AnyView, () -> Void)
     }
 
-    static let scenarios: [Scenario] = [
+    static let scenarios: [Scenario] = readmeScenarios + [
         Scenario(name: "extensions-none") {
             let nav = fixtureNav(installed: [])
             return (settings(nav), { enterExtensions(nav) })
@@ -225,11 +238,192 @@ enum ScreenshotRenderer {
         AnyView(ExtensionsView(catalog: catalog, host: host, onConfigure: { _ in }, onBack: {}))
     }
 
+    // MARK: - README
+
+    // One directory for every fixture's ledger and session names, removed when
+    // the run ends.
+    private static let scratchRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("stack-nudge-screenshots-\(UUID().uuidString)", isDirectory: true)
+
+    // The whole panel, tab strip and all, at its default 600 x 320.
+    private static let panelHeight: CGFloat = 320
+
+    private static let readmeScenarios: [Scenario] = [
+        Scenario(name: "events", set: "readme", height: panelHeight) {
+            let f = PanelFixture(mode: .events)
+            return (f.view, { f.store.selectedID = f.store.events.first?.id })
+        },
+        Scenario(name: "sessions", set: "readme", height: panelHeight) {
+            let f = PanelFixture(mode: .sessions)
+            return (f.view, {})
+        },
+        Scenario(name: "usage", set: "readme", height: panelHeight) {
+            let f = PanelFixture(mode: .usage)
+            return (f.view, {})
+        },
+        Scenario(name: "outcomes", set: "readme", height: panelHeight) {
+            let f = PanelFixture(mode: .outcomes)
+            return (f.view, {})
+        },
+        Scenario(name: "settings", set: "readme", height: panelHeight) {
+            let f = PanelFixture(mode: .settings)
+            return (f.view, {
+                f.nav.settingsCategory = .notifications
+                f.nav.settingsDetailFocused = true
+                f.nav.selectFirstCategoryRow()
+            })
+        },
+        Scenario(name: "widget", set: "readme", height: 56, width: 290) {
+            let f = PanelFixture(mode: .events)
+            f.nav.compactMode = true
+            return (AnyView(CompactView(store: f.store, sessions: f.sessions, nav: f.nav,
+                                        onExpand: {}, onExitCompact: {})), {})
+        },
+    ]
+
+    // Every store the panel reads, filled with made-up work in made-up repos.
+    // The ledger and session names live in a scratch directory, the session
+    // list is never scanned, and Settings never runs its appear-time probes,
+    // so nothing on the machine rendering these reaches a picture.
+    private final class PanelFixture {
+        let nav = PanelNav()
+        let store = EventStore()
+        let persistence: SessionPersistence
+        let sessions: SessionStore
+        let scratch: URL
+
+        init(mode: PanelMode) {
+            scratch = ScreenshotRenderer.scratchRoot
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+            persistence = SessionPersistence(path: scratch.appendingPathComponent("sessions.json"))
+            sessions = SessionStore(persistence: persistence)
+            nav.sessionPersistence = persistence
+            nav.handoffLedger = HandoffLedger(path: scratch.appendingPathComponent("handoffs.jsonl"))
+            nav.persistExtensionValue = { _, _ in }
+            nav.onExtensionConfigChanged = { _ in }
+            nav.mode = mode
+            // The pill is the default; the panel pictures want the panel.
+            nav.compactMode = false
+            fillEvents()
+            fillSessions()
+            fillUsage()
+            fillOutcomes()
+        }
+
+        var view: AnyView {
+            AnyView(PanelContentView(
+                store: store, sessions: sessions, nav: nav, phrases: PhrasesViewModel(),
+                permissions: PermissionsModel(),
+                extensions: ExtensionHost(background: { _ in }, toMain: { $0() },
+                                          runner: { _, _, _ in .transient("fixture") },
+                                          tiers: { [:] },
+                                          makeSupervisor: { _, _, _ in fatalError("no services in fixtures") }),
+                extensionCatalog: ExtensionCatalog(fetchCatalogue: { .success([]) },
+                                                   performInstall: { .success($0.id) },
+                                                   performRemove: { .success($0) },
+                                                   background: { $0() }, toMain: { $0() },
+                                                   probeRequirement: { _ in true },
+                                                   recordedTiers: { [:] }),
+                onConfigureExtension: { _ in }, onCloseExtensionsBrowser: {},
+                onGrantPermissions: {}, runsOnAppear: false
+            ).environmentObject(persistence))
+        }
+
+        private func path(_ repo: String) -> String { "/Users/dev/code/\(repo)" }
+
+        private func fillEvents() {
+            let now = Date()
+            // A prompt that can still be answered: its FIFO exists and its hook
+            // is alive, which is what makes the footer offer Approve. The FIFO is
+            // a plain file nobody writes to, and the hook is this process.
+            let fifo = scratch.appendingPathComponent("prompt.fifo")
+            FileManager.default.createFile(atPath: fifo.path, contents: nil)
+            // Oldest first: each append goes on top.
+            store.append(NudgeEvent(agent: "codex", kind: .stop, title: "Codex", message: "Done",
+                                    projectPath: path("infra"), timestamp: now.addingTimeInterval(-41 * 60)))
+            store.append(NudgeEvent(agent: "github", kind: .other, title: "Review requested",
+                                    message: "Add rate limiting to the public endpoints",
+                                    timestamp: now.addingTimeInterval(-12 * 60),
+                                    source: .github, tag: "review-request", severity: .action,
+                                    url: URL(string: "https://github.com/acme/api/pull/318"),
+                                    repo: "acme/api", pr: 318))
+            store.append(NudgeEvent(agent: "claude", kind: .stop, title: "Claude Code", message: "Done",
+                                    projectPath: path("docs"), timestamp: now.addingTimeInterval(-3 * 60)))
+            store.append(NudgeEvent(agent: "claude", kind: .permission, title: "Claude Code",
+                                    message: "npm test -- --coverage", projectPath: path("web-app"),
+                                    hasActionButton: true, timestamp: now.addingTimeInterval(-20),
+                                    fifoPath: fifo.path, hookPID: Int(getpid())))
+        }
+
+        private func fillSessions() {
+            let now = Date()
+            func session(_ pid: Int, _ agent: String, _ repo: String, _ elapsed: String,
+                         busy: Bool, name: String? = nil, quietFor: TimeInterval) -> Session {
+                var s = Session(id: pid, pid: pid, agent: agent, projectPath: path(repo), projectName: repo,
+                                terminalPID: nil, terminalApp: "iTerm2", elapsed: elapsed,
+                                customName: name, status: .active)
+                s.liveStatus = busy ? "busy" : "idle"
+                s.lastActivityAt = now.addingTimeInterval(-quietFor)
+                return s
+            }
+            sessions.showFixture([
+                session(4101, "claude", "web-app", "42:10", busy: true, quietFor: 6),
+                session(4102, "claude", "api", "1:12:03", busy: false, name: "rate limits", quietFor: 4 * 60),
+                session(4103, "codex", "infra", "18:44", busy: true, quietFor: 12),
+                session(4104, "gemini", "docs", "05:31", busy: false, quietFor: 2 * 60),
+            ])
+        }
+
+        private func fillUsage() {
+            let now = Date()
+            nav.quota = QuotaSnapshot(
+                fiveHour: QuotaTier(utilization: 38, resetsAt: now.addingTimeInterval(2 * 3600 + 14 * 60),
+                                    windowLength: 5 * 3600),
+                sevenDay: QuotaTier(utilization: 61, resetsAt: now.addingTimeInterval(3 * 86_400 + 5 * 3600),
+                                    windowLength: 7 * 86_400),
+                // Two bars, so the pane fits the default height without scrolling.
+                sevenDayOpus: nil, sevenDaySonnet: nil,
+                planType: "max")
+            nav.codexQuota = CodexQuotaSnapshot(
+                primary: QuotaTier(utilization: 22, resetsAt: now.addingTimeInterval(3 * 3600),
+                                   windowLength: 5 * 3600),
+                secondary: QuotaTier(utilization: 47, resetsAt: now.addingTimeInterval(4 * 86_400),
+                                     windowLength: 7 * 86_400),
+                planType: "plus")
+            nav.quotaUpdatedAt = [.claude: now.addingTimeInterval(-40), .codex: now.addingTimeInterval(-40)]
+        }
+
+        private func fillOutcomes() {
+            let ledger = nav.handoffLedger
+            // (session, agent, repo, branch, ticket, tokens, outcome)
+            let work: [(String, String, String, String, String?, Int, OutcomeStatus)] = [
+                ("s1", "claude", "web-app", "feat/app-142-checkout", "APP-142", 182_000, .merged),
+                ("s2", "claude", "web-app", "feat/app-142-checkout", "APP-142", 64_000, .merged),
+                ("s3", "codex", "api", "feat/app-151-rate-limits", "APP-151", 121_000, .pushed),
+                ("s4", "claude", "api", "fix/app-149-timeouts", "APP-149", 48_000, .merged),
+                ("s5", "codex", "infra", "chore/upgrade-terraform", nil, 37_000, .committed),
+                ("s6", "claude", "docs", "docs/getting-started", nil, 22_000, .needsReview),
+            ]
+            for (id, agent, repo, branch, ticket, tokens, outcome) in work {
+                ledger.upsert(id: id + "\n" + branch, agent: agent) { r in
+                    r.repoRoot = path(repo)
+                    r.branch = branch
+                    r.ticket = ticket
+                    r.model = agent == "claude" ? "claude-sonnet-5-5" : "gpt-5.5-codex"
+                    r.contextTokens = tokens
+                }
+                nav.outcomeByBranch[PanelNav.outcomeKey(path(repo), branch)] = outcome
+            }
+            nav.handoffsRevision += 1
+        }
+    }
+
     // MARK: - Capture
 
     private static func render(_ scenario: Scenario, to path: String) throws {
         let (view, settle) = scenario.make()
-        let size = NSSize(width: Self.size.width, height: scenario.height)
+        let size = NSSize(width: scenario.width, height: scenario.height)
         let hosting = NSHostingView(rootView: view
             .frame(width: size.width, height: size.height)
             .background(Color(nsColor: .windowBackgroundColor)))

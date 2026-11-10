@@ -16,35 +16,40 @@
 </div>
 
 ---
-  <p align="center">
-    <img src="https://github.com/user-attachments/assets/c73cb65b-ff96-48bf-9371-3f1d3241c6cb" width="48%" alt="StackNudge banner" />
-    &nbsp;
-    <img src="https://github.com/user-attachments/assets/e4fecb5d-376e-44eb-a68a-220cb0b30507" width="48%" alt="StackNudge panel" />
-  </p>
+
+<p align="center">
+  <img src="assets/screenshots/events.png" width="49%" alt="The Events tab: a permission prompt waiting for approval, above finished turns and a GitHub review request" />
+  <img src="assets/screenshots/usage.png" width="49%" alt="The Usage tab: Claude's session and weekly quota bars, with a pace warning" />
+</p>
+
+StackNudge is a macOS menu-bar app that tells you when an AI coding agent finishes a turn or stops to ask permission, and lets you answer from the keyboard:
+
+- **Banners, sound and voice** when an agent is done or waiting. Click one, or press `⏎` in the panel, to jump to the exact terminal or editor window. Claude Code and Codex prompts can be approved right from the panel.
+- **A keyboard-driven panel** (`⌘⌥N`) with your recent nudges, every running agent session, your subscription quota, and what your agent work actually shipped.
+- **Reminders** for prompts you missed, an optional **Slack DM** when you're away from the Mac, and a timed **mute** when you need quiet.
+- **Extensions** that add their own tabs and settings pages.
 
 ## Supports
 
-| Agent | Status |
+| Agent | Approve from the panel |
 |-------|--------|
 | Claude Code | ✅ |
-| Cursor | ✅ |
 | Codex | ✅ |
-| Gemini CLI | ✅ † |
-| Antigravity CLI | ✅ † |
-| pi | ✅ † |
-| Any hooks-capable agent | ✅ — point it at `notify.sh` |
+| Cursor | — (turn ends only) |
+| Gemini CLI | banner only † |
+| Antigravity CLI | banner only † |
+| pi | — (turn ends only) |
+| Any hooks-capable agent | banner only, once you point it at `notify.sh` ([manual setup](docs/setup.md#manual-setup)) |
 
-† Gemini CLI, Antigravity, and pi route their turn-end / permission signals through an observability-only hook — the banner shows the prompt, but the Allow / Deny click still has to happen in the agent's own terminal. Claude Code and Codex permission events can be approved from the panel directly — with two deliberate exceptions, below. (pi has no native hook system; stack-nudge installs a pi extension that forwards its lifecycle events.)
+† These agents report a permission prompt but can't take an answer from outside, so you still click Allow / Deny in the agent's own terminal.
 
-**Platforms:** macOS — full app with panel, click-to-focus banners, auto-update, quota tracking, voice. Linux (PulseAudio / ALSA / libnotify) and Windows (Git Bash / WSL) get audio + basic notifications via `notify.sh` only.
+**Platforms:** macOS gets the full app. Linux (PulseAudio / ALSA / libnotify) and Windows (Git Bash / WSL) get sound and basic notifications through `notify.sh` only.
 
 ## Install
 
 ### macOS
 
-Download the latest release from [GitHub Releases](https://github.com/StackOneHQ/stack-nudge/releases/latest) — pick the `.tar.gz` matching your Mac's architecture (`arm64` for Apple Silicon, `x86_64` for Intel), expand, and drag `StackNudge.app` into `~/Applications/`.
-
-CLI shortcut (requires [`gh`](https://cli.github.com/)):
+Download the latest release from [GitHub Releases](https://github.com/StackOneHQ/stack-nudge/releases/latest), pick the `.tar.gz` for your Mac (`arm64` for Apple Silicon, `x86_64` for Intel), expand it, and drag `StackNudge.app` into `~/Applications/`. Or with [`gh`](https://cli.github.com/):
 
 ```bash
 ARCH=$(uname -m)
@@ -55,19 +60,9 @@ mv StackNudge.app ~/Applications/
 open ~/Applications/StackNudge.app
 ```
 
-On first launch, stack-nudge runs a one-screen wizard:
+On first launch a one-screen setup finds the agents you use (all of the above except pi, which `./install.sh` wires), wires their hooks, starts StackNudge at login, and walks you through the macOS permissions it needs. Everything ships inside the app, voice engine included; new releases install themselves from Settings.
 
-1. Detects which agents you have configured (`~/.claude`, `~/.cursor`, `~/.gemini`).
-2. Wires their hook configs to `notify.sh`.
-3. Registers itself + the voice engine as launchd agents so they start at login.
-
-Everything is self-contained inside the `.app` — no Xcode CLT, no Python, no shell-script bootstrap required. The bundle ships with a portable Python + stackvox (the offline voice engine) already installed. The Kokoro voice model downloads lazily the first time you enable voice notifications.
-
-Subsequent releases install automatically via the in-app auto-updater (Settings → "Update available · vX.Y.Z" when a new release exists).
-
-### Linux / Windows
-
-These platforms get the audio + libnotify path only — no panel, no click-to-focus, no auto-update. The shell installer is what wires `notify.sh` into agent hooks:
+### Linux / Windows, or from source
 
 ```bash
 git clone https://github.com/StackOneHQ/stack-nudge.git
@@ -75,519 +70,55 @@ cd stack-nudge
 ./install.sh
 ```
 
-**Prerequisites:** Python ≥ 3.10 (the bundled voice engine [stackvox](https://github.com/StackOneHQ/stackvox) requires it).
+The installer wires hooks for every agent it finds. On macOS it also builds and installs the app, which needs the Xcode Command Line Tools. Requires Python ≥ 3.10.
 
-The installer auto-wires hooks for every detected agent — **Claude Code** (`~/.claude`), **Cursor** (`~/.cursor`), **Codex** (`~/.codex`), **Gemini CLI** (`~/.gemini`), **Antigravity CLI** (`~/.gemini/antigravity-cli`), and **pi** (`~/.pi/agent`, wired by installing a pi extension rather than a hook config). Any other hooks-capable agent can be wired by hand — see [Manual setup](#manual-setup) below.
+## The panel
 
-### From source (macOS dev)
+Press `⌘⌥N` from anywhere. `⌘1`…`⌘9` or `⌘←` / `⌘→` switch tabs, `↑ ↓` and `⏎` do the rest, and `Esc` hides it. Every page's footer lists its keys.
 
-If you're working on stack-nudge itself and want to build from source rather than download a release:
-
-```bash
-git clone https://github.com/StackOneHQ/stack-nudge.git
-cd stack-nudge
-./install.sh
-```
-
-Same script as Linux/Windows; on macOS it additionally builds and installs the panel `.app`. Requires Xcode CLT. See [Development](#development) for the inner-loop tools.
-
-## How it works
-
-Each supported agent has a hooks system. `stack-nudge` registers these hooks:
-
-| Agent | Event | What happens |
-|-------|-------|--------------|
-| Claude Code | `Stop` | Banner when the turn ends |
-| Claude Code | `PermissionRequest` | Banner when Claude pauses for approval |
-| Cursor | `stop` | Banner when agent turn ends |
-| Gemini CLI | session end | Banner when agent finishes |
-| pi | `agent_settled` (via extension) | Banner when the turn settles |
-
-The hook calls `notify.sh <agent> <event>`, which plays a sound and shows a banner via:
-
-1. **macOS** — the native `stack-nudge.app` (click-to-focus routes back to your editor)
-2. **Linux** — `paplay` / `aplay` / `notify-send`
-3. **Windows** — `powershell [console]::beep`
-
-### Click-to-focus (macOS)
-
-When you click the banner, `stack-nudge.app` uses System Events to raise the exact window that triggered the notification — even if you have multiple Cursor or terminal windows open. Clicking a permission banner also hands the prompt back to the agent, so it's waiting for you in the terminal (Codex won't show its own prompt while the hook is still holding it). Supported apps:
-
-- Cursor, VS Code, Zed
-- iTerm2, Warp, Ghostty, Terminal.app
-
-If the target app is already in focus when the notification fires, the banner is suppressed and only the sound plays.
-
-> **Note on Zed:** Zed itself doesn't expose an external hook system, so stack-nudge relies on the agent's hooks (e.g. `~/.claude/settings.json` for Claude Code) firing from inside Zed's integrated terminal. Click-to-focus and frontmost-window suppression are wired up via `TERM_PROGRAM=zed`, which Zed sets automatically.
-
-### Immediate focus mode
-
-If you'd rather have your editor focus automatically — no click needed:
-
-```bash
-export STACKNUDGE_ACTIVATE_IMMEDIATELY=true
-```
-
-Add that to your shell profile.
-
-### Keyboard-native panel (macOS)
-
-If you'd rather not click banners with the mouse, stack-nudge runs a small floating panel that you summon with a hotkey. It has five tabs (**Events**, **Sessions**, **Usage**, **Outcomes**, and **Settings**) and is fully keyboard-driven.
-
-The panel is installed and registered as a launchd agent by `./install.sh` — no opt-in needed. To run quietly without macOS banners, toggle **Settings → Banner notifications** off (panel-only mode).
-
-Default hotkey is `cmd+opt+n`. Hit it from anywhere to summon the panel; hit it again while focused to hide. Switch tabs with `Cmd+1` (Events), `Cmd+2` (Sessions), `Cmd+3` (Usage), `Cmd+4` (Outcomes), `Cmd+5` (Settings), or click them; `Cmd+,` also opens Settings, and so does **Settings…** in the menu bar menu. Banner and panel can run together, alone, or both off; the sound and voice still fire as passive signals.
-
-These keys work the same on every page, including while a text field has focus:
-
-| Key | Action |
-|-----|--------|
-| `Esc` | Hide the panel. In a text field it cancels the field instead: a filter, search or new phrase empties and hands the keyboard back to the page, a rename or config field keeps its saved value. While a shortcut is being recorded it cancels that and keeps the old one, and `Esc` with a modifier is recorded as the shortcut. The footer's last hint shows which. |
-| `⌘←` / `⌘→` | Previous / next tab. From a sub-page, the tabs either side of the one it belongs to. Not while recording a hotkey, where they do nothing (a shortcut can't use an arrow), and not on the setup screen or Permissions opened from it, which have no tabs. |
-| `⌘,` | Open Settings, as in any Mac app. Works from a text field too; not while recording a hotkey, or on the setup and update screens. |
-| `⌫` in an empty text field | Cancel the field, as `Esc` does. A fresh press only: holding `⌫` to clear a field stops once it's empty. |
-
-Outside a text field, `←` is back a level on sub-pages and detail panes: out of a detail pane, or from a sub-page to the page it belongs under. The exception is picking a value in Settings, where `←` / `→` step the value.
-
-#### Events tab
-
-Recent nudges in chronological order. Each shows agent, message, project name, time.
-
-| Key | Action |
-|-----|--------|
-| `↑ ↓` | Move selection |
-| `⏎` | Approve permission / focus source editor |
-| `O` | Focus source editor without approving, a waiting prompt goes back to the agent to answer there |
-| `M` | Mute all notifications for the configured duration (press again to resume) |
-| `⌫` | Dismiss the selected nudge locally |
-| `H` | Open the searchable history pane |
-| `Esc` | Hide the panel |
-
-When you press `⏎` on a permission event in a VS Code / Cursor terminal pane, stack-nudge walks the editor's accessibility tree to focus the right pane (matched by the agent name in the tab title) before sending Enter — so the approval keystroke lands in the agent's terminal, not whatever was last focused. Falls back gracefully if the pane can't be found.
-
-**Mute for a while.** Press `M` (or use the bell button in the panel header, or the menu-bar **Mute notifications** submenu) to silence *everything* — banner, sound, voice, and the focus jump — for a set duration, **including permission prompts**. Events keep flowing into the panel while muted; only the interruptions are suppressed. A live countdown shows on the header bell and the menu-bar icon (the compact widget just shows a muted-bell glyph), and the mute lifts itself when the timer runs out (or immediately if you press `M` / **Resume** again). The default duration is configurable (`STACKNUDGE_MUTE_DURATION_MIN`, one of 15 / 30 / 60 / 120, default 30) and can be cycled in Settings. Mute is in-memory only — it resets on relaunch.
-
-**History.** The list above is a live triage queue — capped, pruned per session, and gone when you quit. Press `H` for the durable log behind it: every nudge, newest first, with a filter box that matches on message, agent, and repo. `↑↓` and `⌘↑↓` walk the rows; start typing (or press `/`) to filter, `⏎` hands the keyboard back to the rows, and `←` steps back to the queue.
-
-History is deliberately a separate pane rather than more rows in the queue. The queue is an action list — `⏎` approves, `⌫` dismisses — and a replayed record has no FIFO to answer and no process to focus, so mixing the two would make those keys mean different things depending on which row you happened to land on.
-
-**Feed events.** Besides agent nudges, the queue can show events from a script or an in-app feed. A script writes one JSON object per line to `~/.stack-nudge/panel.sock`:
-
-```bash
-printf '%s\n' '{"agent":"deploy-bot","event":"other","title":"Deployed","message":"api to production","source":"script","tag":"deploy","severity":"action","url":"https://example.com/deploys/9","repo":"acme/api","key":"deploy:9"}' \
-  | nc -U ~/.stack-nudge/panel.sock
-```
-
-`agent`, `event`, `title` and `message` are required. The rest are optional:
-
-| Field | Meaning |
-|-------|---------|
-| `source` | `script`, `github` or `calendar`. Anything else, or `agent`, makes it an ordinary agent event. A feed event is never a permission prompt: it ignores `event`, `fifo_path`, `hook_pid` and `has_action_button`. |
-| `tag` | Free-form label that picks the row's icon: `review`, `review-request`, `ci`, `ready`, `deploy`, `pipeline` or `calendar`. Any other tag gets the source's icon. Searchable in history. |
-| `severity` | `info` (default), `action` or `alert`. Colours the icon grey, orange or red. |
-| `url` | Opened by `⏎` or `O` (the primary action reads **Open**). Only `http` and `https` links are kept. Without one, `⏎` just dismisses the row. |
-| `repo`, `pr` | Shown in the row's chip, for example `GitHub · api#9`. |
-| `key` | An event with the same `key` replaces the one already queued, so a build that fails and then passes is one row. |
-
-Each source keeps its own 20 most recent events, so a busy feed can't push a permission prompt out of the queue. A feed banner doesn't clear other banners, and clicking it opens its `url`. History records the source, tag and link, and searches the source and tag.
-
-Records live in `~/.stack-nudge/events.jsonl` (mode 0600), one JSON object per line, holding timestamp, agent, kind, title, message, repo path, and session id — the descriptive fields only, never the FIFO paths or PIDs. They're kept for 30 days or 10,000 records, whichever binds first, trimmed once per launch. **The log contains prompt and tool text**, so if that isn't something you want on disk, turn it off in Settings → **Event history** (`STACKNUDGE_EVENT_HISTORY=false`); Settings → **Clear event history** deletes the file outright. Nothing is ever sent anywhere — this is a local file, same as the rest of `~/.stack-nudge`.
-
-**Answering elsewhere clears the prompt.** A permission prompt is tracked by two things: the FIFO notify.sh creates for your decision, and the hook process waiting to read it. Both are required. The FIFO alone isn't proof — its cleanup is skipped entirely on `SIGKILL`, which is what the agent does to the hook when you answer in its own UI. (It was also skipped on a clean exit until recently — the trap referenced a variable that had gone out of scope by the time it fired — so answered and timed-out prompts leaked their FIFO directory until the half-hourly sweep collected it.) So approving a plan in the terminal used to leave the panel convinced the prompt was still blocking, keeping it in the menu-bar count and re-nudging you (and Slack) for the full 550 seconds. Now a prompt whose hook has gone is retired within a tick, because there's nobody left to read a decision.
-
-**Some prompts get a banner but no button.** Two kinds of Claude Code event arrive through the same permission hook as a tool call but are not a yes/no question, and stack-nudge shows them without an **Allow**:
-
-- **Questions and plan approvals** (`AskUserQuestion`, `ExitPlanMode`). Claude Code renders its own dialog *concurrently* with the blocking hook, and whichever answers first wins. An **Allow** here isn't "approve" in either case — it arrives as Return on the dialog's first option, and what that option *is* differs. On a question it picks the highlighted answer, so the agent proceeds on a choice you never made. On a plan it approves the plan **and** the permission mode bundled into that first option (*"Yes, and auto-accept edits"* / *"and use auto mode"* / *"and bypass permissions"*, depending on the build), which loosens approvals for everything after it. The banner still tells you the agent is waiting; you answer in its own UI.
-- **Payloads stack-nudge cannot read.** If the hook can't extract a `tool_name` — no `jq` and no `python3`, a broken `jq`, a schema change that moves or retypes the field — it can't tell a tool call from a question, so it fails open: banner, no button, and the hook exits rather than holding a FIFO nobody can answer. The agent prompts in its terminal exactly as it would without stack-nudge installed.
-
-Both are a button withheld, never a prompt hidden and never an answer sent on your behalf — the asymmetry is the point, since the alternative failure answers for you.
-
-**Reminders for prompts you didn't answer.** macOS slides a banner into Notification Center after a few seconds, so a permission prompt you missed used to leave the agent blocked with nothing on screen to say so. stack-nudge now re-nudges: while a prompt is still waiting, it fires again on an interval (`STACKNUDGE_REMIND_MIN`, one of 1 / 2 / 5 minutes, default 2, `Off` to disable), up to three times — or fewer at longer intervals, since reminders stop once the hook hits its own 550-second timeout. The reminder carries the same **Allow** / **Deny** buttons and reads *"Still waiting 4m · Bash(rm -rf build/)"*, and the menu-bar icon shows a live count of prompts waiting on you — the one signal that survives an expired banner.
-
-Reminders only fire for prompts stack-nudge can *prove* are unanswered. Claude Code and Codex permission hooks block on a FIFO that's removed the moment the hook exits, so its presence means nobody has answered — in the panel, on the banner, or in the terminal. Gemini and Antigravity route permissions through fire-and-forget notification hooks with no such signal, so they get the single banner they always did rather than reminders that might be about something you already handled. Reminders stop at three, and stop early once the hook hits its own 550-second timeout and the agent falls back to prompting in the terminal. A per-session mute silences them like any other nudge. A *global* mute silences the banner and sound but not the Slack DM — see the Slack section for why.
-
-**Prompts raised by a subagent say so.** Claude Code's `Task` agents and Codex's `spawn_agent` children run their tool calls through the same permission hook as the main thread, so a prompt from an `Explore` agent used to be indistinguishable from one you'd asked for; that's the case where attribution matters most, since the reaction to an unexpected approval prompt is *"I didn't ask for that"*. Those banners now read **Claude Code · Explore** (plugin-scoped agent names are shown unscoped). If you'd rather not hear from them at all, set `STACKNUDGE_SUBAGENT_NUDGES=off` and they're dropped: the agent still prompts in its own terminal, so nothing is auto-approved, but nothing tells you it's waiting either, which is why tagging is the default. Turn-end nudges never needed this: both agents convert a subagent's turn end to their own `SubagentStop` event, which stack-nudge doesn't wire.
-
-**Headless runs stay quiet.** A script driving an agent (`claude -p` / `--print`, `codex exec` / `e` / `review`) fires the same hooks as a person at a terminal, but nobody can answer its prompts, and a held hook would stall the script for up to 550 seconds. stack-nudge posts nothing for those runs and leaves the decision to the agent's own permission setting; their turns ending aren't nudged either. Set `STACKNUDGE_HEADLESS_NUDGES=on` to treat them like any other session.
-
-**Slack, for when you're not at the Mac.** Banners only work if you're looking at the screen. Point stack-nudge at a Slack bot token and a permission prompt also arrives as a DM **from StackNudge** — which, unlike a message you send yourself, actually notifies you.
-
-| Setting | Default | |
-|---|---|---|
-| `STACKNUDGE_SLACK` | off | Master switch; turned on for you by a successful test message |
-| `STACKNUDGE_SLACK_IDLE_MIN` | `5` | Minutes idle before Slack is used. `Always`, or 5–60 in steps of 5 |
-| `STACKNUDGE_SLACK_DETAIL` | off | Include the tool call, not just the headline |
-| `STACKNUDGE_SLACK_STOP` | off | Also DM on finished turns, not just permission prompts |
-| `STACKNUDGE_SLACK_MEMBER_ID` | — | Who to DM. Detected for you; not secret |
-
-**Setup, once per person:** Settings → **Paste Slack setup** reads your clipboard and takes either an `xoxb-…` bot token, a `U…` member ID, or a JSON blob with both — so an org can keep one password-manager entry and onboarding is a single paste. stack-nudge then looks you up from your `git config user.email` and shows who it found; that's a *suggestion*, and pasting a member ID overrides it. **Send test message** confirms the whole chain and switches delivery on.
-
-**Setup, once per org:** create a Slack app, give its **bot** token `chat:write` (plus `users:read.email` and `users:read` if you want the automatic user lookup), install it, and share the `xoxb-` token internally. There is deliberately **no default app and no embedded credentials** — every install points at its own workspace.
-
-The token lives in the **Keychain**, never `~/.stack-nudge/config`. For scripted provisioning you can plant `STACKNUDGE_SLACK_BOT_TOKEN` in the config file; stack-nudge moves it into the Keychain on next launch and deletes the line. (The config file is now written `0600` regardless — it never needed to be world-readable.)
-
-Three things worth knowing about how it behaves:
-
-- **It's idle-gated, not a mirror.** By default nothing reaches Slack until the Mac has been untouched for 5 minutes — there's no point pinging your phone about a prompt you're already looking at. Set it to `Always` if you'd rather have everything — that removes the *idle* gate, not the rate limit below. Reminders for prompts you never answered skip the gate: you may be back at the desk and still not have seen the banner.
-- **Finished turns are rate-limited; permission prompts aren't.** The limit is global rather than per session, so with several agents running the headline names one of them and the rest are folded into the count — the DM means "go and look", not "look here specifically". The idle setting decides *whether* you're away, not how often you're interrupted while you are — so on its own it would send a DM per event, and an unattended hour can produce fifty. Finished turns are therefore folded into one message per 15 minutes, which says what it swallowed (*"finished a turn · 7 more while you were away"*). Permission prompts are never batched: each one is blocking something until you answer it, and repeats of a single prompt are already capped at three. Coming back to the machine clears the wait — but only a stay longer than the idle threshold does, since a single stray keystroke is indistinguishable from a trackpad bump.
-- **A global mute does *not* silence Slack.** Mute means "stop interrupting me *here*", and Slack exists precisely because you're elsewhere. Use the Slack switch to stop it. A *per-session* mute does apply, same as it does to banners.
-- **Titles only, by default.** A DM reads *"Claude Code in attack-lib needs permission"*. The tool call itself (`Bash(rm -rf build/)`) stays on your machine unless you turn on **Include message text**, because command lines carry paths, hostnames, and sometimes secrets, and this is the one path that leaves the Mac.
-
-You can't approve or deny from Slack — that needs an inbound endpoint this app deliberately doesn't have.
-
-> **Why a bot token and not "Connect with Slack"?** We tried. Slack supports OAuth with PKCE, which lets a desktop app authenticate with no client secret and no server — but *"desktop redirects are not allowed to request bot scopes"*, so it only yields a **user** token, and a user token can only post *as you*. Slack never notifies you about your own messages, so those DMs arrive silently. A notifying DM requires a bot token, a bot token requires the client-secret exchange, and a desktop app can't hold a secret. Slackbot reminders were the remaining workaround and Slack retired that API in March 2023. Hence: provision the token, paste it once.
-
-#### Sessions tab
-
-Live list of running agent processes (`claude`, `gemini`, `codex` — including node-hosted variants like `gemini-cli`). Polls every 3 seconds while visible and every 15 seconds in the background for the compact widget. Sessions that exit linger for 30s with `ended Ns ago`.
-
-**Stalled sessions.** An agent that reports itself busy but has produced nothing for a while is usually a wedged tool call. Set `Settings → Flag stalled after` (`STACKNUDGE_STALLED_MIN`, one of 10 / 20 / 30 / 60 minutes, default `Off`) and those rows turn amber and read `stalled · no output 24m` instead of a `busy` that implies progress. Flagging only — no banner, since there's nothing to approve and a stall often clears itself.
-
-For Claude Code sessions specifically, stack-nudge reads `~/.claude/sessions/<pid>.json` (Claude Code's per-process sidecar) to surface live data without waiting for a hook event:
-
-- **Live status dot** — yellow for `busy` (turn in flight), green for `idle` (waiting for input).
-- **Session name** from the sidecar when set to anything other than the default `main-agent` (falls back to the project name otherwise).
-- **Context-window usage** — `293K tokens · opus-4-7` beneath the project path, updated on each Claude turn.
-
-**Terminal tab titles.** Each row's meta line shows the terminal, the tab's title, and the working directory — `iTerm2 · ✳ Fixing the parser · ~/src/stackone`. Where the title comes from depends on the terminal:
-
-| Terminal | Source | Can name a session? |
-|---|---|---|
-| iTerm2 | AppleScript `autoName` | yes |
-| Terminal.app | AppleScript `custom title` (set by a human, or absent) | yes |
-| tmux | `#{pane_title}` per pane | yes |
-| VS Code / Cursor | the OS **window** title, shipped by the hook | no — see below |
-| Warp | — | no title available |
-| Ghostty | — | no title available |
-
-VS Code and Cursor are the odd one out: what's shown there is the editor's window title (`Panel.swift — stackone — Cursor`), which names whichever file is open and changes on every editor tab switch. It's useful context on the row, so it stays visible — but it's never used as a session name.
-
-By default a tab title is *shown* but never used as the session's **name**. It can't be trusted as one: on iTerm2 a manual rename, an OSC escape and the profile name all write the same value, tmux's `#{pane_title}` is the same OSC signal, and Claude Code rewrites the title every turn — so there's no way to tell "the user chose this" from "the agent just overwrote it".
-
-If you do title your tabs deliberately and want those names back, turn on `Settings → Name from tab titles` (`STACKNUDGE_TAB_TITLE_NAMES`, default off). It applies everywhere a session is named — Sessions rows, the compact widget, event rows, banner titles and spoken nudges — and sits below the two signals that *are* deliberate: a rename in the Sessions pane (`n`) and a name set inside the agent both still win. It only ever replaces the fallback to the project folder, and it never applies to VS Code / Cursor sessions, per the table above. A leading spinner glyph is trimmed, since Claude Code cycles one into the title frame by frame (`✳ Fixing the parser`) and it would otherwise churn the name and be read aloud as *"eight spoked asterisk"*.
-
-**Slack is the exception:** a DM only uses the tab title when `Include message text` (`STACKNUDGE_SLACK_DETAIL`) is also on, and falls back to the project name otherwise. That switch exists because a DM is the one path that leaves your machine, and a tab title is whatever the program in that pane wrote — oh-my-zsh, starship and most prompt frameworks put `user@host: /full/path` there via a `precmd` title hook. If you turned detail off deliberately, this doesn't route your paths out through a different door.
-
-Rows are ordered busy-first, then by most-recent activity. Status label reads `busy · 2 min ago` / `idle · 1 hr ago`.
-
-| Key | Action |
-|-----|--------|
-| `↑ ↓` | Move selection |
-| `⏎` | Focus the session's source terminal |
-| `n` | Rename the selected session inline |
-| `⌘⌫` | Send SIGTERM to the agent process |
-| `Esc` | Hide the panel |
-
-#### Usage tab
-
-Reachable from the tab strip or `Cmd+3`. Renders your Claude Code subscription quota — the same numbers `claude /usage` shows in the terminal — but always available without typing the command:
-
-- **Current session** (5-hour rolling window)
-- **Current week (all models)**
-- **Current week (Opus only)** *(when your plan has the tier)*
-- **Current week (Sonnet only)** *(when your plan has the tier)*
-
-Bars are color-coded: green below 50%, yellow 50–80%, red 80%+. Reset times shown per tier.
-
-Each bar is really two: a pale bar showing how far through the window you are, with the solid usage bar inset inside it. Compare the two right-hand edges — usage short of elapsed means you're spending quota slower than the clock is running it down; usage past elapsed means you'll hit the cap before the reset. It answers “am I above 50% usage with 50% of the window left?” at a glance. When usage leads the clock by five points or more, the row also says so outright — *“22% ahead of pace”*. Only that direction is called out: there's no “on track” line to learn to ignore, so the warning still means something when it shows up. The pale bar needs both a reset time and a window length, so it's absent where either is missing: Antigravity publishes a reset time per model but never a window length, and its monthly credit pool has neither. It's also absent once a tier's reset time has passed, since a snapshot that outlived its own window can't be placed on one.
-
-Numbers come from the vendor's own CLI, never from a provider API directly. For Claude, stack-nudge reads the usage payload Claude Code caches to `~/.claude.json` when that cache is under a minute old, and otherwise shells out to `claude --print /usage`. Because the CLI holds its *own* keychain grant, **stack-nudge never touches your keychain or calls the Anthropic API, so there's no password prompt**. If `claude` isn't on your `PATH` or you're signed out, the tab shows *"Claude usage unavailable — run `claude /usage` to check your session"* rather than falling back to any other source; if the CLI breaks with a usable reading still on disk, the tab shows that reading dated to when it was taken rather than nothing at all.
-
-Codex works the same way through a different door: stack-nudge asks the local `codex app-server` for `account/rateLimits/read`, which returns **account-wide** limits — quota you spent on the web, in the IDE or on another machine included. A `codex` too old to serve it falls back to the newest rollout file under `~/.codex/sessions`, which only sees turns run on this machine. Antigravity is unchanged: its usage comes from the running `agy` process over loopback.
-
-Polls every 60 seconds while the full panel is open, and otherwise every 5 minutes by default (configurable via Settings → Usage → "Poll frequency"). The collapsed widget counts as background, so it polls at your configured frequency rather than the faster open-panel rate. Opening the panel syncs immediately if the last one is over a minute old. On the Usage tab: `r` triggers a manual sync, `p` pauses/resumes the poller.
-
-Claude, Codex, Antigravity and pi each appear in the tab's client list when they have something to show; `↑`/`↓` switch between them. **The compact widget's gauge follows whatever you select here** — pick Codex in the Usage tab and the pill's rings, hover legend, and reset countdown all switch to Codex, with the client name shown in the legend on hover. All four are read on the same poll tick, so switching costs nothing. The selection is in-memory and resets to the first connected client on relaunch.
-
-For Claude and Codex the two rings are the 5-hour and weekly windows. A Claude account with no 5-hour limit (a verified Ultra plan) shows the weekly window in the inner ring, with its reset countdown beside it. Codex reports the window length per limit rather than a fixed pair, and on some accounts publishes only a weekly one, so its Usage tab headings are named from what it actually reports. Antigravity reports neither — it publishes one window per model plus a monthly credit pool — so its inner ring shows whichever model is closest to its limit and the outer ring shows monthly prompt credits. Gemini CLI has no usage counter: unlike the others it writes no rate-limit data to disk and serves no local endpoint, so there's nothing to read.
-
-**pi is the one client whose bars are not a quota.** It enforces none: its API models bill per token against your own keys, and its local models cost nothing. What its page tracks is a fair-usage budget you set yourself, one daily token allowance for API models and one for local models, with the week being seven days of it. The page lists one row per model, the same bar, reset line and pace warning as the other clients, each measured against the allowance for its kind and naming it (*"of 1.5M API budget"*), and the tab labels it `Budget` where the others show a subscription tier. `W` toggles the page between today and this week. The windows are calendar ones rather than rolling, which is what gives the reset time and the ahead-of-pace warning something to measure against, and the widget's rings follow whichever model is closest to its budget in each. Tokens are counted the way the history graph's "no cache reads" metric counts them, so resuming a long session doesn't burn the budget by replaying itself, and a turn counts as local when pi priced it at zero. Set the two allowances in Settings → Usage (`STACKNUDGE_PI_API_BUDGET` / `STACKNUDGE_PI_LOCAL_BUDGET`, tokens per day, `Off` to drop that kind's models from the page). Going over is reported rather than clamped: that is the only thing a budget you set for yourself can usefully tell you.
-
-#### Threshold-crossing notifications
-
-When any quota tier reaches your configured threshold, stack-nudge fires a banner — *"Weekly quota at 85% — resets May 17"* — once per period per tier, so you get a heads-up before hitting the cap. Configure in Settings → Usage:
-
-- **Quota tracking** — master switch for the whole feature (default on; off disables polling entirely)
-- **Quota alerts** — banner toggle (default on)
-- **Alert threshold** — 50% / 70% / 80% / 90% / 95% (default 80%)
-- **Poll frequency** — 1 / 2 / 5 / 10 / 15 / 30 min (default 5)
-
-#### Per-session context alerts
-
-Independent of quota: stack-nudge can also fire a banner when an individual Claude Code session's context window fills past a threshold you pick. The banner names the session — *"Context filling up — classifier-evolution-2 — at 175K tokens (opus-4-7). Consider /compact."* — so you know exactly which one to act on.
-
-- **Context alert at** — `Off` / 100K / 150K / 175K / 200K / 300K / 500K / 750K (default Off)
-- Absolute tokens, not a percent — Claude 4.x context windows vary (Opus/Sonnet 1M, Haiku 200K, opt-in betas), and there's no reliable way to infer the limit from the model ID alone.
-- One banner per session per threshold; the dedup re-arms whenever the session's token count drops by ≥20K (the characteristic shape of a `/compact` or `/clear`), so refilling after a compact alerts you again.
-
-#### Settings tab
-
-Reachable from the tab strip or `Cmd+5`. Keyboard-driven rows for hotkey, behavior toggles (banner, mute when focused, a Mute/Resume action row with mute duration, unanswered-prompt reminder interval, stalled-session threshold, pin panel, launch at login), widget (snap-to-corners toggle, corner, mascot picker, opacity), companion (on/off, count badge, size, pose preview, reset position), sound picks (with preview-on-cycle), voice notifications + picker + speed (with preview-on-cycle using a random conversational phrase), usage config (quota tracking + alerts + threshold + poll frequency + context alert threshold + show-remaining), event history (recording toggle + clear), Slack (paste setup, detected user, test message, notifications toggle, idle threshold, message detail, finished-turn toggle), and action rows (edit phrases, check permissions, open config file, view release notes, check for updates, uninstall, quit). The Extensions category lists what's installed, each with its status, then **Browse extensions**; each one opens a page of its own with its status, its settings as the same kinds of rows, what it's allowed, and Update / Remove.
-
-| Key | Action |
-|-----|--------|
-| `↑ ↓` / `Tab` | Move selection |
-| `Space` / `⏎` | Activate (toggles flip, action rows fire, hotkey row records a new combo, an extension's text setting opens its field). On a value row (sound, voice, duration, threshold, an extension's picker) it starts picking. |
-| `←` / `→` while picking | Step through the values (sounds and voices preview as you go) |
-| `Space` / `⏎` while picking | Settle on the value. Moving to another row settles it too. |
-| `→` / `⏎` on an Extensions row | Open that extension's page (or the browser, from Browse extensions) |
-| `⌘⌫` on an Extensions row or a page's Remove row | Remove the extension (no confirmation; ignores autorepeat) |
-| `←` | Back to the category list, or from an extension's page back to the Extensions list |
-| `Esc` | Hide the panel |
-
-The hotkey row records live: press `⏎` on it, press the new combo, and stack-nudge re-registers the global hotkey. If the combo is already grabbed by another app, the previous one stays and an inline error explains why.
-
-All Settings choices persist to `~/.stack-nudge/config` (a `KEY=value` text file). You don't need to edit it directly — Settings is the source of truth — but it's there for backup/sync or scripted setup.
-
-### Outcomes (usage → shipped)
-
-The **Outcomes** tab (`⌘4`) is two views of one dataset. It opens on the **Overview** (the aggregate); press `→` to carousel into the per-ticket **Tickets** list, `←` to step back.
-
-#### Overview
-
-The spend-to-outcome picture over a trailing window, so you see not just *what* your agents did but *what share of it shipped*.
-
-- **Shipped share**: the headline. Of the effort spent in the window, how much sits on work that merged or pushed, versus in-flight, versus **abandoned** (committed / needs-review work that's gone quiet for over 14 days).
-- **Spend bar**: one bar partitioning tokens across those three buckets, coloured shipped (green) / in-flight (blue) / abandoned (orange).
-- **Top tickets by spend**: the heaviest tickets (or unticketed repos) in the window, each with its dominant outcome. Click a row to open the ticket (when `STACKNUDGE_TICKET_URL` is set) or its PR.
-- **Agents**: the token mix per agent alongside each agent's **shipped share**, so you can see whose work actually merges. Plus the model mix.
-
-The Overview is a scroll page: `↑ ↓` scroll, `⌘↑ ⌘↓` jump to top/bottom, `W` cycles the trailing window (24h / 7d / 30d / 90d; 90d is the ledger's own retention ceiling). Because "abandoned" needs 14 days of quiet, it only appears on the 30d and 90d windows. It's token-only today; per-model dollar cost and reclaimed-time are planned follow-ups.
-
-#### Tickets
-
-Every captured agent session rolled up **by ticket**, derived from your branch naming (`eng-123/…` → `ENG-123`), falling back to the branch when there's no ticket. Shows the tokens spent, files changed, and the live git outcome: *needs-review → committed → pushed → merged*. `↑ ↓` select rows, `⏎` opens the ticket or PR, `⌫` dismisses one, `←` steps back to the Overview.
-
-The two panes agree by construction: both read the same per-branch outcome and PR state, so a squash-merged branch reads as shipped in each.
-
-Opt-in GitHub linking adds real **PR + CI status** (so even squash-merged work reads as *merged*). Turn it on in Settings → Tickets → **GitHub PR links**, then sign in via the in-panel device flow (no `gh` needed). Config keys (all optional; the toggles in Settings write the same file):
-
-| Key | What it does |
+| Tab | What's there |
 |-----|--------------|
-| `STACKNUDGE_GITHUB` | `true` to enable GitHub PR/CI linking (off by default) |
-| `STACKNUDGE_GITHUB_CLIENT_ID` | Override the embedded OAuth app Client ID (rarely needed) |
-| `STACKNUDGE_TICKET_URL` | Deep-link template for ticket rows, e.g. `https://linear.app/acme/issue/{key}`; `{key}` is replaced with the ticket |
-| `STACKNUDGE_HIDE_SHIPPED` | `true` to drop groups once their PR reads merged, keeping the list on in-flight work |
+| **Events** | Finished turns and permission prompts, newest first. `⏎` approves or jumps to the agent, `S` snoozes, `M` mutes everything for a while, `H` opens the full history. |
+| **Sessions** | Every running agent: busy or idle, its terminal tab, and for Claude Code how full its context is. `⏎` focuses it, `N` renames, `M` mutes just that session. |
+| **Usage** | Claude, Codex, Antigravity and pi quota, with a warning when you're spending faster than the window resets, and alerts at a threshold you pick. |
+| **Outcomes** | How much of your agents' token spend ended up shipped (pushed or merged), by ticket and by agent. |
+| **Settings** | Everything above, plus voice, the floating widget, Slack and extensions. `⌘,` opens it. |
 
-The sign-in finishes only once the token is saved to the Keychain and reads back. If the Keychain refuses the write, the sign-in card says so (with the `OSStatus`) instead of showing you as signed in, and `~/.stack-nudge/app.log` gets a line. If an earlier sign-in's token is still there, you stay signed in on it, and Settings notes under **Disconnect GitHub…** that the new sign-in didn't save.
+<p align="center">
+  <img src="assets/screenshots/sessions.png" width="49%" alt="The Sessions tab: four agent sessions across repos, busy and idle" />
+  <img src="assets/screenshots/outcomes.png" width="49%" alt="The Outcomes tab: share of token spend that shipped, and the top tickets" />
+</p>
 
-**Nothing showing up?** A session is recorded when an agent's turn ends *inside a git repo*, and only if the hook payload carries a session id. The Tickets empty state names which of those failed; `~/.stack-nudge/app.log` has a line per dropped turn. The usual cause is an installed hook script older than the app, since updates swap the `.app` alone: the app repairs that on launch, and Settings warns in the footer if the rewrite couldn't be applied. To fix it by hand:
+When you're not using the panel, a floating widget stays on the desktop. New installs get the **companion**, an animated character whose pose follows your agents (busy, waiting on you, a quota running hot, muted) and that opens the panel when clicked. Or pick the **pill** in **Settings → Appearance → Floating widget**, which shows your quota, the reset countdown and your agents at a glance:
 
-```bash
-grep -c stack-nudge-version ~/.stack-nudge/notify.sh   # 0 means the script predates v1.26
-./install.sh                                            # or reinstall from the app
-```
+<p align="center">
+  <img src="assets/screenshots/widget.png" width="290" alt="The pill widget: a quota ring, the reset countdown and the busiest session" />
+</p>
 
-### Companion (macOS)
+The whole panel, key by key, is in **[docs/panel.md](docs/panel.md)**.
 
-The companion is a small animated character that floats on your desktop and takes the pill widget's place while it is on. New installs start with it; on an existing install you are offered it once after an update, or you can choose it in **Settings → Appearance → Floating widget**, which is `Pill`, `Companion` or `Off` (`STACKNUDGE_FLOATING_WIDGET`). The pill's own rows (corner, opacity, type, mascot, snap) apply only to `Pill`. A config from before that setting is migrated on first load: `STACKNUDGE_COMPANION=true` becomes `companion`, else the old `STACKNUDGE_COMPACT_MODE` (on unless `false`) becomes `pill`, else `off`. On the update screen, `Tab` / `⇧Tab` move between **Turn on** and **Got it** (focus starts on **Got it**) and `⏎` presses the one with the ring.
+## Extensions
 
-- **Click** the character to open the panel beside it. The hotkey opens it there too.
-- **Drag** it anywhere; it stays where you drop it, and comes back on screen if a display it was on goes away.
-- **Right-click** for the menu, including a **Companion** submenu with its size and **Reset position**, which puts it back where a fresh install starts it.
+Extensions add a tab, a Settings page, or a small background service, and install from **Settings → Extensions → Browse extensions**. They run as you rather than in a sandbox, so only extensions reviewed in this repo are offered. To write one, see **[docs/extensions.md](docs/extensions.md)**.
 
-Its pose follows what stack-nudge knows: thinking while an agent is busy, watching while agent sessions are live, waiting when an event or a permission prompt is queued, alert when a quota is past your alert threshold, muted while notifications are muted, and asleep after five quiet minutes. The waiting pose is a wave: it means something wants you to act, and a finished agent turn is one of those, so it still waves. A new finished turn also gets a single small nod on arrival, when the character is otherwise calm (idle or asleep), not muted, and Reduce Motion is off. A count badge at its corner shows how many events are waiting, grey while muted. It animates on the render server and pauses while it is covered, the display sleeps or the screen is locked, so it stays near 0% CPU. With Reduce Motion on, it holds still.
+## Configuration
 
-| Setting | Key | Values |
-|---------|-----|--------|
-| Floating widget (Appearance) | `STACKNUDGE_FLOATING_WIDGET` | `pill`, `companion`, `off` |
-| Size | `STACKNUDGE_COMPANION_SIZE` | `small`, `medium` (default), `large` |
-| Count badge | `STACKNUDGE_COMPANION_BADGE` | `true` (default) / `false` |
+Settings is the place to change things. Every choice is saved to `~/.stack-nudge/config`, a plain `KEY=value` file you can back up or script; tokens for Slack and GitHub live in the Keychain instead. There's no account, analytics or backend; [PRIVACY.md](PRIVACY.md) lists the few network calls it makes (update checks, and Slack, GitHub and extensions once you turn them on).
 
-The Companion tab holds only the character's own settings. While Floating widget isn't `Companion` it shows a note and a **Turn on companion** row that switches it, and the settings are dimmed. `Space` or `⏎` flips Count badge, runs Reset position and Turn on companion, and on Floating widget, Size and Preview pose starts picking, as on every other row. Preview pose shows any pose on the character without changing anything else; it isn't saved. Holding `⌥` while the menu is open also reveals a **Debug** submenu under Companion with the same pose preview and an **Info (nod)** entry that plays the nod once. The character's last spot is kept in `STACKNUDGE_COMPANION_POS`.
+## More
 
-### Menu bar (macOS)
-
-When the panel daemon is running, a bell icon appears in your menu bar. The same items you can reach from the in-panel Settings tab are mirrored here for one-click access without summoning the panel:
-
-| Item | What it does |
-|------|--------------|
-| `Hotkey · …` | Shows your current hotkey (info only) |
-| `Show banners` | Toggles macOS banner notifications. Enabling fires a confirmation banner. |
-| `Voice notifications` | Toggles spoken notifications. Enabling speaks *"Voice notifications enabled"*. |
-| `Mute notifications ▸` | Submenu (For 15m / 30m / 1h / 2h) to silence all nudges for a set time. While muted the item becomes `Resume notifications` and the menu-bar icon shows a `bell.slash` + countdown. |
-| `Companion ▸` | While the companion is on: size, Reset position, and (with `⌥` held) Debug |
-| `Show panel` | Brings the floating panel up (handy when no events are queued) |
-| `Settings…` (⌘,) | Opens the panel straight on Settings |
-| `Check permissions…` | Opens the Permissions page in the panel (see below) |
-| `Open config file…` | Opens `~/.stack-nudge/config` in your default editor |
-| `Quit stack-nudge panel` | Exits the daemon |
-
-Menu changes take effect immediately for the next nudge — no daemon restart needed.
-
-### Permissions (macOS)
-
-The panel needs two privacy grants to fully work:
-
-| Permission                       | Why                                                                                                |
-|----------------------------------|----------------------------------------------------------------------------------------------------|
-| **Accessibility**                | Required for `AXIsProcessTrusted()` to return true — without it, the Enter-to-approve keystroke is silently skipped |
-| **Automation → System Events**   | Required for the AppleScript that focuses the right app and window when you act on a nudge        |
-
-The Permissions page shows each grant's live status. It's a Settings sub-page: open it from **Settings › Actions › Check permissions**, the "Permissions needed" row at the top of Settings, **Check permissions…** in the menu bar, or **Grant permissions** on the setup screen.
-
-| Key | Action |
-|-----|--------|
-| `↑ ↓` | Move selection |
-| `⏎` | Prompt for the selected grant. For Accessibility and Automation that's **Reset & prompt**, which clears the existing TCC entry and then triggers macOS's grant dialog. Notifications only asks, and once you've answered, the switch is in System Settings. |
-| `⌘⏎` | Open System Settings at the right pane |
-| `⌘R` | Check every grant again |
-| `←` | Back to Settings, or to setup if you came from there |
-
-The panel (or the expanded widget) stays up on this page even when a grant prompt or System Settings takes focus, so you can work through every grant in one pass; drag it aside if it covers System Settings. The page checks again whenever the panel becomes key, so a grant made in System Settings shows up when you click back.
-
-#### The rebuild gotcha
-
-stack-nudge's apps are **ad-hoc signed**, so every rebuild produces a new cdhash. macOS's TCC database binds permissions to that cdhash, which means a fresh build silently invalidates prior grants — even though System Settings still *shows* the entry as "on". `AXIsProcessTrusted()` returns false because the running binary's hash no longer matches.
-
-If approval has stopped working after a rebuild, hit **Reset & prompt** on the Permissions page. It runs `tccutil reset`, then triggers a fresh dialog bound to the current cdhash.
-
-### Auto-update
-
-stack-nudge polls GitHub Releases on launch and every 6 hours. When a newer release exists, the Settings tab gets a small accent dot and an "Update available · vX.Y.Z" row at the top of the list. Click it (or press Enter while it's selected) for a confirmation view with the release notes, then "Update Now" runs the install:
-
-1. Downloads the arch-appropriate `.tar.gz` artifact for your Mac (~150–200 MB)
-2. Verifies the SHA256 against the sidecar checksum file
-3. Extracts to a temp directory, strips the `com.apple.quarantine` xattr
-4. Atomic-swaps `~/Applications/stack-nudge.app` with the new bundle (keeps the old as `.app.old` for safety)
-5. Runs `launchctl kickstart -k` — the current process dies, launchd brings up the new bundle
-6. The new bundle's first launch shows a welcome-style "Updated to vX.Y.Z" screen with the release notes
-
-Because the swap replaces only the bundle, the hook script the agents invoke (`~/.stack-nudge/notify.sh`) would otherwise stay at whatever version first installed it. Each launch compares its `stack-nudge-version` stamp against the bundled script's and rewrites it when they differ, so payload fields added by a release reach the panel without a reinstall.
-
-No source clone, no swiftc rebuild on the user's machine — the new bundle is the already-signed-and-notarized artifact from CI. Updates are fast and don't disturb the user's Xcode CLT or Python install (or lack thereof).
-
-While the StackOne stack-nudge repo is private the auto-updater falls back to your local `gh` CLI auth (`gh api`) to read the release metadata. Org members with `gh` configured see no friction; the actual artifact download uses the release's signed asset URL.
-
-### Phrase editor
-
-The phrase pools that power [Voice notifications](#voice-notifications) can be customised in-app. Settings → "Edit phrases…" opens a keyboard-driven editor where you can:
-
-- Toggle individual built-in phrases on or off (`Space`)
-- Add your own custom phrases (typed inline, `Enter` to commit)
-- Remove custom phrases (`⌘⌫`)
-
-Per-pool customisations are stored in `~/.stack-nudge/phrases.user.json` and merged with the built-in pools at notification time. Disable a built-in phrase you find too cheery, add ones in your own voice — the same random-selection logic still applies.
-
-### Voice notifications
-
-stack-nudge uses [stackvox](https://github.com/StackOneHQ/stackvox), an offline Kokoro-82M TTS engine that speaks notifications aloud with ~13 ms latency. `./install.sh` pip-installs it from PyPI into an isolated venv at `~/.stack-nudge/venv` — no separate setup needed.
-
-**Enable** via Settings → Voice → "Voice notifications".
-
-The voice daemon starts automatically on first notification and is registered as a login item so it stays running across reboots.
-
-Voice fires alongside the banner and panel surfaces. The frontmost-suppression check still applies — when the source window is already focused, sound, banner, panel post, *and* voice are all suppressed (you don't need a nudge for the thing you're looking at).
-
-When voice is enabled, the chime is suppressed automatically — voice replaces sound rather than playing alongside it.
-
-#### Phrasing
-
-Voice messages are picked at random from per-event phrase pools and labelled with the project name (cwd basename, with hyphens/underscores split and a few acronyms expanded — `CLI` → `C L I`, `MCP` → `M C P`, etc.). For a project called `unified-cloud-api` you'll hear things like:
-
-- **Stop:** *"unified cloud api is ready for you"* / *"task complete in unified cloud api"* / *"output ready in unified cloud api"*
-- **Permission:** *"unified cloud api requires a decision"* / *"unified cloud api has a question for you"* / *"unified cloud api is awaiting approval"*
-
-Phrase pools live in `~/.stack-nudge/phrases/` — `en.sh`, `fr.sh`, `hi.sh`, `it.sh`, `pt.sh`. The right pool is picked from the configured voice's prefix (`af_*`/`am_*`/`bf_*`/`bm_*` → en, `ff_*` → fr, `hf_*`/`hm_*` → hi, `if_*`/`im_*` → it, `pf_*`/`pm_*` → pt) so a French voice speaks French phrasing.
-
-Tune via Settings → Voice → "Voice" (cycle voices with preview) and "Speed" (1.0 = normal).
-
-## Sounds
-
-| Event | macOS | Linux | Windows |
-|-------|-------|-------|---------|
-| Agent done | `Glass.aiff` | freedesktop bell | 800 Hz beep |
-| Waiting for approval | `Ping.aiff` | freedesktop bell | 1200 Hz beep |
-
-Any file from `/System/Library/Sounds/` works on macOS: Basso, Blow, Bottle, Frog, Funk, Glass, Hero, Morse, Ping, Pop, Purr, Sosumi, Submarine, Tink. Override per-event via Settings → Sounds → "Agent done" / "Permission" (cycle plays a preview on each step).
+- **[docs/notifications.md](docs/notifications.md)**: which hooks are wired, click-to-focus, how permission prompts and reminders behave, feed events from your own scripts, Slack, voice and sounds.
+- **[docs/panel.md](docs/panel.md)**: every tab and key, the menu bar, Outcomes and GitHub linking.
+- **[docs/setup.md](docs/setup.md)**: permissions, auto-update, uninstalling, wiring an agent by hand, and development.
+- **[docs/extensions.md](docs/extensions.md)**: building and publishing extensions.
 
 ## Uninstall
 
-### macOS — in-app
+**Settings → Actions → Uninstall StackNudge…** removes the hooks, the login items, `~/.stack-nudge/` and the app. Without the app, run `./uninstall.sh` from a clone. Details in [docs/setup.md](docs/setup.md#uninstall).
 
-Open the panel (`⌘⌥N`), go to **Settings → Uninstall stack-nudge…**, confirm. The app tears down:
+## Contributing
 
-- Hook entries in `~/.claude/settings.json`, `~/.cursor/hooks.json`, and `~/.gemini/settings.json`
-- The launchd agents (`com.stackonehq.stack-nudge`, `…-daemon`)
-- `~/.stack-nudge/` (config, `notify.sh`, phrases)
-- Moves `stack-nudge.app` to Trash and quits
-
-Settings (config, the cached Kokoro voice model in `~/.cache/huggingface/`) are not touched. stack-nudge never creates its own keychain entries, so there's nothing of ours to clean up there.
-
-### Linux / Windows / fallback
-
-```bash
-git pull        # if you cloned a while back — older uninstall.sh lacks hook cleanup
-./uninstall.sh
-```
-
-Same set of cleanups as the in-app path, useful when the .app isn't reachable or the in-app uninstall failed mid-flight.
-
-## Manual setup
-
-Claude Code, Cursor, Codex, Gemini CLI, and Antigravity CLI are auto-wired by the first-launch wizard. For other hooks-capable agents (or to integrate from a custom script), all you need is to invoke `notify.sh <agent-label> <event>` from wherever your agent emits lifecycle events. `<event>` should be `stop` (agent finished a turn) or `permission` (waiting for approval); `<agent-label>` can be anything — it just controls the banner title.
-
-Example block in any agent's hooks config:
-
-```json
-{
-  "hooks": {
-    "Stop": [
-      {
-        "matcher": "",
-        "hooks": [
-          { "type": "command", "command": "$HOME/.stack-nudge/notify.sh my-agent stop", "timeout": 30 }
-        ]
-      }
-    ]
-  }
-}
-```
-
-## Development
-
-```bash
-make build      # builds stack-nudge.app into build/
-make install    # full install (build + copy + register hooks + launchd)
-make reload     # rebuild + replace installed app + refresh notify.sh + bounce the daemon
-make dev        # watch sources; auto-reload on .swift / Info.plist / notify.sh / phrase changes
-make uninstall  # remove app, hooks, launchd agents, ~/.stack-nudge/
-make test-notify # drive notify.sh against a fake panel socket (macOS, no Xcode)
-```
-
-`make dev` is the inner-loop tool — leave it running in another terminal, save a Swift file or `notify.sh`, and the daemon bounces with the new build in ~2 seconds.
-
-Source layout:
-
-- `panel/` — the single persistent `stack-nudge.app` binary: hotkey, floating NSPanel, socket listener for incoming events, macOS banner posting via `UNUserNotificationCenter`, sessions list, settings and its Permissions page, auto-updater, quota probe
-- `panel/Companion/`: the companion character and its skin engine. The art is baked PNG parts and a manifest per skin, committed under `assets/skins/` and copied into the app bundle by `build.sh`; building the app needs no extra tooling.
-- `shared/` — code shared with the standalone Linux/Windows surfaces (currently `AppActivator.swift`)
-- `phrases/` — per-language voice phrase pools sourced by `notify.sh` at hook time
-- `notify.sh` — the shell entry-point CC/Cursor/Gemini hooks invoke; on macOS posts events to the running app via Unix-domain socket, on Linux/Windows handles audio + libnotify directly
-
-Swift compiled with `swiftc` directly. No Xcode, no SPM, no dependencies.
-
-### Extensions
-
-A tab can be contributed by an extension: a directory holding a manifest and an
-executable that prints one JSON document. No API to link against and no native
-code — anything that can print JSON works.
-
-Extensions are curated rather than sandboxed: the script runs as you, and the
-control is that nothing installs which did not come through a reviewed PR here.
-See **[docs/extensions.md](docs/extensions.md)** for the manifest, the view
-document, and what a reviewer should check.
-
-**Settings → Extensions** lists what's installed: name, a one-line description, and a status (Update x.y, Running, Present / Away, Broken, Tab ⌘N…). `→` or `⏎` opens an extension's page: its status, its settings, what it's allowed, where it appears, and **Update** / **Remove**. **Browse extensions**, the last row, says how many are available and opens the catalogue: updates first, then what you haven't installed, ten at a time until you search, which matches names and descriptions.
-
-| Key | On the browse page |
-|-----|--------|
-| `↑ ↓` / `⌘↑ ⌘↓` | Select / first or last |
-| `⏎` | Install or update, or open an installed one's page in Settings → Extensions. Every install and update takes two: the first says what it is (and, if it gets more than a tab, what it asks for), `⏎` again does it. A held `⏎` never counts, and a row that needs something missing ("Needs python3") does nothing |
-| `⌘⏎` | Open an installed one's page (when `⏎` is busy updating) |
-| `/`, or just type | Search |
-| `⌘R` | Reload the catalogue |
-| `←` | Back to Settings |
+Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). `make dev` rebuilds and restarts the app on every save, and [docs/setup.md](docs/setup.md#development) has the rest.
 
 ## Terms of use
 

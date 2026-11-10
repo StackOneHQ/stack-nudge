@@ -114,6 +114,7 @@ final class SessionStore: ObservableObject {
     }
 
     private func startPolling(every interval: TimeInterval) {
+        guard !isFixture else { return }
         // One-shot sweep of dead-PID sidecars left in ~/.claude/sessions/.
         // Claude Code writes these but doesn't garbage-collect them, so they
         // accumulate over weeks of use. Conservative guards (PID actually
@@ -132,6 +133,16 @@ final class SessionStore: ObservableObject {
         pollTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             self?.scan()
         }
+    }
+
+    // ScreenshotRenderer's sessions: shown as given and never scanned, so no
+    // process on the machine rendering them can appear in a picture.
+    private var isFixture = false
+    func showFixture(_ fixture: [Session]) {
+        isFixture = true
+        sessions = fixture
+        selectedPID = fixture.first?.pid
+        didFirstScan = true
     }
 
     func stopPolling() {

@@ -1,7 +1,10 @@
 # Service extensions
 
-Status: **proposal**, for review before any code. The reference prototype is the
-`feat/away-proximity` branch, a built-in version of the first service extension.
+Status: the host side **shipped in #243**: manifest schema 2, service mode,
+tiers, signals and Settings pages. The pilot extension, Away, is in review in #245. Parts
+still to build are marked *not yet delivered* below. The reference prototype was
+the `feat/away-proximity` branch, a built-in version of the first service
+extension.
 
 ## Why
 
@@ -65,7 +68,7 @@ The other fields (`name`, `version`, `tab`, `requires`, `config`) are as today; 
 What the bump touches:
 
 - **The host** accepts manifest schema 1 and 2. A view extension keeps saying 1.
-- **The index.** Entries gain `schema` and `mode`, so a new host can leave out
+- **The index.** Entries gain `mode`, `capabilities` and `tier`, so a new host can leave out
   what it can't run. Old hosts read the newest index (it's fetched from
   `/releases/latest`), so they will still list a service extension and refuse it
   only at install, at the manifest check. The reason is clear, but it's a wasted
@@ -73,7 +76,8 @@ What the bump touches:
 - **`STACKNUDGE_EXT_SCHEMA`** stays the *document* schema. The manifest schema is
   never passed to the script, so a view extension isn't told "2" and doesn't
   print a schema 2 document.
-- **`scripts/package-extensions.sh`** hard-codes schema 1 and needs to accept 2.
+- **`scripts/package-extensions.sh`** accepts schema 1 and 2, and checks `mode`
+  against the schema.
 
 - `mode`: `"view"` (the default, today's behaviour) or `"service"`.
 - `capabilities`: what the extension asks the app for. The app can only
@@ -136,7 +140,7 @@ user saves the extension's settings, so apply each one as it comes. Events are d
 - `document` replaces the tab's document, with the same schema and caps as a view
   extension's stdout today (8 MB).
 - `signal` sets a named value the app's features read. See [Signals](#signals).
-- `feed` posts a feed event on the same path as the socket's
+- `feed` (*not yet delivered*: the host accepts the line and logs it) posts a feed event on the same path as the socket's
   `"source":"script"` events (#235), so it can never be a permission prompt. It
   gets its own source, `extension:<id>`, with its own cap of 20, so an extension
   can't push the user's own script events out of the queue.
@@ -164,14 +168,16 @@ what reacts. For the pilot there is one:
 
 At most one extension may hold a given signal. The first to be granted it keeps
 it, and the host records that, so it doesn't depend on launch order. A second
-one asking is refused with the reason in Settings, where the user can switch the
-signal to it. Disabling
+one asking is refused, and the refusal is logged (*not yet delivered*: showing it
+in Settings and letting the user switch the signal to the newcomer). Removing
 or crashing the holder resets the signal to its neutral value (`present`), so a
 dead extension can never leave the app locked or muted.
 
 ## Events
 
-What the app tells service extensions, each behind an `event:*` capability:
+What the app tells service extensions, each behind an `event:*` capability.
+*Not yet delivered*: the capabilities can be declared and granted, but the host
+sends no events yet.
 
 | Event | Payload | Why |
 |---|---|---|
@@ -201,8 +207,8 @@ everything else here it relies on review, not containment. The file is new: ther
 the manifest itself. The host re-checks the tier on every index fetch: a
 demotion revokes the capabilities at once and restarts the process with the
 smaller grant. An extension on disk with no index entry, put there by hand, gets
-`view`. Settings → Extensions shows each extension's tier and granted
-capabilities. Installing one that asks for more than `view` lists what it asks
+`view`. Each extension's page in Settings → Extensions shows its granted
+capabilities (the tier itself isn't shown). Installing one that asks for more than `view` lists what it asks
 for and needs confirming.
 
 Hardware capabilities need the app's Info.plist to carry the usage string, as
@@ -267,8 +273,8 @@ prompts, the panel and widget shell, Settings, updates, and the extension host.
 
 The new surfaces follow AGENTS.md's keyboard rules like any other page:
 
-- **Settings → Extensions** gains each extension's tier, its granted
-  capabilities, the broken state, and which signal it holds.
+- **Settings → Extensions** gains each extension's granted capabilities, the
+  broken state, and which signal it holds.
 - **The install confirmation** for anything above `view` lists what it asks for.
 
 That means key routing in a pure, tested function, footers that list only live
