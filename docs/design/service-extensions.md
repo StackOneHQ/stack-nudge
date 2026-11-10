@@ -300,7 +300,9 @@ manifest field:
   and the page holds the status, the settings, the app's lock row for the
   presence holder, what it was allowed in plain words, where it appears, and
   Update and Remove (`⌘⌫`). It replaced the old per-extension config page. The
-  browser asks before installing anything above `view`. Config keys gain an
+  browser asks before every install and update, and lists what one above `view`
+  asks for, from the index entry's `mode` and `capabilities`; installing
+  refuses a package whose manifest differs from that entry. Config keys gain an
   optional `type` (`text`, `toggle`,
   `choice`, `number` with an optional `unit: "seconds"`, `dynamic`), checked at
   parse time and again on save. The status is a readout above the rows rather

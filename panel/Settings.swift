@@ -770,7 +770,7 @@ struct SettingsView: View {
                 label: nav.extensionConfirming == id ? "Confirm update to \(version)" : "Update to \(version)",
                 kind: .action, value: "",
                 detail: nav.extensionConfirming == id
-                    ? "It asks for more than before. Press ⏎ again to update." : nil)
+                    ? "Press ⏎ again to update." : nil)
         // ⌘⌫, not ⏎: see PanelNav.activate. The value says so.
         case .extensionRemove(let id):
             if !nav.settingsRows.contains(.extensionUpdate(id)) { extensionPageTrailer(id) }

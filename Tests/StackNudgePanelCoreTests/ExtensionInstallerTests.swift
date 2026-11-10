@@ -75,6 +75,28 @@ final class ExtensionInstallerTests: XCTestCase {
         XCTAssertEqual(old.first?.reviewedTier, .view)
     }
 
+    // The user confirmed what the index described: a package whose manifest
+    // runs differently or asks for something else isn't installed.
+    func testAPackageDifferentFromItsIndexEntryIsRefused() {
+        guard case .success(let manifest) = ExtensionManifest.parse(Data("""
+            {"id":"away","name":"Away","version":"1","schema":2,"mode":"service",
+             "capabilities":["bluetooth","signal:presence"]}
+            """.utf8)) else { return XCTFail("fixture didn't parse") }
+        var entry = ExtensionInstaller.IndexEntry(id: "away", name: "Away", version: "1", description: "",
+                                                  asset: "extension-away-1.tar.gz", sha256: "ab",
+                                                  requires: [], config: [])
+        XCTAssertNil(ExtensionInstaller.differenceFromIndex(manifest, entry), "an old index can't differ")
+        entry.mode = "service"
+        entry.capabilities = ["signal:presence", "bluetooth"]
+        XCTAssertNil(ExtensionInstaller.differenceFromIndex(manifest, entry), "order doesn't matter")
+        entry.capabilities = ["signal:presence"]
+        XCTAssertEqual(ExtensionInstaller.differenceFromIndex(manifest, entry), "capabilities differ")
+        entry.capabilities = nil
+        entry.mode = "view"
+        XCTAssertEqual(ExtensionInstaller.differenceFromIndex(manifest, entry), "runs as service, not view")
+        XCTAssertTrue(ExtensionInstaller.Failure.differsFromIndex("x").message.contains("wasn't installed"))
+    }
+
     func testAnEmptyIndexIsNotAFailure() {
         guard case .success(let entries) = index(#"{"schema":1,"extensions":[]}"#) else {
             return XCTFail("expected success")

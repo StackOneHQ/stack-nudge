@@ -458,6 +458,8 @@ for d in dirs:
         # What it asks for, so the install confirmation can say so before
         # anything is downloaded. Additive: older hosts ignore it.
         "capabilities": m.get("capabilities", []),
+        # And how it runs, which decides what the confirmation may claim.
+        "mode": m.get("mode", "view"),
     })
 
 entries.sort(key=lambda e: e["id"])

@@ -175,29 +175,39 @@ final class ExtensionCatalog: ObservableObject {
         entry.reviewedTier > .view && entry.reviewedTier > (recorded ?? .view)
     }
 
-    // What the confirmation says: what this extension asks for that its tier
-    // would grant, in plain words, and never anything it didn't ask for. An
-    // index from before entries carried capabilities can't say, so it says
-    // only that the extension gets more than a tab would.
-    static func confirmationText(for entry: ExtensionInstaller.IndexEntry, updating: Bool = false) -> String {
+    // What the confirmation says. Every install and update asks; one that
+    // gets more than a tab (a new install above view, or an update raising
+    // the tier) says what. "Runs in the background" only for a service, which
+    // is the only kind anything is granted to, and only capabilities this
+    // extension asked for that its tier grants: never one it didn't ask for.
+    // An index from before entries carried mode and capabilities can't say,
+    // so it says only that the extension gets more than a tab would.
+    static func confirmationText(for entry: ExtensionInstaller.IndexEntry, updating: Bool = false,
+                                 recorded: ExtensionTier? = nil) -> String {
+        let again = updating ? "\u{23CE} again to update to \(entry.version)."
+                             : "\u{23CE} again to install \(entry.version)."
+        guard needsConfirmation(entry, recorded: recorded) else { return again }
         let tier = entry.reviewedTier
-        guard tier > .view else { return "" }
-        let again = updating ? " \u{23CE} again to update." : " \u{23CE} again to install."
-        guard let asked = entry.requestedCapabilities else {
-            return "Runs in the background with more access than a tab." + again
+        guard let mode = entry.mode, let asked = entry.requestedCapabilities else {
+            return "Runs in the background with more access than a tab. " + again
         }
+        guard mode == ExtensionManifest.Mode.service.rawValue else { return again }
         let granted = asked.filter(tier.allows)
-        guard !granted.isEmpty else { return "Runs in the background." + again }
+        guard !granted.isEmpty else { return "Runs in the background. " + again }
         return "Runs in the background. Asks for: "
-            + granted.map(\.askingWords).joined(separator: ", ") + "." + again
+            + granted.map(\.askingWords).joined(separator: ", ") + ". " + again
+    }
+
+    func confirmationText(for entry: ExtensionInstaller.IndexEntry, updating: Bool) -> String {
+        Self.confirmationText(for: entry, updating: updating, recorded: recordedTiers()[entry.id])
     }
 
     // Every install and update goes through here: the browser's ⏎ and its
-    // buttons, and the Update row on an extension's page. Straight away when
-    // no confirmation is needed, otherwise on the second request for the
-    // same extension.
+    // buttons, and the Update row on an extension's page. Always two
+    // deliberate steps: the first arms it and shows what it is, the second,
+    // for the same extension, runs it.
     func requestInstall(_ entry: ExtensionInstaller.IndexEntry) {
-        if Self.needsConfirmation(entry, recorded: recordedTiers()[entry.id]), confirming != entry.id {
+        if confirming != entry.id {
             confirming = entry.id
             return
         }
@@ -293,6 +303,7 @@ final class ExtensionCatalog: ObservableObject {
         guard let row = rows.first(where: { $0.id == selectedID }) else { return }
         if failure(for: row.id) != nil { return dismissFailure(for: row.id) }
         guard !isBusy(row.id), row.updateAvailable || !row.isInstalled,
+              (missingRequirements[row.id] ?? []).isEmpty || row.isInstalled,
               let entry = entries.first(where: { $0.id == row.id })
         else { return }
         requestInstall(entry)
@@ -311,9 +322,10 @@ final class ExtensionCatalog: ObservableObject {
     // catalogue arrives after the view does, so there was nothing to select at
     // onAppear and nothing selected it afterwards either.
     //
-    // Row order is what makes seeding safe to do unprompted: refusals sort
-    // first, then what is installed, and only then what is merely published. On
-    // any machine with an extension on it ⏎ lands on a page, not an install.
+    // The seeded row is often an installable one (updates and what isn't
+    // installed sort first), which is safe because nothing installs on one ⏎:
+    // the first arms it and says what it is (see requestInstall), and the page
+    // opens with nothing armed.
     func reconcileSelection(among rows: [ExtensionRow]) {
         cancelConfirmation()
         let all = targets(among: rows)
@@ -581,6 +593,7 @@ struct ExtensionsView: View {
                 let hints = Self.footerHints(
                     selection: catalog.selection,
                     activation: activationLabel(in: rows),
+                    activationDimmed: activationBlocked(in: rows),
                     updateSelected: selectedRow(in: rows)?.updateAvailable == true,
                     hasRows: !rows.isEmpty,
                     searching: searchFocused)
@@ -634,6 +647,7 @@ struct ExtensionsView: View {
     // extension config page ran into.
     static func footerHints(selection: ExtensionCatalog.Target?,
                             activation: String,
+                            activationDimmed: Bool = false,
                             updateSelected: Bool,
                             hasRows: Bool,
                             searching: Bool = false) -> [FooterHintSpec] {
@@ -656,7 +670,8 @@ struct ExtensionsView: View {
         // Only while the ring is on a row. On the chevron or Try again, ⏎
         // belongs to those, and the row verb would name something it will not do.
         if case .row = selection {
-            hints.append(FooterHintSpec(label: activation, keys: ["⏎"], primary: true))
+            hints.append(FooterHintSpec(label: activation, keys: ["⏎"], primary: !activationDimmed,
+                                        dimmed: activationDimmed))
             // Only where Enter is busy doing something else. An installed row
             // with an update pending takes Enter for the update, so without this
             // there would be no keyboard route to its page.
@@ -704,6 +719,13 @@ struct ExtensionsView: View {
         // Enter did nothing at all.
         if catalog.confirming == row.id { return "Confirm" }
         return row.isInstalled ? "Open" : "Install"
+    }
+
+    // ⏎ does nothing on a row that can't be installed here yet ("Needs
+    // python3"), so its hint dims rather than promising an install.
+    private func activationBlocked(in rows: [ExtensionRow]) -> Bool {
+        guard let row = selectedRow(in: rows), !row.isInstalled else { return false }
+        return !(catalog.missingRequirements[row.id] ?? []).isEmpty
     }
 
     private var searchField: some View {
@@ -849,7 +871,7 @@ struct ExtensionsView: View {
                 status(row)
             }
             if confirming, let entry = entry(for: row.id) {
-                Text(ExtensionCatalog.confirmationText(for: entry, updating: row.isInstalled))
+                Text(catalog.confirmationText(for: entry, updating: row.isInstalled))
                     .font(.caption)
                     .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)

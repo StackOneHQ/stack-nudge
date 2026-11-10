@@ -193,7 +193,8 @@ enum ScreenshotRenderer {
             ExtensionInstaller.IndexEntry(id: id, name: name, version: id == "derby" ? "1.2.0" : "1.1.0",
                                           description: description, asset: "extension-\(id)-1.1.0.tar.gz",
                                           sha256: "ab", requires: requires, config: [], tier: tier,
-                                          capabilities: capabilities[id] ?? [])
+                                          capabilities: capabilities[id] ?? [],
+                                          mode: capabilities[id] == nil ? "view" : "service")
         }
         let catalog = ExtensionCatalog(fetchCatalogue: { .success(entries) },
                                        performInstall: { .success($0.id) },

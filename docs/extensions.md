@@ -410,10 +410,13 @@ extension called `stack-nudge` would be offered to the updater as an app build.
 
 Each index entry carries what the browser needs before anything is downloaded:
 the id, name, version, description, asset and its sha256, `requires`, config
-key names, the reviewed `tier`, and the manifest's `capabilities`, so the
-install confirmation can say what this extension asks for. The last two are
-additive, and older hosts ignore them; a host reading an index without
-`capabilities` says only that the extension gets more access than a tab.
+key names, the reviewed `tier`, and the manifest's `mode` and `capabilities`,
+so the install confirmation can say what this extension asks for (only a
+service is said to run in the background or ask for anything). These are
+additive, and older hosts ignore them; a host reading an index without them
+says only that the extension gets more access than a tab. Installing refuses a
+package whose manifest's mode or capabilities differ from its index entry: the
+user confirmed what the entry described.
 
 The index is attached to the app's own release, so there is one trust anchor and
 one fetch path. It ships even when there are no extensions, so the app always has
@@ -486,7 +489,8 @@ room for), and a short status on the right. A pending update says "Update x.y";
 otherwise a service says what it's doing (Running, Starting, Broken, Stopped,
 or Present / Away for the one holding `presence`), and a view says "Tab ⌘N"
 when it has a tab. Below the list, **Browse extensions** opens the catalogue,
-where an extension above the `view` tier asks before it installs.
+where every install and update takes two presses of `⏎`: the first says what it
+is, and for anything that gets more than a tab, what it asks for.
 
 `→` or `⏎` on a row opens the extension's own page, and `←` goes back to the
 list. Top to bottom it shows:

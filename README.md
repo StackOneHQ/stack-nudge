@@ -563,7 +563,7 @@ document, and what a reviewer should check.
 | Key | On the browse page |
 |-----|--------|
 | `↑ ↓` / `⌘↑ ⌘↓` | Select / first or last |
-| `⏎` | Install or update, or open an installed one's page in Settings → Extensions. Anything that would get more than the `view` tier asks first: `⏎` again confirms (a held `⏎` never does) |
+| `⏎` | Install or update, or open an installed one's page in Settings → Extensions. Every install and update takes two: the first says what it is (and, if it gets more than a tab, what it asks for), `⏎` again does it. A held `⏎` never counts, and a row that needs something missing ("Needs python3") does nothing |
 | `⌘⏎` | Open an installed one's page (when `⏎` is busy updating) |
 | `/`, or just type | Search |
 | `⌘R` | Reload the catalogue |
