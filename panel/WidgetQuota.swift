@@ -20,9 +20,10 @@ struct WidgetQuota: Equatable {
 
     var hasData: Bool { short != nil || long != nil }
 
-    // Border urgency, pulse rate and the pill's refresh cadence all key off
-    // the short window alone — that's the one that blocks you first, and it
-    // preserves the pre-multi-client behaviour where those read `fiveHour`.
+    // Border urgency, pulse rate and the pill's redraw interval all key off
+    // the short window alone — that's the one that blocks you first. It holds
+    // the week when that's all a client reports (Codex weekly-only, Claude
+    // Ultra), so a high week keeps the pill urgent until the weekly reset.
     var shortUtilization: Double { short?.utilization ?? 0 }
 
     // The mascot's stress signal instead keys off whichever window is tighter,
@@ -80,6 +81,14 @@ struct WidgetQuota: Equatable {
                      pi: PiQuotaSnapshot?) -> WidgetQuota {
         switch client {
         case .claude:
+            // A verified Ultra account has no session window: the usage API
+            // reports `five_hour: null`. The week is then the window that blocks
+            // you first, so it takes the inner ring, and with it the countdown
+            // and the border, as Codex's weekly-only window already does.
+            if claude?.fiveHour == nil, let week = claude?.sevenDay {
+                return WidgetQuota(client: .claude, short: week, long: nil,
+                                   shortLabel: ringLabel(week, fallback: "7d"), longLabel: "7d")
+            }
             return WidgetQuota(client: .claude,
                                short: claude?.fiveHour, long: claude?.sevenDay,
                                shortLabel: "5h", longLabel: "7d")
