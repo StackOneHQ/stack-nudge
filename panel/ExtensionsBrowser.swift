@@ -165,11 +165,13 @@ final class ExtensionCatalog: ObservableObject {
 
     // MARK: - Installing and removing
 
-    // Whether installing or updating this entry asks first: when the index
-    // gives it a tier above `view` and above what this Mac has recorded for
-    // it. A fresh install has nothing recorded, so anything above `view`
-    // asks; an update that keeps or lowers the tier doesn't, and one that
-    // raises it does, since it's being given more than was agreed to.
+    // Every install and update takes a second press. This decides only
+    // whether that confirmation spells out what the extension is given: when
+    // the index gives it a tier above `view` and above what this Mac has
+    // recorded for it. A fresh install has nothing recorded, so anything above
+    // `view` spells it out; an update that keeps or lowers the tier doesn't,
+    // and one that raises it does, since it's being given more than was
+    // agreed to.
     static func needsConfirmation(_ entry: ExtensionInstaller.IndexEntry,
                                   recorded: ExtensionTier?) -> Bool {
         entry.reviewedTier > .view && entry.reviewedTier > (recorded ?? .view)
@@ -712,12 +714,14 @@ struct ExtensionsView: View {
     private func activationLabel(in rows: [ExtensionRow]) -> String {
         guard let row = selectedRow(in: rows) else { return "Select" }
         if catalog.failure(for: row.id) != nil { return "Dismiss" }
+        // Armed comes before update: every update now takes a second press,
+        // and the footer has to say what that press does, as the button does.
+        if catalog.confirming == row.id { return "Confirm" }
         if row.updateAvailable { return "Update" }
         // Named for what Enter does, which on an installed row is open its
         // page — the same thing the card's button does. It used to say
         // "Installed", which is a state rather than an action, on a row where
         // Enter did nothing at all.
-        if catalog.confirming == row.id { return "Confirm" }
         return row.isInstalled ? "Open" : "Install"
     }
 
