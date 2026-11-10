@@ -60,6 +60,46 @@ with open(sys.argv[1]) as fh:
 ' "$1" "$2"
 }
 
+# The capabilities the host knows, read from the ExtensionCapability enum
+# itself so the check can't drift from it. Each `case` line in the enum's own
+# block gives one: its raw value if it spells one out (`case eventIdle =
+# "event:idle"`), otherwise its name (`case feed`). Finding no enum or no cases
+# is an error, so a refactor that moves or reshapes the enum fails the gate
+# loudly instead of quietly checking against nothing.
+capability_source="$repo_root/panel/ExtensionManifest.swift"
+known_capabilities() {
+  python3 - "$capability_source" <<'PY'
+import re, sys
+try:
+    lines = open(sys.argv[1]).read().splitlines()
+except OSError as e:
+    sys.exit(f"can't read {sys.argv[1]}: {e}")
+start = next((i for i, l in enumerate(lines)
+              if re.match(r"\s*(?:\w+\s+)*enum\s+ExtensionCapability\b", l)), None)
+if start is None:
+    sys.exit(f"no `enum ExtensionCapability` in {sys.argv[1]}")
+depth, opened, found = 0, False, []
+for line in lines[start:]:
+    code = line.split("//", 1)[0]
+    # Only the enum's own level: a `case` inside a nested switch isn't one.
+    if depth == 1:
+        m = re.match(r"\s*case\s+(.*?)\s*$", code)
+        if m:
+            for item in m.group(1).split(","):
+                c = re.fullmatch(r'\s*(\w+)\s*(?:=\s*"([^"]*)")?\s*', item)
+                if not c:
+                    sys.exit(f"can't read `{line.strip()}` in {sys.argv[1]}")
+                found.append(c.group(2) if c.group(2) is not None else c.group(1))
+    depth += code.count("{") - code.count("}")
+    opened = opened or "{" in code
+    if opened and depth <= 0:
+        break
+if not found:
+    sys.exit(f"`enum ExtensionCapability` in {sys.argv[1]} has no cases")
+print("\n".join(found))
+PY
+}
+
 validate_one() {
   local dir="$1" rc=0
   local id manifest run_rel run_path declared_id schema mode version
@@ -99,14 +139,13 @@ validate_one() {
     *)       fail "$id: unknown mode '$mode'" || rc=1 ;;
   esac
 
-  # Mirrors ExtensionCapability: the host refuses a manifest naming anything
+  # Against ExtensionCapability: the host refuses a manifest naming anything
   # else, so a typo here would ship an extension no host will load. Caught in
   # CI instead.
   local bad_capability
   bad_capability="$(python3 -c '
 import json, sys
-known = {"bluetooth", "signal:presence", "event:idle", "event:panel",
-         "event:session", "event:nudge", "feed"}
+known = set(sys.argv[2].split("\n"))
 caps = json.load(open(sys.argv[1])).get("capabilities", [])
 if not isinstance(caps, list):
     print("(not a list)")
@@ -115,7 +154,7 @@ else:
         if not isinstance(c, str) or c not in known:
             print(c)
             break
-' "$manifest")"
+' "$manifest" "$capabilities")"
   [[ -z "$bad_capability" ]] \
     || fail "$id: unknown capability '$bad_capability'" || rc=1
 
@@ -204,13 +243,20 @@ list_extension_dirs() {
 }
 
 main() {
-  local dirs=() rc=0
+  local dirs=() rc=0 capabilities
   while IFS= read -r -d '' dir; do
     dirs+=("$dir")
   done < <(list_extension_dirs)
   # The subshell's failure is invisible to the loop, so ask again.
   if [[ -d "$ext_root" ]] && ! find "$ext_root" -mindepth 1 -maxdepth 1 -type d > /dev/null 2>&1; then
     echo "refusing to $mode: cannot read $ext_root" >&2
+    return 1
+  fi
+
+  # Read once, up front, and before anything else can pass: a gate that
+  # couldn't read the list must not go on to say every manifest is fine.
+  if ! capabilities="$(known_capabilities)" || [[ -z "$capabilities" ]]; then
+    echo "refusing to $mode: couldn't read the capabilities from $capability_source" >&2
     return 1
   fi
 
