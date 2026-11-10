@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+#
+# Starts the Away service, building it first if needed.
+#
+# Away needs CoreBluetooth, which no script language here can reach, so it is a
+# small Swift program. It's compiled on this Mac from away.swift rather than
+# shipped as a binary: nothing opaque lands in the repository or the release,
+# the reviewer reads exactly what runs, and the Command Line Tools that provide
+# swiftc are already on any Mac that runs a coding agent (git needs them). The
+# cost is a couple of seconds on the first start after an install or update.
+#
+# stdout belongs to the line protocol from the moment this starts, so the
+# compiler's output, and anything else said here, goes to stderr.
+
+set -euo pipefail
+
+# The host starts this in the extension's own directory, but resolve it anyway
+# so running it by path from anywhere works the same. No dirname: the host's
+# PATH is minimal, and a builtin can't go missing.
+here="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
+src="$here/away.swift"
+build="$here/.build"
+bin="$build/away"
+
+if [[ ! -x "$bin" || "$src" -nt "$bin" ]]; then
+  if ! command -v swiftc > /dev/null 2>&1; then
+    echo "away: swiftc not found; install the Command Line Tools (xcode-select --install)" >&2
+    exit 69
+  fi
+  mkdir -p "$build"
+  # Built beside the real path under a name only this process uses, and moved
+  # into place, so a build the host cuts short (it allows 10 s for the first
+  # reply) never leaves a half-written binary that looks current, and two
+  # launches at once never write or remove each other's.
+  tmp="$build/away.$$"
+  if ! swiftc -O "$src" -o "$tmp" >&2; then
+    rm -f "${tmp:?}"
+    echo "away: couldn't build away.swift" >&2
+    exit 70
+  fi
+  mv -f "$tmp" "$bin"
+fi
+
+exec "$bin" "$@"

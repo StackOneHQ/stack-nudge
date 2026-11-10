@@ -24,6 +24,8 @@
     <string>NSApplication</string>
     <key>NSUserNotificationAlertStyle</key>
     <string>alert</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>StackNudge listens for your phone's Bluetooth signal to tell when you've stepped away from your Mac, if you install the Away extension.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>StackNudge uses System Events to focus the correct window when you act on a notification.</string>
 </dict>
