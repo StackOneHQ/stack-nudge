@@ -18,10 +18,6 @@ enum PanelMode: Hashable {
     // The extension browser. Absent from orderedTabs like .phrases: it is a
     // sub-page of Settings, not a tab.
     case extensions
-    // One extension's own configuration, a level below the browser. Keyed by
-    // id for the same reason .extensionTab is: the view is rebuilt when the id
-    // changes rather than reused with a different extension's values in it.
-    case extensionConfig(String)
     // Confirmation step after the user clicks the "Update available" row.
     // Shows release notes (when available) + Cancel / Update Now buttons.
     case updateConfirm
@@ -176,6 +172,7 @@ enum SettingsRow: Hashable {
     case voiceEnabled, voice, voiceSpeed, speakHotkey, downloadVoiceModel
     case quotaTracking, quotaAlerts, alertThreshold, pollFrequency, contextAlert, showRemaining
     case piApiBudget, piLocalBudget
+    case awayLock
     case githubLinks, hideShipped, disconnectGithub
     case historyPerSession
     case editPhrases, checkPermissions, openConfig, releaseNotes, checkUpdates, uninstall, quit
@@ -186,6 +183,12 @@ enum SettingsRow: Hashable {
     // below; every `switch` over SettingsRow stays exhaustive, which is what
     // actually keeps a new row from being forgotten.
     case installedExtension(String)
+    // One per config key on an extension's own Settings page: the
+    // extension's id, then the key. Drawn as the control its type asks for.
+    case extensionSetting(String, String)
+    // The action rows at the foot of an extension's page.
+    case extensionUpdate(String)
+    case extensionRemove(String)
 }
 
 // Hand-written because `installedExtension` carries a value. The representative
@@ -197,9 +200,13 @@ enum SettingsRow: Hashable {
 extension SettingsRow: CaseIterable {
 
     static let representativeExtensionID = "derby"
+    static let representativeConfigKey = "STACKNUDGE_EXT_DERBY_ORG"
 
     static var allCases: [SettingsRow] {
-        staticCases + [.installedExtension(representativeExtensionID)]
+        staticCases + [.installedExtension(representativeExtensionID),
+                       .extensionSetting(representativeExtensionID, representativeConfigKey),
+                       .extensionUpdate(representativeExtensionID),
+                       .extensionRemove(representativeExtensionID)]
     }
 
     private static let staticCases: [SettingsRow] = [
@@ -216,6 +223,7 @@ extension SettingsRow: CaseIterable {
         .voiceEnabled, .voice, .voiceSpeed, .speakHotkey, .downloadVoiceModel,
         .quotaTracking, .quotaAlerts, .alertThreshold, .pollFrequency,
         .contextAlert, .showRemaining, .piApiBudget, .piLocalBudget,
+        .awayLock,
         .githubLinks, .hideShipped, .disconnectGithub,
         .historyPerSession,
         .editPhrases, .checkPermissions, .openConfig, .releaseNotes,
@@ -267,13 +275,16 @@ final class PanelNav: ObservableObject {
     static let repositoryURL = "https://github.com/StackOneHQ/stack-nudge"
 
     @Published var mode: PanelMode = .events {
-        // Leaving the form drops it, so a second visit reads the config file
-        // again rather than reopening the last visit's unsaved edits. Done here
-        // rather than at the two back buttons because the mode also changes
-        // when a tab is picked, when an extension is uninstalled underneath the
-        // panel, and when the panel is reopened on a different tab.
+        // Leaving Settings drops a half-typed value on an extension's page, so
+        // the next visit shows what's saved rather than the last visit's edit.
+        // Done here rather than at each way out because the mode also changes
+        // when a tab is picked and when the panel reopens on a different tab.
         didSet {
-            if case .extensionConfig = mode {} else { extensionConfig = nil }
+            if mode != .settings, extensionTextEdit != nil { cancelExtensionTextEdit() }
+            guard mode != oldValue else { return }
+            modeJustChanged = true
+            dropUpdateConfirmationIfLeft()
+            modeJustChanged = false
         }
     }
     @Published var selectedSettingIndex: Int = 0 {
@@ -281,6 +292,7 @@ final class PanelNav: ObservableObject {
             // A re-anchor can move the index without moving off the row.
             if selectedRow != anchoredSettingRow { pickingValue = false }
             anchoredSettingRow = selectedRow
+            dropUpdateConfirmationIfLeft()
         }
     }
 
@@ -1026,6 +1038,90 @@ final class PanelNav: ObservableObject {
     @Published var quotaAlertsEnabled:   Bool = true
     @Published var quotaShowRemaining:   Bool = false
 
+    // Settings → Away. Whether the app locks the screen when the presence
+    // signal says you've gone. The signal comes from a service extension (Away,
+    // or anything else trusted with it), so the only app setting is what to do
+    // about it. On by default: installing Away and choosing a phone is already
+    // the opt-in.
+    @Published var awayLock: Bool = true
+    // What the presence signal currently says, and which extension holds it
+    // (nil when none does). Set by PanelController from the signal registry.
+    // The holder's Settings page carries the lock row, since locking is the
+    // app's reaction to what that extension reports.
+    @Published var isAway: Bool = false
+    @Published var presenceHolderID: String? = nil {
+        didSet { if presenceHolderID != oldValue { settingsLayoutChanged() } }
+    }
+    // Every loaded extension's page under Settings → Extensions, in install
+    // order. A page that goes away while it is open hands the pane back to the
+    // list, where its row was.
+    @Published var extensionSettingsPages: [ExtensionSettingsPage] = [] {
+        didSet { if extensionSettingsPages != oldValue { settingsLayoutChanged() } }
+    }
+
+    // The holder or the pages changed, which can add or remove the lock row,
+    // a page's rows, or a whole category. A category that has gone hands the
+    // pane back to Extensions, where its card was; otherwise the selection
+    // follows its row, the same re-anchor every other reshaping input does.
+    private func settingsLayoutChanged() {
+        if case .extensionPage(let id) = settingsCategory, rows(in: settingsCategory).isEmpty {
+            return settingsBack(to: id)
+        }
+        if rows(in: settingsCategory).isEmpty { settingsDetailFocused = false }
+        reanchorSettingSelection()
+    }
+
+    // Where the lock row lives: on the holder's page, which every loaded
+    // extension has. Should the holder have none (a record from before it
+    // failed to load, say), the row goes on the Extensions list itself, so the
+    // toggle exists whenever something can lock the screen.
+    var lockRowOnTheList: Bool {
+        guard let holder = presenceHolderID else { return false }
+        return !extensionSettingsPages.contains { $0.id == holder }
+    }
+    // The saved value of every declared key on those pages, as the config
+    // file holds it; a key that's unset is absent.
+    @Published var extensionConfigValues: [String: String] = [:]
+    // What each service last offered for its dynamic keys (ExtensionHost.choices).
+    @Published var extensionChoices: [String: [String: [ConfigOption]]] = [:]
+    // One line per page from the extension's latest document.
+    @Published var extensionStatus: [String: String] = [:]
+    // The value a picker on an extension's page is showing while it's being
+    // picked. Written to the config file only when the pick settles, so the
+    // extension hears one change rather than one per step (Away would forget
+    // its phone on every step through the list).
+    struct ExtensionPick: Equatable {
+        let id: String
+        let key: String
+        var value: String
+    }
+    @Published private(set) var extensionPick: ExtensionPick?
+    // Told after an extension's value is saved, so the host can pass it on.
+    var onExtensionConfigChanged: (String) -> Void = { _ in }
+    // The page's Update and Remove rows, and ⌘⌫ on the list.
+    var onUpdateExtension: (String) -> Void = { _ in }
+    // An install or update waiting for its second press (ExtensionCatalog
+    // owns it; mirrored here for the page's Update row), and how to drop it.
+    @Published var extensionConfirming: String?
+    var onCancelUpdateConfirmation: () -> Void = {}
+    private var modeJustChanged = false
+    var onRemoveExtension: (String) -> Void = { _ in }
+    // The short status on each Extensions list row, from PanelController.
+    @Published var extensionListStatus: [String: String] = [:]
+    // The Browse row's trailing text (ExtensionCatalog.browseRowValue).
+    @Published var browseExtensionsValue: String = ""
+
+    // A text key being typed into on its row: the extension, the key and the
+    // text so far. Saved on ⏎; Esc, or ⌫ in an empty field, puts it back.
+    @Published var extensionTextEdit: ExtensionPick?
+    // Why the last ⏎ didn't save, shown under the field until the next edit.
+    @Published var extensionTextProblem: String?
+    // Bumped to hand the field first-responder status when editing starts.
+    @Published private(set) var extensionTextFocusRequests = 0
+    // Where an extension's values are written. Injected for tests, which must
+    // never touch the real config file.
+    var persistExtensionValue: (String, String?) -> Void = ExtensionConfigValue.writeToConfigFile
+
     // Which Settings category the sidebar has selected, and whether focus has
     // stepped into its rows. Changing category resets the row selection, or the
     // index would point into the previous category's list.
@@ -1042,7 +1138,12 @@ final class PanelNav: ObservableObject {
     // True while a value row is being picked: Space or ⏎ on the row starts it,
     // ←/→ then step the value, and Space or ⏎ again settles it. Moving off the
     // row or out of the category list settles it too.
-    @Published var pickingValue = false
+    @Published var pickingValue = false {
+        didSet {
+            guard pickingValue != oldValue else { return }
+            if pickingValue { beginExtensionPick() } else { settleExtensionPick() }
+        }
+    }
 
     // ⌘1…⌘9. Tabs past this are reachable by ←/→ only.
     static let maxNumberedTabs = 9
@@ -1073,15 +1174,10 @@ final class PanelNav: ObservableObject {
         // had just clicked Remove. Removing several in a row is exactly the
         // flow that happens in.
         didSet {
-            guard oldValue.map(\.id) != installedExtensions.map(\.id) else { return }
-            reanchorSettingSelection()
+            guard oldValue != installedExtensions else { return }
+            settingsLayoutChanged()
         }
     }
-    // The form behind .extensionConfig. Held here rather than built in the view
-    // so its unsaved edits survive a re-render, and cleared on the way out so a
-    // second visit reads the file again rather than showing the last visit's
-    // values.
-    @Published var extensionConfig: ExtensionConfigModel?
 
     // The row Settings should land on when it is re-entered from one of its own
     // sub-pages, consumed once by SettingsView.onAppear.
@@ -1138,10 +1234,9 @@ final class PanelNav: ObservableObject {
         // away, so this catches the out-of-band case — the directory deleted
         // under the panel — which would otherwise leave the mode on a page
         // describing something that no longer exists.
-        if case .extensionConfig(let id) = mode,
+        if case .extensionPage(let id) = settingsCategory,
            !installedExtensions.contains(where: { $0.id == id }) {
-            mode = .settings
-            return
+            settingsBack()
         }
         guard case .extensionTab = mode, !orderedTabs.contains(mode) else { return }
         mode = .events
@@ -1329,6 +1424,19 @@ final class PanelNav: ObservableObject {
             return [.quotaTracking, .quotaAlerts, .alertThreshold,
                     .pollFrequency, .contextAlert, .showRemaining,
                     .piApiBudget, .piLocalBudget]
+        // An extension's page, one level below the Extensions list: its
+        // settings, the app's lock row when it holds presence, then Update
+        // (only when there is one) and Remove. A refused extension has no
+        // manifest to read settings from, so its page is Remove alone.
+        case .extensionPage(let id):
+            guard let page = extensionSettingsPages.first(where: { $0.id == id }) else {
+                return installedExtensions.contains { $0.id == id } ? [.extensionRemove(id)] : []
+            }
+            let update = installedExtensions.first { $0.id == id }?.updateAvailable == true
+            return page.keys.map { .extensionSetting(id, $0.key) }
+                + (presenceHolderID == id ? [.awayLock] : [])
+                + (update ? [.extensionUpdate(id)] : [])
+                + [.extensionRemove(id)]
         case .integrations:
             return [.slackPaste, .slackIdentity, .slackTest,
                     .slackEnabled, .slackIdle, .slackDetail, .slackStop,
@@ -1344,7 +1452,8 @@ final class PanelNav: ObservableObject {
         // it away from the installed ones is what produced an orange "Remove"
         // sitting directly above a card offering "Install".
         case .extensions:
-            return installedExtensions.map { .installedExtension($0.id) } + [.browseExtensions]
+            return installedExtensions.map { .installedExtension($0.id) }
+                + (lockRowOnTheList ? [.awayLock] : []) + [.browseExtensions]
         case .panel:
             return [.hotkey, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin, .tabTitleNames]
         case .events:
@@ -1379,7 +1488,7 @@ final class PanelNav: ObservableObject {
         let pending = settingsResumeRow
         settingsResumeRow = nil
         guard let pending,
-              let category = SettingsCategory.allCases.first(where: { rows(in: $0).contains(pending) })
+              let category = category(containing: pending)
         else {
             settingsDetailFocused = false
             selectFirstCategoryRow()
@@ -1410,18 +1519,96 @@ final class PanelNav: ObservableObject {
     // selected category, so anything reaching for a row by identity has to land
     // on its category first.
     func category(containing row: SettingsRow) -> SettingsCategory? {
-        SettingsCategory.allCases.first { rows(in: $0).contains(row) }
+        (settingsCategories + installedExtensions.map { .extensionPage($0.id) })
+            .first { rows(in: $0).contains(row) }
+    }
+
+    // The sidebar, in order. Extension pages aren't in it: they are a level
+    // below the Extensions category, reached from its list.
+    var settingsCategories: [SettingsCategory] { SettingsCategory.allCases }
+
+    // Which sidebar entry is lit: Extensions while one of its pages is open.
+    var sidebarCategory: SettingsCategory {
+        if case .extensionPage = settingsCategory { return .extensions }
+        return settingsCategory
+    }
+
+    // → or ⏎ on an installed extension's row opens its page.
+    func openExtensionPage(_ id: String) {
+        guard installedExtensions.contains(where: { $0.id == id }) else { return }
+        settingsCategory = .extensionPage(id)
+        settingsDetailFocused = true
+        selectFirstCategoryRow()
+    }
+
+    // ← in a category's rows. From an extension's page it goes back to the
+    // Extensions list, on that extension's row; anywhere else, out to the
+    // sidebar.
+    func settingsBack() {
+        guard case .extensionPage(let id) = settingsCategory else {
+            settingsDetailFocused = false
+            return
+        }
+        settingsBack(to: id)
+    }
+
+    private func settingsBack(to id: String) {
+        settingsCategory = .extensions
+        settingsDetailFocused = true
+        let row = SettingsRow.installedExtension(id)
+        if settingsRows.contains(row) { selectedSettingIndex = index(of: row) }
+    }
+
+    // Rows that → opens, like ⏎ does: the Extensions list's, each of which is
+    // a door to a page. Everywhere else → only steps a value being picked.
+    var selectedRowOpensOnRight: Bool {
+        switch selectedRow {
+        case .installedExtension, .browseExtensions: return true
+        default:                                     return false
+        }
+    }
+
+    // What ⌘⌫ removes: the extension whose row or Remove row is selected. The
+    // only destructive key on these pages, and it takes no confirmation, so it
+    // is bound nowhere else.
+    var selectedRemovableExtension: String? {
+        switch selectedRow {
+        case .installedExtension(let id), .extensionRemove(let id): return id
+        default:                                                     return nil
+        }
+    }
+
+    // Whether →, ⏎ or Tab on the sidebar may step into the category's rows.
+    // Not into one with no rows of its own: the selection would land on the
+    // last attention banner above the split, and ⏎ there runs the updater or
+    // rewrites hook config. Such a page says so in its header instead.
+    var canEnterSettingsCategory: Bool { !rows(in: settingsCategory).isEmpty }
+
+    @discardableResult
+    func enterSettingsCategory() -> Bool {
+        guard canEnterSettingsCategory else { return false }
+        settingsDetailFocused = true
+        selectFirstCategoryRow()
+        return true
+    }
+
+    func label(for category: SettingsCategory) -> String {
+        if case .extensionPage(let id) = category,
+           let page = extensionSettingsPages.first(where: { $0.id == id }) {
+            return page.name
+        }
+        return category.label
     }
 
     func selectNextCategory() {
-        let all = SettingsCategory.allCases
-        guard let i = all.firstIndex(of: settingsCategory) else { return }
+        let all = settingsCategories
+        guard let i = all.firstIndex(of: sidebarCategory) else { return }
         settingsCategory = all[(i + 1) % all.count]
     }
 
     func selectPrevCategory() {
-        let all = SettingsCategory.allCases
-        guard let i = all.firstIndex(of: settingsCategory) else { return }
+        let all = settingsCategories
+        guard let i = all.firstIndex(of: sidebarCategory) else { return }
         settingsCategory = all[(i - 1 + all.count) % all.count]
     }
 
@@ -1485,6 +1672,7 @@ final class PanelNav: ObservableObject {
         quotaTrackingEnabled = ConfigFile.bool(config, "STACKNUDGE_QUOTA_TRACKING", default: true)
         quotaAlertsEnabled   = ConfigFile.bool(config, "STACKNUDGE_QUOTA_ALERTS",   default: true)
         quotaShowRemaining   = ConfigFile.bool(config, "STACKNUDGE_QUOTA_SHOW_REMAINING", default: false)
+        awayLock             = ConfigFile.bool(config, "STACKNUDGE_AWAY_LOCK", default: true)
         // Coerce out-of-list values to the nearest valid threshold so a
         // hand-edited config can't desync the cycle row's selection.
         let rawThreshold = Int(config["STACKNUDGE_QUOTA_THRESHOLD"] ?? "") ?? 80
@@ -1779,7 +1967,18 @@ final class PanelNav: ObservableObject {
         // Listed explicitly. This switch ends in `default: applyCycle`, so an
         // omission here is not a build error — it is Enter quietly doing
         // nothing, on the one row whose whole purpose is being opened.
-        case .installedExtension(let id): actions?.openExtension(id)
+        case .installedExtension(let id): openExtensionPage(id)
+        // Pickers never get here (see above). A toggle flips; a text key hands
+        // its row a field to type in.
+        case .extensionSetting(let id, let key):
+            guard let declared = extensionConfigKey(id, key) else { return }
+            if declared.kind == .toggle { flipExtensionToggle(id, declared) }
+            else { beginExtensionTextEdit(id, key) }
+        case .extensionUpdate(let id): onUpdateExtension(id)
+        // Removing takes ⌘⌫ (see selectedRemovableExtension), never a bare ⏎
+        // or Space: it has no confirmation, and those keys flip and pick
+        // everywhere else on this page. The footer dims Act here.
+        case .extensionRemove: break
         case .checkPermissions: actions?.checkPermissions()
         case .openConfig:       actions?.openConfig()
         case .clearHistory:     actions?.clearEventHistory()
@@ -1820,12 +2019,16 @@ final class PanelNav: ObservableObject {
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
              .slackPaste, .slackIdentity, .slackTest, .openRepo, .none:
             return false
+        case .extensionSetting(let id, let key):
+            return extensionConfigKey(id, key)?.kind.isPicker ?? false
+        case .extensionUpdate, .extensionRemove:
+            return false
         case .banner, .muteWhenFocused, .mute, .tabTitleNames, .pinPanel,
              .keepOpenWhenEmpty, .launchAtLogin, .widget, .snapToCorners,
              .soundEnabled, .voiceEnabled,
              .quotaTracking, .quotaAlerts, .showRemaining,
              .githubLinks, .hideShipped, .eventHistory,
-             .slackEnabled, .slackDetail, .slackStop:
+             .slackEnabled, .slackDetail, .slackStop, .awayLock:
             return false
         case .permissions, .update, .hotkey, .speakHotkey, .downloadVoiceModel:
             return false
@@ -2047,6 +2250,9 @@ final class PanelNav: ObservableObject {
         case .showRemaining:
             quotaShowRemaining.toggle()
             ConfigFile.write(key: "STACKNUDGE_QUOTA_SHOW_REMAINING", value: quotaShowRemaining ? "true" : "false")
+        case .awayLock:
+            awayLock.toggle()
+            ConfigFile.write(key: "STACKNUDGE_AWAY_LOCK", value: awayLock ? "true" : "false")
         case .githubLinks:
             toggleGithubLinking()
         case .hideShipped:
@@ -2088,7 +2294,182 @@ final class PanelNav: ObservableObject {
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
              .slackPaste, .slackIdentity, .slackTest, .openRepo, .none:
             break
+        case .extensionSetting(let id, let key):
+            stepExtensionPick(id, key, forward: forward)
+        case .extensionUpdate, .extensionRemove:
+            break
         }
+    }
+
+    // MARK: - Extension Settings pages
+
+    // The row's secondary line: the manifest's help for the key, which is
+    // the one place an extension gets to say what a setting means.
+    func extensionRowDetail(_ id: String, _ key: String) -> String? {
+        guard let help = extensionConfigKey(id, key)?.help?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !help.isEmpty else { return nil }
+        return help
+    }
+
+    func extensionConfigKey(_ id: String, _ key: String) -> ExtensionManifest.ConfigKey? {
+        extensionSettingsPages.first { $0.id == id }?.keys.first { $0.key == key }
+    }
+
+    // The empty string stands for "unset" in a picker's list: the entry that
+    // removes the key, offered only when the manifest gave no default to show.
+    static let unsetValue = ""
+
+    // What a picker steps through: the declared or offered values, with the
+    // saved one always among them, and "unset" first when nothing else would
+    // describe a key that isn't set.
+    func extensionPickerOptions(_ id: String, _ declared: ExtensionManifest.ConfigKey) -> [ConfigOption] {
+        let saved = extensionConfigValues[declared.key]
+        let options = declared.kind.options(offered: extensionChoices[id]?[declared.key] ?? [],
+                                            saved: saved)
+        guard declared.defaultValue == nil else { return options }
+        let unset = declared.kind == .dynamic ? "Not set" : "Default"
+        return [ConfigOption(value: Self.unsetValue, label: unset)] + options
+    }
+
+    // The row's trailing text: the value being picked while it is, otherwise
+    // the saved one (or the default the manifest names), by its label.
+    func extensionValueLabel(_ id: String, _ key: String) -> String {
+        guard let declared = extensionConfigKey(id, key) else { return "" }
+        let value: String
+        if let pick = extensionPick, pick.id == id, pick.key == key { value = pick.value }
+        else { value = extensionConfigValues[key] ?? declared.defaultValue ?? Self.unsetValue }
+        switch declared.kind {
+        case .toggle:
+            return value == "true" ? "On" : "Off"
+        case .text:
+            return value
+        case .choice, .number:
+            return extensionPickerOptions(id, declared).first { $0.value == value }?.label ?? value
+        // A service's labels carry live detail (a signal strength) that is
+        // for choosing; once chosen, the row shows the value itself.
+        case .dynamic:
+            let picking = extensionPick?.id == id && extensionPick?.key == key
+            let option = extensionPickerOptions(id, declared).first { $0.value == value }
+            return picking ? (option?.label ?? value) : (value == Self.unsetValue ? (option?.label ?? "") : value)
+        }
+    }
+
+    private func currentExtensionValue(_ declared: ExtensionManifest.ConfigKey) -> String {
+        extensionConfigValues[declared.key] ?? declared.defaultValue ?? Self.unsetValue
+    }
+
+    private func beginExtensionPick() {
+        guard case .extensionSetting(let id, let key)? = selectedRow,
+              let declared = extensionConfigKey(id, key), declared.kind.isPicker else { return }
+        extensionPick = ExtensionPick(id: id, key: key, value: currentExtensionValue(declared))
+    }
+
+    private func stepExtensionPick(_ id: String, _ key: String, forward: Bool) {
+        guard var pick = extensionPick, pick.id == id, pick.key == key,
+              let declared = extensionConfigKey(id, key) else { return }
+        let list = extensionPickerOptions(id, declared).map(\.value)
+        guard !list.isEmpty else { return }
+        let next: Int
+        if let idx = list.firstIndex(of: pick.value) {
+            next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+        } else {
+            next = forward ? 0 : list.count - 1
+        }
+        pick.value = list[next]
+        extensionPick = pick
+    }
+
+    // Writes the picked value, if it changed and is one the key may hold.
+    // Settling where it started writes nothing, so opening a picker and
+    // closing it again doesn't make the extension reconfigure.
+    private func settleExtensionPick() {
+        guard let pick = extensionPick else { return }
+        extensionPick = nil
+        guard let declared = extensionConfigKey(pick.id, pick.key),
+              pick.value != currentExtensionValue(declared) else { return }
+        if pick.value == Self.unsetValue {
+            saveExtensionValue(pick.id, pick.key, nil)
+            return
+        }
+        // The list only ever holds acceptable values, but the service's offer
+        // can change between the step and the settle, and a saved value that
+        // is merely still shown is fine to keep.
+        let offered = extensionChoices[pick.id]?[pick.key] ?? []
+        guard declared.kind.accepts(pick.value, offered: offered)
+                || pick.value == extensionConfigValues[pick.key] else { return }
+        saveExtensionValue(pick.id, pick.key, pick.value)
+    }
+
+    // Moving off the Update row that asked, or out of Settings, withdraws
+    // the question, as moving off the row does in the browser.
+    private func dropUpdateConfirmationIfLeft() {
+        guard let id = extensionConfirming else { return }
+        if mode == .settings, selectedRow == .extensionUpdate(id) { return }
+        // In the browser its own selection rule applies; only the way into it
+        // (a mode change) drops one asked on the page.
+        if mode == .extensions, !modeJustChanged { return }
+        onCancelUpdateConfirmation()
+    }
+
+    func beginExtensionTextEdit(_ id: String, _ key: String) {
+        extensionTextEdit = ExtensionPick(id: id, key: key, value: extensionConfigValues[key] ?? "")
+        extensionTextProblem = nil
+        extensionTextFocusRequests += 1
+    }
+
+    func updateExtensionTextEdit(_ value: String) {
+        guard var edit = extensionTextEdit, edit.value != value else { return }
+        edit.value = value
+        extensionTextEdit = edit
+        extensionTextProblem = nil
+    }
+
+    // ⏎ in the field. Checked as the config page always checked it: no line
+    // breaks or control characters, https only for an address, and a typed
+    // key's value must be one of its options. Empty unsets the key. Returns
+    // whether it was saved, so the field can keep focus when it wasn't.
+    @discardableResult
+    func commitExtensionTextEdit() -> Bool {
+        guard let edit = extensionTextEdit, let declared = extensionConfigKey(edit.id, edit.key) else {
+            extensionTextEdit = nil
+            return true
+        }
+        if let problem = ExtensionConfigValue.problem(with: edit.value) {
+            extensionTextProblem = problem
+            return false
+        }
+        let value = edit.value.trimmingCharacters(in: .whitespaces)
+        if let problem = ExtensionConfigValue.problem(
+            with: value, for: declared, offered: extensionChoices[edit.id]?[edit.key] ?? [],
+            saved: extensionConfigValues[edit.key]) {
+            extensionTextProblem = problem
+            return false
+        }
+        extensionTextEdit = nil
+        extensionTextProblem = nil
+        let next: String? = value.isEmpty ? nil : value
+        if next != extensionConfigValues[edit.key] { saveExtensionValue(edit.id, edit.key, next) }
+        return true
+    }
+
+    func cancelExtensionTextEdit() {
+        extensionTextEdit = nil
+        extensionTextProblem = nil
+    }
+
+    private func flipExtensionToggle(_ id: String, _ declared: ExtensionManifest.ConfigKey) {
+        let on = currentExtensionValue(declared) == "true"
+        saveExtensionValue(id, declared.key, on ? "false" : "true")
+    }
+
+    // The same write the config page makes, then the same notice to the host.
+    private func saveExtensionValue(_ id: String, _ key: String, _ value: String?) {
+        // Every value here came from an option list, but the list came from a
+        // manifest or a service, so it is checked again on the way out.
+        if let value, ConfigFile.containsLineBreak(value) { return }
+        persistExtensionValue(key, value)
+        extensionConfigValues[key] = value
+        onExtensionConfigChanged(id)
     }
 
     private func step(_ current: String, in list: [String], forward: Bool, key: String, preview: Bool) -> String {
@@ -2159,11 +2540,24 @@ struct ExtensionTab: Equatable, Identifiable {
 // Settings grouped by subject. The old sections named control types rather than
 // subjects — "Toggles" held ten rows spanning notifications, panel behaviour and
 // session naming, while "Hotkey" was a category of one.
-enum SettingsCategory: String, CaseIterable {
-    case notifications, voice, appearance, usage, integrations, extensions, panel, events, actions,
-         about
+//
+// The built-in categories, plus one per installed extension that asked for a
+// Settings page (`"surfaces": ["settings"]`). Those come after every built-in
+// one, in install order, and are listed by PanelNav.settingsCategories, since
+// only nav knows what is installed. `allCases` is the built-in ones alone.
+enum SettingsCategory: Hashable, CaseIterable {
+    case notifications, voice, appearance, usage, integrations, extensions, panel, events,
+         actions, about
+    // One extension's page, a level below Extensions. Not in the sidebar.
+    case extensionPage(String)
 
-    // Kept short: the sidebar is ~120pt.
+    static let allCases: [SettingsCategory] = [
+        .notifications, .voice, .appearance, .usage, .integrations, .extensions, .panel,
+        .events, .actions, .about,
+    ]
+
+    // Kept short: the sidebar is ~120pt. An extension's page is titled by its
+    // name, which PanelNav.label(for:) knows; this falls back to the id.
     var label: String {
         switch self {
         case .notifications: return "Notifications"
@@ -2176,6 +2570,65 @@ enum SettingsCategory: String, CaseIterable {
         case .events:        return "Events"
         case .actions:       return "Actions"
         case .about:         return "About"
+        case .extensionPage(let id): return id
         }
+    }
+}
+
+// An installed extension's Settings page: what nav needs to draw its rows,
+// rebuilt from the host whenever discovery runs.
+struct ExtensionSettingsPage: Equatable {
+    let id: String
+    let name: String
+    let keys: [ExtensionManifest.ConfigKey]
+    // What it was granted, in plain words, for the "Allowed" line.
+    var allowed: [String] = []
+    // Where it appears besides this page: "Tab ⌘3", "Tab", or nil for none.
+    var tab: String? = nil
+}
+
+// The words a person reads for each capability, on an extension's page.
+extension ExtensionCapability {
+    var plainWords: String {
+        switch self {
+        case .bluetooth:      return "Bluetooth"
+        case .signalPresence: return "Tell StackNudge you're away"
+        case .eventIdle:      return "Know how long the Mac has been idle"
+        case .eventPanel:     return "Know when the panel opens"
+        case .eventSession:   return "See agent sessions"
+        case .eventNudge:     return "Read nudges, including prompt text"
+        case .feed:           return "Post to the event feed"
+        }
+    }
+
+    // The same, as the object of "Asks for:" in the install confirmation.
+    var askingWords: String {
+        switch self {
+        case .bluetooth:      return "Bluetooth"
+        case .signalPresence: return "telling StackNudge you're away"
+        case .eventIdle:      return "knowing how long the Mac has been idle"
+        case .eventPanel:     return "knowing when the panel opens"
+        case .eventSession:   return "seeing agent sessions"
+        case .eventNudge:     return "reading nudges, including prompt text"
+        case .feed:           return "posting to the event feed"
+        }
+    }
+}
+
+// The short status on the right of an Extensions list row. Pure, so each
+// precedence is testable: a pending update says so first, since it is the one
+// thing there to act on; then a refusal; then what a service is doing (the
+// presence holder says Present or Away, which is what it's for); then where a
+// view extension's tab is.
+enum ExtensionListStatus {
+    static func text(refused: Bool, update: String?, isService: Bool, serviceState: String?,
+                     holdsPresence: Bool, isAway: Bool, tab: String?) -> String {
+        if let update { return "Update \(update)" }
+        if refused { return "Not loaded" }
+        if isService {
+            if holdsPresence, serviceState == "Running" { return isAway ? "Away" : "Present" }
+            return serviceState ?? "Stopped"
+        }
+        return tab ?? ""
     }
 }

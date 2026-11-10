@@ -8,6 +8,9 @@ enum SettingsKind {
     // Trailing reflects mute state: a plain bell when idle, bell.slash +
     // countdown while muted, matching the header bell / menu-bar glyph.
     case mute
+    // An action that can't be undone: drawn in the warning colour with its
+    // shortcut, and no chevron, since it opens nothing.
+    case destructive
 }
 
 struct SettingsView: View {
@@ -17,6 +20,9 @@ struct SettingsView: View {
     private static let scrollTopID = "settings-detail-top"
 
     @ObservedObject var nav: PanelNav
+    // False only for ScreenshotRenderer's fixtures: appearing reads the
+    // config file and probes the machine, which a fixture must not.
+    var runsOnAppear = true
 
     // Hook-script freshness, sampled on appear (two small file reads) rather than
     // recomputed every render. Surfaced in hookScriptRow.
@@ -44,25 +50,29 @@ struct SettingsView: View {
                     FooterHint(label: "Move", keys: ["↑", "↓"])
                 } else {
                     if nav.settingsDetailFocused {
-                        FooterHint(label: "Move", keys: ["↑", "↓"])
-                        // Works at both levels, but only worth advertising
-                        // here — on the sidebar it duplicates plain ↑↓.
-                        FooterHint(label: "Category", keys: ["⌘↑↓"])
-                        // Space / Enter do something on every row: act on it,
-                        // or start picking a value row.
-                        FooterHint(label: nav.selectedRowIsPicker ? "Pick" : "Act", keys: ["␣", "⏎"])
+                        let onPage: Bool = { if case .extensionPage = nav.settingsCategory { return true }; return false }()
+                        let hints = Self.detailFooterHints(
+                            picker: nav.selectedRowIsPicker,
+                            opensPage: nav.selectedRowOpensOnRight,
+                            removeRow: { if case .extensionRemove? = nav.selectedRow { return true }; return false }(),
+                            removable: nav.selectedRemovableExtension != nil,
+                            inExtensions: onPage || nav.settingsCategory == .extensions,
+                            onPage: onPage,
+                            editingText: nav.extensionTextEdit != nil)
+                        ForEach(hints.indices, id: \.self) { FooterHintRow(spec: hints[$0]) }
                     } else {
                         FooterHint(label: "Category", keys: ["↑", "↓"])
                         FooterHint(label: "Open", keys: ["→"])
-                    }
-                    if nav.settingsDetailFocused {
-                        FooterHint(label: "Categories", keys: ["←"])
+                            .opacity(nav.canEnterSettingsCategory ? 1 : 0.35)
                     }
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onChange(of: nav.extensionTextFocusRequests) { _ in extensionFieldFocused = true }
+        .onChange(of: nav.extensionTextEdit == nil) { ended in if ended { extensionFieldFocused = false } }
         .onAppear {
+            guard runsOnAppear else { return }
             // Matching UsageView: never land back inside the detail from a
             // previous visit, where ↑↓ move rows rather than categories and the
             // attention-row count may have changed while away, unless this is
@@ -476,8 +486,121 @@ struct SettingsView: View {
 
     // Bundle version, rendered at the foot of the category sidebar and again at
     // the head of the About category.
+    // The bar while a category's rows have the keyboard, as data so it can be
+    // asserted. Every hint stays in place as the selection moves, dimmed where
+    // it doesn't apply, so the bar never reflows.
+    //
+    // On the Extensions list and an extension's page: → opens a list row's
+    // page as ⏎ does, ⌘⌫ removes the extension whose row or Remove row is
+    // selected, and ← goes back to the list from a page. ⏎ and Space do
+    // nothing on the Remove row, which takes ⌘⌫ alone, so Act dims there.
+    // While a text row is being typed into, the field has the keyboard and
+    // only ⏎ (save) is its own; PageFooter adds Esc.
+    static func detailFooterHints(picker: Bool, opensPage: Bool, removeRow: Bool,
+                                  removable: Bool, inExtensions: Bool, onPage: Bool,
+                                  editingText: Bool) -> [FooterHintSpec] {
+        if editingText { return [FooterHintSpec(label: "Save", keys: ["⏎"], primary: true)] }
+        var hints = [
+            FooterHintSpec(label: "Move", keys: ["↑", "↓"]),
+            // Works at both levels, but only worth advertising here — on the
+            // sidebar it duplicates plain ↑↓.
+            FooterHintSpec(label: "Category", keys: ["⌘↑↓"]),
+        ]
+        if opensPage {
+            hints.append(FooterHintSpec(label: "Open", keys: ["→", "⏎"], primary: true))
+        } else {
+            hints.append(FooterHintSpec(label: picker ? "Pick" : "Act", keys: ["␣", "⏎"],
+                                        dimmed: removeRow))
+        }
+        if inExtensions {
+            hints.append(FooterHintSpec(label: "Remove", keys: ["⌘⌫"], dimmed: !removable))
+        }
+        hints.append(FooterHintSpec(label: onPage ? "Extensions" : "Categories", keys: ["←"]))
+        return hints
+    }
+
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+    }
+
+    // The head of an extension's own page: what it last reported, as a
+    // readout rather than a row, for the same reason About's version is one:
+    // there's nothing to activate, and a row that ignores ⏎ reads as broken.
+    // When this extension holds presence, it also says that the lock row at
+    // the bottom is StackNudge's, not the extension's.
+    private func extensionPageHeader(_ id: String) -> some View {
+        let row = nav.installedExtensions.first { $0.id == id }
+        let status = row?.refusedReason ?? nav.extensionStatus[id]
+        // The page's title and its status, as the list row showed them, so
+        // stepping in reads as the same thing opened up.
+        // One line, so a page of rows fits the panel's default height.
+        return HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(nav.label(for: .extensionPage(id)))
+                .font(.subheadline.weight(.semibold))
+            Text(status ?? "No status yet")
+                .font(.caption)
+                .foregroundStyle(row?.refusedReason != nil ? Color.orange : .secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .help(status ?? "")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.bottom, 4)
+    }
+
+    // Read-only lines under a page's rows: what it was allowed, in plain
+    // words, and where else it appears.
+    private func extensionPageTrailer(_ id: String) -> some View {
+        return Text(Self.extensionPageTrailerText(nav.extensionSettingsPages.first { $0.id == id }))
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+    }
+
+    // One line: what it was allowed, and where else it appears only when that
+    // is somewhere (a tab). Pure, so the wording is testable.
+    static func extensionPageTrailerText(_ page: ExtensionSettingsPage?) -> String {
+        let allowed = page?.allowed ?? []
+        var text = "Allowed: " + (allowed.isEmpty ? "nothing beyond running" : allowed.joined(separator: " \u{00B7} "))
+        if let tab = page?.tab {
+            let shortcut = tab.replacingOccurrences(of: "Tab", with: "").trimmingCharacters(in: .whitespaces)
+            text += shortcut.isEmpty ? " \u{00B7} Also a tab" : " \u{00B7} Also a tab \u{00B7} \(shortcut)"
+        }
+        return text
+    }
+
+    // A text key being typed into, in place of its row.
+    @FocusState private var extensionFieldFocused: Bool
+
+    @ViewBuilder private func extensionTextField(_ id: String, _ label: String, placeholder: String,
+                                                 help: String?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 10) {
+                Text(label).font(.subheadline)
+                TextField(placeholder, text: Binding(get: { nav.extensionTextEdit?.value ?? "" },
+                                            set: { nav.updateExtensionTextEdit($0) }))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.subheadline)
+                    .focused($extensionFieldFocused)
+                    // Saved on ⏎; a value that's refused keeps the field so it
+                    // can be fixed.
+                    .onSubmit { if nav.commitExtensionTextEdit() { extensionFieldFocused = false } }
+            }
+            if let problem = nav.extensionTextProblem {
+                Text(problem).font(.caption).foregroundStyle(.orange)
+            } else if let help, !help.isEmpty {
+                Text(help).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(Color.accentColor.opacity(0.22)))
     }
 
     // Non-navigable readouts at the head of the About category: the version, and
@@ -514,96 +637,65 @@ struct SettingsView: View {
     // rows(in:) and missing from its group would be keyboard-selectable and
     // invisible, and no test could see it. Exhaustive, so a new row has to be
     // given a home here too.
-    // Both numbers, not one instead of the other. Three working extensions and
-    // one stale directory used to read "1 not loaded", with no sign the other
-    // three existed.
-    private var extensionsRowValue: String {
-        Self.extensionsRowValue(installed: nav.extensionTabs.count,
-                                updates: nav.installedExtensions.filter(\.updateAvailable).count,
-                                refused: nav.refusedExtensionCount)
-    }
 
-    // Pure, so the summary is testable without a view. The first test for this
-    // asserted the `updateAvailable` flags on hand-built rows and never touched
-    // the counting at all — it passed while the production path handed every
-    // row a nil availableVersion and the count was permanently zero.
-    //
-    // Updates are counted for the same reason refusals already were: this row
-    // is the only thing anyone sees without opening the browser, and an update
-    // visible only once you go looking is one nobody takes.
-    static func extensionsRowValue(installed: Int, updates: Int, refused: Int) -> String {
-        var parts = [installed == 0 ? "None" : "\(installed) installed"]
-        if updates > 0 { parts.append("\(updates) update\(updates == 1 ? "" : "s")") }
-        if refused > 0 { parts.append("\(refused) not loaded") }
-        return parts.joined(separator: " · ")
-    }
-
+    // One line per installed extension: icon, name, its one-line
+    // description, and a short status on the right (see ExtensionListStatus).
+    // → or ⏎ opens its page, where everything else about it lives.
     @ViewBuilder private func extensionCard(_ id: String) -> some View {
         if let extensionRow = nav.installedExtensions.first(where: { $0.id == id }) {
             let selected = nav.settingsDetailFocused
                 && nav.selectedSettingIndex == nav.index(of: .installedExtension(id))
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: extensionRow.refusedReason == nil
-                      ? "puzzlepiece.extension.fill" : "exclamationmark.triangle.fill")
+            let refused = extensionRow.refusedReason != nil
+            HStack(spacing: 10) {
+                Image(systemName: refused ? "exclamationmark.triangle.fill" : "puzzlepiece.extension.fill")
                     .font(.system(size: 13))
-                    .foregroundStyle(extensionRow.refusedReason == nil ? Color.green : Color.orange)
+                    .foregroundStyle(refused ? Color.orange : Color.green)
                     .frame(width: 18)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(extensionRow.name).font(.callout.weight(.medium)).lineLimit(1)
-                        if let version = extensionRow.installedVersion {
-                            Text(version).font(.caption2.monospacedDigit())
-                                .foregroundStyle(.tertiary)
-                        }
-                        if extensionRow.updateAvailable,
-                           let available = extensionRow.availableVersion {
-                            Text("→ \(available)")
-                                .font(.caption2.monospacedDigit())
-                                .foregroundStyle(Color.accentColor)
-                        }
-                    }
-                    if let reason = extensionRow.refusedReason {
-                        Text(reason).font(.caption).foregroundStyle(.orange)
-                            .fixedSize(horizontal: false, vertical: true)
-                    } else if !extensionRow.description.isEmpty {
-                        Text(extensionRow.description).font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if !extensionRow.config.isEmpty {
-                        Text("Reads \(extensionRow.configKeyList)")
-                            .font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
-                    }
-                    if !extensionRow.requires.isEmpty {
-                        Text("Needs \(extensionRow.requires.joined(separator: ", "))")
-                            .font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(extensionRow.name).font(.subheadline).lineLimit(1)
+                    let line = extensionRow.refusedReason ?? extensionRow.description
+                    if !line.isEmpty {
+                        Text(line).font(.caption)
+                            .foregroundStyle(refused ? Color.orange : .secondary)
+                            .lineLimit(1)
                     }
                 }
                 Spacer(minLength: 8)
+                if let status = nav.extensionListStatus[id], !status.isEmpty {
+                    Text(status).font(.caption.monospacedDigit())
+                        .foregroundStyle(status.hasPrefix("Update") ? Color.accentColor
+                                         : ["Broken", "Not loaded"].contains(status) ? Color.orange
+                                         : .secondary)
+                        .lineLimit(1)
+                }
                 Image(systemName: "chevron.right")
                     .font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
             }
-            .padding(10)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
             .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(extensionRow.refusedReason == nil
-                      ? Color.primary.opacity(selected ? 0.12 : 0.05)
-                      : Color.orange.opacity(selected ? 0.16 : 0.08)))
-            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(Color.accentColor.opacity(selected ? 0.6 : 0), lineWidth: 1.5))
+                .fill(Color.accentColor.opacity(selected ? 0.22 : 0)))
             .contentShape(Rectangle())
             // Moves the keyboard selection too, exactly as the shared row()
-            // helper does. Without it a click left selectedSettingIndex parked
-            // on whatever was selected before — and if the click removed an
-            // extension, that index then pointed past the end of a shorter
-            // list, so nothing was highlighted while ⏎ still acted on a row.
+            // helper does, then opens the page as ⏎ would.
             .onTapGesture {
                 nav.selectedSettingIndex = nav.index(of: .installedExtension(id))
-                nav.actions?.openExtension(id)
+                nav.openExtensionPage(id)
             }
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(selected ? [.isSelected] : [])
             .id(nav.index(of: .installedExtension(id)))
         }
+    }
+
+    // Not a row: nothing to select. The Browse row follows it.
+    private var noExtensionsNote: some View {
+        Text("No extensions installed \u{2014} Browse to add one")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
     }
 
     @ViewBuilder private func settingRow(_ id: SettingsRow) -> some View {
@@ -653,6 +745,37 @@ struct SettingsView: View {
         case .piApiBudget:    row(.piApiBudget, label: "Pi API budget / day", kind: .cycle, value: PiBudget.label(nav.piApiBudgetDaily), enabled: nav.quotaTrackingEnabled)
         case .piLocalBudget:  row(.piLocalBudget, label: "Pi local budget / day", kind: .cycle, value: PiBudget.label(nav.piLocalBudgetDaily), enabled: nav.quotaTrackingEnabled)
 
+        // An extension's own page. The lock row is the app's, shown on the
+        // page of whichever extension holds presence.
+        case .awayLock:       row(.awayLock, label: "Lock screen when away", kind: .toggle, value: nav.awayLock ? "On" : "Off",
+                                  detail: "StackNudge's own setting, applied when this extension says you've gone.")
+        case .extensionSetting(let id, let key):
+            if let declared = nav.extensionConfigKey(id, key) {
+                if let edit = nav.extensionTextEdit, edit.id == id, edit.key == key {
+                    extensionTextField(id, declared.displayLabel, placeholder: declared.placeholder ?? "",
+                                       help: nav.extensionRowDetail(id, key))
+                        .id(nav.index(of: .extensionSetting(id, key)))
+                } else {
+                    row(.extensionSetting(id, key), label: declared.displayLabel,
+                        kind: declared.kind == .toggle ? .toggle : declared.kind.isPicker ? .cycle : .action,
+                        value: nav.extensionValueLabel(id, key),
+                        detail: nav.extensionRowDetail(id, key))
+                }
+            }
+        case .extensionUpdate(let id):
+            // The read-only lines sit above the actions, which come last.
+            extensionPageTrailer(id)
+            let version = nav.installedExtensions.first { $0.id == id }?.availableVersion ?? ""
+            row(.extensionUpdate(id),
+                label: nav.extensionConfirming == id ? "Confirm update to \(version)" : "Update to \(version)",
+                kind: .action, value: "",
+                detail: nav.extensionConfirming == id
+                    ? "Press ⏎ again to update." : nil)
+        // ⌘⌫, not ⏎: see PanelNav.activate. The value says so.
+        case .extensionRemove(let id):
+            if !nav.settingsRows.contains(.extensionUpdate(id)) { extensionPageTrailer(id) }
+            row(.extensionRemove(id), label: "Remove", kind: .destructive, value: "⌘⌫")
+
         // Integrations
         case .slackPaste:      row(.slackPaste, label: "Paste Slack setup", kind: .action, value: slackPasteValue)
         case .slackIdentity:   row(.slackIdentity, label: "Slack user", kind: .action, value: slackUserValue, enabled: nav.slackTokenPresent)
@@ -699,8 +822,8 @@ struct SettingsView: View {
         case .editPhrases:      row(.editPhrases, label: "Edit phrases…", kind: .action, value: "")
         // The count is the useful part at a glance; a refusal is worth surfacing
         // here too, since the whole point of the sub-page is that it explains one.
-        case .browseExtensions: row(.browseExtensions, label: "Browse extensions…", kind: .action,
-                                    value: extensionsRowValue)
+        case .browseExtensions: row(.browseExtensions, label: "Browse extensions", kind: .action,
+                                    value: nav.browseExtensionsValue)
         case .checkPermissions: row(.checkPermissions, label: "Check permissions…", kind: .action, value: "")
         case .openConfig:       row(.openConfig, label: "Open config file…", kind: .action, value: "")
         case .releaseNotes:     row(.releaseNotes, label: "View release notes…", kind: .action, value: "")
@@ -724,6 +847,8 @@ struct SettingsView: View {
     // matching this order; the mute and hook-script notices are readouts with
     // nothing to open, so they render here without taking a keyboard slot.
     @ViewBuilder private var settingsBanners: some View {
+        let any = nav.isMuted || !nav.unwiredAgents.isEmpty || !nav.recentlyWiredAgents.isEmpty
+            || !nav.missingPermissions.isEmpty || nav.updateAvailable != nil || hookScriptStale
         VStack(alignment: .leading, spacing: 10) {
             muteBanner
             if !nav.unwiredAgents.isEmpty {
@@ -742,7 +867,9 @@ struct SettingsView: View {
             }
         }
         .padding(.horizontal, 14)
-        .padding(.top, 12)
+        // No room taken when there's nothing to say, so every category's
+        // first row sits at the same height.
+        .padding(.top, any ? 12 : 0)
     }
 
     // Left column: the category list, with the version pinned under it.
@@ -760,7 +887,7 @@ struct SettingsView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 2) {
-                        ForEach(SettingsCategory.allCases, id: \.self) { category in
+                        ForEach(nav.settingsCategories, id: \.self) { category in
                             categoryRow(category)
                                 .id(category)
                         }
@@ -806,6 +933,12 @@ struct SettingsView: View {
                         // also the order the keyboard walks.
                         settingsBanners
                         if nav.settingsCategory == .about { aboutHeader }
+                        if nav.settingsCategory == .extensions, nav.installedExtensions.isEmpty {
+                            noExtensionsNote
+                        }
+                        if case .extensionPage(let id) = nav.settingsCategory {
+                            extensionPageHeader(id)
+                        }
                         detailRows
                     }
                     .padding(.horizontal, 14)
@@ -852,8 +985,8 @@ struct SettingsView: View {
     }
 
     private func categoryRow(_ category: SettingsCategory) -> some View {
-        let selected = nav.settingsCategory == category
-        return Text(category.label)
+        let selected = nav.sidebarCategory == category
+        return Text(nav.label(for: category))
             .font(.caption.weight(selected ? .semibold : .regular))
             .foregroundStyle(selected ? Color.accentColor : .secondary)
             .lineLimit(1)
@@ -880,13 +1013,15 @@ struct SettingsView: View {
 
 
     @ViewBuilder
-    private func row(_ id: SettingsRow, label: String, kind: SettingsKind, value: String, enabled: Bool = true) -> some View {
+    private func row(_ id: SettingsRow, label: String, kind: SettingsKind, value: String,
+                     enabled: Bool = true, detail: String? = nil) -> some View {
         SettingsRowView(
             label: label,
             value: value,
             kind: kind,
             selected: nav.settingsDetailFocused && nav.selectedSettingIndex == nav.index(of: id),
-            picking: nav.pickingValue && nav.selectedRow == id
+            picking: nav.pickingValue && nav.selectedRow == id,
+            detail: detail
         )
         // Visual-only dimming when a row is gated by another setting
         // (Sound section's deps when Sound is off; Usage deps when
@@ -900,7 +1035,11 @@ struct SettingsView: View {
             // For actions, single-click is enough. For toggles/cycles a click
             // on the row also acts so mouse users don't have to keyboard. The
             // mute row acts in place too, so it clicks like an action.
-            if kind == .action || kind == .toggle || kind == .mute {
+            // Remove is the exception: ⏎ never removes, but a click on the
+            // row is as deliberate as the old page's Remove button was.
+            if case .extensionRemove(let extensionID) = id {
+                nav.onRemoveExtension(extensionID)
+            } else if kind == .action || kind == .toggle || kind == .mute || kind == .destructive {
                 nav.activate()
             }
         }
@@ -916,12 +1055,26 @@ private struct SettingsRowView: View {
     // A value row being picked shows ‹ › either side of its value, the keys
     // that now step it.
     var picking = false
+    // A secondary line under the label: an extension key's help text.
+    var detail: String? = nil
 
     var body: some View {
         HStack(spacing: 10) {
-            Text(label)
-                .font(.subheadline)
-                .foregroundStyle(selected ? Color.primary : Color.primary.opacity(0.85))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label)
+                    .font(.subheadline)
+                    .foregroundStyle(kind == .destructive ? Color.orange
+                                     : selected ? Color.primary : Color.primary.opacity(0.85))
+                // Only on the selected row, where it's being read: every
+                // other row stays one line, like the built-in ones, so a page
+                // of them fits the panel.
+                if selected, let detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             Spacer()
             trailing
         }
@@ -946,6 +1099,8 @@ private struct SettingsRowView: View {
                 if picking { Image(systemName: "chevron.left").font(.caption.weight(.semibold)) }
                 Text(value)
                     .font(.subheadline.monospaced())
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 if picking { Image(systemName: "chevron.right").font(.caption.weight(.semibold)) }
             }
             .foregroundStyle(picking ? Color.accentColor : selected ? Color.primary : .secondary)
@@ -962,6 +1117,10 @@ private struct SettingsRowView: View {
                     .font(.callout)
                     .foregroundStyle(value.isEmpty ? Color.secondary : Color.accentColor)
             }
+        case .destructive:
+            Text(value)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         case .action:
             HStack(spacing: 8) {
                 if !value.isEmpty {

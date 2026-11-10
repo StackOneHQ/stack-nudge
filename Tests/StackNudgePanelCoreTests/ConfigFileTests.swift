@@ -173,16 +173,20 @@ final class ConfigFileTests: XCTestCase {
         }
     }
 
-    // What the injection actually produced, so the shape of the bug is on
-    // record rather than only its fix: one appended line became three, and the
-    // middle one was a live assignment the reader honours.
-    func testTheInjectedAssignmentWouldHaveBeenReadBack() {
+    // What the injection used to produce: one appended line became three, and
+    // the middle one was a live assignment the reader honours. write() refuses
+    // the key, and apply() itself now refuses a key or value carrying a line
+    // break, leaving the file as it was, so the shape can't come back through
+    // a caller that skips the key check.
+    func testTheInjectedAssignmentIsNoLongerWritten() {
         let smuggled = "STACKNUDGE_EXT_DERBY_ORG\nSTACKNUDGE_CLAUDE_PATH=/tmp/evil\n#"
         let written = ConfigFile.apply("", key: smuggled, value: "StackOne")
-        XCTAssertEqual(ConfigFile.parse(written)["STACKNUDGE_CLAUDE_PATH"], "/tmp/evil")
-        // ...and the value the user actually typed went nowhere.
-        XCTAssertNil(ConfigFile.parse(written)["STACKNUDGE_EXT_DERBY_ORG"])
-        // Which is why write() refuses the key rather than trusting apply().
+        XCTAssertEqual(written, "")
+        XCTAssertNil(ConfigFile.parse(written)["STACKNUDGE_CLAUDE_PATH"])
         XCTAssertFalse(ConfigFile.isWritableKey(smuggled))
+        // The same through the value, the shape a choices option would take.
+        let viaValue = ConfigFile.apply("", key: "STACKNUDGE_EXT_AWAY_PHONE",
+                                        value: "Pixel\nSTACKNUDGE_AWAY_LOCK=false")
+        XCTAssertNil(ConfigFile.parse(viaValue)["STACKNUDGE_AWAY_LOCK"])
     }
 }

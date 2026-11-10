@@ -128,7 +128,6 @@ struct PanelContentView: View {
     // the keyboard on, and the chevron here and ← in the key handler have to
     // do the identical thing.
     let onCloseExtensionsBrowser: () -> Void
-    let onCloseExtensionConfig: () -> Void
 
     // The disk-backed name store. Observed here (rather than inside EventRow)
     // so resolving a nudge's session label stays a render-time lookup that
@@ -221,23 +220,6 @@ struct PanelContentView: View {
                                    host: extensions,
                                    onConfigure: onConfigureExtension,
                                    onBack: onCloseExtensionsBrowser)
-                // .id(id) for the same reason .extensionTab has one: the
-                // associated value isn't part of a ViewBuilder case's identity,
-                // so two extensions' forms would share one view and the second
-                // would open showing the first's values.
-                case .extensionConfig(let id):
-                    if let model = nav.extensionConfig, model.id == id {
-                        ExtensionConfigView(model: model, onBack: onCloseExtensionConfig)
-                            .id(id)
-                    } else {
-                        // Unreachable in practice — the model is set before the
-                        // mode is — but a half-entered navigation must not be a
-                        // blank panel with no way back.
-                        ExtensionsView(catalog: extensionCatalog,
-                                       host: extensions,
-                                       onConfigure: onConfigureExtension,
-                                       onBack: onCloseExtensionsBrowser)
-                    }
                 case .updateConfirm:
                     UpdateConfirmView(
                         nav: nav,
@@ -287,7 +269,7 @@ struct PanelContentView: View {
         case .extensionTab(let id): return nav.extensionTab(id: id)?.label ?? id
         // Listed, not defaulted: a new tab should fail to compile here rather
         // than render an unlabelled one.
-        case .phrases, .permissions, .extensions, .extensionConfig, .updateConfirm, .updating,
+        case .phrases, .permissions, .extensions, .updateConfirm, .updating,
              .postUpdate, .bootstrap, .uninstall:
             return ""
         }
@@ -431,7 +413,7 @@ struct PanelContentView: View {
     static func tabStripAnchor(for mode: PanelMode, in tabs: [PanelMode]) -> PanelMode? {
         if tabs.contains(mode) { return mode }
         switch mode {
-        case .phrases, .permissions, .extensions, .extensionConfig, .updateConfirm, .uninstall:
+        case .phrases, .permissions, .extensions, .updateConfirm, .uninstall:
             return tabs.contains(.settings) ? .settings : nil
         // No strip is drawn in these, so there is nothing to bring into view.
         case .updating, .postUpdate, .bootstrap:
@@ -1058,49 +1040,51 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // config keys: the page is where Remove lives, and a row that opens nothing
     // would make Enter mean something different depending on the extension.
     func configureExtension(_ row: ExtensionRow, from origin: PanelMode = .extensions) {
-        nav.extensionConfig = ExtensionConfigModel(
-            row: row,
-            origin: origin,
-            // Saving is not enough on its own: the environment is rebuilt for
-            // each invocation, so the tab only shows the new value once the
-            // extension runs again.
-            didChange: { [weak self] in self?.extensions.refresh(row.id) },
-            onRemove: { [weak self] in self?.removeExtension(row.id) })
-        nav.mode = .extensionConfig(row.id)
+        showExtensionPage(row.id)
+    }
+
+    // Every way to an extension's page lands here: its row in Settings →
+    // Extensions, the browser's Settings button and ⌘⏎, and ⏎ on an installed
+    // row there. The page lives inside Settings, so from anywhere else Settings
+    // is opened on it.
+    func showExtensionPage(_ id: String) {
+        guard nav.installedExtensions.contains(where: { $0.id == id }) else { return }
+        if nav.mode == .settings {
+            nav.openExtensionPage(id)
+        } else {
+            // SettingsView resets its selection as it appears and then consumes
+            // this, so the page is what it opens on.
+            nav.settingsResumeRow = nav.rows(in: .extensionPage(id)).first
+            nav.mode = .settings
+        }
     }
 
     // From a Settings row, which knows only the id.
-    func openExtension(_ id: String) {
-        guard let row = nav.installedExtensions.first(where: { $0.id == id }) else { return }
-        configureExtension(row, from: .settings)
-    }
+    func openExtension(_ id: String) { showExtensionPage(id) }
 
     // The two ways back out, in one place each so ← and the chevron cannot
     // disagree. Both leave Settings a note about where the keyboard was, which
     // it consumes on the way in.
     func closeExtensionsBrowser() {
+        // A question asked on a page you've left isn't one you answered.
+        extensionCatalog.cancelConfirmation()
         nav.settingsResumeRow = .browseExtensions
         nav.mode = .settings
     }
 
-    func closeExtensionConfig() {
-        let origin = nav.extensionConfig?.origin ?? .extensions
-        if origin == .settings, let id = nav.extensionConfig?.id {
-            nav.settingsResumeRow = .installedExtension(id)
-        }
-        nav.mode = origin
-    }
-
+    // Removing goes back to the Extensions list, since the page describes
+    // something about to stop existing; the list re-anchors once it has gone.
     private func removeExtension(_ id: String) {
         extensionCatalog.remove(id)
-        let origin = nav.extensionConfig?.origin ?? .settings
-        // Not the extension's own row, which is the one thing that is about to
-        // stop existing. Browse is the row next to it and the obvious next move
-        // after removing something.
-        if origin == .settings { nav.settingsResumeRow = .browseExtensions }
-        // Back where the page was opened from — the extension it described no
-        // longer exists, so staying on it is not an option.
-        nav.mode = origin
+        if nav.mode == .settings, case .extensionPage(id) = nav.settingsCategory { nav.settingsBack() }
+    }
+
+    // The page's Update row: the same install the browser's Update button runs.
+    // Through the same confirmation the browser uses, since an update can
+    // raise the tier: the first press asks (the row says so), the second runs.
+    private func updateExtension(_ id: String) {
+        guard let entry = extensionCatalog.entries.first(where: { $0.id == id }) else { return }
+        extensionCatalog.requestInstall(entry)
     }
 
     // Installed and refused, as the Extensions settings category renders them.
@@ -1109,28 +1093,60 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private func refreshInstalledExtensions() {
         nav.installedExtensions = extensionCatalog.settingsRows(installed: extensions.manifests,
                                                                 refused: extensions.refused)
+        refreshBrowseValue()
     }
 
-    private lazy var extensionCatalog = ExtensionCatalog(
+    private func refreshBrowseValue() {
+        let value = ExtensionCatalog.browseRowValue(load: extensionCatalog.load,
+                                                    catalogue: extensionCatalog.entries,
+                                                    installed: nav.installedExtensions)
+        if nav.browseExtensionsValue != value { nav.browseExtensionsValue = value }
+    }
+
+    private lazy var extensionCatalog: ExtensionCatalog = ExtensionCatalog(
         fetchCatalogue: { ExtensionInstaller.fetchCatalogue() },
+        // The tier is recorded only once the install has succeeded, from the
+        // index entry it was installed from. Recorded before didChange runs
+        // discovery, so a service extension starts with its grant the first
+        // time rather than being refused and then restarted.
         performInstall: { entry in
-            ExtensionInstaller.install(entry, from: ExtensionInstaller.releaseSources())
+            let result = ExtensionInstaller.install(entry, from: ExtensionInstaller.releaseSources())
+            if case .success = result { ExtensionTiers.record(entry) }
+            return result
+        },
+        performRemove: { id in
+            let result = ExtensionInstaller.remove(id)
+            if case .success = result { ExtensionTiers.forget(id) }
+            return result
         },
         didChange: { [weak self] in self?.extensions.load() },
-        // A fetched catalogue is what gives an installed row something to
-        // compare against, so the Settings list is rebuilt when one lands.
-        didLoadCatalogue: { [weak self] in self?.refreshInstalledExtensions() })
+        didLoadCatalogue: { [weak self] in
+            guard let self else { return }
+            // A fresh index re-checks every recorded tier, unless
+            // STACKNUDGE_EXTENSIONS_LOCAL_TIERS says the file is the word.
+            // Reloading is what restarts a demoted service with its smaller
+            // grant (or refuses it outright once it's below the service tier).
+            if ExtensionTiers.reconcile(with: self.extensionCatalog.entries) {
+                self.extensions.load()
+            }
+            // A fetched catalogue is what gives an installed row something to
+            // compare against, so the Settings list is rebuilt when one lands.
+            self.refreshInstalledExtensions()
+        })
     // Extensions publish their tabs through nav, so nav stays the single source
     // of tab order and this stays the single source of what's in them.
     private lazy var extensions = ExtensionHost(onTabsChanged: { [weak self] tabs in
         self?.nav.extensionTabs = tabs
         self?.refreshInstalledExtensions()
+        self?.refreshExtensionSettingsPages()
+        // The holder is named by its manifest, which may only now be loaded.
+        self?.refreshPresenceHolder()
     }, onRefusalsChanged: { [weak self] count in
         self?.nav.refusedExtensionCount = count
         self?.refreshInstalledExtensions()
     }, onGlancesChanged: { [weak self] glances in
         self?.nav.extensionGlances = glances
-    })
+    }, signals: SignalRegistry(path: SignalRegistry.defaultPath))
     private var listener: EventListener?
     private var menuBar: MenuBarController?
     private var updateChecker: UpdateChecker?
@@ -1205,6 +1221,130 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private static let panelMinWidth:  CGFloat = 560
     private static let panelMinHeight: CGFloat = 260
 
+    // The app's half of Away. The presence signal comes from a service
+    // extension; what the app does with it is here: publish it on nav, and
+    // lock the screen on "away" if Settings → Away says to. A holder that
+    // crashes or stops is reset to "present" by the registry, which comes
+    // through here too and never locks.
+    private func wirePresence() {
+        extensions.signals.onChange = { [weak self] signal, value in
+            guard let self else { return }
+            let reaction = PresenceReaction.on(signal, value: value, lockWhenAway: self.nav.awayLock)
+            guard let away = reaction.isAway else { return }
+            self.nav.isAway = away
+            NSLog("stack-nudge: presence: %@%@", value, reaction.locks ? ", locking the screen" : "")
+            if reaction.locks { ScreenLock.lock() }
+        }
+        extensions.signals.onHoldersChange = { [weak self] in self?.refreshPresenceHolder() }
+        refreshPresenceHolder()
+    }
+
+    private func refreshPresenceHolder() {
+        let id = extensions.signals.holders[.presence]
+        nav.presenceHolderID = id
+    }
+
+    // Settings pages for the extensions that asked for one, and the saved
+    // values of their keys. Only the declared keys are read into nav, for the
+    // same reason the config page reads only those.
+    private func refreshExtensionSettingsPages() {
+        let pages = extensions.manifests.map { manifest in
+            ExtensionSettingsPage(id: manifest.id, name: manifest.name, keys: manifest.config,
+                                  allowed: extensions.granted(manifest.id).map(\.plainWords),
+                                  tab: manifest.hasTab ? tabLabel(forExtension: manifest.id) : nil)
+        }
+        nav.extensionConfigValues = Self.extensionConfigValues(ConfigFile.read(), pages: pages)
+        if nav.extensionSettingsPages != pages { nav.extensionSettingsPages = pages }
+    }
+
+    // Only the declared keys of installed extensions, and only set ones. The
+    // config file holds forty-odd other settings, one of them a Slack token,
+    // and none of them belong behind an extension's page.
+    static func extensionConfigValues(_ config: [String: String],
+                                      pages: [ExtensionSettingsPage]) -> [String: String] {
+        let declared = Set(pages.flatMap { $0.keys.map(\.key) })
+        return config.filter { declared.contains($0.key) && !$0.value.isEmpty }
+    }
+
+    // "Tab ⌘3", or "Tab" past the ninth.
+    private func tabLabel(forExtension id: String) -> String {
+        guard let index = nav.orderedTabs.firstIndex(of: .extensionTab(id)),
+              index < PanelNav.maxNumberedTabs else { return "Tab" }
+        return "Tab ⌘\(index + 1)"
+    }
+
+    // The status on each Extensions list row. Recomputed when anything it
+    // reads changes; cheap, and a list row that lags its page is a bug.
+    private func refreshExtensionListStatus() {
+        var status: [String: String] = [:]
+        for row in nav.installedExtensions {
+            let manifest = extensions.manifest(row.id)
+            status[row.id] = ExtensionListStatus.text(
+                refused: row.refusedReason != nil,
+                update: row.updateAvailable ? row.availableVersion : nil,
+                isService: manifest?.mode == .service,
+                serviceState: manifest?.mode == .service
+                    ? ExtensionHost.stateLabel(extensions.services[row.id]) : nil,
+                holdsPresence: nav.presenceHolderID == row.id,
+                isAway: nav.isAway,
+                tab: manifest?.hasTab == true ? tabLabel(forExtension: row.id) : nil)
+        }
+        if nav.extensionListStatus != status { nav.extensionListStatus = status }
+    }
+
+    // What an extension's page needs from the host as it changes: the choices
+    // its service offers, a status line from its latest document, and, for a
+    // view extension, a fetch when its page is opened (it has no tab whose
+    // opening would do that).
+    private func wireExtensionSettingsPages() {
+        nav.onExtensionConfigChanged = { [weak self] id in self?.extensions.configChanged(id) }
+        nav.onUpdateExtension = { [weak self] id in self?.updateExtension(id) }
+        nav.onCancelUpdateConfirmation = { [weak self] in self?.extensionCatalog.cancelConfirmation() }
+        // A failed or started load changes what the Browse row says too, not
+        // only a successful one.
+        extensionCatalog.$load
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshBrowseValue() }
+            .store(in: &cancellables)
+        extensionCatalog.$confirming
+            .sink { [weak self] id in self?.nav.extensionConfirming = id }
+            .store(in: &cancellables)
+        nav.onRemoveExtension = { [weak self] id in self?.removeExtension(id) }
+        // The list's status column reads all of these.
+        Publishers.Merge4(
+            extensions.$services.map { _ in () },
+            nav.$installedExtensions.map { _ in () },
+            nav.$isAway.map { _ in () },
+            nav.$presenceHolderID.map { _ in () })
+            .merge(with: nav.$extensionTabs.map { _ in () })
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in
+                self?.refreshExtensionListStatus()
+                // Grants change as services start; the page's Allowed line follows.
+                self?.refreshExtensionSettingsPages()
+            }
+            .store(in: &cancellables)
+        extensions.$choices
+            .sink { [weak self] choices in self?.nav.extensionChoices = choices }
+            .store(in: &cancellables)
+        extensions.$panes
+            .sink { [weak self] panes in
+                guard let self else { return }
+                var status: [String: String] = [:]
+                for page in self.nav.extensionSettingsPages {
+                    status[page.id] = panes[page.id].flatMap(ExtensionHost.statusLine)
+                }
+                if self.nav.extensionStatus != status { self.nav.extensionStatus = status }
+            }
+            .store(in: &cancellables)
+        nav.$settingsCategory
+            .removeDuplicates()
+            .sink { [weak self] category in
+                if case .extensionPage(let id) = category { self?.extensions.tabAppeared(id) }
+            }
+            .store(in: &cancellables)
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Pre-1.7 users had `stack-nudge.app` in ~/Applications/. If we're
         // running from the new `StackNudge.app` location, scrub the
@@ -1260,7 +1400,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             extensions: extensions, extensionCatalog: extensionCatalog,
             onConfigureExtension: { [weak self] row in self?.configureExtension(row) },
             onCloseExtensionsBrowser: { [weak self] in self?.closeExtensionsBrowser() },
-            onCloseExtensionConfig: { [weak self] in self?.closeExtensionConfig() },
             onGrantPermissions: { [weak self] in self?.handleGrantPermissions() }
         ).environmentObject(SessionPersistence.shared))
         // Don't let SwiftUI's preferred / intrinsic content size drive
@@ -1378,6 +1517,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
         startQuotaPolling()
         startAttentionTicking()
+        // Before the first load, which is what starts service extensions and
+        // hands out their signals.
+        wirePresence()
+        wireExtensionSettingsPages()
         // Discovery is a directory listing and a few small JSON reads, so it
         // runs inline; nothing is spawned until a tab is opened.
         extensions.load()
@@ -3837,6 +3980,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // audio that was triggered by us — the original bug that motivated
         // moving the bell from notify.sh into the app.
         Speaker.stopAllAudio()
+        // Service extensions run until told otherwise, so they are told, and
+        // the quit waits for them rather than leaving them running unowned.
+        extensions.stopServices()
     }
 
     // MARK: - PanelKeyDelegate
@@ -4019,19 +4165,31 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         if nav.recordingSpeakHotkey { nav.cancelRecordingSpeakHotkey() }
         if nav.recordingHotkey { nav.cancelRecordingHotkey() }
         panel.makeFirstResponder(nil)
-        switch nav.mode {
-        case .events:
-            nav.historyQuery = ""
-        case .sessions where sessions.renamingPID != nil:
-            sessions.cancelRename()
-        case .extensions:
-            extensionCatalog.query = ""
-        case .extensionConfig:
-            if let model = nav.extensionConfig, let key = model.selectedKey { model.revert(key) }
-        case .phrases:
-            phrases.draft = ""
-        default:
-            break
+        switch Self.fieldToCancel(in: nav.mode, renaming: sessions.renamingPID != nil) {
+        case .historyQuery:   nav.historyQuery = ""
+        case .rename:         sessions.cancelRename()
+        case .catalogueQuery: extensionCatalog.query = ""
+        case .extensionValue: nav.cancelExtensionTextEdit()
+        case .phraseDraft:    phrases.draft = ""
+        case nil:             break
+        }
+    }
+
+    // Which field a page's cancel puts back, as a value so a test can see
+    // every page's answer. Settings' is the text row being typed into on an
+    // extension's page, which goes back to its saved value.
+    enum FieldToCancel: Equatable {
+        case historyQuery, rename, catalogueQuery, extensionValue, phraseDraft
+    }
+
+    static func fieldToCancel(in mode: PanelMode, renaming: Bool) -> FieldToCancel? {
+        switch mode {
+        case .events:               return .historyQuery
+        case .sessions where renaming: return .rename
+        case .extensions:           return .catalogueQuery
+        case .settings:             return .extensionValue
+        case .phrases:              return .phraseDraft
+        default:                    return nil
         }
     }
 
@@ -4235,65 +4393,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return true
         }
 
-        // An extension's configuration form. Two levels, like the browser below
-        // and the Usage tab: the page opens with no field focused, so this
-        // branch owns ↑↓ (move between fields), ⏎ (hand the selected field
-        // focus), ← (back), ⌘S (save) and ⌘⌫ (remove). Once a field *is* first
-        // responder it consumes keys before NSWindow.keyDown: its own .onSubmit
-        // saves and steps back out, and ⌫ on an empty field reverts it.
-        //
-        // It used to own Esc and ⌘⌫ and nothing else, which left the form
-        // reachable only with the mouse or with Tab: ⏎ was advertised in the
-        // footer and did nothing at all until something had been clicked.
-        if case .extensionConfig = nav.mode {
-            // ⌘⌫ rather than a bare ⌫, which is what the field editor wants,
-            // and deliberately the macOS "move to trash" combination: this is
-            // the one destructive action on the page and it takes no
-            // confirmation.
-            switch Self.destructiveKeyAction(for: event) {
-            case .act:          nav.extensionConfig?.onRemove(); return true
-            case .ignoreRepeat: return true
-            case nil:           break
-            }
-            let onlyCommand = mods.intersection([.command, .control, .option, .shift]) == [.command]
-            if onlyCommand {
-                switch event.keyCode {
-                // The only Save at all on a page where ⏎ has handed focus back.
-                //
-                // Level one only, verified in the app rather than assumed: a
-                // focused field swallows this exactly as it swallows ⌘⌫, so
-                // the footer advertises it only while nothing is focused and
-                // names ⏎ as the way to save from inside a field.
-                case KeyCode.sKey:
-                    nav.extensionConfig?.save()
-                    return true
-                // Leave every other ⌘ combination to the app: ⌘Q and friends.
-                default:
-                    return false
-                }
-            }
-            guard mods.intersection([.command, .control, .option]).isEmpty else { return false }
-            switch Self.extensionConfigKeyAction(keyCode: event.keyCode) {
-            case .back:
-                // Wherever this page was opened from, which is the Settings list
-                // as often as the browser.
-                closeExtensionConfig()
-            case .moveSelection(let delta):
-                nav.extensionConfig?.moveSelection(by: delta)
-            case .activateSelection:
-                switch nav.extensionConfig?.selection {
-                case .field:  nav.extensionConfig?.focusSelectedField()
-                case .save:   nav.extensionConfig?.save()
-                case .remove: nav.extensionConfig?.onRemove()
-                case .back:   closeExtensionConfig()
-                case nil:     break
-                }
-            case .swallow:
-                break
-            }
-            return true
-        }
-
         // Extensions browser. The page opens with its search field unfocused, so
         // this branch owns the keyboard: ← steps back, / hands over to the
         // field, and any printable character seeds the query and hands over —
@@ -4317,11 +4416,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             // three lists plus a sort and a filter, and it ran on every key
             // event including the ones this branch doesn't handle.
             func visibleRows() -> [ExtensionRow] {
-                ExtensionCatalog.matching(
+                ExtensionCatalog.browseRows(
                     ExtensionCatalog.rows(catalogue: extensionCatalog.entries,
                                           installed: extensions.manifests,
                                           refused: extensions.refused),
-                    query: extensionCatalog.query)
+                    query: extensionCatalog.query).shown
             }
             let onlyCommand = mods.intersection([.command, .control, .option, .shift]) == [.command]
 
@@ -4345,8 +4444,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             }
             guard mods.intersection([.command, .control, .option]).isEmpty else { return false }
 
-            switch Self.extensionsKeyAction(keyCode: event.keyCode,
-                                            characters: event.charactersIgnoringModifiers) {
+            switch Self.extensionsKeyAction(for: event) {
             case .back:         closeExtensionsBrowser()
             case .focusSearch:  extensionCatalog.focusSearch()
             case .appendToQuery(let typed):
@@ -4452,18 +4550,42 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                      KeyCode.returnKey where plain,
                      KeyCode.numpadEnter where plain,
                      KeyCode.tab where plain:
-                    nav.settingsDetailFocused = true
-                    nav.selectFirstCategoryRow()
+                    // Does nothing on a category with no rows of its own.
+                    nav.enterSettingsCategory()
                 default:
                     return false
                 }
                 return true
             }
 
-            switch Self.settingsDetailKeyAction(keyCode: event.keyCode, modifiers: flags,
-                                                picking: nav.pickingValue) {
+            // A text row being typed into owns the keyboard; the field's own
+            // .onSubmit saves, and Esc or ⌫ when empty cancel it
+            // (panelHandlesGlobalKey).
+            // A field that has lost focus (a click elsewhere) has been
+            // abandoned: put it back rather than leave keys going nowhere.
+            if nav.extensionTextEdit != nil {
+                if nav.editingText { return false }
+                nav.cancelExtensionTextEdit()
+            }
+
+            // ⌘⌫ removes the extension whose list row or Remove row is
+            // selected, and nothing else here: see destructiveKeyAction.
+            if let id = nav.selectedRemovableExtension {
+                switch Self.destructiveKeyAction(for: event) {
+                case .act:          nav.onRemoveExtension(id); return true
+                case .ignoreRepeat: return true
+                case nil:           break
+                }
+            }
+
+            switch Self.settingsDetailKeyAction(for: event, picking: nav.pickingValue,
+                                                rightOpens: nav.selectedRowOpensOnRight) {
+            case .ignoreRepeat:
+                break
             case .back:
-                nav.settingsDetailFocused = false
+                // Out to the sidebar, or from an extension's page back to the
+                // Extensions list.
+                nav.settingsBack()
             case .step(let delta):
                 delta < 0 ? nav.cycleBackward() : nav.cycleForward()
             case .moveRow(let delta):
@@ -4486,7 +4608,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         if case .extensionTab(let id) = nav.mode {
             // The routing, ordering and repeat handling all live in
             // extensionTabKeyAction, where a test can see them.
-            switch Self.extensionTabKeyAction(for: event) {
+            switch Self.extensionTabKeyAction(for: event, keys: extensions.tabKeys(id)) {
             case .forceRefresh:     extensions.forceRefresh(id)
             case .move(let delta):  extensions.moveSelection(on: id, by: delta)
             case .run(let key):     extensions.handle(key: key, on: id)
@@ -4722,12 +4844,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // one invocation per autorepeat, and holding ⏎ on a row that opens a link
     // opened it over and over. The arrows only move the selection and keep
     // their repeat.
+    //
+    // `keys` is what this tab answers (ExtensionHost.tabKeys), the same value
+    // its footer is drawn from. A key the tab doesn't answer is swallowed, not
+    // passed on: it is still this tab's key, just one with nothing to do.
     static func extensionTabKeyAction(keyCode: UInt16, characters: String?,
                                       modifiers: NSEvent.ModifierFlags,
-                                      isRepeat: Bool) -> ExtensionTabKeyAction {
+                                      isRepeat: Bool,
+                                      keys: ExtensionHost.TabKeys = .view) -> ExtensionTabKeyAction {
         let modifiers = modifiers.intersection([.command, .control, .option, .shift])
         if isForceRefresh(keyCode: keyCode, modifiers: modifiers, isRepeat: isRepeat) {
-            return .forceRefresh
+            return keys.refresh == nil ? .swallow : .forceRefresh
         }
         guard modifiers.isEmpty else { return .passThrough }
         switch keyCode {
@@ -4735,7 +4862,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         case KeyCode.downArrow: return .move(1)
         default:                break
         }
-        guard !isRepeat else { return .swallow }
+        guard !isRepeat, keys.actions else { return .swallow }
         if keyCode == KeyCode.returnKey || keyCode == KeyCode.numpadEnter { return .run("return") }
         if let typed = characters?.lowercased(), typed.count == 1 { return .run(typed) }
         return .swallow
@@ -4744,11 +4871,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // What the tab calls, so the modifier masking and the repeat flag can't be
     // got wrong at the call site. Arrows arrive with .function and
     // .numericPad set, caps lock with .capsLock; none of them count.
-    static func extensionTabKeyAction(for event: NSEvent) -> ExtensionTabKeyAction {
+    static func extensionTabKeyAction(for event: NSEvent,
+                                      keys: ExtensionHost.TabKeys = .view) -> ExtensionTabKeyAction {
         extensionTabKeyAction(keyCode: event.keyCode,
                               characters: event.charactersIgnoringModifiers,
                               modifiers: event.modifierFlags,
-                              isRepeat: event.isARepeat)
+                              isRepeat: event.isARepeat,
+                              keys: keys)
     }
 
     // What a key does on the extensions browser. Pure and beside
@@ -4768,6 +4897,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     }
 
     enum SettingsDetailKeyAction: Equatable {
+        // A held ⏎, Space or opening →: swallowed, so it can't open a page
+        // and then fire that page's first row, or flip a toggle back and forth.
+        case ignoreRepeat
         case back
         case step(Int)
         case moveRow(Int)
@@ -4779,12 +4911,35 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // same ← the Usage tab uses, and → steps nothing (cycleForward only acts
     // mid-pick), so no row acts on an arrow. Space / ⏎ act on the row, and on
     // a value row start or settle a pick.
+    //
+    // On the Extensions list, → opens the selected row's page as ⏎ does, since
+    // every row there is a door (`rightOpens`); it is never a value change.
+    static func settingsDetailKeyAction(for event: NSEvent, picking: Bool,
+                                        rightOpens: Bool) -> SettingsDetailKeyAction? {
+        settingsDetailKeyAction(keyCode: event.keyCode,
+                                modifiers: event.modifierFlags.intersection([.command, .control, .option, .shift]),
+                                picking: picking, rightOpens: rightOpens, isRepeat: event.isARepeat)
+    }
+
     static func settingsDetailKeyAction(keyCode: UInt16,
                                         modifiers: NSEvent.ModifierFlags,
-                                        picking: Bool) -> SettingsDetailKeyAction? {
+                                        picking: Bool,
+                                        rightOpens: Bool = false,
+                                        isRepeat: Bool = false) -> SettingsDetailKeyAction? {
+        let action = settingsDetailKeyActionIgnoringRepeat(keyCode: keyCode, modifiers: modifiers,
+                                                           picking: picking, rightOpens: rightOpens)
+        // Moving and stepping repeat as they always have; acting doesn't.
+        if isRepeat, action == .activate { return .ignoreRepeat }
+        return action
+    }
+
+    private static func settingsDetailKeyActionIgnoringRepeat(keyCode: UInt16,
+                                                               modifiers: NSEvent.ModifierFlags,
+                                                               picking: Bool,
+                                                               rightOpens: Bool) -> SettingsDetailKeyAction? {
         switch (keyCode, modifiers) {
         case (KeyCode.leftArrow, []):                return picking ? .step(-1) : .back
-        case (KeyCode.rightArrow, []):               return .step(1)
+        case (KeyCode.rightArrow, []):               return !picking && rightOpens ? .activate : .step(1)
         case (KeyCode.upArrow, []), (KeyCode.tab, .shift):  return .moveRow(-1)
         case (KeyCode.downArrow, []), (KeyCode.tab, []):    return .moveRow(1)
         case (KeyCode.returnKey, []), (KeyCode.numpadEnter, []), (KeyCode.space, []):
@@ -4821,45 +4976,22 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
     }
 
-    // The config form's level one, where no field has focus. A page of text
-    // fields cannot walk itself with ↑↓: a focused field is first responder
-    // and takes them before NSWindow.keyDown runs, so the traversal lives here
-    // and ⏎ is what hands over.
-    enum ExtensionConfigKeyAction: Equatable {
-        case back
-        case moveSelection(Int)
-        // What that does depends on where the selection is, which the controller
-        // resolves: focus a field, save, remove, or walk back out.
-        case activateSelection
-        // Swallowed rather than passed on, the same rule every sub-page follows:
-        // a stray key must not reach the Events bindings and answer a permission
-        // prompt on a tab this page isn't showing.
-        case swallow
-    }
-
-    // Tab joins ⏎ because it is what a macOS form is entered with, and at level
-    // one nothing else claims it. Neither is gated on the page having fields:
-    // the selection walks the back chevron, Save and Remove as well, so there is
-    // always something for ⏎ to act on, and what that is belongs to the model
-    // rather than to a key table.
-    static func extensionConfigKeyAction(keyCode: UInt16) -> ExtensionConfigKeyAction {
-        switch keyCode {
-        case KeyCode.leftArrow:
-            return .back
-        case KeyCode.upArrow:
-            return .moveSelection(-1)
-        case KeyCode.downArrow:
-            return .moveSelection(1)
-        case KeyCode.returnKey, KeyCode.numpadEnter, KeyCode.tab:
-            return .activateSelection
-        default:
-            return .swallow
-        }
+    // What the page calls, so the repeat flag can't be dropped at the call
+    // site: a held ⏎ must not install, nor answer the confirmation it just
+    // asked for.
+    static func extensionsKeyAction(for event: NSEvent) -> ExtensionsKeyAction {
+        extensionsKeyAction(keyCode: event.keyCode, characters: event.charactersIgnoringModifiers,
+                            isRepeat: event.isARepeat)
     }
 
     static func extensionsKeyAction(keyCode: UInt16,
-                                    characters: String?) -> ExtensionsKeyAction {
+                                    characters: String?,
+                                    isRepeat: Bool = false) -> ExtensionsKeyAction {
         switch keyCode {
+        // ⏎ starts work (an install, a confirmation, a reload), so its
+        // autorepeat is swallowed rather than acted on.
+        case KeyCode.returnKey where isRepeat, KeyCode.numpadEnter where isRepeat:
+            return .swallow
         case KeyCode.leftArrow:
             return .back
         case KeyCode.slash:
@@ -5082,17 +5214,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             permissions.selectEdge(top: top)
         case .extensions:
             extensionCatalog.selectEdge(
-                among: ExtensionCatalog.matching(
+                among: ExtensionCatalog.browseRows(
                     ExtensionCatalog.rows(catalogue: extensionCatalog.entries,
                                           installed: extensions.manifests,
                                           refused: extensions.refused),
-                    query: extensionCatalog.query),
+                    query: extensionCatalog.query).shown,
                 top: top)
-        case .extensionConfig:
-            // Always somewhere to go: the back chevron and Remove are targets on
-            // every extension's page, including one declaring no config keys.
-            guard let config = nav.extensionConfig else { return false }
-            config.selectEdge(top: top)
         default:
             return false  // modal / single-purpose screens have nothing to jump
         }
@@ -5264,6 +5391,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // resetting to its overview pane on each open.
         nav.eventsPane = .live
         nav.historyQuery = ""
+        // An install waiting to be confirmed isn't confirmed by coming back.
+        extensionCatalog.cancelConfirmation()
         // A value being picked settles where it stands, and a shortcut being
         // recorded keeps the old one.
         nav.pickingValue = false

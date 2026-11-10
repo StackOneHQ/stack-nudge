@@ -84,6 +84,17 @@ final class ExtensionHost: ObservableObject {
     // Directories that looked like extensions and weren't loadable. Surfaced
     // rather than dropped — see ExtensionRuntime.Discovery.
     @Published private(set) var refused: [ExtensionRuntime.Refusal] = []
+    // Each running service extension's supervisor state, as last reported.
+    // Nothing renders it yet; Settings will.
+    @Published private(set) var services: [String: ServiceSupervisor.State] = [:]
+    // What each service last offered for its `dynamic` config keys, by
+    // extension then key. Kept when the process stops, so a picker still has
+    // something to step through while it restarts; dropped with the extension.
+    @Published private(set) var choices: [String: [String: [ConfigOption]]] = [:]
+
+    // Signals the service extensions hold. PanelController reacts to them
+    // (presence locks the screen) through the registry's onChange.
+    let signals: SignalRegistry
 
     private let runner: (ExtensionManifest, String?, String?) -> ExtensionRuntime.Fetch
     private let onTabsChanged: ([ExtensionTab]) -> Void
@@ -94,6 +105,36 @@ final class ExtensionHost: ObservableObject {
     private var publishedGlances: [ExtensionGlance] = []
     private let background: (@escaping () -> Void) -> Void
     private let toMain: (@escaping () -> Void) -> Void
+
+    // MARK: Service extensions
+
+    typealias SupervisorFactory = (ExtensionManifest, [ExtensionCapability],
+                                   @escaping (ServiceSupervisor.Event) -> Void) -> ServiceSupervisor
+
+    private struct Service {
+        let manifest: ExtensionManifest
+        // What the tier allows, before signals are handed out. Compared on
+        // every load, so a change of tier restarts the process with the new
+        // grant rather than leaving it running on the old one.
+        let allowed: [ExtensionCapability]
+        // What it was actually given: `allowed` less any signal another
+        // extension holds.
+        let granted: [ExtensionCapability]
+        let supervisor: ServiceSupervisor
+        // Which supervisor an event came from. An old one still winding down
+        // after an update shares the id with its replacement.
+        let token: UUID
+    }
+
+    private let tiers: () -> [String: ExtensionTier]
+    private let makeSupervisor: SupervisorFactory
+    private var running: [String: Service] = [:]
+    // Supervisors told to stop that haven't finished. A replacement waits for
+    // its predecessor, so there is never more than one process per extension.
+    private var stopping: [String: ServiceSupervisor] = [:]
+    private var wanted: [String: (manifest: ExtensionManifest, allowed: [ExtensionCapability])] = [:]
+    private var shuttingDown = false
+    private var reportedFeed: Set<String> = []
 
     // `runner` is injected so the store can be driven with canned outcomes in
     // tests; the default spawns for real. It is called on a background queue,
@@ -110,13 +151,25 @@ final class ExtensionHost: ObservableObject {
          toMain: @escaping (@escaping () -> Void) -> Void
              = { DispatchQueue.main.async(execute: $0) },
          runner: @escaping (ExtensionManifest, String?, String?) -> ExtensionRuntime.Fetch
-             = { ExtensionRuntime.fetch($0, action: $1, row: $2) }) {
+             = { ExtensionRuntime.fetch($0, action: $1, row: $2) },
+         tiers: @escaping () -> [String: ExtensionTier] = { ExtensionTiers.read() },
+         // In memory unless given a path. The app passes the real record; a
+         // test that builds a host never writes to the user's.
+         signals: SignalRegistry = SignalRegistry(),
+         makeSupervisor: @escaping SupervisorFactory = { manifest, granted, onEvent in
+             ServiceSupervisor.live(manifest: manifest,
+                                    directory: ExtensionRuntime.directory(for: manifest.id) ?? "",
+                                    granted: granted, onEvent: onEvent)
+         }) {
         self.onTabsChanged = onTabsChanged
         self.onRefusalsChanged = onRefusalsChanged
         self.onGlancesChanged = onGlancesChanged
         self.background = background
         self.toMain = toMain
         self.runner = runner
+        self.tiers = tiers
+        self.makeSupervisor = makeSupervisor
+        self.signals = signals
     }
 
     func pane(_ id: String) -> Pane { panes[id] ?? Pane() }
@@ -132,13 +185,27 @@ final class ExtensionHost: ObservableObject {
 
     func load(_ discovery: ExtensionRuntime.Discovery? = nil) {
         let found = discovery ?? ExtensionRuntime.discover()
-        manifests = found.installed
-        refused = found.refused
+        let tiers = self.tiers()
+        var installed: [ExtensionManifest] = []
+        var refusals = found.refused
+        for manifest in found.installed {
+            let tier = tiers[manifest.id] ?? .view
+            // Refused rather than shown as a tab that never fills: its `run`
+            // was written to stay up, so it can't be run as a view instead.
+            if manifest.mode == .service, !tier.allowsServiceMode {
+                refusals.append(.init(id: manifest.id,
+                                      reason: "service mode needs the service tier; it has \(tier.rawValue)"))
+                continue
+            }
+            installed.append(manifest)
+        }
+        manifests = installed
+        refused = refusals
         // Still reported to stderr, but no longer only there: the Settings
         // browser renders these now, which is what the published property was
         // added for. The log line stays because a refusal at launch happens
         // before anybody opens Settings.
-        for refusal in found.refused {
+        for refusal in refusals {
             FileHandle.standardError.write(Data(
                 "stack-nudge: extension \"\(refusal.id)\" not loaded — \(refusal.reason)\n".utf8))
         }
@@ -146,9 +213,25 @@ final class ExtensionHost: ObservableObject {
         // extension doesn't resurrect the document from its previous life.
         let live = Set(manifests.map(\.id))
         panes = panes.filter { live.contains($0.key) }
-        onTabsChanged(manifests.map(\.tabEntry))
+        choices = choices.filter { live.contains($0.key) }
+        // Only those that asked for a tab get one, and with it a ⌘N slot.
+        // A settings-only extension appears as a Settings category instead.
+        onTabsChanged(manifests.filter(\.hasTab).map(\.tabEntry))
         onRefusalsChanged(refused.count)
         publishGlances()
+
+        wanted = [:]
+        for manifest in manifests where manifest.mode == .service {
+            wanted[manifest.id] = (manifest, ExtensionTier.grants(for: manifest,
+                                                                  tier: tiers[manifest.id] ?? .view))
+        }
+        // A recorded holder that is gone, refused, or no longer granted the
+        // signal gives it up, so the next one in line can have it.
+        let wanted = self.wanted
+        signals.forgetHolders { signal, id in
+            wanted[id]?.allowed.contains(signal.capability) == true
+        }
+        reconcileServices()
     }
 
     // MARK: - Invocation
@@ -194,7 +277,12 @@ final class ExtensionHost: ObservableObject {
     // is the opposite, and without it an extension declaring no actions of its
     // own has no way to refresh at all — the floor would otherwise have taken
     // away the switch-away-and-back that used to serve as one.
-    func forceRefresh(_ id: String) { refresh(id, superseding: true) }
+    func forceRefresh(_ id: String) {
+        // On a service, ⌘R is offered only once it has given up, and means
+        // try again. See `tabKeys`.
+        if manifest(id)?.mode == .service { return retryService(id) }
+        refresh(id, superseding: true)
+    }
 
     // How stale a pane must be before coming on screen refetches it.
     //
@@ -212,6 +300,18 @@ final class ExtensionHost: ObservableObject {
     static func reopenFloor(_ manifest: ExtensionManifest) -> Int {
         max(ExtensionManifest.minimumIntervalSeconds,
             manifest.refresh.intervalSeconds ?? ExtensionManifest.minimumIntervalSeconds)
+    }
+
+    // The extension's settings were saved. A view runs again with the new
+    // environment; a running service is sent the new values without a restart,
+    // and keeps them for its next one.
+    func configChanged(_ id: String, configValues: [String: String] = ConfigFile.read()) {
+        guard let manifest = manifest(id) else { return }
+        guard manifest.mode == .service else { return refresh(id) }
+        guard let service = running[id] else { return }
+        let (environment, config) = ServiceSupervisor.configuration(for: service.manifest,
+                                                                     configValues: configValues)
+        service.supervisor.reconfigure(environment: environment, config: config)
     }
 
     func refresh(_ id: String, superseding: Bool = false) {
@@ -304,7 +404,7 @@ final class ExtensionHost: ObservableObject {
     @discardableResult
     func handle(key: String, on id: String) -> Bool {
         let pane = self.pane(id)
-        guard !pane.busy, let document = pane.document,
+        guard manifest(id)?.mode == .view, !pane.busy, let document = pane.document,
               let hit = Self.resolve(key: key, in: document, selectedRow: pane.selectedRow)
         else { return false }
         perform(action: hit.action, row: hit.row, on: id)
@@ -313,7 +413,9 @@ final class ExtensionHost: ObservableObject {
 
     private func invoke(_ id: String, action: String?, row: String?,
                         superseding: Bool = false) {
-        guard let manifest = manifest(id) else { return }
+        // A service's documents come from its own process. Running `run` as a
+        // one-shot fetch would start a second copy beside it.
+        guard let manifest = manifest(id), manifest.mode == .view else { return }
         var pane = self.pane(id)
         guard !pane.busy else { return }
         pane.busy = true
@@ -382,10 +484,20 @@ final class ExtensionHost: ObservableObject {
     // dropped, because a chip that vanishes reads as "all clear".
     static func glance(for manifest: ExtensionManifest, pane: Pane,
                        now: Date = Date()) -> ExtensionGlance? {
-        guard manifest.glance, let header = pane.document?.header, let badge = header.badge,
+        // The chip opens the tab, so an extension without one has no chip.
+        guard manifest.glance, manifest.hasTab,
+              let header = pane.document?.header, let badge = header.badge,
               badge.tone == .warning || badge.tone == .danger else { return nil }
-        let limit = TimeInterval(glanceStaleAfterIntervals * reopenFloor(manifest))
-        let stale = pane.updatedAt.map { now.timeIntervalSince($0) > limit } ?? false
+        let stale: Bool
+        if manifest.mode == .service {
+            // A service sends a document when something changes, not on a
+            // clock, so its age says nothing. What does is whether the process
+            // behind it is still up, which the pane's status already tracks.
+            stale = pane.status != .idle
+        } else {
+            let limit = TimeInterval(glanceStaleAfterIntervals * reopenFloor(manifest))
+            stale = pane.updatedAt.map { now.timeIntervalSince($0) > limit } ?? false
+        }
         return ExtensionGlance(id: manifest.id, label: manifest.tab.label, text: badge.text,
                                tone: badge.tone, trailing: stale ? nil : header.trailing,
                                stale: stale)
@@ -402,5 +514,242 @@ final class ExtensionHost: ObservableObject {
         guard current != publishedGlances else { return }
         publishedGlances = current
         onGlancesChanged(current)
+    }
+
+    // MARK: - Services
+
+    // Which keys an extension's tab answers, for the router and the footer to
+    // agree on. A view's ⌘R refetches and its document's actions run it. A
+    // service has neither: its documents arrive by themselves, and its actions
+    // would need a message the protocol doesn't have yet. Its ⌘R comes back
+    // only once it is broken, as the way to try again.
+    struct TabKeys: Equatable {
+        // The ⌘R hint's label, or nil when ⌘R does nothing here.
+        var refresh: String?
+        var actions: Bool
+
+        static let view = TabKeys(refresh: "Refresh", actions: true)
+    }
+
+    static func tabKeys(mode: ExtensionManifest.Mode, state: ServiceSupervisor.State?) -> TabKeys {
+        guard mode == .service else { return .view }
+        if case .broken? = state { return TabKeys(refresh: "Retry", actions: false) }
+        return TabKeys(refresh: nil, actions: false)
+    }
+
+    func tabKeys(_ id: String) -> TabKeys {
+        Self.tabKeys(mode: manifest(id)?.mode ?? .view, state: services[id])
+    }
+
+    // A fresh supervisor, so a fresh crash window: the user has asked, and
+    // presumably fixed whatever it was.
+    private func retryService(_ id: String) {
+        guard case .broken? = services[id] else { return }
+        stopService(id)
+    }
+
+    // Brings the running supervisors in line with what is installed: stops
+    // what was removed or changed (an update, a new tier, a signal it was
+    // refused that has since come free), and starts what is missing once any
+    // predecessor has gone.
+    //
+    // Started in id order, so that when nobody has a signal on record, which
+    // extension gets it is the same every launch rather than whatever order a
+    // dictionary happened to iterate in. Once given, the record decides.
+    private func reconcileServices() {
+        guard !shuttingDown else { return }
+        for (id, service) in running {
+            let signalCameFree = AppSignal.allCases.contains {
+                service.allowed.contains($0.capability) && !service.granted.contains($0.capability)
+                    && signals.holders[$0] == nil
+            }
+            guard let want = wanted[id], want.manifest == service.manifest,
+                  want.allowed == service.allowed, !signalCameFree else {
+                stopService(id)
+                continue
+            }
+        }
+        for id in wanted.keys.sorted() where running[id] == nil && stopping[id] == nil {
+            guard let want = wanted[id] else { continue }
+            startService(want.manifest, allowed: want.allowed)
+        }
+    }
+
+    private func startService(_ manifest: ExtensionManifest, allowed: [ExtensionCapability]) {
+        let id = manifest.id
+        // Signals are handed out here, first come first kept. One already held
+        // by another extension is left out of the grant, so `hello` tells this
+        // one the truth about what it can set.
+        var granted = allowed
+        for signal in AppSignal.allCases where granted.contains(signal.capability) {
+            if !signals.claim(signal, by: id) {
+                granted.removeAll { $0 == signal.capability }
+                log(id, "not given \(signal.rawValue) \u{2014} \(signals.refusals[id]?.message ?? "it is held")")
+            }
+        }
+        let token = UUID()
+        let supervisor = makeSupervisor(manifest, granted) { [weak self] event in
+            self?.toMain { self?.serviceEvent(event, from: id, token: token) }
+        }
+        running[id] = Service(manifest: manifest, allowed: allowed, granted: granted,
+                              supervisor: supervisor, token: token)
+        services[id] = .stopped
+        supervisor.start()
+    }
+
+    private func stopService(_ id: String) {
+        guard let service = running.removeValue(forKey: id) else { return }
+        // Released now rather than when the process is finally gone: the
+        // extension is no longer one the app listens to, so whatever it last
+        // said must not keep acting.
+        signals.release(id)
+        services[id] = nil
+        // Held here until the stop completes. This is the supervisor's only
+        // strong reference, and letting go of it early would skip the polite
+        // stop for the SIGKILL in its deinit.
+        stopping[id] = service.supervisor
+        service.supervisor.stop { [weak self] in
+            self?.toMain {
+                self?.stopping[id] = nil
+                self?.reconcileServices()
+            }
+        }
+    }
+
+    // Quitting. Blocks until every service has gone or `timeout` passes, which
+    // is the stop sequence's own worst case: a process left behind would carry
+    // on running with nobody to stop it. The supervisors finish on their own
+    // queues, so waiting here on main can't hold them up.
+    func stopServices(waitingUpTo timeout: TimeInterval = 6) {
+        shuttingDown = true
+        wanted = [:]
+        // Every supervisor is held until the wait is over: the stop runs on
+        // its own queue, and one released before then would deinit and kill
+        // its process outright instead of asking it to stop.
+        let supervisors = running.values.map(\.supervisor) + Array(stopping.values)
+        for id in running.keys { signals.release(id) }
+        running = [:]
+        services = [:]
+        let group = DispatchGroup()
+        for supervisor in supervisors {
+            group.enter()
+            supervisor.stop { group.leave() }
+        }
+        withExtendedLifetime(supervisors) {
+            _ = group.wait(timeout: .now() + timeout)
+        }
+    }
+
+    private func serviceEvent(_ event: ServiceSupervisor.Event, from id: String, token: UUID) {
+        guard running[id]?.token == token else { return }
+        switch event {
+        case .state(let state):
+            services[id] = state
+            serviceStateChanged(id, state)
+        case .document(let document):
+            // Exactly the path a view fetch takes, so the tab can't tell them apart.
+            finish(id, .ok(document))
+        case .malformedDocument(let why):
+            finish(id, .malformed(why))
+        case .signal(let name, let value):
+            if let refusal = signals.set(name, to: value, from: id) {
+                log(id, "signal refused \u{2014} \(refusal.message)")
+            }
+        case .choices(let key, let options):
+            // Only for a key it declared as dynamic. Anything else would put
+            // values into a picker the manifest never agreed to, or make a
+            // fixed list say something its manifest doesn't.
+            guard let declared = running[id]?.manifest.config.first(where: { $0.key == key }),
+                  declared.kind == .dynamic else {
+                return log(id, "sent choices for \(key), which it didn't declare as dynamic")
+            }
+            choices[id, default: [:]][key] = options
+        case .feed:
+            // Accepted and dropped. Posting it means giving EventStore a source
+            // per extension (`extension:<id>`, with its own cap), and
+            // EventSource is a closed enum that the event log persists, so that
+            // is its own change. Said once per process, not once per event.
+            if reportedFeed.insert(id).inserted {
+                log(id, "sent a feed event; those aren't shown yet, so it was dropped")
+            }
+        case .degraded(let why):
+            log(id, "degraded \u{2014} \(why)")
+        case .problem(let why):
+            log(id, why)
+        }
+    }
+
+    private func serviceStateChanged(_ id: String, _ state: ServiceSupervisor.State) {
+        var pane = self.pane(id)
+        switch state {
+        case .starting:
+            reportedFeed.remove(id)
+            if pane.document == nil { pane.status = .loading }
+        case .running:
+            pane.status = pane.document == nil ? .loading : .idle
+        case .restarting(let delay):
+            // A dead holder must not leave the app acting on what it last said.
+            signals.reset(id)
+            let why = "restarting in \(Int(delay.rounded(.up)))s"
+            pane.lastFailureWasTransient = true
+            pane.status = pane.document == nil ? .broken(why) : .stale(why)
+        case .broken(let termination):
+            signals.reset(id)
+            pane.lastFailureWasTransient = false
+            pane.status = .broken(Self.brokenMessage(termination))
+        case .stopping, .stopped:
+            return
+        }
+        panes[id] = pane
+        publishGlances()
+    }
+
+    // What a service was given, for its page's "Allowed" line. Empty for a
+    // view extension, which nothing passes through.
+    func granted(_ id: String) -> [ExtensionCapability] { running[id]?.granted ?? [] }
+
+    // A supervisor state as the Extensions list says it.
+    static func stateLabel(_ state: ServiceSupervisor.State?) -> String {
+        switch state {
+        case .running?:            return "Running"
+        case .starting?:           return "Starting"
+        case .restarting?:         return "Restarting"
+        case .stopping?:           return "Stopping"
+        case .broken?:             return "Broken"
+        case .stopped?, nil:       return "Stopped"
+        }
+    }
+
+    // One line for a Settings page: the header badge, then the first row's
+    // title and value, from the latest document. What the pane says when it
+    // has no document, or when what it has is old.
+    static func statusLine(_ pane: Pane) -> String? {
+        var parts: [String] = []
+        if let document = pane.document {
+            if let badge = document.header?.badge?.text { parts.append(badge) }
+            if let row = document.rows.first {
+                parts.append(row.title)
+                if let value = row.value, !value.isEmpty { parts.append(value) }
+            } else if let message = document.message, !message.isEmpty {
+                parts.append(message)
+            }
+        }
+        if let why = pane.status.message { parts.append(why) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    static func brokenMessage(_ termination: ServiceSupervisor.Termination) -> String {
+        switch termination {
+        case .exited, .signalled:
+            return "stopped restarting after repeated crashes; last \(termination.message)"
+        case .unresponsive:
+            return "stopped restarting after repeated crashes; the last one \(termination.message)"
+        case .failedToStart, .incompatible:
+            return termination.message
+        }
+    }
+
+    private func log(_ id: String, _ message: String) {
+        FileHandle.standardError.write(Data("stack-nudge: extension \"\(id)\" \(message)\n".utf8))
     }
 }

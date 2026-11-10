@@ -31,6 +31,25 @@ enum ExtensionInstaller {
         // made a strictly additive manifest change into a breaking index
         // change, for no gain.
         let config: [String]
+        // The tier the reviewers gave it (extensions/tiers.json), as a name.
+        // Optional, because indexes before tiers don't carry it, and a String
+        // rather than an ExtensionTier so a tier this host doesn't know
+        // degrades to `view` instead of failing the whole entry. Recorded at
+        // install; see ExtensionTiers.
+        var tier: String? = nil
+
+        var reviewedTier: ExtensionTier { tier.flatMap(ExtensionTier.init(rawValue:)) ?? .view }
+
+        // What the manifest asks for, as the index publishes it. nil from an
+        // index that predates the field, which is not the same as asking for
+        // nothing. Names this host doesn't know are dropped.
+        var capabilities: [String]? = nil
+        // "view" or "service", as the manifest says; nil from an older index.
+        var mode: String? = nil
+
+        var requestedCapabilities: [ExtensionCapability]? {
+            capabilities.map { $0.compactMap(ExtensionCapability.init(rawValue:)) }
+        }
     }
 
     enum Failure: Error, Equatable {
@@ -42,6 +61,7 @@ enum ExtensionInstaller {
         case unsafeArchive(String)
         case missingRequirement(String)
         case manifestRejected(String)
+        case differsFromIndex(String)
         case downloadFailed(String)
         case catalogueUnavailable
         case extractFailed(String)
@@ -59,6 +79,8 @@ enum ExtensionInstaller {
             case .unsafeArchive(let why):      return "the package contains \(why)"
             case .missingRequirement(let what): return "needs \(what), which isn't installed"
             case .manifestRejected(let why):   return "the package's manifest was refused — \(why)"
+            case .differsFromIndex(let what):
+                return "the package asks for something other than the catalogue said (\(what)), so it wasn't installed"
             case .downloadFailed(let what):    return "couldn't download \(what)"
             case .catalogueUnavailable:
                 // Both paths failed. Anonymous GitHub is sixty requests an hour
@@ -339,8 +361,12 @@ enum ExtensionInstaller {
             return .failure(.manifestRejected(failure.message))
         case .success(let manifest) where manifest.id != entry.id:
             return .failure(.manifestRejected("manifest declares id \"\(manifest.id)\""))
-        case .success:
-            break
+        case .success(let manifest):
+            // The user confirmed what the index described; don't install
+            // something else.
+            if let difference = differenceFromIndex(manifest, entry) {
+                return .failure(.differsFromIndex(difference))
+            }
         }
 
         guard let destination = ExtensionRuntime.directory(for: entry.id, in: root) else {
@@ -387,6 +413,20 @@ enum ExtensionInstaller {
             return .failure(.installFailed(error.localizedDescription))
         }
         return .success(id)
+    }
+
+    // What the package's manifest says that its index entry didn't, where the
+    // entry said anything: how it runs, and what it asks for. nil when they
+    // agree, or when the index predates the fields.
+    static func differenceFromIndex(_ manifest: ExtensionManifest, _ entry: IndexEntry) -> String? {
+        if let mode = entry.mode, mode != manifest.mode.rawValue {
+            return "runs as \(manifest.mode.rawValue), not \(mode)"
+        }
+        if let listed = entry.capabilities,
+           Set(listed) != Set(manifest.capabilities.map(\.rawValue)) {
+            return "capabilities differ"
+        }
+        return nil
     }
 
     // MARK: - Talking to the release

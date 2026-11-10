@@ -54,6 +54,49 @@ final class ExtensionInstallerTests: XCTestCase {
         XCTAssertEqual(entries.map(\.id), ["system"])
     }
 
+    // The tier the reviewers gave it, when the index carries one. An index
+    // from before tiers simply doesn't, and every entry reads as `view`.
+    func testTheIndexCarriesATierWhenItHasOne() {
+        let json = """
+            {"schema":1,"extensions":[
+              {"id":"away","name":"Away","version":"1.0.0","description":"",
+               "asset":"extension-away-1.0.0.tar.gz","sha256":"ab","requires":["swiftc"],
+               "config":[],"tier":"trusted"}]}
+            """
+        guard case .success(let entries) = index(json) else { return XCTFail("expected entries") }
+        XCTAssertEqual(entries.first?.reviewedTier, .trusted)
+        XCTAssertNil(entries.first?.capabilities, "no field is not the same as asking for nothing")
+        let withCapabilities = json.replacingOccurrences(of: #""tier":"trusted""#,
+                                                         with: #""tier":"trusted","capabilities":["bluetooth","warp"]"#)
+        guard case .success(let more) = index(withCapabilities) else { return XCTFail("expected entries") }
+        XCTAssertEqual(more.first?.requestedCapabilities, [.bluetooth])
+        guard case .success(let old) = index(oneEntry) else { return XCTFail("expected entries") }
+        XCTAssertNil(old.first?.tier)
+        XCTAssertEqual(old.first?.reviewedTier, .view)
+    }
+
+    // The user confirmed what the index described: a package whose manifest
+    // runs differently or asks for something else isn't installed.
+    func testAPackageDifferentFromItsIndexEntryIsRefused() {
+        guard case .success(let manifest) = ExtensionManifest.parse(Data("""
+            {"id":"away","name":"Away","version":"1","schema":2,"mode":"service",
+             "capabilities":["bluetooth","signal:presence"]}
+            """.utf8)) else { return XCTFail("fixture didn't parse") }
+        var entry = ExtensionInstaller.IndexEntry(id: "away", name: "Away", version: "1", description: "",
+                                                  asset: "extension-away-1.tar.gz", sha256: "ab",
+                                                  requires: [], config: [])
+        XCTAssertNil(ExtensionInstaller.differenceFromIndex(manifest, entry), "an old index can't differ")
+        entry.mode = "service"
+        entry.capabilities = ["signal:presence", "bluetooth"]
+        XCTAssertNil(ExtensionInstaller.differenceFromIndex(manifest, entry), "order doesn't matter")
+        entry.capabilities = ["signal:presence"]
+        XCTAssertEqual(ExtensionInstaller.differenceFromIndex(manifest, entry), "capabilities differ")
+        entry.capabilities = nil
+        entry.mode = "view"
+        XCTAssertEqual(ExtensionInstaller.differenceFromIndex(manifest, entry), "runs as service, not view")
+        XCTAssertTrue(ExtensionInstaller.Failure.differsFromIndex("x").message.contains("wasn't installed"))
+    }
+
     func testAnEmptyIndexIsNotAFailure() {
         guard case .success(let entries) = index(#"{"schema":1,"extensions":[]}"#) else {
             return XCTFail("expected success")

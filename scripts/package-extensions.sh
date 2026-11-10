@@ -19,6 +19,12 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ext_root="$repo_root/extensions"
+# Which tier each extension is reviewed for: view, service or trusted. Owned by
+# the reviewers rather than by the extensions, so a manifest can't promote
+# itself; the index carries it to the host, which records it at install. An
+# extension missing from it is `view`. See docs/design/service-extensions.md,
+# "Privilege tiers".
+tiers_file="$ext_root/tiers.json"
 
 mode="${1:-validate}"
 outdir="${2:-$repo_root/dist/extensions}"
@@ -60,9 +66,53 @@ with open(sys.argv[1]) as fh:
 ' "$1" "$2"
 }
 
+# The capabilities the host knows, read from the ExtensionCapability enum
+# itself so the check can't drift from it. Each `case` line in the enum's own
+# block gives one: its raw value if it spells one out (`case eventIdle =
+# "event:idle"`), otherwise its name (`case feed`). Finding no enum or no cases
+# is an error, so a refactor that moves or reshapes the enum fails the gate
+# loudly instead of quietly checking against nothing.
+capability_source="$repo_root/panel/ExtensionManifest.swift"
+known_capabilities() {
+  python3 - "$capability_source" <<'PY'
+import re, sys
+try:
+    text = open(sys.argv[1]).read()
+except OSError as e:
+    sys.exit(f"can't read {sys.argv[1]}: {e}")
+# Block comments go first, keeping their line breaks, so a case commented out
+# with /* */ isn't counted as known. Line comments are cut per line below.
+text = re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"), text, flags=re.S)
+lines = text.splitlines()
+start = next((i for i, l in enumerate(lines)
+              if re.match(r"\s*(?:\w+\s+)*enum\s+ExtensionCapability\b", l)), None)
+if start is None:
+    sys.exit(f"no `enum ExtensionCapability` in {sys.argv[1]}")
+depth, opened, found = 0, False, []
+for line in lines[start:]:
+    code = line.split("//", 1)[0]
+    # Only the enum's own level: a `case` inside a nested switch isn't one.
+    if depth == 1:
+        m = re.match(r"\s*case\s+(.*?)\s*$", code)
+        if m:
+            for item in m.group(1).split(","):
+                c = re.fullmatch(r'\s*(\w+)\s*(?:=\s*"([^"]*)")?\s*', item)
+                if not c:
+                    sys.exit(f"can't read `{line.strip()}` in {sys.argv[1]}")
+                found.append(c.group(2) if c.group(2) is not None else c.group(1))
+    depth += code.count("{") - code.count("}")
+    opened = opened or "{" in code
+    if opened and depth <= 0:
+        break
+if not found:
+    sys.exit(f"`enum ExtensionCapability` in {sys.argv[1]} has no cases")
+print("\n".join(found))
+PY
+}
+
 validate_one() {
   local dir="$1" rc=0
-  local id manifest run_rel run_path declared_id schema version
+  local id manifest run_rel run_path declared_id schema mode version
 
   id="$(basename "$dir")"
   manifest="$dir/manifest.json"
@@ -86,8 +136,113 @@ validate_one() {
   [[ "$id" =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] \
     || fail "$id: id is not ^[a-z0-9][a-z0-9-]{0,31}\$" || rc=1
 
+  # Mirrors ExtensionManifest.supportedManifestSchemas: 1 for a view, 2 for
+  # anything that needs service mode (a view may say 2 as well). Service mode
+  # on 1 is refused because an older host reads 1 and would run it as a view.
   schema="$(manifest_field "$manifest" schema)"
-  [[ "$schema" == "1" ]] || fail "$id: schema is '$schema', expected 1" || rc=1
+  mode="$(manifest_field "$manifest" mode)"
+  [[ "$schema" == "1" || "$schema" == "2" ]] \
+    || fail "$id: schema is '$schema', expected 1 or 2" || rc=1
+  case "$mode" in
+    ""|view) ;;
+    service) [[ "$schema" == "2" ]] || fail "$id: mode 'service' needs schema 2" || rc=1 ;;
+    *)       fail "$id: unknown mode '$mode'" || rc=1 ;;
+  esac
+
+  # Against ExtensionCapability: the host refuses a manifest naming anything
+  # else, so a typo here would ship an extension no host will load. Caught in
+  # CI instead.
+  local bad_capability
+  bad_capability="$(python3 -c '
+import json, sys
+known = set(sys.argv[2].split("\n"))
+caps = json.load(open(sys.argv[1])).get("capabilities", [])
+if not isinstance(caps, list):
+    print("(not a list)")
+else:
+    for c in caps:
+        if not isinstance(c, str) or c not in known:
+            print(c)
+            break
+' "$manifest" "$capabilities")"
+  [[ -z "$bad_capability" ]] \
+    || fail "$id: unknown capability '$bad_capability'" || rc=1
+
+  # Mirrors ExtensionManifest's surfaces and ConfigKind.read: where it appears,
+  # and what each typed config key may hold. The host refuses a manifest that
+  # gets either wrong, so CI does too.
+  local shape_problem
+  shape_problem="$(python3 -c '
+import json, sys
+m = json.load(open(sys.argv[1]))
+def say(msg):
+    print(msg); sys.exit()
+surfaces = m.get("surfaces", ["tab"])
+if not isinstance(surfaces, list) or not surfaces:
+    say("surfaces must be a non-empty list of \"tab\" and \"settings\"")
+for s in surfaces:
+    if s not in ("tab", "settings"):
+        say("unknown surface %r" % (s,))
+def storable(v):
+    return isinstance(v, str) and v != "" and len(v) <= 256 and v == v.strip() \
+        and not any(ord(c) < 32 or ord(c) == 127 for c in v)
+for entry in m.get("config", []):
+    if not isinstance(entry, dict):
+        continue
+    key, kind = entry.get("key"), entry.get("type", "text")
+    opts = entry.get("options")
+    if kind in ("text", "toggle", "dynamic"):
+        if opts is not None:
+            say("config key %s is type %s, which takes no options" % (key, kind))
+    elif kind == "choice":
+        if not isinstance(opts, list) or not opts or len(opts) > 64:
+            say("config key %s is a choice and needs 1 to 64 {value, label} options" % key)
+        values = [o.get("value") if isinstance(o, dict) else None for o in opts]
+        if len(set(map(str, values))) != len(values):
+            say("config key %s lists the same option twice" % key)
+        for o in opts:
+            if not storable(o.get("value")) or not isinstance(o.get("label"), str) or not o["label"]:
+                say("config key %s has an option that cannot be stored or shown" % key)
+    elif kind == "number":
+        if not isinstance(opts, list) or not opts or len(opts) > 64 \
+                or not all(isinstance(n, int) and not isinstance(n, bool) for n in opts):
+            say("config key %s is a number and needs 1 to 64 whole-number options" % key)
+        if len(set(opts)) != len(opts):
+            say("config key %s lists the same number twice" % key)
+        if entry.get("unit") not in (None, "seconds"):
+            say("config key %s has unknown unit %r" % (key, entry.get("unit")))
+    else:
+        say("config key %s has unknown type %r" % (key, kind))
+' "$manifest")"
+  [[ -z "$shape_problem" ]] || fail "$id: $shape_problem" || rc=1
+
+  # Mirrors ExtensionTier.allows. An extension asking for more than its tier
+  # grants would install and then run without it (or, in service mode below
+  # the service tier, not run at all), so the mismatch is a CI failure rather
+  # than something a user finds out.
+  local tier_problem
+  tier_problem="$(python3 -c '
+import json, sys
+manifest = json.load(open(sys.argv[1]))
+try:
+    tiers = json.load(open(sys.argv[2]))
+except FileNotFoundError:
+    tiers = {}
+tier = tiers.get(sys.argv[3], "view") if isinstance(tiers, dict) else "view"
+rank = {"view": 0, "service": 1, "trusted": 2}
+needs = {"event:idle": 1, "event:panel": 1, "feed": 1,
+         "signal:presence": 2, "event:session": 2, "event:nudge": 2, "bluetooth": 2}
+have = rank.get(tier, 0)
+if manifest.get("mode") == "service" and have < 1:
+    print("mode \"service\" needs the service tier; tiers.json gives it %s" % tier)
+else:
+    caps = manifest.get("capabilities", [])
+    for c in caps if isinstance(caps, list) else []:
+        if needs.get(c, 0) > have:
+            print("asks for %s, which tier %s does not grant" % (c, tier))
+            break
+' "$manifest" "$tiers_file" "$id")"
+  [[ -z "$tier_problem" ]] || fail "$id: $tier_problem" || rc=1
 
   # Constrained like the id is. It becomes part of an asset filename and is
   # interpolated into shell, so "non-empty" was never a sufficient check.
@@ -145,8 +300,13 @@ package_one() {
   # machine-specific .pyc files to every user, and made the tarball's bytes
   # depend on whether the person building it had run the tests — which is not a
   # thing a checksummed artefact may depend on.
+  #
+  # .build is excluded for the same reason: an extension that compiles itself
+  # on first run (away) keeps its build there, and a binary from whoever ran
+  # it last has no place in a package whose point is that the source is what
+  # runs.
   tar czf "$outdir/$asset" \
-    --exclude '__pycache__' --exclude '*.pyc' --exclude '.DS_Store' \
+    --exclude '__pycache__' --exclude '*.pyc' --exclude '.DS_Store' --exclude '.build' \
     -C "$ext_root" -- "$id"
   # Run from $outdir with a bare basename, shasum already prints exactly
   # "<hash>  <basename>" — so there is nothing for awk to do, and no program
@@ -154,6 +314,34 @@ package_one() {
   # arbitrary code execution in a job holding contents: write.
   ( cd "$outdir" && shasum -a 256 "$asset" > "$asset.sha256" )
   echo "  → $asset"
+}
+
+# tiers.json is optional, but if it's there it has to say something the host
+# can read: an object of extension ids to a known tier, naming only extensions
+# that exist. A typo'd id would otherwise leave its extension at `view` with
+# nothing to say why.
+validate_tiers() {
+  [[ -f "$tiers_file" ]] || return 0
+  local problem
+  problem="$(python3 -c '
+import json, os, sys
+path, root = sys.argv[1], sys.argv[2]
+try:
+    tiers = json.load(open(path))
+except ValueError:
+    print("is not valid JSON"); sys.exit()
+if not isinstance(tiers, dict):
+    print("is not an object"); sys.exit()
+for ext_id, tier in sorted(tiers.items()):
+    if tier not in ("view", "service", "trusted"):
+        print("gives %s the unknown tier %r" % (ext_id, tier)); break
+    if not os.path.isdir(os.path.join(root, ext_id)):
+        print("names %s, which is not an extension here" % ext_id); break
+' "$tiers_file" "$ext_root")"
+  if [[ -n "$problem" ]]; then
+    fail "tiers.json $problem"
+    return 1
+  fi
 }
 
 extension_dirs() {
@@ -174,13 +362,20 @@ list_extension_dirs() {
 }
 
 main() {
-  local dirs=() rc=0
+  local dirs=() rc=0 capabilities
   while IFS= read -r -d '' dir; do
     dirs+=("$dir")
   done < <(list_extension_dirs)
   # The subshell's failure is invisible to the loop, so ask again.
   if [[ -d "$ext_root" ]] && ! find "$ext_root" -mindepth 1 -maxdepth 1 -type d > /dev/null 2>&1; then
     echo "refusing to $mode: cannot read $ext_root" >&2
+    return 1
+  fi
+
+  # Read once, up front, and before anything else can pass: a gate that
+  # couldn't read the list must not go on to say every manifest is fine.
+  if ! capabilities="$(known_capabilities)" || [[ -z "$capabilities" ]]; then
+    echo "refusing to $mode: couldn't read the capabilities from $capability_source" >&2
     return 1
   fi
 
@@ -194,11 +389,13 @@ main() {
   case "$mode" in
     validate)
       echo "validating ${#dirs[@]} extension(s)"
+      validate_tiers || rc=1
       for dir in ${dirs[@]+"${dirs[@]}"}; do
         validate_one "$dir" || rc=1
       done
       ;;
     package)
+      validate_tiers || rc=1
       for dir in ${dirs[@]+"${dirs[@]}"}; do
         validate_one "$dir" || rc=1
       done
@@ -224,10 +421,15 @@ main() {
 # The index is what the app fetches to know what is installable. Written by
 # python3 so the JSON is actually encoded rather than string-concatenated.
 write_index() {
-  python3 - "$outdir" "$@" <<'PY'
+  python3 - "$outdir" "$tiers_file" "$@" <<'PY'
 import hashlib, json, os, sys
 
-outdir, dirs = sys.argv[1], sys.argv[2:]
+outdir, tiers_file, dirs = sys.argv[1], sys.argv[2], sys.argv[3:]
+try:
+    with open(tiers_file) as fh:
+        tiers = json.load(fh)
+except FileNotFoundError:
+    tiers = {}
 entries = []
 for d in dirs:
     with open(os.path.join(d, "manifest.json")) as fh:
@@ -249,6 +451,15 @@ for d in dirs:
         # index — and nothing downstream needs the metadata here: the settings
         # form renders for an *installed* extension and reads its manifest.
         "config": [c["key"] if isinstance(c, dict) else c for c in m.get("config", [])],
+        # From tiers.json, never the manifest. Hosts that predate tiers ignore
+        # the field; newer ones record it at install and re-check it on every
+        # fetch, so lowering it here demotes installed copies.
+        "tier": tiers.get(m["id"], "view"),
+        # What it asks for, so the install confirmation can say so before
+        # anything is downloaded. Additive: older hosts ignore it.
+        "capabilities": m.get("capabilities", []),
+        # And how it runs, which decides what the confirmation may claim.
+        "mode": m.get("mode", "view"),
     })
 
 entries.sort(key=lambda e: e["id"])

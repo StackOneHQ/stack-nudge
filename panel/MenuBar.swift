@@ -18,6 +18,16 @@ enum ConfigFile {
         return parse(contents)
     }
 
+    // Anything that ends a line for some reader, anywhere in the string, not
+    // just inside it: CR, LF, the other CharacterSet.newlines (vertical tab,
+    // form feed, NEL, the Unicode line and paragraph separators), and NUL,
+    // which ends a C string. Checked before any trimming, because a trim that
+    // removes a leading newline is exactly how one slips past a check that
+    // runs after it.
+    static func containsLineBreak(_ text: String) -> Bool {
+        text.unicodeScalars.contains { CharacterSet.newlines.contains($0) || $0 == "\u{0}" }
+    }
+
     static func write(key: String, value: String) {
         guard isWritableKey(key) else { return }
         let contents = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
@@ -89,6 +99,12 @@ enum ConfigFile {
     /// and surrounding comments). Otherwise the assignment is appended,
     /// trailing blanks collapsed, and a final newline guaranteed.
     static func apply(_ contents: String, key: String, value: String) -> String {
+        // Defence in depth. The file is line-based, so a value holding a line
+        // break doesn't set a long value: it sets a short one and appends what
+        // followed as an assignment of its own. Every entry point refuses
+        // such a value already; this refuses it where the line is written, so
+        // a caller that forgot can't write it, and leaves the file unchanged.
+        guard !containsLineBreak(key), !containsLineBreak(value) else { return contents }
         var lines = contents.components(separatedBy: "\n")
         let newLine = "\(key)=\(value)"
         var replaced = false

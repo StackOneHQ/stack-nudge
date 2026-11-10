@@ -24,7 +24,8 @@ final class ExtensionCatalogTests: XCTestCase {
         didChange: @escaping () -> Void = {}
     ) -> ExtensionCatalog {
         ExtensionCatalog(fetchCatalogue: fetch, performInstall: install, performRemove: remove,
-                         background: { $0() }, toMain: { $0() }, didChange: didChange)
+                         background: { $0() }, toMain: { $0() }, didChange: didChange,
+                         recordedTiers: { [:] })
     }
 
     // The completion must come back through the main hop. Every other test
@@ -215,7 +216,7 @@ final class ExtensionCatalogTests: XCTestCase {
     }
 
     // Enter does whatever the row's own button would: install an uninstalled
-    // one, remove an installed one.
+    // one, on the second press; the first arms it and says what it is.
     func testActivatingAnUninstalledRowInstallsIt() {
         var installed: [String] = []
         // Loaded, because activation resolves the row back to its index entry —
@@ -224,6 +225,9 @@ final class ExtensionCatalogTests: XCTestCase {
                         install: { installed.append($0.id); return .success($0.id) })
         c.reload()
         c.selection = .row("available")
+        c.activateSelection(among: threeRows)
+        XCTAssertEqual(installed, [], "the first ⏎ only arms it")
+        XCTAssertEqual(c.confirming, "available")
         c.activateSelection(among: threeRows)
         XCTAssertEqual(installed, ["available"])
     }
@@ -268,6 +272,7 @@ final class ExtensionCatalogTests: XCTestCase {
                         install: { _ in attempts += 1; return .failure(.installFailed("no")) })
         c.reload()
         c.selection = .row("available")
+        c.activateSelection(among: threeRows)
         c.activateSelection(among: threeRows)
         XCTAssertEqual(attempts, 1)
         XCTAssertNotNil(c.failure(for: "available"))
@@ -596,6 +601,262 @@ final class ExtensionCatalogTests: XCTestCase {
 
     // Whoever merged the two lists needs telling when a catalogue lands, or the
     // Settings list keeps whatever it was built from before the fetch.
+    // Every install asks first, whatever its tier; the same ⏎ again installs
+    // it, and moving off the row withdraws the question.
+    func testEveryInstallTakesTwoDeliberateSteps() {
+        var installed: [String] = []
+        var trusted = entry("away")
+        trusted.tier = "trusted"
+        let c = ExtensionCatalog(fetchCatalogue: { .success([trusted, self.entry("derby")]) },
+                                 performInstall: { installed.append($0.id); return .success($0.id) },
+                                 background: { $0() }, toMain: { $0() },
+                                 recordedTiers: { [:] })
+        c.reload()
+        let rows = ExtensionCatalog.rows(catalogue: c.entries, installed: [], refused: [])
+        c.selection = .row("away")
+        c.activateSelection(among: rows)
+        XCTAssertEqual(c.confirming, "away")
+        XCTAssertTrue(installed.isEmpty)
+        c.selection = .row("derby")
+        XCTAssertNil(c.confirming, "moving off withdraws it")
+        c.activateSelection(among: rows)
+        XCTAssertTrue(installed.isEmpty, "a view-tier one asks too")
+        XCTAssertEqual(c.confirmationText(for: c.entries[1], updating: false), "\u{23CE} again to install 1.0.0.")
+        c.activateSelection(among: rows)
+        XCTAssertEqual(installed, ["derby"])
+        c.selection = .row("away")
+        c.activateSelection(among: rows)
+        c.activateSelection(among: rows)
+        XCTAssertEqual(installed, ["derby", "away"])
+        XCTAssertFalse(ExtensionCatalog.confirmationText(for: trusted).contains("STACKNUDGE"))
+    }
+
+    // An update asks too, from every entry point: the browser's ⏎
+    // (activateSelection) and the card's and the page's Update
+    // (requestInstall, which both call). It says what the extension asks for
+    // only when the tier rises above what's recorded.
+    func testEveryUpdateAsksAndSaysMoreWhenItRaisesTheTier() {
+        var installed: [String] = []
+        var away = entry("away", version: "2.0.0")
+        away.tier = "trusted"
+        away.mode = "service"
+        away.capabilities = ["bluetooth"]
+        var recorded: [String: ExtensionTier] = ["away": .trusted]
+        let c = ExtensionCatalog(fetchCatalogue: { .success([away]) },
+                                 performInstall: { installed.append($0.id); return .success($0.id) },
+                                 background: { $0() }, toMain: { $0() },
+                                 recordedTiers: { recorded })
+        c.reload()
+        let manifest: ExtensionManifest = {
+            guard case .success(let m) = ExtensionManifest.parse(Data(#"{"id":"away","name":"Away","version":"1.0.0","schema":1}"#.utf8))
+            else { fatalError() }
+            return m
+        }()
+        let rows = ExtensionCatalog.rows(catalogue: c.entries, installed: [manifest], refused: [])
+        XCTAssertTrue(rows[0].updateAvailable)
+
+        // Same tier: a short line, and two steps, by ⏎ and by the button.
+        c.selection = .row("away")
+        c.activateSelection(among: rows)
+        XCTAssertEqual(installed, [])
+        XCTAssertEqual(c.confirmationText(for: away, updating: true), "\u{23CE} again to update to 2.0.0.")
+        c.requestInstall(away)
+        XCTAssertEqual(installed, ["away"])
+
+        // Raising it from service: the fuller line.
+        recorded = ["away": .service]
+        XCTAssertEqual(c.confirmationText(for: away, updating: true),
+                       "Runs in the background. Asks for: Bluetooth. \u{23CE} again to update to 2.0.0.")
+        c.activateSelection(among: rows)
+        XCTAssertEqual(c.confirming, "away")
+        c.requestInstall(away)
+        XCTAssertEqual(installed.count, 2, "the second request confirms")
+
+        XCTAssertFalse(ExtensionCatalog.needsConfirmation(away, recorded: .trusted))
+        XCTAssertTrue(ExtensionCatalog.needsConfirmation(away, recorded: nil))
+        XCTAssertFalse(ExtensionCatalog.needsConfirmation(entry("derby"), recorded: nil))
+    }
+
+    // Opening Browse arms nothing: the seeded row is often installable (the
+    // ranking puts updates and what isn't installed first), and the ⏎ that
+    // opened the page mustn't count as the first of two.
+    func testOpeningBrowseArmsNothingEvenOnAnInstallableRow() {
+        var installed: [String] = []
+        let c = ExtensionCatalog(fetchCatalogue: { .success([self.entry("zeta"), self.entry("alpha")]) },
+                                 performInstall: { installed.append($0.id); return .success($0.id) },
+                                 background: { $0() }, toMain: { $0() }, recordedTiers: { [:] })
+        c.reload()
+        let shown = ExtensionCatalog.browseRows(ExtensionCatalog.rows(catalogue: c.entries, installed: [],
+                                                                      refused: []), query: "").shown
+        c.reconcileSelection(among: shown)
+        XCTAssertEqual(c.selection, .row("alpha"), "seeded on the first ranked row, an install")
+        XCTAssertNil(c.confirming)
+        c.activateSelection(among: shown)
+        XCTAssertTrue(installed.isEmpty, "one ⏎ in Browse never installs")
+    }
+
+    // A row this Mac can't install yet does nothing on ⏎.
+    func testANeedsRowDoesNotInstall() {
+        var installed: [String] = []
+        var needy = entry("derby")
+        needy = .init(id: "derby", name: "Derby", version: "1.0.0", description: "", asset: needy.asset,
+                      sha256: "abc", requires: ["python3"], config: [])
+        let c = ExtensionCatalog(fetchCatalogue: { .success([needy]) },
+                                 performInstall: { installed.append($0.id); return .success($0.id) },
+                                 background: { $0() }, toMain: { $0() },
+                                 probeRequirement: { _ in false }, recordedTiers: { [:] })
+        c.reload()
+        let rows = ExtensionCatalog.rows(catalogue: c.entries, installed: [], refused: [])
+        c.selection = .row("derby")
+        c.activateSelection(among: rows)
+        c.activateSelection(among: rows)
+        XCTAssertTrue(installed.isEmpty)
+        XCTAssertNil(c.confirming)
+    }
+
+    // A pending question goes with leaving, reloading, or the list changing.
+    func testAPendingConfirmationIsDroppedOnReloadAndReconcile() {
+        var away = entry("away")
+        away.tier = "service"
+        let c = ExtensionCatalog(fetchCatalogue: { .success([away]) },
+                                 background: { $0() }, toMain: { $0() }, recordedTiers: { [:] })
+        c.reload()
+        let rows = ExtensionCatalog.rows(catalogue: c.entries, installed: [], refused: [])
+        c.selection = .row("away")
+        c.activateSelection(among: rows)
+        XCTAssertEqual(c.confirming, "away")
+        c.reload()
+        XCTAssertNil(c.confirming)
+        c.activateSelection(among: rows)
+        c.reconcileSelection(among: rows)
+        XCTAssertNil(c.confirming)
+        c.activateSelection(among: rows)
+        c.cancelConfirmation()
+        XCTAssertNil(c.confirming)
+    }
+
+    private func tiered(_ tier: String?, capabilities: [String]?, mode: String? = "service")
+        -> ExtensionInstaller.IndexEntry {
+        var e = entry("radar")
+        e.tier = tier
+        e.capabilities = capabilities
+        e.mode = mode
+        return e
+    }
+
+    // It says what this extension asks for, in plain words, and nothing else:
+    // Radar asking for nothing special must not be said to use Bluetooth.
+    func testTheConfirmationListsWhatThatExtensionAsksFor() {
+        let again = "\u{23CE} again to install 1.0.0."
+        XCTAssertEqual(ExtensionCatalog.confirmationText(for: tiered("trusted",
+                                                                     capabilities: ["bluetooth", "signal:presence"])),
+                       "Runs in the background. Asks for: Bluetooth, telling StackNudge you're away. " + again)
+        XCTAssertEqual(ExtensionCatalog.confirmationText(for: tiered("trusted", capabilities: [])),
+                       "Runs in the background. " + again)
+        // Only what the tier would grant: a service-tier entry asking for
+        // Bluetooth won't get it, so it isn't promised.
+        XCTAssertEqual(ExtensionCatalog.confirmationText(for: tiered("service",
+                                                                     capabilities: ["bluetooth", "event:idle"])),
+                       "Runs in the background. Asks for: knowing how long the Mac has been idle. " + again)
+        // A view extension is granted nothing and doesn't run in the background.
+        XCTAssertEqual(ExtensionCatalog.confirmationText(for: tiered("trusted", capabilities: ["bluetooth"],
+                                                                     mode: "view")), again)
+        // An old index, with no capabilities or mode: neutral.
+        XCTAssertEqual(ExtensionCatalog.confirmationText(for: tiered("trusted", capabilities: nil, mode: nil),
+                                                         updating: true),
+                       "Runs in the background with more access than a tab. \u{23CE} again to update to 1.0.0.")
+        XCTAssertEqual(ExtensionCatalog.confirmationText(for: tiered(nil, capabilities: ["bluetooth"])), again)
+        let unknown = tiered("trusted", capabilities: ["teleport", "feed"])
+        XCTAssertEqual(ExtensionCatalog.confirmationText(for: unknown),
+                       "Runs in the background. Asks for: posting to the event feed. " + again)
+    }
+
+    private func installedManifest(_ id: String, version: String = "1.0.0",
+                                   description: String = "") -> ExtensionManifest {
+        guard case .success(let m) = ExtensionManifest.parse(Data("""
+            {"id":"\(id)","name":"\(id.capitalized)","version":"\(version)","schema":1,
+             "description":"\(description)"}
+            """.utf8)) else { fatalError("fixture manifest didn't parse") }
+        return m
+    }
+
+    // Settings lists what's installed; the catalogue is the browser's.
+    func testSettingsListsInstalledAndRefusedOnly() {
+        let c = ExtensionCatalog(fetchCatalogue: { .success([self.entry("derby"), self.entry("pylon"),
+                                                              self.entry("system")]) },
+                                 background: { $0() }, toMain: { $0() })
+        c.reload()
+        let rows = c.settingsRows(installed: [installedManifest("away")],
+                                  refused: [.init(id: "broken", reason: "needs schema 9")])
+        XCTAssertEqual(rows.map(\.id).sorted(), ["away", "broken"])
+    }
+
+    // An installed extension describes itself from its manifest on disk, so
+    // one the index doesn't list (or lists differently) still has its line.
+    func testAnInstalledExtensionsDescriptionComesFromItsManifest() {
+        let away = installedManifest("away", description: "Locks the Mac when your phone leaves")
+        XCTAssertEqual(ExtensionCatalog.rows(catalogue: [], installed: [away], refused: []).first?.description,
+                       "Locks the Mac when your phone leaves")
+        var published = entry("away")
+        published = .init(id: "away", name: "Away", version: "1.0.0", description: "Index text",
+                          asset: published.asset, sha256: "abc", requires: [], config: [])
+        XCTAssertEqual(ExtensionCatalog.rows(catalogue: [published], installed: [away], refused: [])
+                        .first?.description, "Locks the Mac when your phone leaves")
+        XCTAssertEqual(ExtensionCatalog.rows(catalogue: [published], installed: [installedManifest("away")],
+                                             refused: []).first?.description,
+                       "Index text", "an empty manifest description falls back to the index")
+        XCTAssertEqual(ExtensionCatalog.rows(catalogue: [published], installed: [], refused: [])
+                        .first?.description, "Index text")
+    }
+
+    // The browser: updates first, then not installed, then installed, ten at
+    // most until you search; a search shows every match.
+    func testTheBrowserRanksCapsAndSearches() {
+        let entries = (1...14).map { entry(String(format: "ext%02d", $0)) }
+            + [entry("derby", version: "2.0.0")]
+        let rows = ExtensionCatalog.rows(catalogue: entries,
+                                         installed: [installedManifest("ext03"), installedManifest("derby")],
+                                         refused: [])
+        let browse = ExtensionCatalog.browseRows(rows, query: "")
+        XCTAssertEqual(browse.shown.count, 10)
+        XCTAssertEqual(browse.more, 5)
+        XCTAssertEqual(browse.shown.first?.id, "derby", "the update comes first")
+        XCTAssertFalse(browse.shown.contains { $0.id == "ext03" }, "installed come last, past the cap")
+        XCTAssertEqual(browse.shown[1].id, "ext01")
+
+        let found = ExtensionCatalog.browseRows(rows, query: "EXT1")
+        XCTAssertEqual(found.shown.map(\.id), ["ext10", "ext11", "ext12", "ext13", "ext14"])
+        XCTAssertEqual(found.more, 0)
+        XCTAssertTrue(ExtensionCatalog.browseRows(rows, query: "nothing like it").shown.isEmpty)
+    }
+
+    func testSearchMatchesNameAndDescriptionIgnoringCaseAndDiacritics() {
+        let rows = [ExtensionRow(id: "a", name: "Café Radar", description: "", installedVersion: nil,
+                                 availableVersion: "1", refusedReason: nil, requires: [], config: []),
+                    ExtensionRow(id: "b", name: "Other", description: "Locks the MAC", installedVersion: nil,
+                                 availableVersion: "1", refusedReason: nil, requires: [], config: [])]
+        XCTAssertEqual(ExtensionCatalog.matching(rows, query: "cafe").map(\.id), ["a"])
+        XCTAssertEqual(ExtensionCatalog.matching(rows, query: "mac").map(\.id), ["b"])
+    }
+
+    // "Needs X" only for what this Mac lacks, probed once per name.
+    func testOnlyMissingRequirementsAreReported() {
+        var probed: [String] = []
+        var a = entry("derby"), b = entry("away"), c0 = entry("system")
+        a = .init(id: a.id, name: a.name, version: a.version, description: "", asset: a.asset,
+                  sha256: "abc", requires: ["python3"], config: [])
+        b = .init(id: b.id, name: b.name, version: b.version, description: "", asset: b.asset,
+                  sha256: "abc", requires: ["swiftc", "python3"], config: [])
+        let entries = [a, b, c0]
+        let c = ExtensionCatalog(fetchCatalogue: { .success(entries) },
+                                 background: { $0() }, toMain: { $0() },
+                                 probeRequirement: { probed.append($0); return $0 == "python3" })
+        c.reload()
+        XCTAssertEqual(Set(probed), ["python3", "swiftc"])
+        XCTAssertEqual(probed.count, 2)
+        XCTAssertEqual(c.missingRequirements, ["away": ["swiftc"]])
+    }
+
     func testLoadingTheCatalogueReportsThatItChanged() {
         var rebuilds = 0
         let c = ExtensionCatalog(fetchCatalogue: { .success([self.entry("derby")]) },

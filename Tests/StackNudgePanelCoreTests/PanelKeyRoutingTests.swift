@@ -22,7 +22,7 @@ final class PanelKeyRoutingTests: XCTestCase {
     // checks, which is how extensionTab slipped through the first version.
     private let allModes: [PanelMode] = [
         .events, .sessions, .usage, .outcomes, .extensionTab("any"),
-        .settings, .phrases, .permissions, .extensions, .extensionConfig("any"),
+        .settings, .phrases, .permissions, .extensions,
         .updateConfirm, .updating, .postUpdate,
         .bootstrap, .uninstall,
     ]
@@ -43,9 +43,6 @@ final class PanelKeyRoutingTests: XCTestCase {
     // Both Settings sub-pages carry an id or sit off the tab strip, which is
     // how .extensionTab was missed from this list the first time round.
     func testTheExtensionSubPagesNeverOwnThemEither() {
-        for id in ["derby", "", "events"] {
-            XCTAssertFalse(PanelController.eventsOwnsKeyboard(.extensionConfig(id)))
-        }
         XCTAssertFalse(PanelController.eventsOwnsKeyboard(.extensions))
     }
 }
@@ -71,7 +68,7 @@ final class TabStripAnchorTests: XCTestCase {
     // is an id nothing renders. Its tab is what should stay on screen while you
     // are a level inside it.
     func testSettingsSubPagesAnchorOnTheSettingsTab() {
-        for mode: PanelMode in [.phrases, .permissions, .extensions, .extensionConfig("derby"),
+        for mode: PanelMode in [.phrases, .permissions, .extensions,
                                 .updateConfirm, .uninstall] {
             XCTAssertEqual(PanelContentView.tabStripAnchor(for: mode, in: tabs), .settings)
         }

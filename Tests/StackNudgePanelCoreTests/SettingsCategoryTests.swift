@@ -41,11 +41,26 @@ final class SettingsCategoryTests: XCTestCase {
                          description: "", installedVersion: "1.0.0", availableVersion: nil,
                          refusedReason: nil, requires: [], config: []),
         ]
+        // Likewise an extension's own Settings page, for the representative
+        // config row, holding presence so the app's lock row is on it too.
+        // With an update on offer, so the page's Update row has a home too.
+        nav.installedExtensions = [
+            ExtensionRow(id: SettingsRow.representativeExtensionID, name: "Derby",
+                         description: "", installedVersion: "1.0.0", availableVersion: "1.1.0",
+                         refusedReason: nil, requires: [], config: []),
+        ]
+        nav.extensionSettingsPages = [
+            ExtensionSettingsPage(id: SettingsRow.representativeExtensionID, name: "Derby", keys: [
+                ExtensionManifest.ConfigKey(key: SettingsRow.representativeConfigKey, label: nil,
+                                            help: nil, placeholder: nil),
+            ]),
+        ]
+        nav.presenceHolderID = SettingsRow.representativeExtensionID
         // The voice category swaps rows on whether the model is cached; both
         // branches are reachable, so both count as homes.
         for cached in [true, false] {
             nav.voiceModelCached = cached
-            for category in SettingsCategory.allCases {
+            for category in nav.settingsCategories + [.extensionPage(SettingsRow.representativeExtensionID)] {
                 covered.formUnion(nav.rows(in: category))
             }
         }
@@ -107,13 +122,11 @@ final class SettingsCategoryTests: XCTestCase {
     // not tell "opens the selected row" from "opens a constant".
     func testEnterOnAnExtensionCardOpensTheSelectedOne() {
         let nav = PanelNav()
-        var opened: [String] = []
-        nav.actions = Self.actions(openExtension: { opened.append($0) })
         nav.installedExtensions = [row("derby"), row("system")]
         nav.settingsCategory = .extensions
         nav.selectedSettingIndex = nav.index(of: .installedExtension("system")) ?? 0
         nav.activate()
-        XCTAssertEqual(opened, ["system"])
+        XCTAssertEqual(nav.settingsCategory, .extensionPage("system"))
     }
 
     // Arrows must not act on it — the card is an action row, and ←/→ grazing it
@@ -138,6 +151,7 @@ final class SettingsCategoryTests: XCTestCase {
         nav.cycleForward()
         nav.cycleBackward()
         XCTAssertTrue(opened.isEmpty, "arrows must not open an extension")
+        XCTAssertEqual(nav.settingsCategory, .extensions, "cycling never opens the page; → is routed as ⏎")
         XCTAssertEqual(permissionChecks, 0, "arrows must not fire another row's action")
         XCTAssertEqual(nav.selectedRow, .installedExtension("derby"))
     }
@@ -217,31 +231,41 @@ final class SettingsCategoryTests: XCTestCase {
     func testAnExtensionRemovedUnderThePanelClosesItsPage() {
         let nav = PanelNav()
         nav.installedExtensions = [row("derby")]
-        nav.mode = .extensionConfig("derby")
+        nav.mode = .settings
+        nav.openExtensionPage("derby")
         nav.reconcileModeWithTabs()
-        XCTAssertEqual(nav.mode, .extensionConfig("derby"))
+        XCTAssertEqual(nav.settingsCategory, .extensionPage("derby"))
 
         nav.installedExtensions = []
         nav.reconcileModeWithTabs()
         XCTAssertEqual(nav.mode, .settings)
+        XCTAssertEqual(nav.settingsCategory, .extensions)
     }
 
-    // The summary itself, not the flags it counts. The first version of this
-    // test asserted `updateAvailable` on hand-built rows and never touched the
-    // counting — so it passed while the production path handed every row a nil
-    // availableVersion and the count was permanently zero.
-    func testTheExtensionsRowSummarisesWhatIsInstalled() {
-        XCTAssertEqual(SettingsView.extensionsRowValue(installed: 2, updates: 0, refused: 0),
-                       "2 installed")
-        XCTAssertEqual(SettingsView.extensionsRowValue(installed: 2, updates: 1, refused: 0),
-                       "2 installed · 1 update")
-        XCTAssertEqual(SettingsView.extensionsRowValue(installed: 3, updates: 2, refused: 1),
-                       "3 installed · 2 updates · 1 not loaded")
-        XCTAssertEqual(SettingsView.extensionsRowValue(installed: 0, updates: 0, refused: 0),
-                       "None")
-        // A refusal is installed-but-broken, so it can be the only thing there.
-        XCTAssertEqual(SettingsView.extensionsRowValue(installed: 0, updates: 0, refused: 1),
-                       "None · 1 not loaded")
+    // The Browse row says what browsing would find: published extensions not
+    // installed, and updates waiting. It used to count installed tabs from a
+    // different source and said "None" with Away installed.
+    func testTheBrowseRowSaysWhatIsAvailable() {
+        func entry(_ id: String) -> ExtensionInstaller.IndexEntry {
+            .init(id: id, name: id, version: "1.1.0", description: "", asset: "extension-\(id)-1.1.0.tar.gz",
+                  sha256: "ab", requires: [], config: [])
+        }
+        let catalogue = [entry("derby"), entry("pylon"), entry("system")]
+        let current = ExtensionRow(id: "system", name: "System", description: "", installedVersion: "1.1.0",
+                                   availableVersion: "1.1.0", refusedReason: nil, requires: [], config: [])
+        let stale = ExtensionRow(id: "derby", name: "Derby", description: "", installedVersion: "1.0.0",
+                                 availableVersion: "1.1.0", refusedReason: nil, requires: [], config: [])
+        XCTAssertEqual(ExtensionCatalog.browseRowValue(load: .loaded, catalogue: catalogue, installed: []),
+                       "3 available")
+        XCTAssertEqual(ExtensionCatalog.browseRowValue(load: .loaded, catalogue: catalogue,
+                                                       installed: [current, stale]),
+                       "1 available · 1 update")
+        XCTAssertEqual(ExtensionCatalog.browseRowValue(load: .loaded, catalogue: [], installed: []),
+                       "None available")
+        XCTAssertEqual(ExtensionCatalog.browseRowValue(load: .loading, catalogue: catalogue, installed: []), "")
+        XCTAssertEqual(ExtensionCatalog.browseRowValue(load: .idle, catalogue: [], installed: []), "")
+        XCTAssertEqual(ExtensionCatalog.browseRowValue(load: .failed("x"), catalogue: [], installed: []),
+                       "Couldn't load")
     }
 
     // What the row counts, end to end through the merge that feeds it: an

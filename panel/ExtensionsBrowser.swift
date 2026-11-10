@@ -44,7 +44,21 @@ final class ExtensionCatalog: ObservableObject {
 
     // Keyboard selection. The panel is keyboard-native and this page's own
     // footer advertises key hints, but every action on it was mouse-only.
-    @Published var selection: Target?
+    @Published var selection: Target? {
+        // Moving off a row withdraws a confirmation it was waiting for.
+        didSet { if selection != oldValue { confirming = nil } }
+    }
+
+    // An install waiting to be confirmed: one above the `view` tier asks
+    // first, saying what that tier lets it do, and the same ⏎ (or the
+    // button, now reading Confirm) again installs it.
+    @Published private(set) var confirming: String?
+
+    // Requirements the catalogue's entries need that this Mac lacks, by
+    // extension. Probed once per name in the background when the catalogue
+    // lands, since a probe runs the interpreter; a row only says "Needs X"
+    // when X is in here.
+    @Published private(set) var missingRequirements: [String: [String]] = [:]
 
     // The row the selection is on, if it is on one. Most of the page cares only
     // about this, and a card highlighting itself should not have to know the
@@ -71,6 +85,8 @@ final class ExtensionCatalog: ObservableObject {
     private let toMain: (@escaping () -> Void) -> Void
     private let didChange: () -> Void
     private let didLoadCatalogue: () -> Void
+    private let probeRequirement: (String) -> Bool
+    private let recordedTiers: () -> [String: ExtensionTier]
 
     init(fetchCatalogue: @escaping () -> Result<[ExtensionInstaller.IndexEntry], ExtensionInstaller.Failure>,
          performInstall: @escaping (ExtensionInstaller.IndexEntry) -> Result<String, ExtensionInstaller.Failure>
@@ -82,7 +98,11 @@ final class ExtensionCatalog: ObservableObject {
          toMain: @escaping (@escaping () -> Void) -> Void
             = { DispatchQueue.main.async(execute: $0) },
          didChange: @escaping () -> Void = {},
-         didLoadCatalogue: @escaping () -> Void = {}) {
+         didLoadCatalogue: @escaping () -> Void = {},
+         probeRequirement: @escaping (String) -> Bool = ExtensionInstaller.interpreterWorks,
+         recordedTiers: @escaping () -> [String: ExtensionTier] = { ExtensionTiers.read() }) {
+        self.probeRequirement = probeRequirement
+        self.recordedTiers = recordedTiers
         self.fetchCatalogue = fetchCatalogue
         self.performInstall = performInstall
         self.performRemove = performRemove
@@ -105,6 +125,7 @@ final class ExtensionCatalog: ObservableObject {
         // fetch — key autorepeat alone was enough to starve the queue the
         // session poll and the quota probes share.
         guard load != .loading else { return }
+        cancelConfirmation()
         load = .loading
         background { [weak self] in
             guard let self else { return }
@@ -115,6 +136,7 @@ final class ExtensionCatalog: ObservableObject {
                 case .success(let entries):
                     self.entries = entries
                     self.load = .loaded
+                    self.probeRequirements(of: entries)
                     // An installed row has nothing to compare its version
                     // against until this lands, so whoever merged the two
                     // lists needs telling to do it again.
@@ -126,7 +148,80 @@ final class ExtensionCatalog: ObservableObject {
         }
     }
 
+    private func probeRequirements(of entries: [ExtensionInstaller.IndexEntry]) {
+        let names = Set(entries.flatMap(\.requires))
+        guard !names.isEmpty else { missingRequirements = [:]; return }
+        let probe = probeRequirement
+        background { [weak self] in
+            let missing = Set(names.filter { !probe($0) })
+            self?.toMain { [weak self] in
+                self?.missingRequirements = Dictionary(uniqueKeysWithValues: entries.compactMap { entry in
+                    let lacking = entry.requires.filter(missing.contains)
+                    return lacking.isEmpty ? nil : (entry.id, lacking)
+                })
+            }
+        }
+    }
+
     // MARK: - Installing and removing
+
+    // Every install and update takes a second press. This decides only
+    // whether that confirmation spells out what the extension is given: when
+    // the index gives it a tier above `view` and above what this Mac has
+    // recorded for it. A fresh install has nothing recorded, so anything above
+    // `view` spells it out; an update that keeps or lowers the tier doesn't,
+    // and one that raises it does, since it's being given more than was
+    // agreed to.
+    static func needsConfirmation(_ entry: ExtensionInstaller.IndexEntry,
+                                  recorded: ExtensionTier?) -> Bool {
+        entry.reviewedTier > .view && entry.reviewedTier > (recorded ?? .view)
+    }
+
+    // What the confirmation says. Every install and update asks; one that
+    // gets more than a tab (a new install above view, or an update raising
+    // the tier) says what. "Runs in the background" only for a service, which
+    // is the only kind anything is granted to, and only capabilities this
+    // extension asked for that its tier grants: never one it didn't ask for.
+    // An index from before entries carried mode and capabilities can't say,
+    // so it says only that the extension gets more than a tab would.
+    static func confirmationText(for entry: ExtensionInstaller.IndexEntry, updating: Bool = false,
+                                 recorded: ExtensionTier? = nil) -> String {
+        let again = updating ? "\u{23CE} again to update to \(entry.version)."
+                             : "\u{23CE} again to install \(entry.version)."
+        guard needsConfirmation(entry, recorded: recorded) else { return again }
+        let tier = entry.reviewedTier
+        guard let mode = entry.mode, let asked = entry.requestedCapabilities else {
+            return "Runs in the background with more access than a tab. " + again
+        }
+        guard mode == ExtensionManifest.Mode.service.rawValue else { return again }
+        let granted = asked.filter(tier.allows)
+        guard !granted.isEmpty else { return "Runs in the background. " + again }
+        return "Runs in the background. Asks for: "
+            + granted.map(\.askingWords).joined(separator: ", ") + ". " + again
+    }
+
+    func confirmationText(for entry: ExtensionInstaller.IndexEntry, updating: Bool) -> String {
+        Self.confirmationText(for: entry, updating: updating, recorded: recordedTiers()[entry.id])
+    }
+
+    // Every install and update goes through here: the browser's ⏎ and its
+    // buttons, and the Update row on an extension's page. Always two
+    // deliberate steps: the first arms it and shows what it is, the second,
+    // for the same extension, runs it.
+    func requestInstall(_ entry: ExtensionInstaller.IndexEntry) {
+        if confirming != entry.id {
+            confirming = entry.id
+            return
+        }
+        confirming = nil
+        install(entry)
+    }
+
+    // Leaving the page, hiding the panel, reloading, or the list changing
+    // under the selection all drop a pending confirmation.
+    func cancelConfirmation() {
+        if confirming != nil { confirming = nil }
+    }
 
     func install(_ entry: ExtensionInstaller.IndexEntry) {
         // A previous failure must not jam the button. The gate is on work *in
@@ -210,9 +305,10 @@ final class ExtensionCatalog: ObservableObject {
         guard let row = rows.first(where: { $0.id == selectedID }) else { return }
         if failure(for: row.id) != nil { return dismissFailure(for: row.id) }
         guard !isBusy(row.id), row.updateAvailable || !row.isInstalled,
+              (missingRequirements[row.id] ?? []).isEmpty || row.isInstalled,
               let entry = entries.first(where: { $0.id == row.id })
         else { return }
-        install(entry)
+        requestInstall(entry)
     }
 
     // ⌘↑↓, which every other list page in the panel answers.
@@ -228,10 +324,12 @@ final class ExtensionCatalog: ObservableObject {
     // catalogue arrives after the view does, so there was nothing to select at
     // onAppear and nothing selected it afterwards either.
     //
-    // Row order is what makes seeding safe to do unprompted: refusals sort
-    // first, then what is installed, and only then what is merely published. On
-    // any machine with an extension on it ⏎ lands on a page, not an install.
+    // The seeded row is often an installable one (updates and what isn't
+    // installed sort first), which is safe because nothing installs on one ⏎:
+    // the first arms it and says what it is (see requestInstall), and the page
+    // opens with nothing armed.
     func reconcileSelection(among rows: [ExtensionRow]) {
+        cancelConfirmation()
         let all = targets(among: rows)
         if let selection, all.contains(selection) { return }
         // A row first where there is one, so ⏎ on arrival acts on the list
@@ -268,9 +366,53 @@ final class ExtensionCatalog: ObservableObject {
     // the count on the Settings row was permanently zero. PanelController is
     // not reachable from a test, so that decision could not be asserted while
     // it lived there — it can here.
+    //
+    // Installed and refused only. The merge also yields every published
+    // extension, which is the browser's list, not this one: Settings showed
+    // Token Derby, Pylon and System on a Mac that had only Away.
     func settingsRows(installed: [ExtensionManifest],
                       refused: [ExtensionRuntime.Refusal]) -> [ExtensionRow] {
-        Self.rows(catalogue: entries, installed: installed, refused: refused)
+        Self.rows(catalogue: entries, installed: installed, refused: refused).filter(\.isInstalled)
+    }
+
+    // The Browse row's trailing text: how many published extensions aren't
+    // installed, and how many installed ones have an update. Nothing until
+    // the catalogue has loaded, since a count of what hasn't been fetched
+    // would be a guess.
+    static func browseRowValue(load: Load, catalogue: [ExtensionInstaller.IndexEntry],
+                               installed: [ExtensionRow]) -> String {
+        switch load {
+        case .idle, .loading: return ""
+        case .failed:         return "Couldn't load"
+        case .loaded:         break
+        }
+        let installedIDs = Set(installed.map(\.id))
+        let available = catalogue.filter { !installedIDs.contains($0.id) }.count
+        let updates = installed.filter(\.updateAvailable).count
+        var parts = [available == 0 ? "None available" : "\(available) available"]
+        if updates > 0 { parts.append("\(updates) update\(updates == 1 ? "" : "s")") }
+        return parts.joined(separator: " · ")
+    }
+
+    // The browser's list: everything published plus anything installed,
+    // ranked so what's worth acting on comes first. With no query it stops at
+    // `browseLimit` and says how many more a search would find; a query shows
+    // every match.
+    static let browseLimit = 10
+
+    static func browseRows(_ rows: [ExtensionRow], query: String) -> (shown: [ExtensionRow], more: Int) {
+        func rank(_ row: ExtensionRow) -> Int {
+            if row.updateAvailable { return 0 }
+            return row.isInstalled ? 2 : 1
+        }
+        let ranked = matching(rows, query: query).sorted { a, b in
+            rank(a) == rank(b)
+                ? a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+                : rank(a) < rank(b)
+        }
+        guard query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              ranked.count > browseLimit else { return (ranked, 0) }
+        return (Array(ranked.prefix(browseLimit)), ranked.count - browseLimit)
     }
 
     func dismissFailure(for id: String) {
@@ -336,10 +478,14 @@ extension ExtensionCatalog {
         var seen = Set<String>()
 
         for entry in catalogue where seen.insert(entry.id).inserted {
+            // The installed manifest's description when there is one: it is
+            // what's on disk, and an extension the index describes differently
+            // (or not at all) is still the one installed.
+            let installedDescription = installedByID[entry.id]?.description ?? ""
             rows.append(ExtensionRow(
                 id: entry.id,
                 name: entry.name,
-                description: entry.description,
+                description: installedDescription.isEmpty ? entry.description : installedDescription,
                 installedVersion: installedByID[entry.id]?.version,
                 availableVersion: entry.version,
                 refusedReason: refusedByID[entry.id],
@@ -362,7 +508,7 @@ extension ExtensionCatalog {
         // no catalogue) it is every installed extension.
         for manifest in installed where seen.insert(manifest.id).inserted {
             rows.append(ExtensionRow(
-                id: manifest.id, name: manifest.name, description: "",
+                id: manifest.id, name: manifest.name, description: manifest.description,
                 installedVersion: manifest.version, availableVersion: nil,
                 refusedReason: nil,
                 requires: manifest.requires, config: manifest.config))
@@ -418,7 +564,7 @@ struct ExtensionsView: View {
             Divider().opacity(0.4)
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
                         catalogueBody(rows)
                     }
                     .padding(.horizontal, 14)
@@ -435,8 +581,12 @@ struct ExtensionsView: View {
                 // a catalogue of any size, which is the whole page.
                 .onChange(of: catalog.selection) { target in
                     guard let anchor = Self.anchor(for: target) else { return }
+                    // The last row brings the "N more" line with it, so the
+                    // end of the list says where the rest are.
+                    let last = rows.last.map { ExtensionCatalog.Target.row($0.id) } == target && browse.more > 0
                     withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo(anchor, anchor: nil)
+                        if last { proxy.scrollTo(Self.moreAnchor, anchor: .bottom) }
+                        else { proxy.scrollTo(anchor, anchor: nil) }
                     }
                 }
             }
@@ -445,6 +595,7 @@ struct ExtensionsView: View {
                 let hints = Self.footerHints(
                     selection: catalog.selection,
                     activation: activationLabel(in: rows),
+                    activationDimmed: activationBlocked(in: rows),
                     updateSelected: selectedRow(in: rows)?.updateAvailable == true,
                     hasRows: !rows.isEmpty,
                     searching: searchFocused)
@@ -484,6 +635,10 @@ struct ExtensionsView: View {
         .onChange(of: rows.map(\.id)) { _ in
             catalog.reconcileSelection(among: rows)
         }
+        // And on the query itself, which is what filters the list as you type.
+        .onChange(of: catalog.query) { _ in
+            catalog.reconcileSelection(among: visibleRows)
+        }
     }
 
     // The bar as data, so it can be asserted rather than read.
@@ -494,6 +649,7 @@ struct ExtensionsView: View {
     // extension config page ran into.
     static func footerHints(selection: ExtensionCatalog.Target?,
                             activation: String,
+                            activationDimmed: Bool = false,
                             updateSelected: Bool,
                             hasRows: Bool,
                             searching: Bool = false) -> [FooterHintSpec] {
@@ -516,7 +672,8 @@ struct ExtensionsView: View {
         // Only while the ring is on a row. On the chevron or Try again, ⏎
         // belongs to those, and the row verb would name something it will not do.
         if case .row = selection {
-            hints.append(FooterHintSpec(label: activation, keys: ["⏎"], primary: true))
+            hints.append(FooterHintSpec(label: activation, keys: ["⏎"], primary: !activationDimmed,
+                                        dimmed: activationDimmed))
             // Only where Enter is busy doing something else. An installed row
             // with an update pending takes Enter for the update, so without this
             // there would be no keyboard route to its page.
@@ -537,6 +694,7 @@ struct ExtensionsView: View {
     // The back chevron sits above the scroller and needs no anchor; scrolling to
     // the top of the list is what brings it into view.
     static let retryAnchor = "extensions-retry"
+    static let moreAnchor = "extensions-more"
 
     static func anchor(for target: ExtensionCatalog.Target?) -> String? {
         switch target {
@@ -556,12 +714,22 @@ struct ExtensionsView: View {
     private func activationLabel(in rows: [ExtensionRow]) -> String {
         guard let row = selectedRow(in: rows) else { return "Select" }
         if catalog.failure(for: row.id) != nil { return "Dismiss" }
+        // Armed comes before update: every update now takes a second press,
+        // and the footer has to say what that press does, as the button does.
+        if catalog.confirming == row.id { return "Confirm" }
         if row.updateAvailable { return "Update" }
         // Named for what Enter does, which on an installed row is open its
         // page — the same thing the card's button does. It used to say
         // "Installed", which is a state rather than an action, on a row where
         // Enter did nothing at all.
-        return row.isInstalled ? "Settings" : "Install"
+        return row.isInstalled ? "Open" : "Install"
+    }
+
+    // ⏎ does nothing on a row that can't be installed here yet ("Needs
+    // python3"), so its hint dims rather than promising an install.
+    private func activationBlocked(in rows: [ExtensionRow]) -> Bool {
+        guard let row = selectedRow(in: rows), !row.isInstalled else { return false }
+        return !(catalog.missingRequirements[row.id] ?? []).isEmpty
     }
 
     private var searchField: some View {
@@ -589,8 +757,10 @@ struct ExtensionsView: View {
         .padding(.bottom, 8)
     }
 
-    var visibleRows: [ExtensionRow] {
-        ExtensionCatalog.matching(
+    var visibleRows: [ExtensionRow] { browse.shown }
+
+    private var browse: (shown: [ExtensionRow], more: Int) {
+        ExtensionCatalog.browseRows(
             ExtensionCatalog.rows(catalogue: catalog.entries,
                                   installed: host.manifests,
                                   refused: host.refused),
@@ -615,7 +785,7 @@ struct ExtensionsView: View {
             }
             .buttonStyle(.plain)
 
-            Text("Extensions").font(.subheadline.weight(.medium)).padding(.leading, 6)
+            Text("Browse extensions").font(.subheadline.weight(.medium)).padding(.leading, 6)
             Spacer()
             if catalog.load == .loading {
                 ProgressView().controlSize(.small).scaleEffect(0.6)
@@ -627,32 +797,25 @@ struct ExtensionsView: View {
 
     @ViewBuilder
     private func catalogueBody(_ rows: [ExtensionRow]) -> some View {
+        let more = browse.more
         switch catalog.load {
         // A failed *catalogue* fetch does not hide what is installed — those
-        // rows are read from disk and are still true, and one of them may be
-        // the refusal somebody came here to remove.
+        // rows are read from disk and are still true.
         case .failed(let why):
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    Text(why).font(.caption).foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 4)
-                    cardButton("Try again", prominent: true,
-                               selected: catalog.selection == .retry) { catalog.reload() }
-                        .id(Self.retryAnchor)
-                }
-                ForEach(rows) { row in extensionRow(row) }
+            HStack(spacing: 6) {
+                Text(why).font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 4)
+                cardButton("Try again", prominent: true,
+                           selected: catalog.selection == .retry) { catalog.reload() }
+                    .id(Self.retryAnchor)
             }
-        // A where clause binds to the pattern it follows, not to the list, so
-        // this read as ".idle, or .loading with nothing to show"; and .idle is
-        // the state the first frame renders in, before onAppear has started the
-        // fetch. An extension already on disk was hidden behind "Looking for
-        // extensions…" for that frame.
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            ForEach(rows) { row in extensionRow(row) }
+        // Only when there is nothing to show; a reload of a populated list
+        // keeps it, and the header spinner says it's working.
         case .idle where rows.isEmpty, .loading where rows.isEmpty:
-            // Only when there is nothing to show. Reloading a populated
-            // catalogue used to replace the whole list with this, while the
-            // header spinner — which is the actual reload indicator — was
-            // already saying the same thing.
             note("Looking for extensions…")
         default:
             if rows.isEmpty {
@@ -660,90 +823,92 @@ struct ExtensionsView: View {
                 // matches what you typed" want very different next actions.
                 note(catalog.query.isEmpty
                      ? "No extensions are published yet."
-                     : "Nothing matches \"\(catalog.query)\".")
+                     : "No extensions match \u{201C}\(catalog.query)\u{201D}.")
             } else {
                 ForEach(rows) { row in extensionRow(row) }
+                if more > 0 {
+                    // Not a row: nothing to select, just where the rest are.
+                    note("\(more) more \u{2014} type to search")
+                        .padding(.top, 4)
+                        .id(Self.moreAnchor)
+                }
             }
         }
     }
 
     private func note(_ text: String) -> some View {
         Text(text).font(.caption).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
     }
 
     // MARK: - Rows
 
+    // One line per extension, the same shape as the installed list in
+    // Settings: icon, name, a one-line description (the whole of it in the
+    // tooltip), and on the right what ⏎ does or why it can't. A pill only
+    // where there is something to press; "Installed" is a state, and ⏎ on it
+    // opens the extension's page, as the chevron says.
     private func extensionRow(_ row: ExtensionRow) -> some View {
         let failure = catalog.failure(for: row.id)
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .top, spacing: 10) {
+        let selected = catalog.selectedID == row.id
+        let confirming = catalog.confirming == row.id
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 10) {
                 Image(systemName: glyph(for: row))
-                    .font(.system(size: 14))
+                    .font(.system(size: 13))
                     .foregroundStyle(tint(for: row))
                     .frame(width: 18)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(row.name).font(.callout.weight(.medium)).lineLimit(1)
-                        if let version = row.installedVersion ?? row.availableVersion {
-                            Text(version).font(.caption2.monospacedDigit())
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    if let reason = row.refusedReason {
-                        Text(reason).font(.caption).foregroundStyle(.orange)
-                            .fixedSize(horizontal: false, vertical: true)
-                    } else if !row.description.isEmpty {
-                        Text(row.description).font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if row.isInstalled && row.availableVersion == nil && row.refusedReason == nil {
-                        Text("Installed directly — not in the catalogue")
-                            .font(.caption2).foregroundStyle(.tertiary)
-                    }
-                    // What it will be able to read, before it is installed
-                    // rather than after. The namespace is narrow by design, but
-                    // narrow is not the same as nothing.
-                    if !row.config.isEmpty {
-                        Text("Reads \(row.configKeyList)")
-                            .font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
-                    }
-                    if !row.requires.isEmpty {
-                        Text("Needs \(row.requires.joined(separator: ", "))")
-                            .font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(row.name).font(.subheadline).lineLimit(1)
+                    let line = row.refusedReason ?? row.description
+                    if !line.isEmpty {
+                        Text(line).font(.caption)
+                            .foregroundStyle(row.refusedReason == nil ? Color.secondary : Color.orange)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .help(line)
                     }
                 }
                 Spacer(minLength: 8)
-                actionArea(row)
+                status(row)
+            }
+            if confirming, let entry = entry(for: row.id) {
+                Text(catalog.confirmationText(for: entry, updating: row.isInstalled))
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 28)
             }
             if let failure {
                 HStack(spacing: 6) {
-                    Text(failure).font(.caption2).foregroundStyle(.orange)
+                    Text(failure).font(.caption).foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 4)
                     cardButton("Dismiss") { catalog.dismissFailure(for: row.id) }
                 }
+                .padding(.leading, 28)
             }
         }
-        .padding(10)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        // The Settings selection, exactly: an accent fill, no ring.
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill(row.refusedReason == nil
-                  ? Color.primary.opacity(catalog.selectedID == row.id ? 0.12 : 0.05)
-                  : Color.orange.opacity(catalog.selectedID == row.id ? 0.16 : 0.08)))
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .strokeBorder(Color.accentColor.opacity(catalog.selectedID == row.id ? 0.6 : 0),
-                          lineWidth: 1.5))
+            .fill(Color.accentColor.opacity(selected ? 0.22 : 0)))
         .contentShape(Rectangle())
-        .onTapGesture { catalog.selection = .row(row.id) }
-        // The scroll anchor, keyed by what the selection is keyed by.
+        .onTapGesture {
+            catalog.selection = .row(row.id)
+            if row.isInstalled, !row.updateAvailable { onConfigure(row) }
+        }
         .id(row.id)
         .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(catalog.selectedID == row.id ? [.isSelected] : [])
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 
     private func glyph(for row: ExtensionRow) -> String {
         if row.refusedReason != nil { return "exclamationmark.triangle.fill" }
-        return row.isInstalled ? "checkmark.circle.fill" : "puzzlepiece.extension"
+        return row.isInstalled ? "puzzlepiece.extension.fill" : "puzzlepiece.extension"
     }
 
     private func tint(for row: ExtensionRow) -> Color {
@@ -751,29 +916,44 @@ struct ExtensionsView: View {
         return row.isInstalled ? .green : .secondary
     }
 
-    // Every state routes through here, including a refused row — which
-    // previously rendered a bare Remove with no spinner and no way to see that
-    // the removal had failed.
+    // The right-hand column. Fixed width, so the column lines up row to row.
+    //
+    // The pill is the accent one only on the selected row, the one ⏎ acts
+    // on; elsewhere it's the quiet one, the same size, so a list of ten isn't
+    // ten blue buttons and nothing moves as the selection does.
     @ViewBuilder
-    private func actionArea(_ row: ExtensionRow) -> some View {
-        if catalog.isBusy(row.id) {
-            ProgressView().controlSize(.small).scaleEffect(0.7)
-        } else {
-            VStack(alignment: .trailing, spacing: 4) {
-                if row.updateAvailable, let entry = entry(for: row.id) {
-                    cardButton("Update", prominent: true) { catalog.install(entry) }
+    private func status(_ row: ExtensionRow) -> some View {
+        let prominent = catalog.selectedID == row.id
+        Group {
+            if catalog.isBusy(row.id) {
+                HStack(spacing: 4) {
+                    ProgressView().controlSize(.small).scaleEffect(0.6)
+                    Text(catalog.work[row.id] == .removing ? "Removing…" : "Installing…")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                // Settings is where an installed extension is configured and
-                // removed; this page is for finding ones you don't have. An
-                // installed row says so and offers the way there rather than
-                // duplicating the controls.
-                if row.isInstalled {
-                    cardButton("Settings") { onConfigure(row) }
-                } else if let entry = entry(for: row.id) {
-                    cardButton("Install", prominent: true) { catalog.install(entry) }
+            } else if row.updateAvailable, let entry = entry(for: row.id) {
+                cardButton(catalog.confirming == row.id ? "Confirm" : "Update \(row.availableVersion ?? "")",
+                           prominent: prominent) {
+                    catalog.selection = .row(row.id)
+                    catalog.requestInstall(entry)
+                }
+            } else if row.isInstalled {
+                HStack(spacing: 6) {
+                    Text("Installed").font(.caption).foregroundStyle(.secondary)
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+                }
+            } else if let missing = catalog.missingRequirements[row.id], !missing.isEmpty {
+                Text("Needs \(missing.joined(separator: ", "))")
+                    .font(.caption).foregroundStyle(.orange).lineLimit(1)
+            } else if let entry = entry(for: row.id) {
+                cardButton(catalog.confirming == row.id ? "Confirm" : "Install", prominent: prominent) {
+                    catalog.selection = .row(row.id)
+                    catalog.requestInstall(entry)
                 }
             }
         }
+        .frame(minWidth: 96, alignment: .trailing)
     }
 
     private func entry(for id: String) -> ExtensionInstaller.IndexEntry? {

@@ -322,15 +322,17 @@ Independent of quota: stack-nudge can also fire a banner when an individual Clau
 
 #### Settings tab
 
-Reachable from the tab strip or `Cmd+5`. Keyboard-driven rows for hotkey, behavior toggles (banner, mute when focused, a Mute/Resume action row with mute duration, unanswered-prompt reminder interval, stalled-session threshold, pin panel, launch at login), widget (snap-to-corners toggle, corner, mascot picker, opacity), sound picks (with preview-on-cycle), voice notifications + picker + speed (with preview-on-cycle using a random conversational phrase), usage config (quota tracking + alerts + threshold + poll frequency + context alert threshold + show-remaining), event history (recording toggle + clear), Slack (paste setup, detected user, test message, notifications toggle, idle threshold, message detail, finished-turn toggle), and action rows (edit phrases, check permissions, open config file, view release notes, check for updates, uninstall, quit).
+Reachable from the tab strip or `Cmd+5`. Keyboard-driven rows for hotkey, behavior toggles (banner, mute when focused, a Mute/Resume action row with mute duration, unanswered-prompt reminder interval, stalled-session threshold, pin panel, launch at login), widget (snap-to-corners toggle, corner, mascot picker, opacity), sound picks (with preview-on-cycle), voice notifications + picker + speed (with preview-on-cycle using a random conversational phrase), usage config (quota tracking + alerts + threshold + poll frequency + context alert threshold + show-remaining), event history (recording toggle + clear), Slack (paste setup, detected user, test message, notifications toggle, idle threshold, message detail, finished-turn toggle), and action rows (edit phrases, check permissions, open config file, view release notes, check for updates, uninstall, quit). The Extensions category lists what's installed, each with its status, then **Browse extensions**; each one opens a page of its own with its status, its settings as the same kinds of rows, what it's allowed, and Update / Remove.
 
 | Key | Action |
 |-----|--------|
 | `↑ ↓` / `Tab` | Move selection |
-| `Space` / `⏎` | Activate (toggles flip, action rows fire, hotkey row records a new combo). On a value row (sound, voice, duration, threshold) it starts picking. |
+| `Space` / `⏎` | Activate (toggles flip, action rows fire, hotkey row records a new combo, an extension's text setting opens its field). On a value row (sound, voice, duration, threshold, an extension's picker) it starts picking. |
 | `←` / `→` while picking | Step through the values (sounds and voices preview as you go) |
 | `Space` / `⏎` while picking | Settle on the value. Moving to another row settles it too. |
-| `←` | Back to the category list |
+| `→` / `⏎` on an Extensions row | Open that extension's page (or the browser, from Browse extensions) |
+| `⌘⌫` on an Extensions row or a page's Remove row | Remove the extension (no confirmation; ignores autorepeat) |
+| `←` | Back to the category list, or from an extension's page back to the Extensions list |
 | `Esc` | Hide the panel |
 
 The hotkey row records live: press `⏎` on it, press the new combo, and stack-nudge re-registers the global hotkey. If the combo is already grabbed by another app, the previous one stays and an inline error explains why.
@@ -555,6 +557,17 @@ Extensions are curated rather than sandboxed: the script runs as you, and the
 control is that nothing installs which did not come through a reviewed PR here.
 See **[docs/extensions.md](docs/extensions.md)** for the manifest, the view
 document, and what a reviewer should check.
+
+**Settings → Extensions** lists what's installed: name, a one-line description, and a status (Update x.y, Running, Present / Away, Broken, Tab ⌘N…). `→` or `⏎` opens an extension's page: its status, its settings, what it's allowed, where it appears, and **Update** / **Remove**. **Browse extensions**, the last row, says how many are available and opens the catalogue: updates first, then what you haven't installed, ten at a time until you search, which matches names and descriptions.
+
+| Key | On the browse page |
+|-----|--------|
+| `↑ ↓` / `⌘↑ ⌘↓` | Select / first or last |
+| `⏎` | Install or update, or open an installed one's page in Settings → Extensions. Every install and update takes two: the first says what it is (and, if it gets more than a tab, what it asks for), `⏎` again does it. A held `⏎` never counts, and a row that needs something missing ("Needs python3") does nothing |
+| `⌘⏎` | Open an installed one's page (when `⏎` is busy updating) |
+| `/`, or just type | Search |
+| `⌘R` | Reload the catalogue |
+| `←` | Back to Settings |
 
 ## Terms of use
 
