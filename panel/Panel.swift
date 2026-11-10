@@ -148,6 +148,8 @@ struct PanelContentView: View {
     @State private var tabsViewportWidth: CGFloat = 0
 
     let onGrantPermissions: () -> Void
+    // False only for ScreenshotRenderer, passed on to Settings: see SettingsView.
+    var runsOnAppear = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -211,8 +213,8 @@ struct PanelContentView: View {
                     // Extensions row can say an update is waiting without
                     // somebody opening the browser to find out. loadIfNeeded
                     // is a no-op once it has loaded.
-                    SettingsView(nav: nav)
-                        .onAppear { extensionCatalog.loadIfNeeded() }
+                    SettingsView(nav: nav, runsOnAppear: runsOnAppear)
+                        .onAppear { if runsOnAppear { extensionCatalog.loadIfNeeded() } }
                 case .phrases:  PhrasesView(model: phrases) { nav.mode = .settings }
                 case .permissions: permissionsPage
                 case .extensions:

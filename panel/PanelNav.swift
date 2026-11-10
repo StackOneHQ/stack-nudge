@@ -529,6 +529,11 @@ final class PanelNav: ObservableObject {
     // in-memory HandoffLedger and reflect the new session live. The ledger
     // isn't itself observable; this is the single change-signal that drives it.
     @Published var handoffsRevision: Int = 0 { didSet { cachedOutcomeGroups = nil } }
+    // The stores behind Outcomes and session mutes. Swappable for the screenshot
+    // renderer's fixtures, and lazy so a fixture's replacement is the only one
+    // opened: opening the real ledger prunes it on disk.
+    lazy var handoffLedger: HandoffLedger = .shared
+    lazy var sessionPersistence: SessionPersistence = .shared
     // Trailing window the Insights tab summarises over. Cycled by `W`; the view
     // recomputes the (cheap, in-memory) rollup whenever this or the outcome maps
     // change, so no separate cache is needed.
@@ -547,7 +552,7 @@ final class PanelNav: ObservableObject {
     // a single source the view reads.
     func insightsSummary() -> InsightsSummary {
         Insights.summarize(
-            records: HandoffLedger.shared.all(),
+            records: handoffLedger.all(),
             outcomeByBranch: outcomeByBranch,
             pullRequestByBranch: pullRequestByBranch,
             now: Date(),
@@ -639,7 +644,7 @@ final class PanelNav: ObservableObject {
 
     private func allOutcomeGroups() -> [TicketGroup] {
         if let cached = cachedOutcomeGroups { return cached }
-        let groups = OutcomesView.groups(from: HandoffLedger.shared.all())
+        let groups = OutcomesView.groups(from: handoffLedger.all())
         cachedOutcomeGroups = groups
         return groups
     }
@@ -702,7 +707,7 @@ final class PanelNav: ObservableObject {
     // the whole group (every branch); a branch sub-row drops just that branch.
     // Matched by (repoRoot, branch), which lives on each record.
     func dismissSelectedOutcome() {
-        let records = HandoffLedger.shared.all()
+        let records = handoffLedger.all()
         let rowKeys = branchKeysForRows(visibleOutcomeGroups())
         guard !rowKeys.isEmpty else { return }
         let index = min(max(0, outcomeSelectedIndex), rowKeys.count - 1)
@@ -711,7 +716,7 @@ final class PanelNav: ObservableObject {
         let ids = records
             .filter { targets.contains(Self.outcomeKey($0.repoRoot, $0.branch)) }
             .map(\.id)
-        HandoffLedger.shared.remove(ids: ids)
+        handoffLedger.remove(ids: ids)
         let newCount = outcomeRowCount()
         if outcomeSelectedIndex >= newCount { outcomeSelectedIndex = max(0, newCount - 1) }
         handoffsRevision += 1
@@ -1855,12 +1860,12 @@ final class PanelNav: ObservableObject {
         "\(NSHomeDirectory())/.stack-nudge/dismissed-agents.json"
 
     func toggleMute(for session: Session) {
-        SessionPersistence.shared.toggleMuted(session)
+        sessionPersistence.toggleMuted(session)
         objectWillChange.send()
     }
 
     func isMuted(_ session: Session) -> Bool {
-        SessionPersistence.shared.isMuted(session)
+        sessionPersistence.isMuted(session)
     }
 
     // Unmatched events fall through unmuted — better to notify on
