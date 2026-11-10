@@ -62,6 +62,10 @@ final class ServiceSupervisor {
         // Answered `hello` with a protocol this host doesn't speak. Restarting
         // can't fix that, so it is broken straight away rather than after five.
         case incompatible(protocol: Int)
+        // Killed by the host for not answering: no `ready` in time, or no
+        // `pong`. Says which, since "killed by signal 9" would only describe
+        // the host's own SIGKILL. Counted as a crash like any other.
+        case unresponsive(String)
 
         var message: String {
             switch self {
@@ -70,6 +74,7 @@ final class ServiceSupervisor {
             case .failedToStart(let why): return why
             case .incompatible(let version):
                 return "speaks service protocol \(version); this version speaks \(ServiceProtocol.version)"
+            case .unresponsive(let why): return why
             }
         }
     }
@@ -149,6 +154,9 @@ final class ServiceSupervisor {
     // Set when the host killed the child on purpose and already knows how this
     // ends, so the exit that follows isn't counted as an ordinary crash.
     private var fatal: Termination?
+    // Set when the host killed the child for not answering. Unlike `fatal`
+    // the exit still counts as a crash; this only says why it happened.
+    private var killedFor: Termination?
 
     // Restart accounting. `crashes` is the window that decides "broken";
     // `consecutive` drives the backoff and only resets once a process has
@@ -289,6 +297,7 @@ final class ServiceSupervisor {
         let generation = self.generation
         splitter = ServiceProtocol.LineSplitter()
         fatal = nil
+        killedFor = nil
         degraded = false
         outstandingPing = nil
         forgaveSleep = false
@@ -318,7 +327,7 @@ final class ServiceSupervisor {
         send(.hello(protocol: ServiceProtocol.version, capabilities: granted.map(\.rawValue)))
         handshakeTimer = scheduler.after(timing.handshake) { [weak self] in
             guard let self, self.generation == generation, self.state == .starting else { return }
-            self.process?.signal(SIGKILL)
+            self.killUnresponsive("didn't answer hello within \(Self.seconds(self.timing.handshake))")
         }
     }
 
@@ -328,7 +337,7 @@ final class ServiceSupervisor {
         cancelRunTimers()
         if state == .stopping { return finishStop(keepState: false) }
         if let fatal { return becomeBroken(fatal) }
-        crashed(termination)
+        crashed(killedFor ?? termination)
     }
 
     private func crashed(_ termination: Termination) {
@@ -506,8 +515,18 @@ final class ServiceSupervisor {
             }
             // A hang. Killed outright rather than asked to stop: it has just
             // shown it isn't reading. The exit is then a crash like any other.
-            self.process?.signal(SIGKILL)
+            self.killUnresponsive("stopped answering pings (no pong within \(Self.seconds(self.timing.pongTimeout)))")
         }
+    }
+
+    private func killUnresponsive(_ why: String) {
+        killedFor = .unresponsive(why)
+        process?.signal(SIGKILL)
+    }
+
+    // "10 s", or "0.5 s" for a test's shorter timing.
+    static func seconds(_ interval: TimeInterval) -> String {
+        interval == interval.rounded() ? "\(Int(interval)) s" : "\(interval) s"
     }
 
     // MARK: - Limits

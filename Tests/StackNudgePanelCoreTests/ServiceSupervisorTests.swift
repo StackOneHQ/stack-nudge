@@ -129,6 +129,44 @@ final class ServiceSupervisorTests: XCTestCase {
         XCTAssertEqual(s.state, .starting)
     }
 
+    // Killed for not answering `hello`, five times over: still counted as
+    // crashes, with the same backoff, but broken says why rather than
+    // "killed by signal 9", which was only the host's own SIGKILL.
+    func testRepeatedHandshakeTimeoutsBreakItSayingWhy() {
+        let s = supervisor()
+        s.start()
+        var delays: [TimeInterval] = []
+        for _ in 0..<5 {
+            clock.advance(10)
+            XCTAssertEqual(spawner.last.signals, [SIGKILL])
+            spawner.last.exit(.signalled(SIGKILL))
+            if case .restarting(let delay) = s.state {
+                delays.append(delay)
+                clock.advance(delay)
+            }
+        }
+        XCTAssertEqual(delays, [1, 2, 4, 8])
+        XCTAssertEqual(s.state, .broken(.unresponsive("didn't answer hello within 10 s")))
+        XCTAssertEqual(ExtensionHost.brokenMessage(.unresponsive("didn't answer hello within 10 s")),
+                       "stopped restarting after repeated crashes; the last one didn't answer hello within 10 s")
+    }
+
+    // The reason belongs to the process that was killed. One that then dies
+    // on its own is reported as itself.
+    func testAKillForSilenceDoesNotOutliveItsProcess() {
+        let s = supervisor()
+        s.start()
+        for _ in 0..<4 {
+            clock.advance(10)
+            spawner.last.exit(.signalled(SIGKILL))
+            guard case .restarting(let delay) = s.state else { return XCTFail("\(s.state)") }
+            clock.advance(delay)
+        }
+        spawner.last.ready()
+        spawner.last.exit(.exited(3))
+        XCTAssertEqual(s.state, .broken(.exited(3)))
+    }
+
     // A protocol this host doesn't speak won't be fixed by restarting.
     func testAnIncompatibleProtocolIsBrokenStraightAway() {
         let s = supervisor()
@@ -235,6 +273,20 @@ final class ServiceSupervisorTests: XCTestCase {
         XCTAssertEqual(s.state, .restarting(after: 1))
         clock.advance(1)
         XCTAssertEqual(spawner.spawned.count, 2)
+    }
+
+    func testRepeatedPongTimeoutsBreakItSayingWhy() {
+        let s = running()
+        for _ in 0..<5 {
+            clock.advance(30 + 10)
+            XCTAssertEqual(spawner.last.signals, [SIGKILL])
+            spawner.last.exit(.signalled(SIGKILL))
+            if case .restarting(let delay) = s.state {
+                clock.advance(delay)
+                spawner.last.ready()
+            }
+        }
+        XCTAssertEqual(s.state, .broken(.unresponsive("stopped answering pings (no pong within 10 s)")))
     }
 
     func testAnsweredPingsKeepItRunning() {
@@ -526,6 +578,50 @@ final class ServiceSupervisorTests: XCTestCase {
         }
         if alive { kill(child, SIGKILL) }
         XCTAssertFalse(alive, "the extension's child outlived it")
+    }
+
+    // A real `run` that reads `hello` and never answers. The host kills it
+    // when the handshake runs out, and the broken reason names the handshake,
+    // not the signal the host sent.
+    func testARealProbeThatNeverSendsReadyIsBrokenForTheHandshake() throws {
+        let shell = "/bin/sh"
+        guard FileManager.default.isExecutableFile(atPath: shell) else { return }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("service-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let run = dir.appendingPathComponent("run")
+        try """
+            #!/bin/sh
+            read hello
+            while read line; do :; done
+            """.write(to: run, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: run.path)
+
+        var timing = ServiceSupervisor.Timing()
+        timing.handshake = 0.3
+        timing.crashLimit = 1
+        let lock = NSLock()
+        var broken: ServiceSupervisor.Termination?
+        let gaveUp = DispatchSemaphore(value: 0)
+        let queue = DispatchQueue(label: "service-test")
+        let supervisor = ServiceSupervisor(
+            id: "probe", directory: dir.path, granted: [],
+            environment: ["PATH": "/usr/bin:/bin"], timing: timing,
+            executable: { run.path },
+            spawner: LiveServiceSpawner(),
+            scheduler: DispatchServiceScheduler(queue: queue),
+            perform: { queue.async(execute: $0) },
+            onEvent: { event in
+                guard case .state(.broken(let why)) = event else { return }
+                lock.lock(); broken = why; lock.unlock()
+                gaveUp.signal()
+            })
+        supervisor.start()
+        XCTAssertEqual(gaveUp.wait(timeout: .now() + 10), .success, "never gave up")
+        lock.lock()
+        XCTAssertEqual(broken, .unresponsive("didn't answer hello within 0.3 s"))
+        lock.unlock()
     }
 
     // A `run` that backgrounds a helper and dies at once. The exit can beat

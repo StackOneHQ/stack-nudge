@@ -689,6 +689,8 @@ final class ExtensionHost: ObservableObject {
         switch termination {
         case .exited, .signalled:
             return "stopped restarting after repeated crashes; last \(termination.message)"
+        case .unresponsive:
+            return "stopped restarting after repeated crashes; the last one \(termination.message)"
         case .failedToStart, .incompatible:
             return termination.message
         }
