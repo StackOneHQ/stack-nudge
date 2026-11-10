@@ -19,13 +19,13 @@ These are handled once, in `panelHandlesGlobalKey`, which `FloatingPanel.sendEve
 | `⌘,` | Open Settings, as in any Mac app. Works from a text field too; not while recording a hotkey, or on the setup and update screens. |
 | `⌫` in an empty text field | Cancel the field, as `Esc` does. |
 
-Cancelling a field puts it back the way it was before you started and hands the keyboard back to its page. Recording a shortcut counts as editing one: cancelling keeps the old shortcut. A search, filter or new-entry field empties. A field holding a value goes back to that value: a rename keeps the old name, an extension config field its saved value. `cancelField` in `Panel.swift` does this per page, so a page that adds a text field adds its case there. The key that cancelled, or the combo a recording took, may still be held when the field lets go, so `GlobalKeyRouter` swallows its autorepeat until a fresh press.
+Cancelling a field puts it back the way it was before you started and hands the keyboard back to its page. Recording a shortcut counts as editing one: cancelling keeps the old shortcut. A search, filter or new-entry field empties. A field holding a value goes back to that value: a rename keeps the old name, a text setting on an extension's page its saved value. `fieldToCancel` in `Panel.swift` says which field each page cancels and `cancelField` does it, so a page that adds a text field adds its case there. The key that cancelled, or the combo a recording took, may still be held when the field lets go, so `GlobalKeyRouter` swallows its autorepeat until a fresh press.
 
 ### Moving through a page
 
-- **Into and out of a level inside a tab** (Settings categories and rows, Usage clients and detail, Outcomes overview and tickets): `→` or `⏎` steps in, `←` steps back out. Stepping in lands on the first row or pane, so the path is predictable.
+- **Into and out of a level inside a tab** (Settings categories and rows, the Settings → Extensions list and each extension's page, Usage clients and detail, Outcomes overview and tickets): `→` or `⏎` steps in, `←` steps back out. Stepping in lands on the first row or pane, so the path is predictable.
 - **Carousels** (Usage detail panes): `←` / `→` walk the panes. `→` stops on the last pane rather than wrapping, and `←` on the first pane steps out a level, so the key that brought you in takes you back.
-- **Sub-pages** opened from another page (Phrases, Permissions, extension config, the extensions browser, the history pane, update and uninstall confirm): `←` goes back to the page it belongs under (Settings for most; setup for Permissions when setup opened it). Never `Esc`.
+- **Sub-pages** opened from another page (Phrases, Permissions, the extensions browser, the history pane, update and uninstall confirm): `←` goes back to the page it belongs under (Settings for most; setup for Permissions when setup opened it). Never `Esc`.
 - **`⌘1`…`⌘9`** jump straight to a tab. The order comes from one list in `PanelNav`, so the strip, the numbers and `⌘←/→` can't disagree.
 
 | Key | Meaning |
@@ -60,11 +60,10 @@ Cancelling a field puts it back the way it was before you started and hands the 
 
 ### Testing
 
-Put the routing for a page in a pure static function that maps a key and modifiers to an action enum (`globalKeyAction`, `historyKeyAction`, `extensionsKeyAction`, `extensionConfigKeyAction`, `permissionsKeyAction`, `settingsDetailKeyAction`, `destructiveKeyAction`, `resignKeyOutcome`, plus `extensionTabKeyAction` for an extension's tab, which uses `isForceRefresh` for its ⌘R), and test that function. Where a decision needs state across key presses, keep the state with it in a value type and drive it with real `NSEvent`s (`GlobalKeyRouter`). Prefer a function that takes the `NSEvent` itself to one each call site feeds masked modifiers and `isARepeat` (`destructiveKeyAction(for:)`): a test of the table can't see a call site that passes the wrong ones. Bugs in key routing have mostly been ordering mistakes, like a branch sitting after a `guard plain` it needed to come before, and a pure function is the only place a test can see the order. For row behaviour on `PanelNav`, drive the real entry points (`cycleForward`, `cycleBackward`, `activate`) rather than only reading the predicate behind them.
+Put the routing for a page in a pure static function that maps a key and modifiers to an action enum (`globalKeyAction`, `historyKeyAction`, `extensionsKeyAction`, `permissionsKeyAction`, `settingsDetailKeyAction` (which also gives an extension's list row `→` and swallows a held `⏎`), `fieldToCancel`, `destructiveKeyAction`, `resignKeyOutcome`, plus `extensionTabKeyAction` for an extension's tab, which uses `isForceRefresh` for its ⌘R), and test that function. Where a decision needs state across key presses, keep the state with it in a value type and drive it with real `NSEvent`s (`GlobalKeyRouter`). Prefer a function that takes the `NSEvent` itself to one each call site feeds masked modifiers and `isARepeat` (`destructiveKeyAction(for:)`): a test of the table can't see a call site that passes the wrong ones. Bugs in key routing have mostly been ordering mistakes, like a branch sitting after a `guard plain` it needed to come before, and a pure function is the only place a test can see the order. For row behaviour on `PanelNav`, drive the real entry points (`cycleForward`, `cycleBackward`, `activate`) rather than only reading the predicate behind them.
 
 ### Known exceptions
 
 These predate the rules. Fix them when you're in the area, or move them up into the rules if they turn out to be right.
 
 - **`R`** means dismiss on Events and refresh on Usage.
-- **Extension config's `Tab` / `⇧Tab`** activate the selected item at level one, as `⏎` does, since `Tab` is how a macOS form is entered.

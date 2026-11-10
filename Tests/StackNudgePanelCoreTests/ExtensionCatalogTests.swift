@@ -596,6 +596,124 @@ final class ExtensionCatalogTests: XCTestCase {
 
     // Whoever merged the two lists needs telling when a catalogue lands, or the
     // Settings list keeps whatever it was built from before the fetch.
+    // Anything above `view` asks first; the same ⏎ again installs it, and
+    // moving off the row withdraws the question.
+    func testInstallingAboveViewTierConfirmsFirst() {
+        var installed: [String] = []
+        var trusted = entry("away")
+        trusted.tier = "trusted"
+        let c = ExtensionCatalog(fetchCatalogue: { .success([trusted, self.entry("derby")]) },
+                                 performInstall: { installed.append($0.id); return .success($0.id) },
+                                 background: { $0() }, toMain: { $0() },
+                                 recordedTiers: { [:] })
+        c.reload()
+        let rows = ExtensionCatalog.rows(catalogue: c.entries, installed: [], refused: [])
+        c.selection = .row("away")
+        c.activateSelection(among: rows)
+        XCTAssertEqual(c.confirming, "away")
+        XCTAssertTrue(installed.isEmpty)
+        c.selection = .row("derby")
+        XCTAssertNil(c.confirming, "moving off withdraws it")
+        c.activateSelection(among: rows)
+        XCTAssertEqual(installed, ["derby"], "a view-tier one installs straight away")
+        c.selection = .row("away")
+        c.activateSelection(among: rows)
+        c.activateSelection(among: rows)
+        XCTAssertEqual(installed, ["derby", "away"])
+        XCTAssertFalse(ExtensionCatalog.confirmationText(for: .trusted).contains("STACKNUDGE"))
+    }
+
+    // An update confirms only when it raises the tier above what's recorded:
+    // from every entry point, the browser's ⏎ (activateSelection) and the
+    // card's and the page's Update (requestInstall, which both call).
+    func testAnUpdateConfirmsOnlyWhenItRaisesTheTier() {
+        var installed: [String] = []
+        var away = entry("away", version: "2.0.0")
+        away.tier = "trusted"
+        var recorded: [String: ExtensionTier] = ["away": .trusted]
+        let c = ExtensionCatalog(fetchCatalogue: { .success([away]) },
+                                 performInstall: { installed.append($0.id); return .success($0.id) },
+                                 background: { $0() }, toMain: { $0() },
+                                 recordedTiers: { recorded })
+        c.reload()
+        let manifest: ExtensionManifest = {
+            guard case .success(let m) = ExtensionManifest.parse(Data(#"{"id":"away","name":"Away","version":"1.0.0","schema":1}"#.utf8))
+            else { fatalError() }
+            return m
+        }()
+        let rows = ExtensionCatalog.rows(catalogue: c.entries, installed: [manifest], refused: [])
+        XCTAssertTrue(rows[0].updateAvailable)
+
+        // Same tier: straight through, by ⏎ and by the button.
+        c.selection = .row("away")
+        c.activateSelection(among: rows)
+        XCTAssertEqual(installed, ["away"])
+        c.requestInstall(away)
+        XCTAssertEqual(installed, ["away", "away"])
+
+        // Raising it from service: asks first, on either path.
+        recorded = ["away": .service]
+        c.activateSelection(among: rows)
+        XCTAssertEqual(c.confirming, "away")
+        XCTAssertEqual(installed.count, 2)
+        c.requestInstall(away)
+        XCTAssertEqual(installed.count, 3, "the second request confirms")
+        c.requestInstall(away)
+        XCTAssertEqual(c.confirming, "away", "and the next one asks again")
+
+        XCTAssertFalse(ExtensionCatalog.needsConfirmation(away, recorded: .trusted))
+        XCTAssertTrue(ExtensionCatalog.needsConfirmation(away, recorded: nil))
+        XCTAssertFalse(ExtensionCatalog.needsConfirmation(entry("derby"), recorded: nil))
+    }
+
+    // A pending question goes with leaving, reloading, or the list changing.
+    func testAPendingConfirmationIsDroppedOnReloadAndReconcile() {
+        var away = entry("away")
+        away.tier = "service"
+        let c = ExtensionCatalog(fetchCatalogue: { .success([away]) },
+                                 background: { $0() }, toMain: { $0() }, recordedTiers: { [:] })
+        c.reload()
+        let rows = ExtensionCatalog.rows(catalogue: c.entries, installed: [], refused: [])
+        c.selection = .row("away")
+        c.activateSelection(among: rows)
+        XCTAssertEqual(c.confirming, "away")
+        c.reload()
+        XCTAssertNil(c.confirming)
+        c.activateSelection(among: rows)
+        c.reconcileSelection(among: rows)
+        XCTAssertNil(c.confirming)
+        c.activateSelection(among: rows)
+        c.cancelConfirmation()
+        XCTAssertNil(c.confirming)
+    }
+
+    func testTheConfirmationTextSaysHowToConfirmForEveryTier() {
+        for tier in [ExtensionTier.service, .trusted] {
+            XCTAssertTrue(ExtensionCatalog.confirmationText(for: tier).hasSuffix("Install again to confirm."))
+            XCTAssertTrue(ExtensionCatalog.confirmationText(for: tier, updating: true)
+                .hasSuffix("Update again to confirm."))
+        }
+        XCTAssertEqual(ExtensionCatalog.confirmationText(for: .view), "")
+    }
+
+    // "Needs X" only for what this Mac lacks, probed once per name.
+    func testOnlyMissingRequirementsAreReported() {
+        var probed: [String] = []
+        var a = entry("derby"), b = entry("away"), c0 = entry("system")
+        a = .init(id: a.id, name: a.name, version: a.version, description: "", asset: a.asset,
+                  sha256: "abc", requires: ["python3"], config: [])
+        b = .init(id: b.id, name: b.name, version: b.version, description: "", asset: b.asset,
+                  sha256: "abc", requires: ["swiftc", "python3"], config: [])
+        let entries = [a, b, c0]
+        let c = ExtensionCatalog(fetchCatalogue: { .success(entries) },
+                                 background: { $0() }, toMain: { $0() },
+                                 probeRequirement: { probed.append($0); return $0 == "python3" })
+        c.reload()
+        XCTAssertEqual(Set(probed), ["python3", "swiftc"])
+        XCTAssertEqual(probed.count, 2)
+        XCTAssertEqual(c.missingRequirements, ["away": ["swiftc"]])
+    }
+
     func testLoadingTheCatalogueReportsThatItChanged() {
         var rebuilds = 0
         let c = ExtensionCatalog(fetchCatalogue: { .success([self.entry("derby")]) },

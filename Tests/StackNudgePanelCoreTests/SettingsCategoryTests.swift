@@ -41,11 +41,26 @@ final class SettingsCategoryTests: XCTestCase {
                          description: "", installedVersion: "1.0.0", availableVersion: nil,
                          refusedReason: nil, requires: [], config: []),
         ]
+        // Likewise an extension's own Settings page, for the representative
+        // config row, holding presence so the app's lock row is on it too.
+        // With an update on offer, so the page's Update row has a home too.
+        nav.installedExtensions = [
+            ExtensionRow(id: SettingsRow.representativeExtensionID, name: "Derby",
+                         description: "", installedVersion: "1.0.0", availableVersion: "1.1.0",
+                         refusedReason: nil, requires: [], config: []),
+        ]
+        nav.extensionSettingsPages = [
+            ExtensionSettingsPage(id: SettingsRow.representativeExtensionID, name: "Derby", keys: [
+                ExtensionManifest.ConfigKey(key: SettingsRow.representativeConfigKey, label: nil,
+                                            help: nil, placeholder: nil),
+            ]),
+        ]
+        nav.presenceHolderID = SettingsRow.representativeExtensionID
         // The voice category swaps rows on whether the model is cached; both
         // branches are reachable, so both count as homes.
         for cached in [true, false] {
             nav.voiceModelCached = cached
-            for category in SettingsCategory.allCases {
+            for category in nav.settingsCategories + [.extensionPage(SettingsRow.representativeExtensionID)] {
                 covered.formUnion(nav.rows(in: category))
             }
         }
@@ -107,13 +122,11 @@ final class SettingsCategoryTests: XCTestCase {
     // not tell "opens the selected row" from "opens a constant".
     func testEnterOnAnExtensionCardOpensTheSelectedOne() {
         let nav = PanelNav()
-        var opened: [String] = []
-        nav.actions = Self.actions(openExtension: { opened.append($0) })
         nav.installedExtensions = [row("derby"), row("system")]
         nav.settingsCategory = .extensions
         nav.selectedSettingIndex = nav.index(of: .installedExtension("system")) ?? 0
         nav.activate()
-        XCTAssertEqual(opened, ["system"])
+        XCTAssertEqual(nav.settingsCategory, .extensionPage("system"))
     }
 
     // Arrows must not act on it — the card is an action row, and ←/→ grazing it
@@ -138,6 +151,7 @@ final class SettingsCategoryTests: XCTestCase {
         nav.cycleForward()
         nav.cycleBackward()
         XCTAssertTrue(opened.isEmpty, "arrows must not open an extension")
+        XCTAssertEqual(nav.settingsCategory, .extensions, "cycling never opens the page; → is routed as ⏎")
         XCTAssertEqual(permissionChecks, 0, "arrows must not fire another row's action")
         XCTAssertEqual(nav.selectedRow, .installedExtension("derby"))
     }
@@ -217,13 +231,15 @@ final class SettingsCategoryTests: XCTestCase {
     func testAnExtensionRemovedUnderThePanelClosesItsPage() {
         let nav = PanelNav()
         nav.installedExtensions = [row("derby")]
-        nav.mode = .extensionConfig("derby")
+        nav.mode = .settings
+        nav.openExtensionPage("derby")
         nav.reconcileModeWithTabs()
-        XCTAssertEqual(nav.mode, .extensionConfig("derby"))
+        XCTAssertEqual(nav.settingsCategory, .extensionPage("derby"))
 
         nav.installedExtensions = []
         nav.reconcileModeWithTabs()
         XCTAssertEqual(nav.mode, .settings)
+        XCTAssertEqual(nav.settingsCategory, .extensions)
     }
 
     // The summary itself, not the flags it counts. The first version of this
