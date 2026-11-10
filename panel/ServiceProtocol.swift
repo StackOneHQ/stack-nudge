@@ -88,7 +88,17 @@ enum ServiceProtocol {
         // would be deciding the feed's.
         case feed(event: Data)
         case pong(id: Int)
+        // The values a `dynamic` config key may take right now, for its
+        // Settings picker. Whether the key is declared, and dynamic, is the
+        // host's to check: this only knows the line.
+        case choices(key: String, options: [ConfigOption])
     }
+
+    // More than a picker can sensibly step through, or a label longer than a
+    // row can show, is refused rather than trimmed: the extension sent
+    // something it shouldn't have, and quietly showing part of it would hide
+    // that.
+    static let maxChoices = ConfigKind.maxOptions
 
     // What one line turned out to be. `ignored` is an unknown type, which is
     // how the protocol stays additive; `invalid` is a known type that broke its
@@ -146,6 +156,31 @@ enum ServiceProtocol {
         case "pong":
             guard let id = integer(object["id"]) else { return .invalid("pong without an id") }
             return .message(.pong(id: id))
+        case "choices":
+            guard let key = object["key"] as? String, ExtensionManifest.isPassableConfigKey(key) else {
+                return .invalid("choices without a STACKNUDGE_EXT_ key")
+            }
+            guard let list = object["options"] as? [[String: Any]] else {
+                return .invalid("choices without a list of options")
+            }
+            guard list.count <= maxChoices else {
+                return .invalid("choices with more than \(maxChoices) options")
+            }
+            var options: [ConfigOption] = []
+            for entry in list {
+                // The value is written into the config file when picked, so it
+                // has to be one the file can hold.
+                guard let value = entry["value"] as? String, ConfigKind.isStorable(value),
+                      let label = entry["label"] as? String, !label.isEmpty,
+                      label.count <= ConfigKind.maxOptionLength,
+                      !ConfigFile.containsLineBreak(label),
+                      ExtensionConfigValue.problem(with: label) == nil
+                else { return .invalid("choices with an option that can't be stored or shown") }
+                if !options.contains(where: { $0.value == value }) {
+                    options.append(ConfigOption(value: value, label: label))
+                }
+            }
+            return .message(.choices(key: key, options: options))
         default:
             return .ignored(type: type)
         }

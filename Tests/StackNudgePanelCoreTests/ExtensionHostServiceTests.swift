@@ -341,9 +341,91 @@ final class ExtensionHostServiceTests: XCTestCase {
         XCTAssertEqual(fetches, ["derby"])
     }
 
+    // The whole path a fetched index takes: the recorded tier is re-checked
+    // against it, and the reload that follows takes the signal away from an
+    // extension that was saying "away", which puts it back to present.
+    func testAnIndexDemotionTakesThePresenceSignalBackToNeutral() {
+        tiers = ExtensionTiers.recording(.init(id: "away", name: "Away", version: "1",
+                                               description: "", asset: "extension-away-1.tar.gz",
+                                               sha256: "ab", requires: [], config: [],
+                                               tier: "trusted"), in: [:])
+        let signals = SignalRegistry()
+        var values: [String] = []
+        signals.onChange = { _, value in values.append(value) }
+        let host = host(signals: signals)
+        let away = manifest("away", capabilities: ["bluetooth", "signal:presence"])
+        host.load(.init(installed: [away]))
+        XCTAssertEqual(hello(spawner.last), ["bluetooth", "signal:presence"])
+        spawner.last.ready()
+        spawner.last.say(#"{"type":"signal","name":"presence","value":"away"}"#)
+        XCTAssertEqual(signals.value(.presence), "away")
+
+        // The next release's index no longer lists it.
+        tiers = ExtensionTiers.reconciling(tiers, with: [])
+        XCTAssertEqual(tiers, ["away": .view])
+        host.load(.init(installed: [away]))
+        XCTAssertEqual(signals.value(.presence), "present")
+        XCTAssertEqual(values, ["away", "present"])
+        XCTAssertEqual(spawner.last.types.last, "stop")
+        XCTAssertEqual(host.refused.map(\.id), ["away"])
+    }
+
     // Quitting tells every service to stop and waits, bounded, for them to go;
     // nothing starts again after, even if something reloads. The fakes never
     // exit on their own, so the wait here runs out its (short) timeout.
+    // MARK: - Settings pages
+
+    private func settingsOnly() -> ExtensionManifest {
+        guard case .success(let m) = ExtensionManifest.parse(Data("""
+            {"id":"away","name":"Away","version":"1","schema":2,"mode":"service",
+             "surfaces":["settings"],"glance":true,
+             "config":[{"key":"STACKNUDGE_EXT_AWAY_PHONE","type":"dynamic"},
+                       {"key":"STACKNUDGE_EXT_AWAY_IDLE","type":"number","options":[10,30]}]}
+            """.utf8)) else { fatalError("fixture manifest didn't parse") }
+        return m
+    }
+
+    // No tab, so no ⌘N slot and no widget chip; it still runs.
+    func testASettingsOnlyExtensionGetsNoTabOrGlance() {
+        tiers = ["away": .service]
+        var tabs: [[ExtensionTab]] = []
+        let host = ExtensionHost(onTabsChanged: { tabs.append($0) },
+                                 background: { $0() }, toMain: { $0() },
+                                 tiers: { [unowned self] in self.tiers },
+                                 makeSupervisor: { [unowned self] manifest, granted, onEvent in
+                                     ServiceSupervisor.fake(id: manifest.id, granted: granted,
+                                                            spawner: self.spawner, scheduler: self.clock,
+                                                            onEvent: onEvent)
+                                 })
+        host.load(.init(installed: [settingsOnly(), manifest("derby", mode: "view")]))
+        XCTAssertEqual(tabs.last?.map(\.id), ["derby"])
+        XCTAssertEqual(host.manifests.map(\.id), ["away", "derby"])
+        XCTAssertEqual(spawner.spawned("away").count, 1)
+
+        spawner.last.ready()
+        spawner.last.say(#"{"type":"document","document":{"schema":1,"header":{"title":"Away","badge":{"text":"Away","tone":"warning"}}}}"#)
+        XCTAssertEqual(host.glances, [])
+    }
+
+    // Choices are kept for a declared dynamic key, and refused for anything
+    // else: a fixed list, or a key it never declared.
+    func testChoicesAreKeptOnlyForADeclaredDynamicKey() {
+        tiers = ["away": .service]
+        let host = host()
+        host.load(.init(installed: [settingsOnly()]))
+        spawner.last.ready()
+        spawner.last.say(#"{"type":"choices","key":"STACKNUDGE_EXT_AWAY_PHONE","options":[{"value":"Pixel","label":"Pixel · −70 dBm"}]}"#)
+        spawner.last.say(#"{"type":"choices","key":"STACKNUDGE_EXT_AWAY_IDLE","options":[{"value":"5","label":"5 s"}]}"#)
+        spawner.last.say(#"{"type":"choices","key":"STACKNUDGE_EXT_AWAY_OTHER","options":[{"value":"x","label":"x"}]}"#)
+        XCTAssertEqual(host.choices, ["away": ["STACKNUDGE_EXT_AWAY_PHONE": [
+            ConfigOption(value: "Pixel", label: "Pixel · −70 dBm"),
+        ]]])
+
+        // Dropped with the extension.
+        host.load(.init(installed: []))
+        XCTAssertEqual(host.choices, [:])
+    }
+
     func testQuittingStopsEveryServiceAndStartsNothingAfter() {
         tiers = ["away": .service, "radar": .service]
         let host = host()

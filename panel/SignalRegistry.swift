@@ -75,6 +75,9 @@ final class SignalRegistry {
     // Called only when a value actually changes, so a reaction (a lock, a mute)
     // isn't repeated for an extension that says "away" every second.
     var onChange: (AppSignal, String) -> Void = { _, _ in }
+    // Called when who holds a signal changes, for Settings to say where a
+    // signal comes from.
+    var onHoldersChange: () -> Void = {}
 
     // Where the holders are recorded. nil keeps them in memory only, which is
     // what tests use so they never touch the real file.
@@ -176,7 +179,10 @@ final class SignalRegistry {
         return holders
     }
 
+    // Every change of holder goes through here, so it is also where the
+    // change is announced.
     private func writeRecord() {
+        onHoldersChange()
         guard let path else { return }
         let object = Dictionary(uniqueKeysWithValues: holders.map { ($0.key.rawValue, $0.value) })
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: .sortedKeys)

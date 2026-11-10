@@ -87,8 +87,13 @@ final class ExtensionHost: ObservableObject {
     // Each running service extension's supervisor state, as last reported.
     // Nothing renders it yet; Settings will.
     @Published private(set) var services: [String: ServiceSupervisor.State] = [:]
+    // What each service last offered for its `dynamic` config keys, by
+    // extension then key. Kept when the process stops, so a picker still has
+    // something to step through while it restarts; dropped with the extension.
+    @Published private(set) var choices: [String: [String: [ConfigOption]]] = [:]
 
-    // Signals the service extensions hold. Nothing in the app reacts to one yet.
+    // Signals the service extensions hold. PanelController reacts to them
+    // (presence locks the screen) through the registry's onChange.
     let signals: SignalRegistry
 
     private let runner: (ExtensionManifest, String?, String?) -> ExtensionRuntime.Fetch
@@ -208,7 +213,10 @@ final class ExtensionHost: ObservableObject {
         // extension doesn't resurrect the document from its previous life.
         let live = Set(manifests.map(\.id))
         panes = panes.filter { live.contains($0.key) }
-        onTabsChanged(manifests.map(\.tabEntry))
+        choices = choices.filter { live.contains($0.key) }
+        // Only those that asked for a tab get one, and with it a ⌘N slot.
+        // A settings-only extension appears as a Settings category instead.
+        onTabsChanged(manifests.filter(\.hasTab).map(\.tabEntry))
         onRefusalsChanged(refused.count)
         publishGlances()
 
@@ -476,7 +484,9 @@ final class ExtensionHost: ObservableObject {
     // dropped, because a chip that vanishes reads as "all clear".
     static func glance(for manifest: ExtensionManifest, pane: Pane,
                        now: Date = Date()) -> ExtensionGlance? {
-        guard manifest.glance, let header = pane.document?.header, let badge = header.badge,
+        // The chip opens the tab, so an extension without one has no chip.
+        guard manifest.glance, manifest.hasTab,
+              let header = pane.document?.header, let badge = header.badge,
               badge.tone == .warning || badge.tone == .danger else { return nil }
         let stale: Bool
         if manifest.mode == .service {
@@ -645,6 +655,15 @@ final class ExtensionHost: ObservableObject {
             if let refusal = signals.set(name, to: value, from: id) {
                 log(id, "signal refused \u{2014} \(refusal.message)")
             }
+        case .choices(let key, let options):
+            // Only for a key it declared as dynamic. Anything else would put
+            // values into a picker the manifest never agreed to, or make a
+            // fixed list say something its manifest doesn't.
+            guard let declared = running[id]?.manifest.config.first(where: { $0.key == key }),
+                  declared.kind == .dynamic else {
+                return log(id, "sent choices for \(key), which it didn't declare as dynamic")
+            }
+            choices[id, default: [:]][key] = options
         case .feed:
             // Accepted and dropped. Posting it means giving EventStore a source
             // per extension (`extension:<id>`, with its own cap), and
@@ -683,6 +702,40 @@ final class ExtensionHost: ObservableObject {
         }
         panes[id] = pane
         publishGlances()
+    }
+
+    // What a service was given, for its page's "Allowed" line. Empty for a
+    // view extension, which nothing passes through.
+    func granted(_ id: String) -> [ExtensionCapability] { running[id]?.granted ?? [] }
+
+    // A supervisor state as the Extensions list says it.
+    static func stateLabel(_ state: ServiceSupervisor.State?) -> String {
+        switch state {
+        case .running?:            return "Running"
+        case .starting?:           return "Starting"
+        case .restarting?:         return "Restarting"
+        case .stopping?:           return "Stopping"
+        case .broken?:             return "Broken"
+        case .stopped?, nil:       return "Stopped"
+        }
+    }
+
+    // One line for a Settings page: the header badge, then the first row's
+    // title and value, from the latest document. What the pane says when it
+    // has no document, or when what it has is old.
+    static func statusLine(_ pane: Pane) -> String? {
+        var parts: [String] = []
+        if let document = pane.document {
+            if let badge = document.header?.badge?.text { parts.append(badge) }
+            if let row = document.rows.first {
+                parts.append(row.title)
+                if let value = row.value, !value.isEmpty { parts.append(value) }
+            } else if let message = document.message, !message.isEmpty {
+                parts.append(message)
+            }
+        }
+        if let why = pane.status.message { parts.append(why) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     static func brokenMessage(_ termination: ServiceSupervisor.Termination) -> String {

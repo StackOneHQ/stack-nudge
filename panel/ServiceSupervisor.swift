@@ -100,6 +100,7 @@ final class ServiceSupervisor {
         case malformedDocument(String)
         case signal(name: String, value: String)
         case feed(event: Data)
+        case choices(key: String, options: [ConfigOption])
         // Something was dropped: too many messages, a line over its limit.
         // Sent once per process, since the point is to say it is happening,
         // not to forward the flood.
@@ -462,6 +463,10 @@ final class ServiceSupervisor {
         case .feed(let event):
             guard granted.contains(.feed) else { return onEvent(.problem("feed wasn't granted")) }
             onEvent(.feed(event: event))
+        case .choices(let key, let options):
+            // Needs no capability: it only fills a picker for one of the
+            // extension's own keys, which the host checks it declared.
+            onEvent(.choices(key: key, options: options))
         case .pong(let id):
             guard outstandingPing?.id == id else { return }
             pongTimer?.cancel()
