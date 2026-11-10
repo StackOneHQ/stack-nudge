@@ -167,6 +167,23 @@ final class ServiceSupervisorTests: XCTestCase {
         XCTAssertEqual(s.state, .broken(.exited(3)))
     }
 
+    // The child exited on its own just as the handshake timer fired and the
+    // host sent its kill: its own exit status is what happened, not the kill.
+    func testAnOwnExitRacingTheHandshakeKillKeepsItsStatus() {
+        let s = supervisor()
+        s.start()
+        for _ in 0..<4 {
+            clock.advance(10)
+            spawner.last.exit(.signalled(SIGKILL))
+            guard case .restarting(let delay) = s.state else { return XCTFail("\(s.state)") }
+            clock.advance(delay)
+        }
+        clock.advance(10)
+        XCTAssertEqual(spawner.last.signals, [SIGKILL])
+        spawner.last.exit(.exited(3))
+        XCTAssertEqual(s.state, .broken(.exited(3)))
+    }
+
     // A protocol this host doesn't speak won't be fixed by restarting.
     func testAnIncompatibleProtocolIsBrokenStraightAway() {
         let s = supervisor()

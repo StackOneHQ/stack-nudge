@@ -71,9 +71,13 @@ known_capabilities() {
   python3 - "$capability_source" <<'PY'
 import re, sys
 try:
-    lines = open(sys.argv[1]).read().splitlines()
+    text = open(sys.argv[1]).read()
 except OSError as e:
     sys.exit(f"can't read {sys.argv[1]}: {e}")
+# Block comments go first, keeping their line breaks, so a case commented out
+# with /* */ isn't counted as known. Line comments are cut per line below.
+text = re.sub(r"/\*.*?\*/", lambda m: "\n" * m.group(0).count("\n"), text, flags=re.S)
+lines = text.splitlines()
 start = next((i for i, l in enumerate(lines)
               if re.match(r"\s*(?:\w+\s+)*enum\s+ExtensionCapability\b", l)), None)
 if start is None:

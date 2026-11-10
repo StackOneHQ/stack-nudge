@@ -337,7 +337,10 @@ final class ServiceSupervisor {
         cancelRunTimers()
         if state == .stopping { return finishStop(keepState: false) }
         if let fatal { return becomeBroken(fatal) }
-        crashed(killedFor ?? termination)
+        // Only our own SIGKILL is the unresponsive kill. A child that exited on
+        // its own just as a timer fired keeps its real exit status.
+        if let killedFor, termination == .signalled(SIGKILL) { return crashed(killedFor) }
+        crashed(termination)
     }
 
     private func crashed(_ termination: Termination) {

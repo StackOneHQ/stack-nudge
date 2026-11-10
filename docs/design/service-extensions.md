@@ -90,7 +90,7 @@ The host owns the process; the extension never daemonises itself.
 | When | The host |
 |---|---|
 | Extension enabled, or app launch with it enabled | starts `run` with the same minimal environment as today, plus `STACKNUDGE_EXT_MODE=service` |
-| It exits or crashes | restarts it with backoff of 1 s, 2 s, 4 s … up to 5 min. After 5 crashes in 10 min, it is marked **broken** with its last exit status, shown in Settings → Extensions like a refusal |
+| It exits or crashes | restarts it with backoff of 1 s, 2 s, 4 s … up to 5 min. After 5 crashes in 10 min, it is marked **broken** with its last exit status (or, when the host killed it, why: no `ready` in time, or no `pong`), shown in Settings → Extensions like a refusal |
 | It goes silent | sends a `ping` every 30 s. No `pong` within 10 s counts as a hang: kill, then restart under the same backoff |
 | Extension disabled, removed or updated, or the app quits | sends `{"type":"stop"}` on stdin, waits 3 s, then SIGTERM, then SIGKILL after 2 s more |
 | The Mac sleeps | nothing special. The process is suspended with everything else, and the next missed `pong` after wake is tolerated once |
@@ -119,7 +119,8 @@ version, and the extension's first message must answer it.
 ```
 
 `capabilities` in `hello` is what was **granted**, which may be less than
-declared. Events are delivered only for granted `event:*` capabilities.
+declared. `config` can arrive again at any point while running, whenever the
+user saves the extension's settings, so apply each one as it comes. Events are delivered only for granted `event:*` capabilities.
 
 **Extension → app (stdout)**
 
