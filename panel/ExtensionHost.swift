@@ -294,6 +294,18 @@ final class ExtensionHost: ObservableObject {
             manifest.refresh.intervalSeconds ?? ExtensionManifest.minimumIntervalSeconds)
     }
 
+    // The extension's settings were saved. A view runs again with the new
+    // environment; a running service is sent the new values without a restart,
+    // and keeps them for its next one.
+    func configChanged(_ id: String, configValues: [String: String] = ConfigFile.read()) {
+        guard let manifest = manifest(id) else { return }
+        guard manifest.mode == .service else { return refresh(id) }
+        guard let service = running[id] else { return }
+        let (environment, config) = ServiceSupervisor.configuration(for: service.manifest,
+                                                                     configValues: configValues)
+        service.supervisor.reconfigure(environment: environment, config: config)
+    }
+
     func refresh(_ id: String, superseding: Bool = false) {
         invoke(id, action: nil, row: nil, superseding: superseding)
     }

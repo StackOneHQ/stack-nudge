@@ -65,6 +65,44 @@ final class ServiceSupervisorTests: XCTestCase {
                        ["STACKNUDGE_EXT_AWAY_WAIT": "30"])
     }
 
+    // A change in Settings reaches a running service as a `config` message,
+    // without a restart, and is what a later restart starts with.
+    func testReconfiguringARunningServiceSendsTheNewConfig() {
+        let s = supervisor(config: ["STACKNUDGE_EXT_AWAY_PHONE": "Pixel"])
+        s.start()
+        spawner.last.ready()
+        s.reconfigure(environment: ["STACKNUDGE_EXT_AWAY_PHONE": "Galaxy"],
+                      config: ["STACKNUDGE_EXT_AWAY_PHONE": "Galaxy"])
+        XCTAssertEqual(spawner.spawned.count, 1, "no restart")
+        XCTAssertEqual(spawner.last.types, ["hello", "config", "config"])
+        XCTAssertEqual(spawner.last.messages.last?["values"] as? [String: String],
+                       ["STACKNUDGE_EXT_AWAY_PHONE": "Galaxy"])
+
+        // The same values again say nothing new.
+        s.reconfigure(environment: ["STACKNUDGE_EXT_AWAY_PHONE": "Galaxy"],
+                      config: ["STACKNUDGE_EXT_AWAY_PHONE": "Galaxy"])
+        XCTAssertEqual(spawner.last.types.filter { $0 == "config" }.count, 2)
+
+        spawner.last.exit()
+        clock.advance(1)
+        XCTAssertEqual(spawner.spawned.count, 2)
+        XCTAssertEqual(spawner.last.environment["STACKNUDGE_EXT_AWAY_PHONE"], "Galaxy")
+        spawner.last.ready()
+        XCTAssertEqual(spawner.last.messages.last?["values"] as? [String: String],
+                       ["STACKNUDGE_EXT_AWAY_PHONE": "Galaxy"])
+    }
+
+    // Before `ready` the config isn't sent early; `ready` sends the new one.
+    func testReconfiguringBeforeReadyWaitsForReady() {
+        let s = supervisor(config: ["STACKNUDGE_EXT_AWAY_PHONE": "Pixel"])
+        s.start()
+        s.reconfigure(environment: [:], config: ["STACKNUDGE_EXT_AWAY_PHONE": "Galaxy"])
+        XCTAssertEqual(spawner.last.types, ["hello"])
+        spawner.last.ready()
+        XCTAssertEqual(spawner.last.messages.last?["values"] as? [String: String],
+                       ["STACKNUDGE_EXT_AWAY_PHONE": "Galaxy"])
+    }
+
     // Nothing counts before `ready`: a document printed first is dropped.
     func testNothingIsDeliveredBeforeReady() {
         let s = supervisor()

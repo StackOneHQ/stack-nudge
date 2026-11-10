@@ -134,8 +134,9 @@ final class ServiceSupervisor {
     private(set) var degraded = false
 
     private let directory: String
-    private let environment: [String: String]
-    private let config: [String: String]
+    // Both change only through `reconfigure`, on the queue.
+    private var environment: [String: String]
+    private var config: [String: String]
     private let executable: () -> String?
     private let spawner: ServiceSpawner
     private let scheduler: ServiceScheduler
@@ -251,6 +252,21 @@ final class ServiceSupervisor {
                     })
                 })
             }
+        }
+    }
+
+    // New config values from Settings. A running process is sent them as a
+    // `config` message rather than restarted, so a service keeps what it has
+    // built up (a Bluetooth scan, a socket). The environment is updated too,
+    // so a restart after this starts with the same values, and a process
+    // still starting gets them with `ready`.
+    func reconfigure(environment: [String: String], config: [String: String]) {
+        perform { [weak self] in
+            guard let self else { return }
+            let changed = config != self.config
+            self.environment = environment
+            self.config = config
+            if changed, self.state == .running { self.send(.config(values: config)) }
         }
     }
 
@@ -450,8 +466,8 @@ final class ServiceSupervisor {
         runningSince = scheduler.now()
         setState(.running)
         // The same values the environment already carries. Sent anyway so a
-        // service has one place to read them from now and later, when a change
-        // in Settings can reach it without a restart.
+        // service has one place to read them from, since a change in Settings
+        // later arrives the same way (`reconfigure`).
         send(.config(values: config))
         schedulePing()
     }
@@ -539,9 +555,7 @@ extension ServiceSupervisor {
                      configValues: [String: String] = ConfigFile.read(),
                      onEvent: @escaping (Event) -> Void) -> ServiceSupervisor {
         let queue = DispatchQueue(label: "stack-nudge.service.\(manifest.id)")
-        let environment = ExtensionRuntime.serviceEnvironment(for: manifest, config: configValues)
-        // The declared keys that are set, exactly as the environment has them.
-        let config = environment.filter { key, _ in manifest.config.contains { $0.key == key } }
+        let (environment, config) = configuration(for: manifest, configValues: configValues)
         return ServiceSupervisor(
             id: manifest.id, directory: directory, granted: granted,
             environment: environment, config: config,
@@ -550,6 +564,18 @@ extension ServiceSupervisor {
             scheduler: DispatchServiceScheduler(queue: queue),
             perform: { queue.async(execute: $0) },
             onEvent: onEvent)
+    }
+}
+
+extension ServiceSupervisor {
+    // What a service is started with, and what `config` messages carry: the
+    // declared keys that are set, exactly as the environment has them.
+    static func configuration(for manifest: ExtensionManifest,
+                              configValues: [String: String])
+        -> (environment: [String: String], config: [String: String]) {
+        let environment = ExtensionRuntime.serviceEnvironment(for: manifest, config: configValues)
+        let config = environment.filter { key, _ in manifest.config.contains { $0.key == key } }
+        return (environment, config)
     }
 }
 

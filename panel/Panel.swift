@@ -1061,10 +1061,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         nav.extensionConfig = ExtensionConfigModel(
             row: row,
             origin: origin,
-            // Saving is not enough on its own: the environment is rebuilt for
-            // each invocation, so the tab only shows the new value once the
-            // extension runs again.
-            didChange: { [weak self] in self?.extensions.refresh(row.id) },
+            // Saving is not enough on its own: a view's environment is rebuilt
+            // for each invocation, so the tab only shows the new value once the
+            // extension runs again, and a running service has to be told.
+            didChange: { [weak self] in self?.extensions.configChanged(row.id) },
             onRemove: { [weak self] in self?.removeExtension(row.id) })
         nav.mode = .extensionConfig(row.id)
     }

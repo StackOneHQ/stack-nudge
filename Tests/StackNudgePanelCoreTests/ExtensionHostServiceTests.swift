@@ -318,6 +318,29 @@ final class ExtensionHostServiceTests: XCTestCase {
         XCTAssertEqual(host.refused.map(\.id), ["away"])
     }
 
+    // Saving a service's settings tells the running process; it isn't
+    // restarted, and a view extension still just runs again.
+    func testSavedConfigReachesARunningServiceWithoutARestart() {
+        tiers = ["probe": .service]
+        guard case .success(let probe) = ExtensionManifest.parse(Data("""
+            {"id":"probe","name":"Probe","version":"1","schema":2,"mode":"service",
+             "config":["STACKNUDGE_EXT_PROBE_WAIT"]}
+            """.utf8)) else { return XCTFail("fixture manifest didn't parse") }
+        let host = host()
+        host.load(.init(installed: [probe, manifest("derby", mode: "view")]))
+        spawner.last.ready()
+        host.configChanged("probe", configValues: ["STACKNUDGE_EXT_PROBE_WAIT": "45",
+                                                   "STACKNUDGE_SLACK_TOKEN": "secret"])
+        XCTAssertEqual(spawner.spawned.count, 1)
+        XCTAssertEqual(spawner.last.messages.last?["type"] as? String, "config")
+        // Only its own declared keys, never the app's.
+        XCTAssertEqual(spawner.last.messages.last?["values"] as? [String: String],
+                       ["STACKNUDGE_EXT_PROBE_WAIT": "45"])
+
+        host.configChanged("derby", configValues: [:])
+        XCTAssertEqual(fetches, ["derby"])
+    }
+
     // Quitting tells every service to stop and waits, bounded, for them to go;
     // nothing starts again after, even if something reloads. The fakes never
     // exit on their own, so the wait here runs out its (short) timeout.
