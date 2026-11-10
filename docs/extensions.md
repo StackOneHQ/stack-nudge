@@ -51,18 +51,18 @@ does not buy.
 | `refresh.intervalSeconds` | no | Default off. Floored at 5 — every tick is a process spawn. |
 | `refresh.whileFocusedOnly` | no | Default `true`. Only poll while your tab is the one on screen. Set `false` to keep polling while the tab is hidden; such an extension is also first run on the first tick after launch, without waiting for its tab to be opened. |
 | `glance` | no | Default `false`. Let the widget show your header badge while it is urgent. See [The widget](#the-widget). |
+| `surfaces` | no | Default `["tab"]`. `["settings"]` means no tab, only its page under Settings → Extensions. See [Where it appears](#where-it-appears). |
 
 A manifest that fails any of these is **refused**, and the reason is reported —
 it does not silently produce a missing tab.
 
-> **Service mode (not yet for general use).** A manifest with `"schema": 2` may
-> also declare `"mode": "service"` and a `capabilities` list, which makes `run` a
+> **Service mode.** A manifest with `"schema": 2` may also declare
+> `"mode": "service"` and a `capabilities` list, which makes `run` a
 > long-running process the host supervises and talks to over stdin and stdout,
-> instead of a one-shot script. The host supports it, but nothing grants it yet,
-> and the details may still change: see
-> [docs/design/service-extensions.md](design/service-extensions.md), which is
-> pending review. A view extension can ignore all of this and keep saying
-> `"schema": 1`.
+> instead of a one-shot script. What it may be granted depends on its
+> [tier](#tiers), and the protocol is in
+> [docs/design/service-extensions.md](design/service-extensions.md). A view
+> extension can ignore all of this and keep saying `"schema": 1`.
 
 ## Configuration
 
@@ -81,8 +81,8 @@ A `config` entry may be a bare key name, or an object describing it:
 ```
 
 Both forms declare the same thing — a key the host will pass to your script.
-The object form adds what **Settings → Extensions → your extension** needs to
-render a labelled field for it rather than a raw environment variable name.
+The object form adds what your page under **Settings → Extensions** needs to
+render a labelled row for it rather than a raw environment variable name.
 Without a `label` the field is titled by the key with its namespace stripped,
 so a bare string still gets a usable form.
 
@@ -104,11 +104,52 @@ writing an empty one, which matters because a declared-but-unset key is
 and "the variable isn't there" are the same case, and you only have to handle
 one of them.
 
+### Typed keys
+
+The object form may also say what kind of value a key holds, with `type`. Every
+installed extension has a [page under Settings → Extensions](#where-it-appears),
+and each type is drawn there as the matching control.
+
+| `type` | Holds | Settings draws |
+|---|---|---|
+| `text` (default) | anything the config file can hold, as today | a row whose `⏎` turns it into a field: `⏎` saves, `Esc` (or `⌫` when empty) puts it back |
+| `toggle` | `"true"` or `"false"` | an on/off row: `Space` or `⏎` flips it |
+| `choice` | one of `options: [{"value": "…", "label": "…"}]` | a picker |
+| `number` | one of `options: [15, 30, 60]`, with an optional `"unit": "seconds"` | a picker, labelled "15 s", "2 min" with the unit |
+| `dynamic` | one of the values your running service offers (a `choices` message, below) | a picker over what you last offered, plus the saved value |
+
+An optional `default` (`30`, `true`, or a string) is what the row shows while
+the key is unset; your extension still decides what an unset key means.
+Without one, a picker's first entry is "Default" (or "Not set" for `dynamic`),
+which removes the key. A picker writes nothing while you step through it, only
+when it settles, so your extension hears one change. Option values must be
+storable as one line of the config file, exactly as given: no CR or LF anywhere
+(not even at the ends, where a trim might otherwise hide one), no other line or
+paragraph separator (NEL, U+2028, U+2029, vertical tab, form feed), no NUL or
+other control character, no surrounding spaces, and at most 256 characters,
+with at most 64 options. The same rule is applied to a manifest's options, to a
+`choices` message, when a value is saved, and by the config writer itself. An unknown `type` or `unit`, missing or repeated options, or a
+`default` that isn't one of the options is refused with the key named.
+
+`dynamic` is for a service extension: it sends what may be picked as
+
+```json
+{"type": "choices", "key": "STACKNUDGE_EXT_AWAY_PHONE",
+ "options": [{"value": "Alex's Pixel", "label": "Alex's Pixel · −70 dBm"}]}
+```
+
+whenever the list changes. The host keeps it only for a key the manifest
+declared as `dynamic`, refuses the whole message for more than 64 options or
+for any value or label that breaks the rule above (so leave out an entry you
+can't tidy rather than sending it), and keeps the last list while the process restarts. The saved
+value is always shown, even when it isn't on offer right now. Older hosts
+ignore the message, like any type they don't know.
+
 The object form is a **manifest** field, not an index field. The published
 `extensions-index.json` carries key *names* only, whichever form the manifest
 used — deliberately, because the index is a wire format read by binaries of
 every version: the app fetches it from `/releases/latest`, so an old host reads
-the *newest* index. The settings form never needs the metadata there, since it
+the *newest* index. Your page never needs the metadata there, since it
 renders for an extension that is already installed and reads that extension's
 own manifest.
 
@@ -371,6 +412,45 @@ The index is attached to the app's own release, so there is one trust anchor and
 one fetch path. It ships even when there are no extensions, so the app always has
 something well-formed to fetch.
 
+### Tiers
+
+A tier is how far the app trusts an extension: `view`, `service` or `trusted`.
+The manifest says what an extension asks for; the tier says what it can have.
+A service extension needs at least `service`, and `trusted` adds signals and
+hardware capabilities such as `bluetooth`. The full table is in the design
+note, under "Privilege tiers".
+
+The tier is the reviewers' call, not the extension's, so it lives outside the
+package, in `extensions/tiers.json`:
+
+```json
+{ "away": "trusted" }
+```
+
+Anything not listed is `view`. Validation refuses a `tiers.json` naming an
+extension that doesn't exist or a tier that isn't one of the three, and an
+extension asking for something its tier can't grant: a service at `view`, or
+`bluetooth` at `service`.
+
+The packager folds it into each index entry as `"tier"`. Hosts that predate
+tiers ignore the field. A newer host records it in
+`~/.stack-nudge/extensions/.tiers.json` when it installs from the index, and
+re-checks the record whenever it loads the catalogue: the first time Settings
+or the extensions browser opens in each launch, and on the browser's ⌘R or Try
+again. A tier can go down to what the index now says, and drops to `view` if
+the index stops listing the extension, but it never goes up without an install
+or an update. A change found then reloads the extensions straight away, so a
+demoted service restarts with its smaller grant (or stops, below `service`).
+Until the catalogue loads, the recorded tier stands. Removing an extension
+forgets its tier.
+
+**For developing an extension** that no release's index lists yet, set
+`STACKNUDGE_EXTENSIONS_LOCAL_TIERS=true` in `~/.stack-nudge/config`. The host
+then never re-checks `.tiers.json` against the index, so a tier you write there
+by hand stays (installing from the index still records the index's tier). It's
+a testing setting, not a way to ship: like the file itself, anything running as
+you could set it, so it rests on review the same way the file does.
+
 ### What installing checks
 
 In this order, and each step refuses before the next one runs:
@@ -386,6 +466,51 @@ In this order, and each step refuses before the next one runs:
    symlink or special file are all refused
 5. the unpacked `manifest.json` is validated with the same parser the runtime
    uses, before anything is moved into place
+
+## Where it appears
+
+```json
+{ "surfaces": ["settings"] }
+```
+
+Every installed extension is listed under **Settings → Extensions**, one row
+each: its name, its `description` (keep it to one line, it's all the row has
+room for), and a short status on the right. A pending update says "Update x.y";
+otherwise a service says what it's doing (Running, Starting, Broken, Stopped,
+or Present / Away for the one holding `presence`), and a view says "Tab ⌘N"
+when it has a tab. Below the list, **Browse extensions** opens the catalogue,
+where an extension above the `view` tier asks before it installs.
+
+`→` or `⏎` on a row opens the extension's own page, and `←` goes back to the
+list. Top to bottom it shows:
+
+- a one-line status from your latest document (the header badge, then the
+  first row's title and value), as a readout, not a row;
+- one row per config key, as its [type](#typed-keys) draws it. The keys are
+  every Settings page's: `Space` or `⏎` flips a toggle, starts and settles a
+  picker, or turns a text row into a field; `←` / `→` step a picker only once
+  it's started;
+- the app's own **Lock screen when away** row, on the page of whichever
+  extension holds `presence`. Should the holder have no page (it failed to
+  load, say), the row sits on the Extensions list instead, so the toggle
+  exists whenever something can lock the screen;
+- read-only lines saying what it was **allowed** (its granted capabilities, in
+  plain words: "Bluetooth", "Tell StackNudge you're away") and where else it
+  **appears** ("Tab ⌘3", or "this page only");
+- **Update to x.y**, only when there is one, and **Remove**. Remove takes `⌘⌫`
+  (not `⏎`, since it has no confirmation), which also removes from the
+  extension's row on the list; nowhere else binds it.
+
+So `surfaces` only decides about the tab. `["tab"]`, the default, gives one as
+described above; `["settings"]` means no tab, no `⌘1`…`⌘9` slot and no widget
+chip, just the page, which suits something you set and forget; `["tab",
+"settings"]` is the same as `["tab"]` today. A view extension without a tab is
+fetched when its page is opened, since there is no tab whose opening would do
+that.
+
+Any tier may use it, since it grants nothing. It's a manifest field, so older
+hosts ignore it and show a tab, which still works. An unknown surface, or an
+empty list, is refused.
 
 ## Trust
 

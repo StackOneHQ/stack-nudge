@@ -130,6 +130,7 @@ user saves the extension's settings, so apply each one as it comes. Events are d
 {"type": "signal", "name": "presence", "value": "away"}
 {"type": "feed", "event": { "title": "Left the desk", "tag": "away", "severity": "info" }}
 {"type": "pong", "id": 17}
+{"type": "choices", "key": "STACKNUDGE_EXT_AWAY_PHONE", "options": [{"value": "Pixel", "label": "Pixel · −70 dBm"}]}
 ```
 
 - `document` replaces the tab's document, with the same schema and caps as a view
@@ -139,6 +140,11 @@ user saves the extension's settings, so apply each one as it comes. Events are d
   `"source":"script"` events (#235), so it can never be a permission prompt. It
   gets its own source, `extension:<id>`, with its own cap of 20, so an extension
   can't push the user's own script events out of the queue.
+- `choices` offers the values a `dynamic` config key may take right now, for its
+  Settings picker (see [Where an extension appears](#where-an-extension-appears)).
+  Kept only for a key the manifest declared as `dynamic`; at most 64 options,
+  each storable in the config file. Additive: no protocol bump, since unknown
+  types are already ignored.
 
 Limits: a `document` line up to 8 MB, any other line up to 64 KB, and at most 20
 messages a second on average. Past
@@ -217,6 +223,18 @@ The prototype's pieces map onto this design like this:
 | Settings → Away rows (phone, wait, lock) | phone and wait as config keys | "Lock screen when away" as an app setting on the `presence` signal |
 | `nav.isAway` | | set from the signal |
 
+**In the host** (this PR), the app's half is built: it reacts to `presence` with
+`ScreenLock` and `nav.isAway`, and its one setting, **Lock screen when away**
+(`STACKNUDGE_AWAY_LOCK`, default on), is drawn on the page of whichever
+extension holds presence (or on the Extensions list, should the holder have no
+page). Saving an extension's settings sends a running service a `config`
+message instead of restarting it. Tiers come from the index as described above:
+`extensions/tiers.json` in the repository, folded into each index entry as
+`"tier"`, recorded at install and re-checked whenever the catalogue loads, with
+`STACKNUDGE_EXTENSIONS_LOCAL_TIERS=true` to turn the re-check off when testing
+an extension no index lists yet. The Away extension itself is the pilot, in the
+stacked PR.
+
 **The open problem is the language.** The extension needs CoreBluetooth, which
 means a small compiled Swift binary (or Python with PyObjC, which we don't
 bundle). The view extensions so far are scripts. A compiled `run` is already
@@ -258,7 +276,8 @@ keys, and the README key tables updated in the same change.
 
 ## Where an extension appears
 
-A follow-up, not part of this PR. Today every extension gets a tab. That suits
+**Built** in this PR; Away, the pilot in the stacked PR, is its first user.
+Before it, every extension got a tab. That suits
 one you look at, but Away is set and forget, and a tab would take one of the
 nine `⌘1`…`⌘9` slots for a page nobody opens. So the author chooses, with a
 manifest field:
@@ -267,14 +286,28 @@ manifest field:
 { "surfaces": ["settings"] }
 ```
 
-- `["tab"]` is the default and today's behaviour. `["settings"]` replaces the
-  tab with a Settings sidebar item, and `["tab", "settings"]` gives both.
+- `["tab"]` is the default and today's behaviour. `["settings"]` means no tab.
+  As built, the page isn't a sidebar item: every installed extension has one,
+  a level below **Settings → Extensions**, whose list shows each extension's
+  description and status.
 - **The Settings page** shows the extension's config as typed controls: a
   number with a range, a toggle, a fixed set of choices, or choices the running
   service supplies (Away offering the paired phones nearby). Under them, a
   read-only status taken from its document.
 - It follows AGENTS.md like the built-in Settings categories: the same keys,
   footers and pure key-routing function.
+- As built: the Extensions list opens each page with `→` / `⏎`, `←` goes back,
+  and the page holds the status, the settings, the app's lock row for the
+  presence holder, what it was allowed in plain words, where it appears, and
+  Update and Remove (`⌘⌫`). It replaced the old per-extension config page. The
+  browser asks before installing anything above `view`. Config keys gain an
+  optional `type` (`text`, `toggle`,
+  `choice`, `number` with an optional `unit: "seconds"`, `dynamic`), checked at
+  parse time and again on save. The status is a readout above the rows rather
+  than a selectable row, like About's version. A picker writes only when it
+  settles, so a service hears one `config` per change. The page of whichever
+  extension holds `presence` also carries the app's own "Lock screen when away"
+  row. docs/extensions.md has the details.
 - **Any tier** may use it, since it grants nothing.
 - **Older hosts** ignore the unknown field and show a tab, which still works.
 
