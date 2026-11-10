@@ -61,7 +61,8 @@ it does not silently produce a missing tab.
 > long-running process the host supervises and talks to over stdin and stdout,
 > instead of a one-shot script. What it may be granted depends on its
 > [tier](#tiers), and the protocol is in
-> [docs/design/service-extensions.md](design/service-extensions.md). A view
+> [docs/design/service-extensions.md](design/service-extensions.md). `away` is
+> the reference: see [Away](#away-the-reference-service-extension). A view
 > extension can ignore all of this and keep saying `"schema": 1`.
 
 ## Configuration
@@ -522,6 +523,45 @@ that.
 Any tier may use it, since it grants nothing. It's a manifest field, so older
 hosts ignore it and show a tab, which still works. An unknown surface, or an
 empty list, is refused.
+
+## Away, the reference service extension
+
+`extensions/away` notices when you walk away from the Mac with your phone, and
+sets the app's `presence` signal. It is the one to read when writing a service:
+
+- **`manifest.json`** asks for `bluetooth` and `signal:presence`, both
+  `trusted`, appears in Settings rather than as a tab (`"surfaces":
+  ["settings"]`), and declares three typed config keys: the phone (`dynamic`,
+  offered from the paired devices it hears), how long the Mac must be idle and
+  how long the phone must be silent (both `number`, in seconds).
+- **`run`** is a launcher. It builds `away.swift` with `swiftc -O` into `.build/`
+  inside the extension's own directory when the binary is missing or older than
+  the source, then `exec`s it. If `swiftc` is missing it says why on stderr and
+  exits non-zero, so the host marks it broken instead of waiting on a process
+  that will never answer.
+- **`away.swift`** is the whole program, in one file. It answers `hello` with
+  `ready`, `ping` with `pong`, re-reads `config`, exits on `stop` or when stdin
+  closes, and skips types it doesn't know. stdin is read on a background thread
+  and handled on main, where CoreBluetooth runs. stdout carries protocol lines
+  and nothing else.
+- **It sets a signal only when it changes**, and sends a `document` (which
+  becomes its page's status line) and the phone `choices` at most
+  every 2 s, only when what they say has changed.
+- **It never acts on its own conclusion.** It says "away"; the app decides
+  whether to lock the screen (the "Lock screen when away" row the app adds to
+  the page of whichever extension holds presence), so turning that off is an app
+  setting and a crashed extension, reset to `present`, can't leave anything
+  locked.
+- **`test_away.py`** builds it, runs `away --self-test` (recorded advertisement
+  timings replayed through the rule) and checks the line protocol without
+  starting a scan. The Swift parts are skipped off macOS.
+
+Why it compiles on first run rather than shipping a binary: nothing opaque goes
+into the repository or the release, and what the reviewer reads is what runs.
+The Command Line Tools that provide `swiftc` are already on any Mac that runs a
+coding agent, since `git` needs them, and `requires: ["swiftc"]` checks for them
+at install. The cost is a couple of seconds on the first start after an install
+or update, well inside the 10 s the host allows for `ready`.
 
 ## Trust
 

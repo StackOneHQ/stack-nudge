@@ -1,7 +1,7 @@
 # Service extensions
 
 Status: the host side **shipped in #243**: manifest schema 2, service mode,
-tiers, signals and Settings pages. The pilot extension, Away, is in review in #245. Parts
+tiers, signals and Settings pages. The pilot extension, Away, ships in #245. Parts
 still to build are marked *not yet delivered* below. The reference prototype was
 the `feat/away-proximity` branch, a built-in version of the first service
 extension.
@@ -229,25 +229,71 @@ The prototype's pieces map onto this design like this:
 | Settings → Away rows (phone, wait, lock) | phone and wait as config keys | "Lock screen when away" as an app setting on the `presence` signal |
 | `nav.isAway` | | set from the signal |
 
-**In the host** (this PR), the app's half is built: it reacts to `presence` with
-`ScreenLock` and `nav.isAway`, and its one setting, **Lock screen when away**
-(`STACKNUDGE_AWAY_LOCK`, default on), is drawn on the page of whichever
-extension holds presence (or on the Extensions list, should the holder have no
-page). Saving an extension's settings sends a running service a `config`
-message instead of restarting it. Tiers come from the index as described above:
-`extensions/tiers.json` in the repository, folded into each index entry as
-`"tier"`, recorded at install and re-checked whenever the catalogue loads, with
-`STACKNUDGE_EXTENSIONS_LOCAL_TIERS=true` to turn the re-check off when testing
-an extension no index lists yet. The Away extension itself is the pilot, in the
-stacked PR.
+**What was built** (migration step 2), and where it differs from the table:
 
-**The open problem is the language.** The extension needs CoreBluetooth, which
-means a small compiled Swift binary (or Python with PyObjC, which we don't
-bundle). The view extensions so far are scripts. A compiled `run` is already
-allowed ("anything that can print JSON"), but it changes what the reviewer reads
-and what CI builds. Proposal: the source lives in the extension's directory, CI
-builds and signs the binary into the release tarball, and the reviewer reads the
-source.
+- `extensions/away` is the whole extension: `manifest.json` (schema 2, mode
+  `service`, `bluetooth` and `signal:presence`), a bash `run` launcher, and
+  `away.swift`, one file a reviewer can read top to bottom.
+- The rule is the prototype's `PresenceTracker`, with the silence now its own
+  setting: away once the Mac has been idle for the configured wait **and** the
+  phone hasn't advertised for the configured silence; back on input or an
+  advertisement at -80 dBm or stronger; once away, `lastSeen` is forgotten, so
+  a phone gone for good locks once. `away --self-test` replays the desk
+  recording (adverts at 0, 6, 12, 15 s, then 81 to 146 s, then 221 and 225 s,
+  with gaps of 66 and 75 s) and checks it never counts as away with a 10 s wait
+  and the shortest silence allowed, 90 s.
+- A sleep forgets `lastSeen` too, as Bluetooth going off does, so silence while
+  the Mac slept never counts as the phone having gone. It's noticed from the
+  clock jumping more than 10 s between one-second ticks, and from NSWorkspace's
+  sleep and wake notifications where they reach the process.
+- It reads idle time itself with `CGEventSource`, which needs no TCC grant,
+  rather than subscribing to `event:idle`, so it needs nothing below `trusted`
+  that it doesn't already have.
+- The phone is configured by **name** (`STACKNUDGE_EXT_AWAY_PHONE`), not by
+  CoreBluetooth identifier as in the prototype: a config field is text the user
+  types, and the identifier isn't something anyone can read off their phone.
+  Names compare loosely (curly apostrophes made straight, space trimmed, case
+  ignored), and the name has to be among the Mac's paired devices. The paired
+  device advertising that name becomes the target, and the extension sticks to
+  its identifier. If two identifiers with the name have both been heard within
+  the silence window, it binds to neither and never goes away until one has
+  been silent for the window; a bound one silent for the window while exactly
+  one other with the name is heard is replaced by it. Its tab lists the paired
+  devices nearby, so the name can be copied from there, and the phone's row
+  reads as a signal ("−75 dBm · 3 s ago", "not heard for 4 min"), not a
+  connection.
+- The wait is `STACKNUDGE_EXT_AWAY_IDLE`, in seconds, 30 when unset, clamped to
+  10 to 120. The silence is `STACKNUDGE_EXT_AWAY_SILENCE`, 120 when unset,
+  clamped to 90 to 600, above the 75 s an idle phone was measured going quiet.
+- Away has no tab (`"surfaces": ["settings"]`, see [Where an extension
+  appears](#where-an-extension-appears)); its page is Settings → Extensions →
+  Away. It has
+  a status line, the Phone picker (offered by the service as `choices`), and
+  Idle for and Phone silent for as number pickers.
+- The app keeps `ScreenLock`, `nav.isAway` and one setting, **Lock screen when
+  away** (`STACKNUDGE_AWAY_LOCK`, default on), drawn as the last row on the
+  page of whichever extension holds presence and labelled there as the app's. The prototype's built-in scan and its Phone and Idle rows are gone
+  from the app.
+- Saving the extension's settings sends the running process a `config` message
+  instead of restarting it, so it keeps what it has heard.
+- Tiers come from the index as described above: `extensions/tiers.json` in the
+  repository, folded into each index entry as `"tier"`, recorded at install and
+  re-checked whenever the catalogue loads (the first Settings open in each
+  launch, or a reload in the browser). `STACKNUDGE_EXTENSIONS_LOCAL_TIERS=true`
+  turns the re-check off, for testing an extension no index lists yet.
+
+**The language.** The extension needs CoreBluetooth, which means Swift (or
+Python with PyObjC, which we don't bundle). The proposal was for CI to build and
+sign the binary into the release tarball. What the pilot does instead is
+compile on the user's Mac: `run` builds `away.swift` with `swiftc -O` into
+`.build/` inside the extension's own directory, when the binary is missing or
+older than the source, and then `exec`s it. No binary is in the repository or
+the release, the package is plain text a reviewer reads in full, and nothing
+needs signing. The Command Line Tools that provide `swiftc` are on any Mac that
+runs a coding agent, because `git` needs them, and the manifest's `requires`
+checks for them at install. The first start after an install or update takes
+about two seconds longer, inside the 10 s handshake. See "Compiled extensions"
+under Open questions for what this leaves open.
 
 ## Migration
 
@@ -282,8 +328,8 @@ keys, and the README key tables updated in the same change.
 
 ## Where an extension appears
 
-**Built** in this PR; Away, the pilot in the stacked PR, is its first user.
-Before it, every extension got a tab. That suits
+**Built** on `feat/away-service-extension`, with Away as its first user. Before
+it, every extension got a tab. That suits
 one you look at, but Away is set and forget, and a tab would take one of the
 nine `⌘1`…`⌘9` slots for a page nobody opens. So the author chooses, with a
 manifest field:
@@ -329,7 +375,15 @@ manifest field:
   energy note in Settings, or a host-wide "pause service extensions on battery"?
 - **Two repos.** An internal StackOne repo and a public one: is the tier
   per-repo (internal = trusted) or per-extension within each index?
-- **Compiled extensions.** See the pilot. Swift is fine for first-party, but do
-  we allow compiled binaries from the public repo at all?
+- **Compiled extensions.** Away compiles itself on first run rather than
+  shipping a binary (see the pilot). That keeps every package reviewable as
+  source and needs no signing, but it costs: a user without the Command Line
+  Tools can't run it (install refuses with a reason, and `run` exits with one);
+  the build is redone when the source changes, not when the toolchain does; the first
+  start is a couple of seconds slower; and `.build/` holds an unsigned binary
+  the extension wrote for itself, which is no worse than a script but is not
+  something Gatekeeper has seen. CI building and signing the binary into the
+  release is still the alternative. Either way, do we allow compiled
+  extensions from the public repo at all?
 - **Prompt and tool text.** Is `event:nudge` too much to hand any extension, even
   a trusted one, or should voice stay in core?
