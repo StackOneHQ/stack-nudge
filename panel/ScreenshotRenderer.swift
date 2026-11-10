@@ -24,8 +24,13 @@ enum ScreenshotRenderer {
         let args = CommandLine.arguments
         guard let i = args.firstIndex(of: flag) else { return }
         let directory = i + 1 < args.count ? args[i + 1] : FileManager.default.currentDirectoryPath
-        // Both sets unless one is named.
+        // Both sets unless one is named. A name that matches neither is a
+        // typo, not an empty set.
         let set = i + 2 < args.count ? args[i + 2] : nil
+        if let set, !scenarios.contains(where: { $0.set == set }) {
+            FileHandle.standardError.write(Data("render-screenshots: unknown set \(set); use readme or extensions\n".utf8))
+            exit(2)
+        }
         NSApplication.shared.setActivationPolicy(.prohibited)
         do {
             try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
@@ -34,11 +39,14 @@ enum ScreenshotRenderer {
                 try render(scenario, to: path)
                 print(path)
             }
-            exit(0)
         } catch {
             FileHandle.standardError.write(Data("render-screenshots: \(error)\n".utf8))
+            // exit() skips defer, so the fixtures' scratch files go by hand.
+            try? FileManager.default.removeItem(at: scratchRoot)
             exit(1)
         }
+        try? FileManager.default.removeItem(at: scratchRoot)
+        exit(0)
     }
 
     // MARK: - Scenarios
@@ -232,6 +240,11 @@ enum ScreenshotRenderer {
 
     // MARK: - README
 
+    // One directory for every fixture's ledger and session names, removed when
+    // the run ends.
+    private static let scratchRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("stack-nudge-screenshots-\(UUID().uuidString)", isDirectory: true)
+
     // The whole panel, tab strip and all, at its default 600 x 320.
     private static let panelHeight: CGFloat = 320
 
@@ -280,8 +293,8 @@ enum ScreenshotRenderer {
         let scratch: URL
 
         init(mode: PanelMode) {
-            scratch = FileManager.default.temporaryDirectory
-                .appendingPathComponent("stack-nudge-screenshots-\(UUID().uuidString)", isDirectory: true)
+            scratch = ScreenshotRenderer.scratchRoot
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
             try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
             persistence = SessionPersistence(path: scratch.appendingPathComponent("sessions.json"))
             sessions = SessionStore(persistence: persistence)

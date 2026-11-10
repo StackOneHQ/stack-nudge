@@ -57,7 +57,7 @@ Open the panel (`⌘⌥N`), go to **Settings → Actions → Uninstall StackNudg
 - `~/.stack-nudge/` (config, `notify.sh`, phrases, history)
 - Moves `StackNudge.app` to Trash and quits
 
-Two things stay behind: the cached Kokoro voice model in `~/.cache/huggingface/`, and the GitHub and Slack tokens in your Keychain (items `stack-nudge-github` and `stack-nudge-slack`), which you can delete in Keychain Access.
+Three things stay behind: the cached Kokoro voice model in `~/.cache/huggingface/`; the GitHub and Slack tokens in your Keychain (items `stack-nudge-github` and `stack-nudge-slack`), which you can delete in Keychain Access; and, if you use pi, its extension at `~/.pi/agent/extensions/stack-nudge.ts`, which `./uninstall.sh` removes.
 
 ### Linux / Windows / fallback
 

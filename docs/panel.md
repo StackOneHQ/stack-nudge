@@ -49,7 +49,7 @@ History is deliberately a separate pane rather than more rows in the queue. The 
 
 Live list of running agent processes (`claude`, `gemini`, `codex`, `agy`, `pi` — including node-hosted variants like `gemini-cli`). Polls every 3 seconds while visible and every 10 seconds in the background for the compact widget. Sessions that exit linger for 30s with `ended Ns ago`.
 
-**Stalled sessions.** An agent that reports itself busy but has produced nothing for a while is usually a wedged tool call. Set `Settings → Flag stalled after` (`STACKNUDGE_STALLED_MIN`, one of 10 / 20 / 30 / 60 minutes, default `Off`) and those rows turn amber and read `stalled · no output 24m` instead of a `busy` that implies progress. Flagging only — no banner, since there's nothing to approve and a stall often clears itself.
+**Stalled sessions.** An agent that reports itself busy but has produced nothing for a while is usually a wedged tool call. Set `Settings → Notifications → Flag stalled after` (`STACKNUDGE_STALLED_MIN`, one of 10 / 20 / 30 / 60 minutes, default `Off`) and those rows turn amber and read `stalled · no output 24m` instead of a `busy` that implies progress. Flagging only — no banner, since there's nothing to approve and a stall often clears itself.
 
 For Claude Code sessions specifically, stack-nudge reads `~/.claude/sessions/<pid>.json` (Claude Code's per-process sidecar) to surface live data without waiting for a hook event:
 
@@ -72,7 +72,7 @@ VS Code and Cursor are the odd one out: what's shown there is the editor's windo
 
 By default a tab title is *shown* but never used as the session's **name**. It can't be trusted as one: on iTerm2 a manual rename, an OSC escape and the profile name all write the same value, tmux's `#{pane_title}` is the same OSC signal, and Claude Code rewrites the title every turn — so there's no way to tell "the user chose this" from "the agent just overwrote it".
 
-If you do title your tabs deliberately and want those names back, turn on `Settings → Name from tab titles` (`STACKNUDGE_TAB_TITLE_NAMES`, default off). It applies everywhere a session is named — Sessions rows, the compact widget, event rows, banner titles and spoken nudges — and sits below the two signals that *are* deliberate: a rename in the Sessions pane (`n`) and a name set inside the agent both still win. It only ever replaces the fallback to the project folder, and it never applies to VS Code / Cursor sessions, per the table above. A leading spinner glyph is trimmed, since Claude Code cycles one into the title frame by frame (`✳ Fixing the parser`) and it would otherwise churn the name and be read aloud as *"eight spoked asterisk"*.
+If you do title your tabs deliberately and want those names back, turn on `Settings → Panel → Name from tab titles` (`STACKNUDGE_TAB_TITLE_NAMES`, default off). It applies everywhere a session is named — Sessions rows, the compact widget, event rows, banner titles and spoken nudges — and sits below the two signals that *are* deliberate: a rename in the Sessions pane (`n`) and a name set inside the agent both still win. It only ever replaces the fallback to the project folder, and it never applies to VS Code / Cursor sessions, per the table above. A leading spinner glyph is trimmed, since Claude Code cycles one into the title frame by frame (`✳ Fixing the parser`) and it would otherwise churn the name and be read aloud as *"eight spoked asterisk"*.
 
 **Slack is the exception:** a DM only uses the tab title when `Include message text` (`STACKNUDGE_SLACK_DETAIL`) is also on, and falls back to the project name otherwise. That switch exists because a DM is the one path that leaves your machine, and a tab title is whatever the program in that pane wrote — oh-my-zsh, starship and most prompt frameworks put `user@host: /full/path` there via a `precmd` title hook. If you turned detail off deliberately, this doesn't route your paths out through a different door.
 
@@ -123,7 +123,7 @@ When any quota tier reaches your configured threshold, stack-nudge fires a banne
 
 ### Per-session context alerts
 
-Independent of quota: stack-nudge can also fire a banner when an individual Claude Code session's context window fills past a threshold you pick. The banner names the session — *"Context filling up — classifier-evolution-2 — at 175K tokens (opus-4-7). Consider /compact."* — so you know exactly which one to act on.
+Independent of quota: stack-nudge can also fire a banner when an individual Claude Code session's context window fills past a threshold you pick. The banner names the session — *"Context filling up — web-app — at 175K tokens (opus-4-7). Consider /compact."* — so you know exactly which one to act on.
 
 - **Context alert at** — `Off` / 100K / 150K / 175K / 200K / 300K / 500K / 750K (default Off)
 - Absolute tokens, not a percent — Claude 4.x context windows vary (Opus/Sonnet 1M, Haiku 200K, opt-in betas), and there's no reliable way to infer the limit from the model ID alone.

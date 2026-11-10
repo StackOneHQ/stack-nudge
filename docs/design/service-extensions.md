@@ -1,7 +1,7 @@
 # Service extensions
 
 Status: the host side **shipped in #243**: manifest schema 2, service mode,
-tiers, signals and Settings pages. The pilot extension, Away, is #245. Parts
+tiers, signals and Settings pages. The pilot extension, Away, is in review in #245. Parts
 still to build are marked *not yet delivered* below. The reference prototype was
 the `feat/away-proximity` branch, a built-in version of the first service
 extension.

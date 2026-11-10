@@ -131,10 +131,10 @@ When voice is enabled, the chime is suppressed automatically — voice replaces 
 
 ### Phrasing
 
-Voice messages are picked at random from per-event phrase pools and labelled with the project name (cwd basename, with hyphens/underscores split and a few acronyms expanded — `CLI` → `C L I`, `MCP` → `M C P`, etc.). For a project called `unified-cloud-api` you'll hear things like:
+Voice messages are picked at random from per-event phrase pools and labelled with the project name (cwd basename, with hyphens/underscores split and a few acronyms expanded — `CLI` → `C L I`, `MCP` → `M C P`, etc.). For a project called `checkout-service` you'll hear things like:
 
-- **Stop:** *"unified cloud api is ready for you"* / *"task complete in unified cloud api"* / *"output ready in unified cloud api"*
-- **Permission:** *"unified cloud api requires a decision"* / *"unified cloud api has a question for you"* / *"unified cloud api is awaiting approval"*
+- **Stop:** *"checkout service is ready for you"* / *"task complete in checkout service"* / *"output ready in checkout service"*
+- **Permission:** *"checkout service requires a decision"* / *"checkout service has a question for you"* / *"checkout service is awaiting approval"*
 
 Phrase pools live in `~/.stack-nudge/phrases/` — `en.sh`, `fr.sh`, `hi.sh`, `it.sh`, `pt.sh`. The right pool is picked from the configured voice's prefix (`af_*`/`am_*`/`bf_*`/`bm_*` → en, `ff_*` → fr, `hf_*`/`hm_*` → hi, `if_*`/`im_*` → it, `pf_*`/`pm_*` → pt) so a French voice speaks French phrasing.
 

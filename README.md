@@ -38,8 +38,8 @@ StackNudge is a macOS menu-bar app that tells you when an AI coding agent finish
 | Cursor | — (turn ends only) |
 | Gemini CLI | banner only † |
 | Antigravity CLI | banner only † |
-| pi | banner only † |
-| Any hooks-capable agent | point it at `notify.sh` ([manual setup](docs/setup.md#manual-setup)) |
+| pi | — (turn ends only) |
+| Any hooks-capable agent | banner only, once you point it at `notify.sh` ([manual setup](docs/setup.md#manual-setup)) |
 
 † These agents report a permission prompt but can't take an answer from outside, so you still click Allow / Deny in the agent's own terminal.
 
@@ -60,7 +60,7 @@ mv StackNudge.app ~/Applications/
 open ~/Applications/StackNudge.app
 ```
 
-On first launch a one-screen setup finds the agents you use, wires their hooks, starts StackNudge at login, and walks you through the macOS permissions it needs. Everything ships inside the app, voice engine included; new releases install themselves from Settings.
+On first launch a one-screen setup finds the agents you use (all of the above except pi, which `./install.sh` wires), wires their hooks, starts StackNudge at login, and walks you through the macOS permissions it needs. Everything ships inside the app, voice engine included; new releases install themselves from Settings.
 
 ### Linux / Windows, or from source
 
@@ -81,7 +81,7 @@ Press `⌘⌥N` from anywhere. `⌘1`…`⌘9` or `⌘←` / `⌘→` switch tab
 | **Events** | Finished turns and permission prompts, newest first. `⏎` approves or jumps to the agent, `S` snoozes, `M` mutes everything for a while, `H` opens the full history. |
 | **Sessions** | Every running agent: busy or idle, its terminal tab, and for Claude Code how full its context is. `⏎` focuses it, `N` renames, `M` mutes just that session. |
 | **Usage** | Claude, Codex, Antigravity and pi quota, with a warning when you're spending faster than the window resets, and alerts at a threshold you pick. |
-| **Outcomes** | How much of your agents' token spend ended up merged, by ticket and by agent. |
+| **Outcomes** | How much of your agents' token spend ended up shipped (pushed or merged), by ticket and by agent. |
 | **Settings** | Everything above, plus voice, the compact widget, Slack and extensions. `⌘,` opens it. |
 
 <p align="center">
@@ -89,7 +89,7 @@ Press `⌘⌥N` from anywhere. `⌘1`…`⌘9` or `⌘←` / `⌘→` switch tab
   <img src="assets/screenshots/outcomes.png" width="49%" alt="The Outcomes tab: share of token spend that shipped, and the top tickets" />
 </p>
 
-Prefer something smaller? Turn on **Settings → Appearance → Widget** for a pill that shows your quota, the reset countdown and your agents at a glance:
+When you're not using the panel it collapses to a pill showing your quota, the reset countdown and your agents at a glance. **Settings → Appearance → Widget** turns that off:
 
 <p align="center">
   <img src="assets/screenshots/widget.png" width="290" alt="The compact widget: a quota ring, the reset countdown and the busiest session" />
