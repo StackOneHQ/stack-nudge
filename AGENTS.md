@@ -56,7 +56,7 @@ Cancelling a field puts it back the way it was before you started and hands the 
 - `PageFooter` adds the `Esc` hint itself, as the rightmost hint, outside the shedding layout so a narrow panel never drops it. It reads "Cancel" while a text field has focus or a shortcut is being recorded, and "Hide" otherwise, from `PanelNav.escapeCancels`. Pages never list `Esc`.
 - Keep hints in place as the selection moves and dim the ones that don't apply (`opacity(0.35)`) instead of hiding them, so the footer doesn't reflow.
 - Name where a key goes, not the key's generic meaning: "Categories" for a `←` that goes back to them, "Overview" for one that goes back to the overview.
-- Update the key tables in `README.md` in the same change.
+- Update the key tables in `docs/panel.md` in the same change.
 
 ### Testing
 
