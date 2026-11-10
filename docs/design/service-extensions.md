@@ -255,6 +255,28 @@ The new surfaces follow AGENTS.md's keyboard rules like any other page:
 That means key routing in a pure, tested function, footers that list only live
 keys, and the README key tables updated in the same change.
 
+## Where an extension appears
+
+A follow-up, not part of this PR. Today every extension gets a tab. That suits
+one you look at, but Away is set and forget, and a tab would take one of the
+nine `⌘1`…`⌘9` slots for a page nobody opens. So the author chooses, with a
+manifest field:
+
+```json
+{ "surfaces": ["settings"] }
+```
+
+- `["tab"]` is the default and today's behaviour. `["settings"]` replaces the
+  tab with a Settings sidebar item, and `["tab", "settings"]` gives both.
+- **The Settings page** shows the extension's config as typed controls: a
+  number with a range, a toggle, a fixed set of choices, or choices the running
+  service supplies (Away offering the paired phones nearby). Under them, a
+  read-only status taken from its document.
+- It follows AGENTS.md like the built-in Settings categories: the same keys,
+  footers and pure key-routing function.
+- **Any tier** may use it, since it grants nothing.
+- **Older hosts** ignore the unknown field and show a tab, which still works.
+
 ## Open questions
 
 - **Signing the index.** Today the index is trusted because it's attached to the
