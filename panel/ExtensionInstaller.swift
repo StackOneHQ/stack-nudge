@@ -31,6 +31,14 @@ enum ExtensionInstaller {
         // made a strictly additive manifest change into a breaking index
         // change, for no gain.
         let config: [String]
+        // The tier the reviewers gave it (extensions/tiers.json), as a name.
+        // Optional, because indexes before tiers don't carry it, and a String
+        // rather than an ExtensionTier so a tier this host doesn't know
+        // degrades to `view` instead of failing the whole entry. Recorded at
+        // install; see ExtensionTiers.
+        var tier: String? = nil
+
+        var reviewedTier: ExtensionTier { tier.flatMap(ExtensionTier.init(rawValue:)) ?? .view }
     }
 
     enum Failure: Error, Equatable {

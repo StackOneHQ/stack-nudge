@@ -84,4 +84,94 @@ final class ExtensionTierTests: XCTestCase {
         XCTAssertFalse(ExtensionManifest.isValidID(".tiers.json"))
         XCTAssertTrue(ExtensionTiers.path.hasSuffix("/extensions/.tiers.json"))
     }
+
+    // MARK: - Recording from the index
+
+    private func entry(_ id: String, tier: String?) -> ExtensionInstaller.IndexEntry {
+        ExtensionInstaller.IndexEntry(id: id, name: id, version: "1", description: "",
+                                      asset: "extension-\(id)-1.tar.gz", sha256: "ab",
+                                      requires: [], config: [], tier: tier)
+    }
+
+    func testTheIndexTierReadsAsViewWhenMissingOrUnknown() {
+        XCTAssertEqual(entry("away", tier: "trusted").reviewedTier, .trusted)
+        XCTAssertEqual(entry("away", tier: nil).reviewedTier, .view)
+        XCTAssertEqual(entry("away", tier: "root").reviewedTier, .view)
+    }
+
+    // Installing takes the index's word, up or down: it's the package that
+    // was reviewed for that tier.
+    func testInstallingRecordsTheIndexTier() {
+        XCTAssertEqual(ExtensionTiers.recording(entry("away", tier: "trusted"), in: [:]),
+                       ["away": .trusted])
+        XCTAssertEqual(ExtensionTiers.recording(entry("away", tier: "service"),
+                                                in: ["away": .trusted, "derby": .view]),
+                       ["away": .service, "derby": .view])
+    }
+
+    func testAFetchDemotesToWhatTheIndexNowSays() {
+        let recorded: [String: ExtensionTier] = ["away": .trusted, "radar": .service]
+        XCTAssertEqual(ExtensionTiers.reconciling(recorded, with: [entry("away", tier: "service"),
+                                                                   entry("radar", tier: "service")]),
+                       ["away": .service, "radar": .service])
+    }
+
+    // No promotion without an install: the copy on disk may be older than
+    // the version the index now vouches for.
+    func testAFetchNeverPromotes() {
+        XCTAssertEqual(ExtensionTiers.reconciling(["away": .view],
+                                                  with: [entry("away", tier: "trusted")]),
+                       ["away": .view])
+    }
+
+    // Dropped from the index, or listed without a tier this host knows:
+    // `view`, the same as an extension nobody installed from it.
+    func testAnExtensionTheIndexNoLongerVouchesForIsView() {
+        XCTAssertEqual(ExtensionTiers.reconciling(["away": .trusted, "radar": .service],
+                                                  with: [entry("radar", tier: "superuser")]),
+                       ["away": .view, "radar": .view])
+        XCTAssertEqual(ExtensionTiers.reconciling(["away": .trusted], with: []), ["away": .view])
+    }
+
+    func testTheRecordRoundTripsThroughTheFile() throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tiers-\(UUID().uuidString)/.tiers.json").path
+        addTeardownBlock {
+            try? FileManager.default.removeItem(atPath: (path as NSString).deletingLastPathComponent)
+        }
+        ExtensionTiers.record(entry("away", tier: "trusted"), path: path)
+        ExtensionTiers.record(entry("derby", tier: nil), path: path)
+        XCTAssertEqual(ExtensionTiers.read(path: path), ["away": .trusted, "derby": .view])
+
+        XCTAssertFalse(ExtensionTiers.reconcile(with: [entry("away", tier: "trusted"),
+                                                       entry("derby", tier: "view")],
+                                                path: path, config: [:]),
+                       "nothing changed, so nothing needs restarting")
+        XCTAssertTrue(ExtensionTiers.reconcile(with: [entry("away", tier: "service")],
+                                               path: path, config: [:]))
+        XCTAssertEqual(ExtensionTiers.read(path: path), ["away": .service, "derby": .view])
+
+        ExtensionTiers.forget("away", path: path)
+        XCTAssertEqual(ExtensionTiers.read(path: path), ["derby": .view])
+    }
+
+    // The developer setting: the file is authoritative, so a tier written by
+    // hand for an extension no index lists survives every fetch.
+    func testLocalTiersStopTheIndexFromReCheckingTheFile() throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tiers-\(UUID().uuidString).json").path
+        addTeardownBlock { try? FileManager.default.removeItem(atPath: path) }
+        ExtensionTiers.write(["away": .trusted], path: path)
+
+        let local = ["STACKNUDGE_EXTENSIONS_LOCAL_TIERS": "true"]
+        XCTAssertFalse(ExtensionTiers.indexReconciles(config: local))
+        XCTAssertFalse(ExtensionTiers.reconcile(with: [], path: path, config: local))
+        XCTAssertEqual(ExtensionTiers.read(path: path), ["away": .trusted])
+
+        // Unset, or anything but true, is the normal rule.
+        XCTAssertTrue(ExtensionTiers.indexReconciles(config: [:]))
+        XCTAssertTrue(ExtensionTiers.indexReconciles(config: ["STACKNUDGE_EXTENSIONS_LOCAL_TIERS": "false"]))
+        XCTAssertTrue(ExtensionTiers.reconcile(with: [], path: path, config: [:]))
+        XCTAssertEqual(ExtensionTiers.read(path: path), ["away": .view])
+    }
 }

@@ -19,6 +19,12 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ext_root="$repo_root/extensions"
+# Which tier each extension is reviewed for: view, service or trusted. Owned by
+# the reviewers rather than by the extensions, so a manifest can't promote
+# itself; the index carries it to the host, which records it at install. An
+# extension missing from it is `view`. See docs/design/service-extensions.md,
+# "Privilege tiers".
+tiers_file="$ext_root/tiers.json"
 
 mode="${1:-validate}"
 outdir="${2:-$repo_root/dist/extensions}"
@@ -162,6 +168,82 @@ else:
   [[ -z "$bad_capability" ]] \
     || fail "$id: unknown capability '$bad_capability'" || rc=1
 
+  # Mirrors ExtensionManifest's surfaces and ConfigKind.read: where it appears,
+  # and what each typed config key may hold. The host refuses a manifest that
+  # gets either wrong, so CI does too.
+  local shape_problem
+  shape_problem="$(python3 -c '
+import json, sys
+m = json.load(open(sys.argv[1]))
+def say(msg):
+    print(msg); sys.exit()
+surfaces = m.get("surfaces", ["tab"])
+if not isinstance(surfaces, list) or not surfaces:
+    say("surfaces must be a non-empty list of \"tab\" and \"settings\"")
+for s in surfaces:
+    if s not in ("tab", "settings"):
+        say("unknown surface %r" % (s,))
+def storable(v):
+    return isinstance(v, str) and v != "" and len(v) <= 256 and v == v.strip() \
+        and not any(ord(c) < 32 or ord(c) == 127 for c in v)
+for entry in m.get("config", []):
+    if not isinstance(entry, dict):
+        continue
+    key, kind = entry.get("key"), entry.get("type", "text")
+    opts = entry.get("options")
+    if kind in ("text", "toggle", "dynamic"):
+        if opts is not None:
+            say("config key %s is type %s, which takes no options" % (key, kind))
+    elif kind == "choice":
+        if not isinstance(opts, list) or not opts or len(opts) > 64:
+            say("config key %s is a choice and needs 1 to 64 {value, label} options" % key)
+        values = [o.get("value") if isinstance(o, dict) else None for o in opts]
+        if len(set(map(str, values))) != len(values):
+            say("config key %s lists the same option twice" % key)
+        for o in opts:
+            if not storable(o.get("value")) or not isinstance(o.get("label"), str) or not o["label"]:
+                say("config key %s has an option that cannot be stored or shown" % key)
+    elif kind == "number":
+        if not isinstance(opts, list) or not opts or len(opts) > 64 \
+                or not all(isinstance(n, int) and not isinstance(n, bool) for n in opts):
+            say("config key %s is a number and needs 1 to 64 whole-number options" % key)
+        if len(set(opts)) != len(opts):
+            say("config key %s lists the same number twice" % key)
+        if entry.get("unit") not in (None, "seconds"):
+            say("config key %s has unknown unit %r" % (key, entry.get("unit")))
+    else:
+        say("config key %s has unknown type %r" % (key, kind))
+' "$manifest")"
+  [[ -z "$shape_problem" ]] || fail "$id: $shape_problem" || rc=1
+
+  # Mirrors ExtensionTier.allows. An extension asking for more than its tier
+  # grants would install and then run without it (or, in service mode below
+  # the service tier, not run at all), so the mismatch is a CI failure rather
+  # than something a user finds out.
+  local tier_problem
+  tier_problem="$(python3 -c '
+import json, sys
+manifest = json.load(open(sys.argv[1]))
+try:
+    tiers = json.load(open(sys.argv[2]))
+except FileNotFoundError:
+    tiers = {}
+tier = tiers.get(sys.argv[3], "view") if isinstance(tiers, dict) else "view"
+rank = {"view": 0, "service": 1, "trusted": 2}
+needs = {"event:idle": 1, "event:panel": 1, "feed": 1,
+         "signal:presence": 2, "event:session": 2, "event:nudge": 2, "bluetooth": 2}
+have = rank.get(tier, 0)
+if manifest.get("mode") == "service" and have < 1:
+    print("mode \"service\" needs the service tier; tiers.json gives it %s" % tier)
+else:
+    caps = manifest.get("capabilities", [])
+    for c in caps if isinstance(caps, list) else []:
+        if needs.get(c, 0) > have:
+            print("asks for %s, which tier %s does not grant" % (c, tier))
+            break
+' "$manifest" "$tiers_file" "$id")"
+  [[ -z "$tier_problem" ]] || fail "$id: $tier_problem" || rc=1
+
   # Constrained like the id is. It becomes part of an asset filename and is
   # interpolated into shell, so "non-empty" was never a sufficient check.
   version="$(manifest_field "$manifest" version)"
@@ -218,8 +300,13 @@ package_one() {
   # machine-specific .pyc files to every user, and made the tarball's bytes
   # depend on whether the person building it had run the tests — which is not a
   # thing a checksummed artefact may depend on.
+  #
+  # .build is excluded for the same reason: an extension that compiles itself
+  # on first run (away) keeps its build there, and a binary from whoever ran
+  # it last has no place in a package whose point is that the source is what
+  # runs.
   tar czf "$outdir/$asset" \
-    --exclude '__pycache__' --exclude '*.pyc' --exclude '.DS_Store' \
+    --exclude '__pycache__' --exclude '*.pyc' --exclude '.DS_Store' --exclude '.build' \
     -C "$ext_root" -- "$id"
   # Run from $outdir with a bare basename, shasum already prints exactly
   # "<hash>  <basename>" — so there is nothing for awk to do, and no program
@@ -227,6 +314,34 @@ package_one() {
   # arbitrary code execution in a job holding contents: write.
   ( cd "$outdir" && shasum -a 256 "$asset" > "$asset.sha256" )
   echo "  → $asset"
+}
+
+# tiers.json is optional, but if it's there it has to say something the host
+# can read: an object of extension ids to a known tier, naming only extensions
+# that exist. A typo'd id would otherwise leave its extension at `view` with
+# nothing to say why.
+validate_tiers() {
+  [[ -f "$tiers_file" ]] || return 0
+  local problem
+  problem="$(python3 -c '
+import json, os, sys
+path, root = sys.argv[1], sys.argv[2]
+try:
+    tiers = json.load(open(path))
+except ValueError:
+    print("is not valid JSON"); sys.exit()
+if not isinstance(tiers, dict):
+    print("is not an object"); sys.exit()
+for ext_id, tier in sorted(tiers.items()):
+    if tier not in ("view", "service", "trusted"):
+        print("gives %s the unknown tier %r" % (ext_id, tier)); break
+    if not os.path.isdir(os.path.join(root, ext_id)):
+        print("names %s, which is not an extension here" % ext_id); break
+' "$tiers_file" "$ext_root")"
+  if [[ -n "$problem" ]]; then
+    fail "tiers.json $problem"
+    return 1
+  fi
 }
 
 extension_dirs() {
@@ -274,11 +389,13 @@ main() {
   case "$mode" in
     validate)
       echo "validating ${#dirs[@]} extension(s)"
+      validate_tiers || rc=1
       for dir in ${dirs[@]+"${dirs[@]}"}; do
         validate_one "$dir" || rc=1
       done
       ;;
     package)
+      validate_tiers || rc=1
       for dir in ${dirs[@]+"${dirs[@]}"}; do
         validate_one "$dir" || rc=1
       done
@@ -304,10 +421,15 @@ main() {
 # The index is what the app fetches to know what is installable. Written by
 # python3 so the JSON is actually encoded rather than string-concatenated.
 write_index() {
-  python3 - "$outdir" "$@" <<'PY'
+  python3 - "$outdir" "$tiers_file" "$@" <<'PY'
 import hashlib, json, os, sys
 
-outdir, dirs = sys.argv[1], sys.argv[2:]
+outdir, tiers_file, dirs = sys.argv[1], sys.argv[2], sys.argv[3:]
+try:
+    with open(tiers_file) as fh:
+        tiers = json.load(fh)
+except FileNotFoundError:
+    tiers = {}
 entries = []
 for d in dirs:
     with open(os.path.join(d, "manifest.json")) as fh:
@@ -329,6 +451,10 @@ for d in dirs:
         # index — and nothing downstream needs the metadata here: the settings
         # form renders for an *installed* extension and reads its manifest.
         "config": [c["key"] if isinstance(c, dict) else c for c in m.get("config", [])],
+        # From tiers.json, never the manifest. Hosts that predate tiers ignore
+        # the field; newer ones record it at install and re-check it on every
+        # fetch, so lowering it here demotes installed copies.
+        "tier": tiers.get(m["id"], "view"),
     })
 
 entries.sort(key=lambda e: e["id"])

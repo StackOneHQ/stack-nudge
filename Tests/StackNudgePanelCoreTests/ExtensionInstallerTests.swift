@@ -54,6 +54,22 @@ final class ExtensionInstallerTests: XCTestCase {
         XCTAssertEqual(entries.map(\.id), ["system"])
     }
 
+    // The tier the reviewers gave it, when the index carries one. An index
+    // from before tiers simply doesn't, and every entry reads as `view`.
+    func testTheIndexCarriesATierWhenItHasOne() {
+        let json = """
+            {"schema":1,"extensions":[
+              {"id":"away","name":"Away","version":"1.0.0","description":"",
+               "asset":"extension-away-1.0.0.tar.gz","sha256":"ab","requires":["swiftc"],
+               "config":[],"tier":"trusted"}]}
+            """
+        guard case .success(let entries) = index(json) else { return XCTFail("expected entries") }
+        XCTAssertEqual(entries.first?.reviewedTier, .trusted)
+        guard case .success(let old) = index(oneEntry) else { return XCTFail("expected entries") }
+        XCTAssertNil(old.first?.tier)
+        XCTAssertEqual(old.first?.reviewedTier, .view)
+    }
+
     func testAnEmptyIndexIsNotAFailure() {
         guard case .success(let entries) = index(#"{"schema":1,"extensions":[]}"#) else {
             return XCTFail("expected success")
