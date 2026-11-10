@@ -533,38 +533,44 @@ struct SettingsView: View {
         let status = row?.refusedReason ?? nav.extensionStatus[id]
         // The page's title and its status, as the list row showed them, so
         // stepping in reads as the same thing opened up.
-        return VStack(alignment: .leading, spacing: 2) {
+        // One line, so a page of rows fits the panel's default height.
+        return HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(nav.label(for: .extensionPage(id)))
                 .font(.subheadline.weight(.semibold))
             Text(status ?? "No status yet")
                 .font(.caption)
                 .foregroundStyle(row?.refusedReason != nil ? Color.orange : .secondary)
-                .lineLimit(2)
+                .lineLimit(1)
+                .truncationMode(.tail)
                 .help(status ?? "")
         }
-        .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10)
-        .padding(.top, 2)
-        .padding(.bottom, 8)
+        .padding(.bottom, 4)
     }
 
     // Read-only lines under a page's rows: what it was allowed, in plain
     // words, and where else it appears.
     private func extensionPageTrailer(_ id: String) -> some View {
-        let page = nav.extensionSettingsPages.first { $0.id == id }
-        let allowed = page?.allowed ?? []
-        return VStack(alignment: .leading, spacing: 4) {
-            Text("Allowed: " + (allowed.isEmpty ? "nothing beyond running" : allowed.joined(separator: ", ")))
-            Text("Appears as: " + (page?.tab ?? "this page only"))
-        }
+        return Text(Self.extensionPageTrailerText(nav.extensionSettingsPages.first { $0.id == id }))
         .font(.caption)
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10)
-        .padding(.top, 6)
-        .padding(.bottom, 6)
+        .padding(.vertical, 4)
+    }
+
+    // One line: what it was allowed, and where else it appears only when that
+    // is somewhere (a tab). Pure, so the wording is testable.
+    static func extensionPageTrailerText(_ page: ExtensionSettingsPage?) -> String {
+        let allowed = page?.allowed ?? []
+        var text = "Allowed: " + (allowed.isEmpty ? "nothing beyond running" : allowed.joined(separator: " \u{00B7} "))
+        if let tab = page?.tab {
+            let shortcut = tab.replacingOccurrences(of: "Tab", with: "").trimmingCharacters(in: .whitespaces)
+            text += shortcut.isEmpty ? " \u{00B7} Also a tab" : " \u{00B7} Also a tab \u{00B7} \(shortcut)"
+        }
+        return text
     }
 
     // A text key being typed into, in place of its row.
@@ -1059,15 +1065,14 @@ private struct SettingsRowView: View {
                     .font(.subheadline)
                     .foregroundStyle(kind == .destructive ? Color.orange
                                      : selected ? Color.primary : Color.primary.opacity(0.85))
-                if let detail, !detail.isEmpty {
-                    // One line, the whole of it on hover, and all of it on
-                    // the selected row, where it's being read.
+                // Only on the selected row, where it's being read: every
+                // other row stays one line, like the built-in ones, so a page
+                // of them fits the panel.
+                if selected, let detail, !detail.isEmpty {
                     Text(detail)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(selected ? nil : 1)
-                        .fixedSize(horizontal: false, vertical: selected)
-                        .help(detail)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer()

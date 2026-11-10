@@ -65,6 +65,11 @@ final class ExtensionInstallerTests: XCTestCase {
             """
         guard case .success(let entries) = index(json) else { return XCTFail("expected entries") }
         XCTAssertEqual(entries.first?.reviewedTier, .trusted)
+        XCTAssertNil(entries.first?.capabilities, "no field is not the same as asking for nothing")
+        let withCapabilities = json.replacingOccurrences(of: #""tier":"trusted""#,
+                                                         with: #""tier":"trusted","capabilities":["bluetooth","warp"]"#)
+        guard case .success(let more) = index(withCapabilities) else { return XCTFail("expected entries") }
+        XCTAssertEqual(more.first?.requestedCapabilities, [.bluetooth])
         guard case .success(let old) = index(oneEntry) else { return XCTFail("expected entries") }
         XCTAssertNil(old.first?.tier)
         XCTAssertEqual(old.first?.reviewedTier, .view)

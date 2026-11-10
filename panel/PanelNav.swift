@@ -2600,6 +2600,19 @@ extension ExtensionCapability {
         case .feed:           return "Post to the event feed"
         }
     }
+
+    // The same, as the object of "Asks for:" in the install confirmation.
+    var askingWords: String {
+        switch self {
+        case .bluetooth:      return "Bluetooth"
+        case .signalPresence: return "telling StackNudge you're away"
+        case .eventIdle:      return "knowing how long the Mac has been idle"
+        case .eventPanel:     return "knowing when the panel opens"
+        case .eventSession:   return "seeing agent sessions"
+        case .eventNudge:     return "reading nudges, including prompt text"
+        case .feed:           return "posting to the event feed"
+        }
+    }
 }
 
 // The short status on the right of an Extensions list row. Pure, so each

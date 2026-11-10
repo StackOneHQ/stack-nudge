@@ -455,6 +455,9 @@ for d in dirs:
         # the field; newer ones record it at install and re-check it on every
         # fetch, so lowering it here demotes installed copies.
         "tier": tiers.get(m["id"], "view"),
+        # What it asks for, so the install confirmation can say so before
+        # anything is downloaded. Additive: older hosts ignore it.
+        "capabilities": m.get("capabilities", []),
     })
 
 entries.sort(key=lambda e: e["id"])

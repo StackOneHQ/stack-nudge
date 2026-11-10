@@ -39,6 +39,15 @@ enum ExtensionInstaller {
         var tier: String? = nil
 
         var reviewedTier: ExtensionTier { tier.flatMap(ExtensionTier.init(rawValue:)) ?? .view }
+
+        // What the manifest asks for, as the index publishes it. nil from an
+        // index that predates the field, which is not the same as asking for
+        // nothing. Names this host doesn't know are dropped.
+        var capabilities: [String]? = nil
+
+        var requestedCapabilities: [ExtensionCapability]? {
+            capabilities.map { $0.compactMap(ExtensionCapability.init(rawValue:)) }
+        }
     }
 
     enum Failure: Error, Equatable {

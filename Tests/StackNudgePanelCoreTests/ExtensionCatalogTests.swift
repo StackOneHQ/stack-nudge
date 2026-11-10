@@ -620,7 +620,7 @@ final class ExtensionCatalogTests: XCTestCase {
         c.activateSelection(among: rows)
         c.activateSelection(among: rows)
         XCTAssertEqual(installed, ["derby", "away"])
-        XCTAssertFalse(ExtensionCatalog.confirmationText(for: .trusted).contains("STACKNUDGE"))
+        XCTAssertFalse(ExtensionCatalog.confirmationText(for: trusted).contains("STACKNUDGE"))
     }
 
     // An update confirms only when it raises the tier above what's recorded:
@@ -687,13 +687,33 @@ final class ExtensionCatalogTests: XCTestCase {
         XCTAssertNil(c.confirming)
     }
 
-    func testTheConfirmationTextSaysHowToConfirmForEveryTier() {
-        for tier in [ExtensionTier.service, .trusted] {
-            XCTAssertTrue(ExtensionCatalog.confirmationText(for: tier).hasSuffix("Confirm to install."))
-            XCTAssertTrue(ExtensionCatalog.confirmationText(for: tier, updating: true)
-                .hasSuffix("Confirm to update."))
-        }
-        XCTAssertEqual(ExtensionCatalog.confirmationText(for: .view), "")
+    private func tiered(_ tier: String?, capabilities: [String]?) -> ExtensionInstaller.IndexEntry {
+        var e = entry("radar")
+        e.tier = tier
+        e.capabilities = capabilities
+        return e
+    }
+
+    // It says what this extension asks for, in plain words, and nothing else:
+    // Radar asking for nothing special must not be said to use Bluetooth.
+    func testTheConfirmationListsWhatThatExtensionAsksFor() {
+        XCTAssertEqual(ExtensionCatalog.confirmationText(for: tiered("trusted",
+                                                                     capabilities: ["bluetooth", "signal:presence"])),
+                       "Runs in the background. Asks for: Bluetooth, telling StackNudge you're away. \u{23CE} again to install.")
+        XCTAssertEqual(ExtensionCatalog.confirmationText(for: tiered("trusted", capabilities: [])),
+                       "Runs in the background. \u{23CE} again to install.")
+        // Only what the tier would grant: a service-tier entry asking for
+        // Bluetooth won't get it, so it isn't promised.
+        XCTAssertEqual(ExtensionCatalog.confirmationText(for: tiered("service",
+                                                                     capabilities: ["bluetooth", "event:idle"])),
+                       "Runs in the background. Asks for: knowing how long the Mac has been idle. \u{23CE} again to install.")
+        // An old index, with no capabilities field: neutral.
+        XCTAssertEqual(ExtensionCatalog.confirmationText(for: tiered("trusted", capabilities: nil), updating: true),
+                       "Runs in the background with more access than a tab. \u{23CE} again to update.")
+        XCTAssertEqual(ExtensionCatalog.confirmationText(for: tiered(nil, capabilities: ["bluetooth"])), "")
+        let unknown = tiered("trusted", capabilities: ["teleport", "feed"])
+        XCTAssertEqual(ExtensionCatalog.confirmationText(for: unknown),
+                       "Runs in the background. Asks for: posting to the event feed. \u{23CE} again to install.")
     }
 
     private func installedManifest(_ id: String, version: String = "1.0.0",

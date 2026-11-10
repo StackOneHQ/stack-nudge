@@ -408,6 +408,13 @@ The `extension-` prefix is not decoration. Extensions share a release with the
 app, and the updater picks its own download by name — without the namespace an
 extension called `stack-nudge` would be offered to the updater as an app build.
 
+Each index entry carries what the browser needs before anything is downloaded:
+the id, name, version, description, asset and its sha256, `requires`, config
+key names, the reviewed `tier`, and the manifest's `capabilities`, so the
+install confirmation can say what this extension asks for. The last two are
+additive, and older hosts ignore them; a host reading an index without
+`capabilities` says only that the extension gets more access than a tab.
+
 The index is attached to the app's own release, so there is one trust anchor and
 one fetch path. It ships even when there are no extensions, so the app always has
 something well-formed to fetch.

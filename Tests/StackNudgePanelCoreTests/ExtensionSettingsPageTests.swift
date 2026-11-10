@@ -742,4 +742,17 @@ final class ExtensionSettingsPageTests: XCTestCase {
         XCTAssertNil(PanelController.fieldToCancel(in: .sessions, renaming: false))
         XCTAssertEqual(PanelController.fieldToCancel(in: .phrases, renaming: false), .phraseDraft)
     }
+
+    // One footnote line; placement only when there's a tab to mention.
+    func testThePageFootnoteIsOneLine() {
+        func page(_ allowed: [String], tab: String?) -> ExtensionSettingsPage {
+            ExtensionSettingsPage(id: "x", name: "X", keys: [], allowed: allowed, tab: tab)
+        }
+        XCTAssertEqual(SettingsView.extensionPageTrailerText(page(["Bluetooth", "Tell StackNudge you're away"], tab: nil)),
+                       "Allowed: Bluetooth \u{00B7} Tell StackNudge you're away")
+        XCTAssertEqual(SettingsView.extensionPageTrailerText(page([], tab: "Tab \u{2318}6")),
+                       "Allowed: nothing beyond running \u{00B7} Also a tab \u{00B7} \u{2318}6")
+        XCTAssertEqual(SettingsView.extensionPageTrailerText(page([], tab: "Tab")),
+                       "Allowed: nothing beyond running \u{00B7} Also a tab")
+    }
 }

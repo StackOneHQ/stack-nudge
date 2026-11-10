@@ -15,7 +15,9 @@ import SwiftUI
 enum ScreenshotRenderer {
 
     static let flag = "--render-screenshots"
-    static let size = NSSize(width: 600, height: 340)
+    // The panel's default size (600 x 320) less its tab strip, which is what
+    // Settings and the browser get.
+    static let size = NSSize(width: 600, height: 283)
 
     static func runIfAsked() {
         let args = CommandLine.arguments
@@ -71,9 +73,19 @@ enum ScreenshotRenderer {
                 nav.cycleForward()
             })
         },
-        Scenario(name: "browse-default", height: 620) {
+        Scenario(name: "browse-default") {
             let (catalog, host) = fixtureCatalog()
             return (browser(catalog, host), { catalog.selection = .row("away") })
+        },
+        Scenario(name: "browse-more") {
+            let (catalog, host) = fixtureCatalog()
+            return (browser(catalog, host), {
+                // The tenth row, as ↓ to the end would leave it.
+                let rows = ExtensionCatalog.browseRows(
+                    ExtensionCatalog.rows(catalogue: catalog.entries, installed: host.manifests,
+                                          refused: host.refused), query: "").shown
+                if let last = rows.last { catalog.selection = .row(last.id) }
+            })
         },
         Scenario(name: "browse-search") {
             let (catalog, host) = fixtureCatalog()
@@ -82,8 +94,8 @@ enum ScreenshotRenderer {
         Scenario(name: "browse-confirm") {
             let (catalog, host) = fixtureCatalog()
             return (browser(catalog, host), {
-                catalog.selection = .row("radar")
-                catalog.requestInstall(catalog.entries.first { $0.id == "radar" }!)
+                catalog.selection = .row("away")
+                catalog.requestInstall(catalog.entries.first { $0.id == "away" }!)
             })
         },
     ]
@@ -175,10 +187,13 @@ enum ScreenshotRenderer {
             ("weather", "Weather", "Rain in the next hour, if any.", nil, []),
             ("pomodoro", "Pomodoro", "A 25-minute timer in the widget.", nil, []),
         ]
+        let capabilities = ["away": ["bluetooth", "signal:presence"], "slack-status": ["event:idle"],
+                            "focus": ["event:panel", "feed"]]
         let entries = published.map { id, name, description, tier, requires in
             ExtensionInstaller.IndexEntry(id: id, name: name, version: id == "derby" ? "1.2.0" : "1.1.0",
                                           description: description, asset: "extension-\(id)-1.1.0.tar.gz",
-                                          sha256: "ab", requires: requires, config: [], tier: tier)
+                                          sha256: "ab", requires: requires, config: [], tier: tier,
+                                          capabilities: capabilities[id] ?? [])
         }
         let catalog = ExtensionCatalog(fetchCatalogue: { .success(entries) },
                                        performInstall: { .success($0.id) },

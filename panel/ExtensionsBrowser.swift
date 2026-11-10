@@ -175,19 +175,21 @@ final class ExtensionCatalog: ObservableObject {
         entry.reviewedTier > .view && entry.reviewedTier > (recorded ?? .view)
     }
 
-    // What the confirmation says about a tier. The index carries the tier, not
-    // the capability list, so this is the most it can honestly promise.
-    static func confirmationText(for tier: ExtensionTier, updating: Bool = false) -> String {
-        let again = updating ? " Confirm to update." : " Confirm to install."
-        switch tier {
-        case .view:
-            return ""
-        case .service:
-            return "Runs in the background, and may know when the Mac is idle or the panel opens." + again
-        case .trusted:
-            return "Runs in the background, and may use Bluetooth and tell StackNudge "
-                + "when you're away." + again
+    // What the confirmation says: what this extension asks for that its tier
+    // would grant, in plain words, and never anything it didn't ask for. An
+    // index from before entries carried capabilities can't say, so it says
+    // only that the extension gets more than a tab would.
+    static func confirmationText(for entry: ExtensionInstaller.IndexEntry, updating: Bool = false) -> String {
+        let tier = entry.reviewedTier
+        guard tier > .view else { return "" }
+        let again = updating ? " \u{23CE} again to update." : " \u{23CE} again to install."
+        guard let asked = entry.requestedCapabilities else {
+            return "Runs in the background with more access than a tab." + again
         }
+        let granted = asked.filter(tier.allows)
+        guard !granted.isEmpty else { return "Runs in the background." + again }
+        return "Runs in the background. Asks for: "
+            + granted.map(\.askingWords).joined(separator: ", ") + "." + again
     }
 
     // Every install and update goes through here: the browser's ⏎ and its
@@ -565,8 +567,12 @@ struct ExtensionsView: View {
                 // a catalogue of any size, which is the whole page.
                 .onChange(of: catalog.selection) { target in
                     guard let anchor = Self.anchor(for: target) else { return }
+                    // The last row brings the "N more" line with it, so the
+                    // end of the list says where the rest are.
+                    let last = rows.last.map { ExtensionCatalog.Target.row($0.id) } == target && browse.more > 0
                     withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo(anchor, anchor: nil)
+                        if last { proxy.scrollTo(Self.moreAnchor, anchor: .bottom) }
+                        else { proxy.scrollTo(anchor, anchor: nil) }
                     }
                 }
             }
@@ -671,6 +677,7 @@ struct ExtensionsView: View {
     // The back chevron sits above the scroller and needs no anchor; scrolling to
     // the top of the list is what brings it into view.
     static let retryAnchor = "extensions-retry"
+    static let moreAnchor = "extensions-more"
 
     static func anchor(for target: ExtensionCatalog.Target?) -> String? {
         switch target {
@@ -797,6 +804,7 @@ struct ExtensionsView: View {
                     // Not a row: nothing to select, just where the rest are.
                     note("\(more) more \u{2014} type to search")
                         .padding(.top, 4)
+                        .id(Self.moreAnchor)
                 }
             }
         }
@@ -841,7 +849,7 @@ struct ExtensionsView: View {
                 status(row)
             }
             if confirming, let entry = entry(for: row.id) {
-                Text(ExtensionCatalog.confirmationText(for: entry.reviewedTier, updating: row.isInstalled))
+                Text(ExtensionCatalog.confirmationText(for: entry, updating: row.isInstalled))
                     .font(.caption)
                     .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
