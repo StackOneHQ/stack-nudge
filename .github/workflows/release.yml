@@ -154,7 +154,7 @@ jobs:
       # tag_name explicit so workflow_dispatch attaches to the right release
       # — without it action-gh-release uses github.ref which is "main"-ish
       # for manual dispatches and fails to find a matching release.
-      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+      - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
         with:
           tag_name: ${{ env.TARGET_TAG }}
           files: |
@@ -199,7 +199,7 @@ jobs:
 
       # The index ships even when there are no extensions yet, so the app always
       # has something well-formed to fetch rather than a 404 it has to special-case.
-      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+      - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
         with:
           tag_name: ${{ env.TARGET_TAG }}
           files: |
