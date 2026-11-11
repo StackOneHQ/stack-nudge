@@ -636,7 +636,7 @@ final class ExtensionSettingsPageTests: XCTestCase {
 
     func testCapabilitiesReadInPlainWords() {
         XCTAssertEqual(ExtensionCapability.bluetooth.plainWords, "Bluetooth")
-        XCTAssertEqual(ExtensionCapability.signalPresence.plainWords, "Tell StackNudge you're away")
+        XCTAssertEqual(ExtensionCapability.signalPresence.plainWords, "Lock the Mac when you're away")
         for capability in ExtensionCapability.allCases {
             XCTAssertFalse(capability.plainWords.contains(":"), "\(capability) reads as a key")
         }
@@ -756,8 +756,8 @@ final class ExtensionSettingsPageTests: XCTestCase {
         func page(_ allowed: [String], tab: String?) -> ExtensionSettingsPage {
             ExtensionSettingsPage(id: "x", name: "X", keys: [], allowed: allowed, tab: tab)
         }
-        XCTAssertEqual(SettingsView.extensionPageTrailerText(page(["Bluetooth", "Tell StackNudge you're away"], tab: nil)),
-                       "Allowed: Bluetooth \u{00B7} Tell StackNudge you're away")
+        XCTAssertEqual(SettingsView.extensionPageTrailerText(page(["Bluetooth", "Lock the Mac when you're away"], tab: nil)),
+                       "Allowed: Bluetooth \u{00B7} Lock the Mac when you're away")
         XCTAssertEqual(SettingsView.extensionPageTrailerText(page([], tab: "Tab \u{2318}6")),
                        "Allowed: nothing beyond running \u{00B7} Also a tab \u{00B7} \u{2318}6")
         XCTAssertEqual(SettingsView.extensionPageTrailerText(page([], tab: "Tab")),

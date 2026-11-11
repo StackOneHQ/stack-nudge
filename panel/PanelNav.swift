@@ -2710,7 +2710,7 @@ extension ExtensionCapability {
     var plainWords: String {
         switch self {
         case .bluetooth:      return "Bluetooth"
-        case .signalPresence: return "Tell StackNudge you're away"
+        case .signalPresence: return "Lock the Mac when you're away"
         case .eventIdle:      return "Know how long the Mac has been idle"
         case .eventPanel:     return "Know when the panel opens"
         case .eventSession:   return "See agent sessions"
@@ -2723,7 +2723,7 @@ extension ExtensionCapability {
     var askingWords: String {
         switch self {
         case .bluetooth:      return "Bluetooth"
-        case .signalPresence: return "telling StackNudge you're away"
+        case .signalPresence: return "locking the Mac when you're away"
         case .eventIdle:      return "knowing how long the Mac has been idle"
         case .eventPanel:     return "knowing when the panel opens"
         case .eventSession:   return "seeing agent sessions"

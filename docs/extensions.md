@@ -507,7 +507,7 @@ list. Top to bottom it shows:
   load, say), the row sits on the Extensions list instead, so the toggle
   exists whenever something can lock the screen;
 - read-only lines saying what it was **allowed** (its granted capabilities, in
-  plain words: "Bluetooth", "Tell StackNudge you're away") and, when it also
+  plain words: "Bluetooth", "Lock the Mac when you're away") and, when it also
   has a tab, "Also a tab · ⌘3";
 - **Update to x.y**, only when there is one, and **Remove**. Remove takes `⌘⌫`
   (not `⏎`, since it has no confirmation), which also removes from the
