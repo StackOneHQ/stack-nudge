@@ -587,7 +587,7 @@ extension ServiceSupervisor {
             id: manifest.id, directory: directory, granted: granted,
             environment: environment, config: config,
             executable: { ExtensionRuntime.resolveExecutable(manifest, in: directory) },
-            spawner: LiveServiceSpawner(),
+            spawner: LiveServiceSpawner(recording: (.live, manifest.id)),
             scheduler: DispatchServiceScheduler(queue: queue),
             perform: { queue.async(execute: $0) },
             onEvent: onEvent)
@@ -633,6 +633,11 @@ struct LiveServiceSpawner: ServiceSpawner {
         let errorDescription: String?
     }
 
+    // Where each process is written down while it runs, and as which
+    // extension, so a launch after a crash can stop one this launch left
+    // behind (see ServiceLedger). nil records nothing.
+    var recording: (ledger: ServiceLedger, id: String)?
+
     func spawn(executable: String,
                directory: String,
                environment: [String: String],
@@ -658,6 +663,7 @@ struct LiveServiceSpawner: ServiceSpawner {
         // Reading starts, and the exit handler is in place, before the child
         // exists: a child that prints and exits at once must lose neither.
         let process = LiveServiceProcess(task: task, input: input, output: output,
+                                          recording: recording,
                                           onOutput: onOutput, onExit: onExit)
         guard process.prepare() else {
             throw SpawnFailure(errorDescription: "couldn't open its output")
@@ -682,6 +688,7 @@ final class LiveServiceProcess: ServiceProcess {
     private let task: Process
     private let input: Pipe
     private let output: Pipe
+    private let recording: (ledger: ServiceLedger, id: String)?
     private let onOutput: (Data) -> Void
     private let onExit: (ServiceSupervisor.Termination) -> Void
 
@@ -709,11 +716,13 @@ final class LiveServiceProcess: ServiceProcess {
     private let launched = DispatchSemaphore(value: 0)
 
     init(task: Process, input: Pipe, output: Pipe,
+         recording: (ledger: ServiceLedger, id: String)? = nil,
          onOutput: @escaping (Data) -> Void,
          onExit: @escaping (ServiceSupervisor.Termination) -> Void) {
         self.task = task
         self.input = input
         self.output = output
+        self.recording = recording
         self.onOutput = onOutput
         self.onExit = onExit
     }
@@ -762,7 +771,11 @@ final class LiveServiceProcess: ServiceProcess {
         let readBack = getpgid(pid)
         let childGroup = readBack > 0 ? readBack : pid
         group = childGroup > 0 && childGroup != getpgrp() ? childGroup : -1
+        let (recordedPID, recordedGroup) = (pid, group)
         lock.unlock()
+        // Before `launched` opens, so the exit, which waits on it, can't
+        // forget the record before it is written.
+        if let recording { recording.ledger.record(id: recording.id, pid: recordedPID, group: recordedGroup) }
         launched.signal()
     }
 
@@ -844,7 +857,9 @@ final class LiveServiceProcess: ServiceProcess {
         lock.lock()
         if group > 0 { killpg(group, SIGKILL) }
         group = -1
+        let exitedPID = pid
         lock.unlock()
+        recording?.ledger.forget(pid: exitedPID)
 
         closePipes()
         onExit(termination)
