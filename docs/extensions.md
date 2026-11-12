@@ -469,9 +469,12 @@ In this order, and each step refuses before the next one runs:
    succeeds on the Command Line Tools stub and then fails the moment anything runs.
    It is looked up on the same `PATH` the extension runs with
    (`/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`), so the check
-   runs the interpreter the extension will get. One that is found but fails is
-   reported with its path ("/usr/bin/python3 won't run") rather than as missing,
-   which usually means a broken Xcode or Command Line Tools install
+   runs the interpreter the extension will get. One that is found but fails, or
+   doesn't answer within 5 s, is reported with its path ("/usr/bin/python3 won't
+   run") rather than as missing, which usually means a broken Xcode or Command
+   Line Tools install. The exception is a `/usr/bin` stub on a Mac with no
+   developer tools selected (`xcode-select -p` fails): that only offers to
+   install them, so it reads as missing ("Needs python3")
 2. the payload is verified against its `.sha256` sidecar — **a missing sidecar is
    fatal**, never a soft pass
 3. the sidecar must also agree with the index; the index naming the asset *and*

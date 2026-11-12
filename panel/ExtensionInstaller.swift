@@ -588,19 +588,42 @@ enum ExtensionInstaller {
 
     // Looked up and run with the environment an extension gets, not the app's
     // own: see ExtensionRuntime.searchPath.
+    //
+    // One that doesn't answer `--version` within `timeout` won't run either.
+    // The likely cause is a first run stuck after an Xcode update, which is
+    // what that message points at, and the catalogue checks again next load.
     static func checkRequirement(_ name: String,
-                                 environment: [String: String] = ExtensionRuntime.probeEnvironment())
+                                 environment: [String: String] = ExtensionRuntime.probeEnvironment(),
+                                 timeout: TimeInterval = 5,
+                                 stubDirectory: String = "/usr/bin",
+                                 developerToolsInstalled: () -> Bool = ExtensionInstaller.developerToolsInstalled)
         -> RequirementCheck {
         // Only a bare name, never a path: `requires` comes from a manifest and
         // this ends up as an executable.
         guard name.range(of: "^[A-Za-z0-9._+-]{1,32}$", options: .regularExpression) != nil
         else { return .missing }
+        // A path, or it isn't a program: `command -v echo` answers "echo", a
+        // shell builtin, which no extension can run as its interpreter.
         guard let resolved = ProcessOutput.read("/bin/sh", ["-c", "command -v \(name)"],
                                                 timeout: 5, env: environment)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
-            !resolved.isEmpty
+            resolved.hasPrefix("/")
         else { return .missing }
-        let completion = ProcessOutput.run(resolved, ["--version"], timeout: 5, env: environment)
-        return completion?.status == 0 ? .works : .wontRun(path: resolved)
+        let completion = ProcessOutput.run(resolved, ["--version"], timeout: timeout, env: environment)
+        if completion?.status == 0 { return .works }
+        // Without the Command Line Tools, /usr/bin/python3 and swiftc are
+        // stubs that only offer to install them. That is missing, not broken:
+        // "Needs swiftc" is the true answer there, and "won't run" would send
+        // someone looking for an Xcode install they never had.
+        if (resolved as NSString).deletingLastPathComponent == stubDirectory, !developerToolsInstalled() {
+            return .missing
+        }
+        return .wontRun(path: resolved)
+    }
+
+    // Whether a developer directory is selected at all, which is what the
+    // /usr/bin stubs need to run anything.
+    static func developerToolsInstalled() -> Bool {
+        ProcessOutput.run("/usr/bin/xcode-select", ["-p"], timeout: 5)?.status == 0
     }
 }

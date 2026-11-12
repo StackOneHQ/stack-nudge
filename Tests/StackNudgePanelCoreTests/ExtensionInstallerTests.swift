@@ -569,12 +569,48 @@ final class ExtensionInstallerTests: XCTestCase {
         XCTAssertEqual(probe["HOME"], runtime["HOME"])
     }
 
+    // A shell builtin isn't a program an extension can run.
+    func testABuiltinIsNotAnInterpreter() {
+        XCTAssertEqual(ExtensionInstaller.checkRequirement("echo"), .missing)
+    }
+
+    // Without the Command Line Tools the /usr/bin stub only offers to install
+    // them: that's missing, and with them it really is broken.
+    func testAStubWithoutTheCommandLineToolsIsMissingRatherThanBroken() throws {
+        let stubs = try interpreterDirectory(named: "sn-fake-swiftc", exitStatus: 1)
+        defer { try? FileManager.default.removeItem(atPath: stubs) }
+        func check(toolsInstalled: Bool) -> ExtensionInstaller.RequirementCheck {
+            ExtensionInstaller.checkRequirement("sn-fake-swiftc", environment: ["PATH": "\(stubs):/usr/bin:/bin"],
+                                                stubDirectory: stubs,
+                                                developerToolsInstalled: { toolsInstalled })
+        }
+
+        XCTAssertEqual(check(toolsInstalled: false), .missing)
+        XCTAssertEqual(check(toolsInstalled: true), .wontRun(path: "\(stubs)/sn-fake-swiftc"))
+    }
+
+    // One that never answers `--version` won't run, rather than counting as
+    // there and working.
+    func testAnInterpreterThatHangsWontRun() throws {
+        let slow = try interpreterDirectory(named: "sn-fake-python", body: "sleep 5")
+        defer { try? FileManager.default.removeItem(atPath: slow) }
+
+        let actual = ExtensionInstaller.checkRequirement(
+            "sn-fake-python", environment: ["PATH": "\(slow):/usr/bin:/bin"], timeout: 0.3)
+
+        XCTAssertEqual(actual, .wontRun(path: "\(slow)/sn-fake-python"))
+    }
+
     private func interpreterDirectory(named name: String, exitStatus: Int) throws -> String {
+        try interpreterDirectory(named: name, body: "exit \(exitStatus)")
+    }
+
+    private func interpreterDirectory(named name: String, body: String) throws -> String {
         let directory = (NSTemporaryDirectory() as NSString)
             .appendingPathComponent("sn-requires-\(UUID().uuidString)")
         try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
         let path = (directory as NSString).appendingPathComponent(name)
-        try "#!/bin/sh\nexit \(exitStatus)\n".write(toFile: path, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\n\(body)\n".write(toFile: path, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
         return directory
     }
