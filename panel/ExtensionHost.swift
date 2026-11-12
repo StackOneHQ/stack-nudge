@@ -135,6 +135,9 @@ final class ExtensionHost: ObservableObject {
     private var wanted: [String: (manifest: ExtensionManifest, allowed: [ExtensionCapability])] = [:]
     private var shuttingDown = false
     private var reportedFeed: Set<String> = []
+    private var extensionLog = ExtensionLog()
+    private let writeLog: (String) -> Void
+    private let now: () -> TimeInterval
 
     // `runner` is injected so the store can be driven with canned outcomes in
     // tests; the default spawns for real. It is called on a background queue,
@@ -160,7 +163,10 @@ final class ExtensionHost: ObservableObject {
              ServiceSupervisor.live(manifest: manifest,
                                     directory: ExtensionRuntime.directory(for: manifest.id) ?? "",
                                     granted: granted, onEvent: onEvent)
-         }) {
+         },
+         // Where log lines go, and the clock their allowance is counted on.
+         writeLog: @escaping (String) -> Void = { FileHandle.standardError.write(Data($0.utf8)) },
+         now: @escaping () -> TimeInterval = { Date().timeIntervalSince1970 }) {
         self.onTabsChanged = onTabsChanged
         self.onRefusalsChanged = onRefusalsChanged
         self.onGlancesChanged = onGlancesChanged
@@ -170,6 +176,8 @@ final class ExtensionHost: ObservableObject {
         self.tiers = tiers
         self.makeSupervisor = makeSupervisor
         self.signals = signals
+        self.writeLog = writeLog
+        self.now = now
     }
 
     func pane(_ id: String) -> Pane { panes[id] ?? Pane() }
@@ -206,8 +214,7 @@ final class ExtensionHost: ObservableObject {
         // added for. The log line stays because a refusal at launch happens
         // before anybody opens Settings.
         for refusal in refusals {
-            FileHandle.standardError.write(Data(
-                "stack-nudge: extension \"\(refusal.id)\" not loaded — \(refusal.reason)\n".utf8))
+            writeLog(ExtensionLog.line(refusal.id, "not loaded — \(refusal.reason)"))
         }
         // Drop state for anything no longer installed, so reinstalling an
         // extension doesn't resurrect the document from its previous life.
@@ -750,6 +757,6 @@ final class ExtensionHost: ObservableObject {
     }
 
     private func log(_ id: String, _ message: String) {
-        FileHandle.standardError.write(Data("stack-nudge: extension \"\(id)\" \(message)\n".utf8))
+        for line in extensionLog.lines(for: id, message, at: now()) { writeLog(line) }
     }
 }
