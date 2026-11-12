@@ -19,6 +19,7 @@
   "requires": [
     "swiftc"
   ],
+  "handshakeSeconds": 90,
   "config": [
     {
       "key": "STACKNUDGE_EXT_AWAY_PHONE",

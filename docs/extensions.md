@@ -51,6 +51,7 @@ does not buy.
 | `refresh.intervalSeconds` | no | Default off. Floored at 5 — every tick is a process spawn. |
 | `refresh.whileFocusedOnly` | no | Default `true`. Only poll while your tab is the one on screen. Set `false` to keep polling while the tab is hidden; such an extension is also first run on the first tick after launch, without waiting for its tab to be opened. |
 | `glance` | no | Default `false`. Let the widget show your header badge while it is urgent. See [The widget](#the-widget). |
+| `handshakeSeconds` | no | Service mode only. How long the host waits for `ready` after `hello`. Default 10, raised to at least 10 and capped at 120. Ask for more only if `run` does slow work first, such as compiling. |
 | `surfaces` | no | Default `["tab"]`. `["settings"]` means no tab, only its page under Settings → Extensions. See [Where it appears](#where-it-appears). |
 
 A manifest that fails any of these is **refused**, and the reason is reported —
@@ -560,8 +561,10 @@ Why it compiles on first run rather than shipping a binary: nothing opaque goes
 into the repository or the release, and what the reviewer reads is what runs.
 The Command Line Tools that provide `swiftc` are already on any Mac that runs a
 coding agent, since `git` needs them, and `requires: ["swiftc"]` checks for them
-at install. The cost is a couple of seconds on the first start after an install
-or update, well inside the 10 s the host allows for `ready`.
+at install. The cost is the first start after an install or update: about 3 s when
+the compiler's module cache is warm, but 15 s or more when it is cold. That is
+past the host's usual 10 s for `ready`, so the manifest asks for a 90 s
+`handshakeSeconds`.
 
 ## Trust
 
@@ -596,6 +599,7 @@ reviewer should check that are easy to miss:
 | ornaments | 4 per row |
 | tab label | 16 characters |
 | poll interval | 5 s minimum |
+| service handshake | 10 s, or up to 120 s with `handshakeSeconds` |
 
 Exceeding a cap truncates rather than fails — an over-long title is a formatting
 slip, not a reason to blank the pane.

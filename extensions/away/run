@@ -7,7 +7,9 @@
 # shipped as a binary: nothing opaque lands in the repository or the release,
 # the reviewer reads exactly what runs, and the Command Line Tools that provide
 # swiftc are already on any Mac that runs a coding agent (git needs them). The
-# cost is a couple of seconds on the first start after an install or update.
+# cost is the first start after an install or update: about 3 s with a warm
+# module cache, but 15 s or more with a cold one, which is why the manifest asks
+# for a 90 s handshake rather than the host's usual 10 s.
 #
 # stdout belongs to the line protocol from the moment this starts, so the
 # compiler's output, and anything else said here, goes to stderr.
@@ -23,15 +25,23 @@ build="$here/.build"
 bin="$build/away"
 
 if [[ ! -x "$bin" || "$src" -nt "$bin" ]]; then
+  # A build the host killed leaves its partial file behind (see below), so any
+  # whose process is gone are cleared before trying again.
+  for old in "$build"/away.*; do
+    pid="${old##*.}"
+    if [[ "$pid" =~ ^[0-9]+$ ]] && ! kill -0 "$pid" 2> /dev/null; then
+      rm -f "${old:?}"
+    fi
+  done
   if ! command -v swiftc > /dev/null 2>&1; then
     echo "away: swiftc not found; install the Command Line Tools (xcode-select --install)" >&2
     exit 69
   fi
   mkdir -p "$build"
   # Built beside the real path under a name only this process uses, and moved
-  # into place, so a build the host cuts short (it allows 10 s for the first
-  # reply) never leaves a half-written binary that looks current, and two
-  # launches at once never write or remove each other's.
+  # into place, so a build the host cuts short (it kills a start that doesn't
+  # answer in time) never leaves a half-written binary that looks current, and
+  # two launches at once never write or remove each other's.
   tmp="$build/away.$$"
   if ! swiftc -O "$src" -o "$tmp" >&2; then
     rm -f "${tmp:?}"

@@ -374,6 +374,22 @@ final class ExtensionManifestTests: XCTestCase {
         XCTAssertTrue(message.contains("2"), message)
     }
 
+    // A service that compiles itself first can ask for longer to answer
+    // hello; nobody gets less than the default or more than the cap.
+    func testAServiceMayAskForALongerHandshake() {
+        func handshake(_ fields: String) -> TimeInterval? {
+            guard case .success(let m) = service(#","mode":"service""# + fields) else { return nil }
+            return m.handshakeSeconds
+        }
+        XCTAssertEqual(handshake(""), ExtensionManifest.defaultHandshakeSeconds)
+        XCTAssertEqual(handshake(#","handshakeSeconds":90"#), 90)
+        XCTAssertEqual(handshake(#","handshakeSeconds":2"#), ExtensionManifest.defaultHandshakeSeconds)
+        XCTAssertEqual(handshake(#","handshakeSeconds":3600"#), ExtensionManifest.maximumHandshakeSeconds)
+        guard case .success(let m) = service(#","mode":"service","handshakeSeconds":90"#) else { return XCTFail() }
+        XCTAssertEqual(ServiceSupervisor.timing(for: m).handshake, 90)
+        XCTAssertEqual(ServiceSupervisor.timing(for: m).pongTimeout, ServiceSupervisor.Timing().pongTimeout)
+    }
+
     func testAnUnknownModeIsRefused() {
         XCTAssertEqual(service(#","mode":"daemon""#), .failure(.unknownMode("daemon")))
     }

@@ -292,7 +292,9 @@ the release, the package is plain text a reviewer reads in full, and nothing
 needs signing. The Command Line Tools that provide `swiftc` are on any Mac that
 runs a coding agent, because `git` needs them, and the manifest's `requires`
 checks for them at install. The first start after an install or update takes
-about two seconds longer, inside the 10 s handshake. See "Compiled extensions"
+about 3 s longer with a warm module cache and 15 s or more with a cold one, so
+the manifest asks for a 90 s handshake (`handshakeSeconds`, capped at 120 s)
+instead of the usual 10 s. See "Compiled extensions"
 under Open questions for what this leaves open.
 
 ## Migration

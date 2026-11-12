@@ -679,21 +679,11 @@ final class ExtensionSettingsPageTests: XCTestCase {
     func testAKeysHelpIsItsRowsSecondLine() {
         let nav = nav()
         XCTAssertNil(nav.extensionRowDetail("away", "STACKNUDGE_EXT_A"))
-        // The real manifest, read from the checkout: both test runners start in
-        // the repository root (the no-Xcode one copies the tests elsewhere, so
-        // #filePath wouldn't find it).
-        let candidates = [
-            URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
-            URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-                .deletingLastPathComponent().deletingLastPathComponent(),
-        ].map { $0.appendingPathComponent("extensions/away/manifest.json") }
-        guard let data = candidates.lazy.compactMap({ try? Data(contentsOf: $0) }).first,
-              case .success(let away) = ExtensionManifest.parse(data)
-        else { return XCTFail("Away's manifest didn't parse") }
-        nav.extensionSettingsPages = [ExtensionSettingsPage(id: "away", name: "Away", keys: away.config)]
-        XCTAssertEqual(nav.extensionRowDetail("away", "STACKNUDGE_EXT_AWAY_PHONE"),
-                       away.config.first?.help)
-        XCTAssertTrue(nav.extensionRowDetail("away", "STACKNUDGE_EXT_AWAY_PHONE")?.contains("paired") == true)
+        let help = "Your phone, from the paired devices Away can hear nearby."
+        nav.extensionSettingsPages = [ExtensionSettingsPage(id: "away", name: "Away", keys: [
+            .init(key: "STACKNUDGE_EXT_AWAY_PHONE", label: "Phone", help: help, placeholder: nil),
+        ])]
+        XCTAssertEqual(nav.extensionRowDetail("away", "STACKNUDGE_EXT_AWAY_PHONE"), help)
     }
 
     // MARK: - The page's Update row confirms

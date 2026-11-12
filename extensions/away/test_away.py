@@ -105,6 +105,26 @@ class Launcher(unittest.TestCase):
             self.assertIn("swiftc", result.stderr)
             self.assertFalse((copy / ".build" / "away").exists())
 
+    def test_it_clears_a_build_a_killed_start_left_behind(self):
+        # A start the host killed mid-compile leaves .build/away.<pid>. The
+        # next start removes those whose process is gone, and leaves alone
+        # one still being written by a start that's running.
+        with tempfile.TemporaryDirectory() as scratch:
+            copy = pathlib.Path(scratch) / "away"
+            (copy / ".build").mkdir(parents=True)
+            for name in ("run", "away.swift", "manifest.json"):
+                shutil.copy2(HERE / name, copy / name)
+            gone = subprocess.Popen(["/bin/sh", "-c", "exit 0"])
+            gone.wait()
+            (copy / ".build" / ("away.%d" % gone.pid)).write_text("partial")
+            (copy / ".build" / ("away.%d" % os.getpid())).write_text("in progress")
+            # /bin has rm but no swiftc, so it clears up and then can't build.
+            subprocess.run(["/bin/bash", str(copy / "run")], cwd=copy,
+                           capture_output=True, text=True, timeout=10,
+                           env={"PATH": "/bin"})
+            self.assertFalse((copy / ".build" / ("away.%d" % gone.pid)).exists())
+            self.assertTrue((copy / ".build" / ("away.%d" % os.getpid())).exists())
+
 
 class Manifest(unittest.TestCase):
 
@@ -116,6 +136,12 @@ class Manifest(unittest.TestCase):
         self.assertEqual(self.manifest["schema"], 2)
         self.assertEqual(self.manifest["mode"], "service")
         self.assertEqual(sorted(self.manifest["capabilities"]), ["bluetooth", "signal:presence"])
+
+    def test_it_asks_for_a_handshake_long_enough_to_compile(self):
+        # A cold swiftc -O took 15 s on an Apple Silicon Mac; the host's usual
+        # 10 s would kill every fresh install's first start.
+        self.assertGreaterEqual(self.manifest["handshakeSeconds"], 60)
+        self.assertLessEqual(self.manifest["handshakeSeconds"], 120)
 
     def test_it_lives_in_settings_with_typed_config(self):
         # Set and forget, so a Settings page rather than a tab, and its keys
