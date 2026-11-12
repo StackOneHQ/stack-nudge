@@ -24,6 +24,8 @@ final class ExtensionHostServiceTests: XCTestCase {
         return m
     }
 
+    private var logged: [String] = []
+
     private func host(signals: SignalRegistry = SignalRegistry()) -> ExtensionHost {
         ExtensionHost(background: { $0() }, toMain: { $0() },
                       runner: { [unowned self] manifest, _, _ in
@@ -36,7 +38,9 @@ final class ExtensionHostServiceTests: XCTestCase {
                           ServiceSupervisor.fake(id: manifest.id, granted: granted,
                                                  spawner: self.spawner, scheduler: self.clock,
                                                  onEvent: onEvent)
-                      })
+                      },
+                      writeLog: { [unowned self] in self.logged.append($0) },
+                      now: { [unowned self] in self.clock.now() })
     }
 
     private func hello(_ process: FakeProcess) -> [String]? {
@@ -181,6 +185,25 @@ final class ExtensionHostServiceTests: XCTestCase {
         spawner.last.say(#"{"type":"signal","name":"presence","value":"away"}"#)
         XCTAssertEqual(host.signals.value(.presence), "present")
         XCTAssertNil(host.signals.holders[.presence])
+    }
+
+    // A service sending refused signals as fast as its rate limit allows gets
+    // a few clean lines in the log, not one per message with its text intact.
+    func testRefusedSignalsCantFloodOrForgeTheLog() {
+        tiers = ["away": .service]
+        let host = host()
+        host.load(.init(installed: [manifest("away", capabilities: ["signal:presence"])]))
+        spawner.last.ready()
+        let name = "x\\nstack-nudge: forged" + String(repeating: "y", count: 4000)
+        for _ in 0..<30 {
+            spawner.last.say(#"{"type":"signal","name":"\#(name)","value":"away"}"#)
+        }
+        XCTAssertEqual(logged.count, ExtensionLog.linesPerMinute)
+        for line in logged {
+            XCTAssertEqual(line.filter { $0 == "\n" }.count, 1, line)
+            XCTAssertLessThan(line.count, ExtensionLog.maxLength + 50)
+        }
+        _ = host
     }
 
     // With nobody on record, the first by id gets it, whatever order they
