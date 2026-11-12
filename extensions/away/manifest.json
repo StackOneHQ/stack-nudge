@@ -1,0 +1,64 @@
+{
+  "id": "away",
+  "name": "Away",
+  "description": "Locks the Mac when your phone leaves",
+  "version": "1.1.0",
+  "schema": 2,
+  "mode": "service",
+  "surfaces": [
+    "settings"
+  ],
+  "capabilities": [
+    "bluetooth",
+    "signal:presence"
+  ],
+  "tab": {
+    "label": "Away"
+  },
+  "run": "./run",
+  "requires": [
+    "swiftc"
+  ],
+  "handshakeSeconds": 90,
+  "config": [
+    {
+      "key": "STACKNUDGE_EXT_AWAY_PHONE",
+      "label": "Phone",
+      "help": "Your phone, from the paired devices Away can hear nearby. It has to be paired with this Mac in System Settings → Bluetooth.",
+      "type": "dynamic"
+    },
+    {
+      "key": "STACKNUDGE_EXT_AWAY_IDLE",
+      "label": "Idle for",
+      "help": "How long the Mac must go untouched before you can count as away.",
+      "type": "number",
+      "options": [
+        10,
+        15,
+        20,
+        30,
+        45,
+        60,
+        90,
+        120
+      ],
+      "unit": "seconds",
+      "default": 30
+    },
+    {
+      "key": "STACKNUDGE_EXT_AWAY_SILENCE",
+      "label": "Phone silent for",
+      "help": "How long the phone must go unheard before you can count as away. A phone lying idle on a desk was measured going 75 s between signals, so nothing shorter than 90 s is offered.",
+      "type": "number",
+      "options": [
+        90,
+        120,
+        180,
+        300,
+        600
+      ],
+      "unit": "seconds",
+      "default": 120
+    }
+  ]
+}

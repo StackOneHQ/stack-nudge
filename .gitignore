@@ -30,3 +30,7 @@ keys/
 # The Pylon extension's cache, written beside it when run from a checkout. It
 # holds customer account names, issue links and message previews.
 extensions/pylon/state.json*
+# Extensions that compile themselves on first run (away) build into .build/
+# beside their source. Already covered by .build/ above; named here so it
+# survives anyone narrowing that line to the root.
+extensions/*/.build/

@@ -95,6 +95,12 @@ struct ExtensionManifest: Equatable {
     // One line for the Extensions list. From the manifest on disk, which is
     // what's installed; the index's copy is only for what isn't.
     var description: String = ""
+    // How long a service has to answer `hello` with `ready`. Most answer at
+    // once; one that compiles itself on first start (Away) can't, and the
+    // allowance has to cover a cold compile on a slow Mac, or every fresh
+    // install starts with a crash. Asked for in the manifest, so the rest
+    // keep the short one that catches a hang quickly.
+    var handshakeSeconds: TimeInterval = ExtensionManifest.defaultHandshakeSeconds
 
     var tabEntry: ExtensionTab { ExtensionTab(id: id, label: tab.label) }
     var hasTab: Bool { surfaces.contains(.tab) }
@@ -126,6 +132,8 @@ struct ExtensionManifest: Equatable {
     // minute for as long as its tab is open. Nothing legitimate needs that, and
     // the value arrives from the package rather than from us.
     static let minimumIntervalSeconds = 5
+    static let defaultHandshakeSeconds: TimeInterval = 10
+    static let maximumHandshakeSeconds: TimeInterval = 120
 
     // Extensions live in their own environment namespace. See
     // ExtensionRuntime.environment for why a bare STACKNUDGE_ prefix was not a
@@ -322,7 +330,11 @@ struct ExtensionManifest: Equatable {
             mode: mode,
             capabilities: capabilities,
             surfaces: surfaces,
-            description: (decoded.description ?? "").trimmingCharacters(in: .whitespacesAndNewlines)))
+            description: (decoded.description ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+            // Clamped rather than refused, like the poll interval: never
+            // shorter than the default, never long enough to hide a hang.
+            handshakeSeconds: min(max(decoded.handshakeSeconds ?? defaultHandshakeSeconds,
+                                      defaultHandshakeSeconds), maximumHandshakeSeconds)))
     }
 
     // The decoder's own description names the field, which is the one thing a
@@ -361,6 +373,7 @@ struct ExtensionManifest: Equatable {
         let capabilities: [String]?
         let surfaces: [String]?
         let description: String?
+        let handshakeSeconds: Double?
     }
 }
 

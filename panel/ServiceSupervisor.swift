@@ -586,6 +586,7 @@ extension ServiceSupervisor {
         return ServiceSupervisor(
             id: manifest.id, directory: directory, granted: granted,
             environment: environment, config: config,
+            timing: timing(for: manifest),
             executable: { ExtensionRuntime.resolveExecutable(manifest, in: directory) },
             spawner: LiveServiceSpawner(),
             scheduler: DispatchServiceScheduler(queue: queue),
@@ -595,6 +596,13 @@ extension ServiceSupervisor {
 }
 
 extension ServiceSupervisor {
+    // The defaults, with the handshake its manifest asked for.
+    static func timing(for manifest: ExtensionManifest) -> Timing {
+        var timing = Timing()
+        timing.handshake = manifest.handshakeSeconds
+        return timing
+    }
+
     // What a service is started with, and what `config` messages carry: the
     // declared keys that are set, exactly as the environment has them.
     static func configuration(for manifest: ExtensionManifest,
