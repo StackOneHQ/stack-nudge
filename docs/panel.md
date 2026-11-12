@@ -213,7 +213,7 @@ grep -c stack-nudge-version ~/.stack-nudge/notify.sh   # 0 means the script pred
 | Key | On the browse page |
 |-----|--------|
 | `↑ ↓` / `⌘↑ ⌘↓` | Select / first or last |
-| `⏎` | Install or update, or open an installed one's page in Settings → Extensions. Every install and update takes two: the first says what it is (and, if it gets more than a tab, what it asks for), `⏎` again does it. A held `⏎` never counts, and a row that needs something missing ("Needs python3") does nothing |
+| `⏎` | Install or update, or open an installed one's page in Settings → Extensions. Every install and update takes two: the first says what it is (and, if it gets more than a tab, what it asks for), `⏎` again does it. A held `⏎` never counts, and a row that needs something missing or broken ("Needs python3", "/usr/bin/python3 won't run") does nothing |
 | `⌘⏎` | Open an installed one's page (when `⏎` is busy updating) |
 | `/`, or just type | Search |
 | `⌘R` | Reload the catalogue |

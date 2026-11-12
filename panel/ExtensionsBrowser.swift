@@ -54,11 +54,11 @@ final class ExtensionCatalog: ObservableObject {
     // button, now reading Confirm) again installs it.
     @Published private(set) var confirming: String?
 
-    // Requirements the catalogue's entries need that this Mac lacks, by
-    // extension. Probed once per name in the background when the catalogue
-    // lands, since a probe runs the interpreter; a row only says "Needs X"
-    // when X is in here.
-    @Published private(set) var missingRequirements: [String: [String]] = [:]
+    // Requirements the catalogue's entries need that this Mac doesn't meet, by
+    // extension: absent, or there but failing to run. Probed once per name in
+    // the background when the catalogue lands, since a probe runs the
+    // interpreter; a row only says what it needs when it is in here.
+    @Published private(set) var unmetRequirements: [String: [ExtensionInstaller.UnmetRequirement]] = [:]
 
     // The row the selection is on, if it is on one. Most of the page cares only
     // about this, and a card highlighting itself should not have to know the
@@ -85,7 +85,7 @@ final class ExtensionCatalog: ObservableObject {
     private let toMain: (@escaping () -> Void) -> Void
     private let didChange: () -> Void
     private let didLoadCatalogue: () -> Void
-    private let probeRequirement: (String) -> Bool
+    private let probeRequirement: (String) -> ExtensionInstaller.RequirementCheck
     private let recordedTiers: () -> [String: ExtensionTier]
 
     init(fetchCatalogue: @escaping () -> Result<[ExtensionInstaller.IndexEntry], ExtensionInstaller.Failure>,
@@ -99,7 +99,8 @@ final class ExtensionCatalog: ObservableObject {
             = { DispatchQueue.main.async(execute: $0) },
          didChange: @escaping () -> Void = {},
          didLoadCatalogue: @escaping () -> Void = {},
-         probeRequirement: @escaping (String) -> Bool = ExtensionInstaller.interpreterWorks,
+         probeRequirement: @escaping (String) -> ExtensionInstaller.RequirementCheck
+            = { ExtensionInstaller.checkRequirement($0) },
          recordedTiers: @escaping () -> [String: ExtensionTier] = { ExtensionTiers.read() }) {
         self.probeRequirement = probeRequirement
         self.recordedTiers = recordedTiers
@@ -150,17 +151,33 @@ final class ExtensionCatalog: ObservableObject {
 
     private func probeRequirements(of entries: [ExtensionInstaller.IndexEntry]) {
         let names = Set(entries.flatMap(\.requires))
-        guard !names.isEmpty else { missingRequirements = [:]; return }
+        guard !names.isEmpty else { unmetRequirements = [:]; return }
         let probe = probeRequirement
         background { [weak self] in
-            let missing = Set(names.filter { !probe($0) })
+            let checks = Dictionary(uniqueKeysWithValues: names.map { ($0, probe($0)) })
             self?.toMain { [weak self] in
-                self?.missingRequirements = Dictionary(uniqueKeysWithValues: entries.compactMap { entry in
-                    let lacking = entry.requires.filter(missing.contains)
-                    return lacking.isEmpty ? nil : (entry.id, lacking)
+                self?.unmetRequirements = Dictionary(uniqueKeysWithValues: entries.compactMap { entry in
+                    let unmet = entry.requires.compactMap { name -> ExtensionInstaller.UnmetRequirement? in
+                        guard let check = checks[name], check != .works else { return nil }
+                        return .init(name: name, check: check)
+                    }
+                    return unmet.isEmpty ? nil : (entry.id, unmet)
                 })
             }
         }
+    }
+
+    // A card's one line about what it's missing. One that is there but won't
+    // run names its path, which is what points at a broken Xcode install
+    // rather than at installing the interpreter again.
+    static func unmetText(_ unmet: [ExtensionInstaller.UnmetRequirement]) -> String {
+        let missing = unmet.filter { $0.check == .missing }.map(\.name)
+        let broken = unmet.compactMap { requirement -> String? in
+            guard case .wontRun(let path) = requirement.check else { return nil }
+            return "\(path) won't run"
+        }
+        let needs = missing.isEmpty ? [] : ["Needs \(missing.joined(separator: ", "))"]
+        return (needs + broken).joined(separator: " \u{00B7} ")
     }
 
     // MARK: - Installing and removing
@@ -305,7 +322,7 @@ final class ExtensionCatalog: ObservableObject {
         guard let row = rows.first(where: { $0.id == selectedID }) else { return }
         if failure(for: row.id) != nil { return dismissFailure(for: row.id) }
         guard !isBusy(row.id), row.updateAvailable || !row.isInstalled,
-              (missingRequirements[row.id] ?? []).isEmpty || row.isInstalled,
+              (unmetRequirements[row.id] ?? []).isEmpty || row.isInstalled,
               let entry = entries.first(where: { $0.id == row.id })
         else { return }
         requestInstall(entry)
@@ -729,7 +746,7 @@ struct ExtensionsView: View {
     // python3"), so its hint dims rather than promising an install.
     private func activationBlocked(in rows: [ExtensionRow]) -> Bool {
         guard let row = selectedRow(in: rows), !row.isInstalled else { return false }
-        return !(catalog.missingRequirements[row.id] ?? []).isEmpty
+        return !(catalog.unmetRequirements[row.id] ?? []).isEmpty
     }
 
     private var searchField: some View {
@@ -943,8 +960,8 @@ struct ExtensionsView: View {
                     Image(systemName: "chevron.right")
                         .font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
                 }
-            } else if let missing = catalog.missingRequirements[row.id], !missing.isEmpty {
-                Text("Needs \(missing.joined(separator: ", "))")
+            } else if let unmet = catalog.unmetRequirements[row.id], !unmet.isEmpty {
+                Text(ExtensionCatalog.unmetText(unmet))
                     .font(.caption).foregroundStyle(.orange).lineLimit(1)
             } else if let entry = entry(for: row.id) {
                 cardButton(catalog.confirming == row.id ? "Confirm" : "Install", prominent: prominent) {

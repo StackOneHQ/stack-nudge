@@ -92,6 +92,19 @@ enum ExtensionRuntime {
 
     // MARK: - Invocation
 
+    // Where an extension's interpreter is found: both the PATH it runs with and
+    // the one the installer checks `requires` against. One value, so the check
+    // runs the interpreter the extension will get. With the app's own launchd
+    // PATH instead, a broken /usr/bin/python3 stub refused an install that a
+    // working /usr/local/bin/python3 would have run (#241).
+    static let searchPath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+    // What the requirement check runs with: the PATH and HOME an extension
+    // gets, without any of its config.
+    static func probeEnvironment(home: String = NSHomeDirectory()) -> [String: String] {
+        ["PATH": searchPath, "HOME": home]
+    }
+
     // The child's whole environment. It replaces ours rather than extending it
     // — ProcessOutput passes `env` straight to Process, which does not merge —
     // so an extension sees exactly the keys its manifest declared plus enough
@@ -120,7 +133,7 @@ enum ExtensionRuntime {
                             config: [String: String] = ConfigFile.read(),
                             home: String = NSHomeDirectory()) -> [String: String] {
         var env = [
-            "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            "PATH": searchPath,
             "HOME": home,
             "\(ExtensionManifest.configPrefix)ID": manifest.id,
             // The one thing an extension needs to adapt to an older host. Free
