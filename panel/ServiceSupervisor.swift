@@ -689,6 +689,8 @@ final class LiveServiceProcess: ServiceProcess {
     private let input: Pipe
     private let output: Pipe
     private let recording: (ledger: ServiceLedger, id: String)?
+    // What `started` wrote down, for `finish` to clear. Guarded by `lock`.
+    private var recorded: ServiceLedger.Record?
     private let onOutput: (Data) -> Void
     private let onExit: (ServiceSupervisor.Termination) -> Void
 
@@ -775,7 +777,10 @@ final class LiveServiceProcess: ServiceProcess {
         lock.unlock()
         // Before `launched` opens, so the exit, which waits on it, can't
         // forget the record before it is written.
-        if let recording { recording.ledger.record(id: recording.id, pid: recordedPID, group: recordedGroup) }
+        let record = recording.flatMap { $0.ledger.record(id: $0.id, pid: recordedPID, group: recordedGroup) }
+        lock.lock()
+        recorded = record
+        lock.unlock()
         launched.signal()
     }
 
@@ -857,9 +862,10 @@ final class LiveServiceProcess: ServiceProcess {
         lock.lock()
         if group > 0 { killpg(group, SIGKILL) }
         group = -1
-        let exitedPID = pid
+        let record = recorded
+        recorded = nil
         lock.unlock()
-        recording?.ledger.forget(pid: exitedPID)
+        if let record { recording?.ledger.forget(record) }
 
         closePipes()
         onExit(termination)

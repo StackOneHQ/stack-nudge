@@ -1547,7 +1547,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // starts. Blocks for up to a second, and only when there is one.
         for leftover in ServiceLedger.live.reapLeftovers() {
             FileHandle.standardError.write(Data(
-                "stack-nudge: extension \"\(leftover.id)\" was still running from the last launch (pid \(leftover.pid)), so it was stopped\n".utf8))
+                "stack-nudge: extension \"\(leftover.id)\" was still running from the last launch (pid \(leftover.process.pid)), so it was stopped\n".utf8))
         }
         // Discovery is a directory listing and a few small JSON reads, so it
         // runs inline; nothing is spawned until a tab is opened.
