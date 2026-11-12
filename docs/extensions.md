@@ -466,7 +466,12 @@ you could set it, so it rests on review the same way the file does.
 In this order, and each step refuses before the next one runs:
 
 1. `requires` — each interpreter is **executed**, because `command -v python3`
-   succeeds on the Command Line Tools stub and then fails the moment anything runs
+   succeeds on the Command Line Tools stub and then fails the moment anything runs.
+   It is looked up on the same `PATH` the extension runs with
+   (`/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`), so the check
+   runs the interpreter the extension will get. One that is found but fails is
+   reported with its path ("/usr/bin/python3 won't run") rather than as missing,
+   which usually means a broken Xcode or Command Line Tools install
 2. the payload is verified against its `.sha256` sidecar — **a missing sidecar is
    fatal**, never a soft pass
 3. the sidecar must also agree with the index; the index naming the asset *and*
