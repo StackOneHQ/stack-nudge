@@ -97,6 +97,7 @@ The host owns the process; the extension never daemonises itself.
 | It exits or crashes | restarts it with backoff of 1 s, 2 s, 4 s … up to 5 min. After 5 crashes in 10 min, it is marked **broken** with its last exit status (or, when the host killed it, why: no `ready` in time, or no `pong`), shown in Settings → Extensions like a refusal |
 | It goes silent | sends a `ping` every 30 s. No `pong` within 10 s counts as a hang: kill, then restart under the same backoff |
 | Extension disabled, removed or updated, or the app quits | sends `{"type":"stop"}` on stdin, waits 3 s, then SIGTERM, then SIGKILL after 2 s more |
+| The app crashes or is force-quit | nothing it can do then: stdin closes, and a service that leaves on EOF is gone. One that ignores EOF is stopped on the next launch, before services start: each running service is recorded in `~/.stack-nudge/services/` with its pid and start time and those of the app that started it. A recorded process still running with the same pid and start time gets SIGTERM, then its group SIGKILL a second later, unless the app that started it is still running too: that is another copy of the app (a dev build beside the installed one), and its services are live |
 | The Mac sleeps | nothing special. The process is suspended with everything else, and the next missed `pong` after wake is tolerated once |
 
 One process per extension, at most. The host keeps the process group, so
