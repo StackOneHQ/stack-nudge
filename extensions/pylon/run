@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Pylon: customer issues waiting on a response from us.
 
+The tab opens on first responses only: the customers nobody has answered yet,
+which is the one list with an SLA the team is measured on. `a` shows
+everything waiting on us, and the header says how many more there are.
+
 Three kinds of row, told apart by the colour of their bar, the one thing on
 a row an extension can colour.
 
@@ -15,7 +19,7 @@ a row an extension can colour.
 
 A reply owed or an engineering ticket whose last word is the customer signing
 off ("thanks", "sounds good") turns grey and reads "close?": still listed, but
-below the real work and left out of the badge's count.
+below the real work. The badge counts first responses only.
 
 Each row's footnote is the latest message on the issue — who, how long ago,
 and its first line — so the list says what's going on without opening
@@ -38,20 +42,20 @@ it asks Pylon again, so an issue answered since the last sync doesn't ping.
 The reminders are the point of running while the tab is hidden — the banner
 that fires while you are looking at something else:
 
-    when it opens      the issue's owner: its assignee, or until somebody
-                       is assigned, the account's owner
-    2/3 of SLA left    the owner again
-    1/3 of SLA left    the owner again
-    1/6 of SLA left    everyone
-    breached           everyone
+    30 min before the deadline   the issue's owner: its assignee, or until
+                                 somebody is assigned, the account's owner
+    5 min before the deadline    everyone
+    breached                     everyone
 
-The SLA is each issue's own window as Pylon sets it, from opening to its
-first-response deadline. On a 30-minute SLA that is "instantly, then 10, 20
-and 25 minutes in", the escalation this was built for. An issue with no owner
-is "ours": it goes to everyone at every stage, because its owner is then the
-whole team. So does one whose owner's Pylon status is out of office. Out of hours, Pylon pushes the deadline to the next business
-morning, so the window is long and its reminders are spread across it; a
-laptop that slept through some gets one banner for the latest, not one each.
+Both lead times are settings, in minutes before Pylon's own first-response
+deadline, and nothing else. On a 30-minute SLA that is "the owner when it
+opens, everyone at 25 minutes and at the breach". Out of hours, Pylon pushes
+the deadline to the next business morning, so the reminders move with it: an
+issue opened on Friday evening and due at 09:30 on Monday pings its owner at
+09:00 on Monday, not over the weekend. An issue with no owner is "ours": it
+goes to everyone at every stage, because its owner is then the whole team. So
+does one whose owner's Pylon status is out of office. A laptop that slept
+through some stages gets one banner for the latest, not one each.
 
 Read-only against Pylon. See docs/extensions.md for the schema this prints.
 """
@@ -73,6 +77,10 @@ EMAIL_KEY = "STACKNUDGE_EXT_PYLON_EMAIL"
 NOTIFY_KEY = "STACKNUDGE_EXT_PYLON_NOTIFY"
 SYNC_KEY = "STACKNUDGE_EXT_PYLON_SYNC_MINUTES"
 DEFAULT_SYNC_MINUTES = 3
+OWNER_KEY = "STACKNUDGE_EXT_PYLON_OWNER_MINUTES"
+TEAM_KEY = "STACKNUDGE_EXT_PYLON_TEAM_MINUTES"
+DEFAULT_OWNER_MINUTES = 30
+DEFAULT_TEAM_MINUTES = 5
 
 # What a sync keeps of each issue: enough to draw its row, time its reminders
 # and open it. Never the body, which is the customer's whole first message.
@@ -159,27 +167,28 @@ ME_TTL = 24 * 3600
 USERS_TTL = 3600
 ACCOUNTS_TTL = 6 * 3600
 
-# (share of the SLA window still left, who hears about it), first to last.
-# The window is each issue's own, as Pylon sets it: from when the issue was
-# opened to its first-response deadline. Pylon's API exposes the deadline but
-# not the SLA's length, so this is the only length there is to go on — and
-# nothing here assumes one. On a 30-minute SLA these land at 30, 20, 10 and 5
-# minutes left and at breach; on a 4-hour one, at 4h, 2h40, 1h20 and 40m.
-STAGES = [
-    (1.0, "owner"),
-    (2 / 3, "owner"),
-    (1 / 3, "owner"),
-    (1 / 6, "team"),
-    (0.0, "team"),
-]
-# Only for an issue with no usable opening time to measure a window from,
-# which Pylon's schema says can't happen: `created_at` is required.
+# The reminders, first to last: the owner, then everyone, then the breach.
+# Each is a fixed time before Pylon's first-response deadline, never a share
+# of the time since the issue opened: out of hours that time includes the
+# night, and shares of it pinged people on Saturday about a Monday deadline.
+OWNER_STAGE, TEAM_STAGE, BREACH_STAGE = 1, 2, 3
+STAGE_COUNT = BREACH_STAGE
+# The ledger's stage numbers meant something else before 1.2.0 (five shares
+# of the window). A ledger without this version is reseeded, not trusted.
+LEDGER_VERSION = 2
+# Only for the bar of an issue with no usable opening time, which Pylon's
+# schema says can't happen: `created_at` is required.
 FALLBACK_WINDOW = 30 * 60
-SOUNDS = {1: "Glass", 2: "Ping", 3: "Ping", 4: "Sosumi", 5: "Basso"}
+SOUNDS = {OWNER_STAGE: "Ping", TEAM_STAGE: "Sosumi", BREACH_STAGE: "Basso"}
 # An issue first seen already this far past its SLA is shown but never
 # bannered. Without it the first run after install pings every stale issue in
 # the workspace at once.
 SILENT_AFTER_BREACH = 60 * 60
+# A first response missed longer ago than this has left the SLA's day. It
+# moves behind `a` with the follow-ups and out of the badge, so a ticket Pylon
+# never saw answered (one moved to engineering a year ago, say) doesn't hold
+# the default view and the widget red for good.
+STALE_FIRST = 24 * 3600
 # More banners than this in one run collapse into a single summary.
 MAX_BANNERS = 3
 
@@ -301,31 +310,48 @@ def classify(issue):
     return None
 
 
-def stage_for(seconds_left, window):
-    """How many escalation stages an issue has crossed, 0..len(STAGES).
+def _minutes_setting(key, default):
+    """A lead time in whole minutes, 0 to 24 hours. Anything unreadable is the
+    default rather than an error: a typo shouldn't cost anyone a reminder."""
+    raw = (os.environ.get(key) or "").strip()
+    try:
+        minutes = int(raw) if raw else default
+    except ValueError:
+        return default
+    return min(max(minutes, 0), 24 * 60)
 
-    Thresholds are rounded to the millisecond: 2/3 of 1800 is
-    1199.9999999999998 in floating point, which would put "20 minutes left"
-    a hair after 20 minutes left."""
-    return sum(1 for share, _ in STAGES if seconds_left <= round(share * window, 3))
+
+def lead_times():
+    """(owner, team) in seconds before the deadline. The owner never hears
+    later than the team: a team lead time longer than the owner's moves the
+    owner's up to it, and the team's reminder is then the one that goes out."""
+    team = _minutes_setting(TEAM_KEY, DEFAULT_TEAM_MINUTES) * 60
+    owner = _minutes_setting(OWNER_KEY, DEFAULT_OWNER_MINUTES) * 60
+    return max(owner, team), team
+
+
+def stage_for(seconds_left, leads=None):
+    """How many reminder stages an issue has crossed, 0..STAGE_COUNT."""
+    owner, team = leads or lead_times()
+    return sum(1 for threshold in (owner, team, 0) if seconds_left <= threshold)
 
 
 def due_banner(previous, crossed, owner):
     """The stage to banner for, or None.
 
     Only the most severe newly crossed stage addressed to this person: a poll
-    that finds an issue gone from "new" straight to "5 min left" sends one
-    banner, not three.
+    that finds an issue gone from "new" straight past the team's reminder
+    sends one banner, not two.
     """
     for stage in range(crossed, previous, -1):
-        if owner or STAGES[stage - 1][1] == "team":
+        if owner or stage != OWNER_STAGE:
             return stage
     return None
 
 
 def last_team_stage(crossed):
-    """The latest team stage at or before `crossed`, or 0."""
-    return max([s for s in range(1, crossed + 1) if STAGES[s - 1][1] == "team"] or [0])
+    """The latest stage at or before `crossed` that goes to everyone, or 0."""
+    return crossed if crossed >= TEAM_STAGE else 0
 
 
 def plan_banners(items, ledger, know_me=True):
@@ -342,10 +368,11 @@ def plan_banners(items, ledger, know_me=True):
     banner for the most severe stage, not one per stage missed.
     """
     banners, kept = [], {}
+    leads = lead_times()
     for item in items:
         if item["kind"] != "first":
             continue
-        crossed = stage_for(item["left"], item["window"])
+        crossed = stage_for(item["left"], leads)
         previous = ledger.get(item["id"])
         previous = previous if isinstance(previous, int) else None
         if item["snoozed"]:
@@ -410,7 +437,9 @@ def row_for(item, now):
         if left > 0:
             row["value"] = "%s left" % short_duration(left)
             fill = 1 - left / item["window"]
-            tint = GREEN if left > item["window"] / 3 else AMBER
+            # Amber once everyone has been told: the same moment the badge
+            # turns red, so the colour and the reminders tell one story.
+            tint = GREEN if left > lead_times()[1] else AMBER
             notes = ["first response due %s" % clock(item["due"], now)]
         else:
             row["value"] = "late %s" % short_duration(-left)
@@ -479,17 +508,16 @@ def said(preview, now):
 
 
 def header_for(items, mine_only, identity="ok", notes=()):
-    ours = [i for i in items if i["mine"] or i["unowned"]]
-    live = [i for i in ours if i["kind"] == "first" and i["left"] > 0]
-    late = [i for i in ours if i["kind"] == "first" and i["left"] <= 0]
-    owed = [i for i in ours if i["kind"] == "reply" and not signed_off(i)]
+    # First responses only: they're the SLA, and the badge is what reaches
+    # the widget. Replies owed and engineering tickets are behind `a`.
+    ours = [i for i in items if (i["mine"] or i["unowned"]) and current_first(i)]
+    live = [i for i in ours if i["left"] > 0]
+    late = [i for i in ours if i["left"] <= 0]
     if late:
         badge = {"text": "%d LATE" % len(late), "tone": "danger"}
     elif live:
-        urgent = any(i["left"] <= i["window"] / 3 for i in live)
+        urgent = any(i["left"] <= lead_times()[1] for i in live)
         badge = {"text": "%d DUE" % len(live), "tone": "danger" if urgent else "warning"}
-    elif owed:
-        badge = {"text": "%d OWED" % len(owed), "tone": "neutral"}
     else:
         badge = {"text": "CLEAR", "tone": "success"}
 
@@ -509,20 +537,38 @@ def header_for(items, mine_only, identity="ok", notes=()):
     return header
 
 
-def visible(items, mine_only):
-    """The rows to draw, in order. "Mine" still shows every first response:
-    the first-response SLA is the team's, and everyone is pinged before it
-    breaches, so hiding a teammate's would hide the one thing you may be asked
-    to catch. Only replies owed on other people's accounts are filtered out."""
+def current_first(item):
+    """A first response still owed, and not missed longer ago than
+    STALE_FIRST."""
+    return item["kind"] == "first" and item["left"] > -STALE_FIRST
+
+
+def visible(items, mine_only, everything=False):
+    """The rows to draw, in order.
+
+    By default only current first responses: the SLA, and the only rows that
+    remind. `everything` adds replies owed, tickets with engineering and first
+    responses missed long ago.
+
+    "Mine" still shows every first response: the first-response SLA is the
+    team's, and everyone is pinged before it breaches, so hiding a teammate's
+    would hide the one thing you may be asked to catch. Only the other kinds
+    on other people's accounts are filtered out."""
     return sorted((i for i in items
-                   if not mine_only or i["mine"] or i["unowned"] or i["kind"] == "first"),
+                   if (everything or current_first(i))
+                   and (not mine_only or i["mine"] or i["unowned"] or i["kind"] == "first")),
                   key=sort_key)
 
 
-def document(items, now, mine_only, identity="ok", notes=()):
-    ordered = visible(items, mine_only)
+def document(items, now, mine_only, identity="ok", notes=(), everything=False):
+    ordered = visible(items, mine_only, everything)
     shown = ordered[:MAX_ROWS]
     notes = list(notes)
+    if not everything:
+        # Say what `a` would add, so the other kinds aren't silently gone.
+        hidden = len(visible(items, mine_only, True)) - len(ordered)
+        if hidden:
+            notes.append("%d more on A" % hidden)
     if len(ordered) > len(shown):
         notes.append("showing %d of %d" % (len(shown), len(ordered)))
     return {
@@ -535,6 +581,9 @@ def document(items, now, mine_only, identity="ok", notes=()):
             # F, for filter, not M: on StackNudge's list pages M is mute, and
             # a key should mean the same thing on every page.
             {"id": "mine", "label": "Everyone" if mine_only else "Mine only", "key": "f"},
+            # A, for all. No list page uses it.
+            {"id": "all", "label": "First responses only" if everything else "All waiting",
+             "key": "a"},
         ],
     }
 
@@ -595,7 +644,7 @@ _launcher = _open_url
 
 def banner_text(stage, item):
     number = "#%s" % item["number"] if item["number"] is not None else "Issue"
-    if stage == len(STAGES):
+    if stage == BREACH_STAGE:
         title = "Pylon %s · first response missed" % number
     else:
         title = "Pylon %s · %s left" % (number, short_duration(item["left"]))
@@ -1118,6 +1167,16 @@ def build(state, now, force=False):
 
     ledger = _dict(state.get("notified"))
     items, know_me, identity = render_items(state, snapshot, now)
+    if state.get("ledger_version") != LEDGER_VERSION:
+        # Stage numbers from an older version mean something else. Count what
+        # has already been crossed as dealt with, so an update sends nothing
+        # on its own; the next stage each issue reaches is reminded as usual.
+        # A new install has no ledger and reminds from the start.
+        if ledger:
+            leads = lead_times()
+            ledger = {i["id"]: stage_for(i["left"], leads)
+                      for i in items if i["kind"] == "first"}
+        state["ledger_version"] = LEDGER_VERSION
     banners, kept = plan_banners(items, ledger, know_me)
     if banners and not attempted and age >= FRESH_FOR_BANNER:
         # About to remind from data up to a sync old. Ask Pylon first: the
@@ -1144,12 +1203,14 @@ def build(state, now, force=False):
         send_banners(banners)
 
     mine_only = bool(state.get("mine_only"))
+    everything = bool(state.get("everything"))
     users = _dict(_dict(state.get("users")).get("by_id"))
-    attach_previews(api, state, items, visible(items, mine_only)[:MAX_ROWS], users, fetch=synced)
+    attach_previews(api, state, items, visible(items, mine_only, everything)[:MAX_ROWS], users,
+                    fetch=synced)
     notes = [note or ("synced %s ago" % short_duration(age) if age >= 60 else None)]
     if snapshot.get("partial"):
         notes.append("partial sync")
-    return document(items, now, mine_only, identity, notes)
+    return document(items, now, mine_only, identity, notes, everything)
 
 
 # --- State ------------------------------------------------------------------
@@ -1204,6 +1265,8 @@ def main(argv=None, now=None):
             _launcher(link)
     elif action == "mine":
         state["mine_only"] = not state.get("mine_only", False)
+    elif action == "all":
+        state["everything"] = not state.get("everything", False)
 
     try:
         result = build(state, now or datetime.now(timezone.utc), force=action == "refresh")
