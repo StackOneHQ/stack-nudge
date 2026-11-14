@@ -31,6 +31,13 @@ StackNudge identifier, because there isn't one.
   the catalogue fetch and the update check retry through it, which authenticates
   as you against your own GitHub account.
 
+  If `STACKNUDGE_EXTENSIONS_SOURCES` names other repositories, their catalogues
+  and packages are fetched from their releases on `api.github.com` too, with
+  your GitHub token (stack-nudge's own sign-in, or the `gh` CLI's) so a private
+  one can be read. The token is only sent to those repositories' release
+  assets on `api.github.com`, never to the storage host GitHub redirects
+  downloads to. Without that setting nothing reads either token for this.
+
   An installed extension is a separate program that stack-nudge runs, and
   **whatever network calls it makes are its own**. Three ship with the app:
 

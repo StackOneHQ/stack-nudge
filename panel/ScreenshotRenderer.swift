@@ -209,7 +209,7 @@ enum ScreenshotRenderer {
                                           capabilities: capabilities[id] ?? [],
                                           mode: capabilities[id] == nil ? "view" : "service")
         }
-        let catalog = ExtensionCatalog(fetchCatalogue: { .success(entries) },
+        let catalog = ExtensionCatalog(fetchCatalogue: { .success(.init(entries: entries)) },
                                        performInstall: { .success($0.id) },
                                        performRemove: { .success($0) },
                                        background: { $0() }, toMain: { $0() },

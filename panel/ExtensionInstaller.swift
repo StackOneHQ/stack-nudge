@@ -46,6 +46,16 @@ enum ExtensionInstaller {
         var capabilities: [String]? = nil
         // "view" or "service", as the manifest says; nil from an older index.
         var mode: String? = nil
+        // Which source listed it: nil for the app's own release, otherwise the
+        // extra source's owner/repo. The host stamps it after parsing and the
+        // index can't carry it (it is not in CodingKeys), so one source's index
+        // can't claim an entry belongs to another.
+        var source: String? = nil
+
+        private enum CodingKeys: String, CodingKey {
+            case id, name, version, description, asset, sha256, requires, config, tier,
+                 capabilities, mode
+        }
 
         var requestedCapabilities: [ExtensionCapability]? {
             capabilities.map { $0.compactMap(ExtensionCapability.init(rawValue:)) }
@@ -64,6 +74,7 @@ enum ExtensionInstaller {
         case differsFromIndex(String)
         case downloadFailed(String)
         case catalogueUnavailable
+        case sourceUnavailable(String, signedIn: Bool)
         case extractFailed(String)
         case installFailed(String)
 
@@ -88,6 +99,15 @@ enum ExtensionInstaller {
                 return "couldn't reach GitHub — it may be rate-limiting this "
                     + "machine, or be unreachable. Installing the gh CLI lets "
                     + "stack-nudge use your own quota."
+            case .sourceUnavailable(_, let signedIn):
+                // A private repository answers 404 to anyone who can't see it,
+                // so "not there" and "not allowed" look the same from here.
+                // Shown after the source's name, so it doesn't repeat it.
+                return signedIn
+                    ? "couldn't read its latest release. Check the name, and that your "
+                        + "GitHub account can see it."
+                    : "couldn't read its latest release. If it's private, sign in to "
+                        + "GitHub in Settings or with the gh CLI."
             case .extractFailed(let why):      return "couldn't unpack the download — \(why)"
             case .installFailed(let why):      return "couldn't install — \(why)"
             }
@@ -249,8 +269,8 @@ enum ExtensionInstaller {
 
     // MARK: - Installing
 
-    // Where the index and the packages live: attached to the app's own release,
-    // so there is one trust anchor and one fetch path rather than two.
+    // Where the index lives on a release: the app's own, or an extra source's
+    // (see ExtensionSource), each carrying its own packages beside it.
     static func indexURL(forRelease assets: [String: URL]) -> URL? {
         assets["extensions-index.json"]
     }
@@ -431,36 +451,68 @@ enum ExtensionInstaller {
 
     // MARK: - Talking to the release
 
+    // Which of an asset's URLs to download it from. The app's own release is
+    // public, so the browser link works with no token. An extra source may be
+    // private, and a private release's browser link only works for a signed-in
+    // browser, so its assets come through the API instead: the asset's own
+    // `url`, asked for as application/octet-stream with the token.
+    enum AssetLink: Equatable {
+        case browserDownload
+        case api(ExtensionSource)
+    }
+
     // Asset name -> download URL, from the release JSON. Hand-parsed, because
     // this one is GitHub's format rather than ours — the same split the manifest
     // and the index already follow.
-    static func assets(fromReleaseJSON data: Data) -> [String: URL] {
+    static func assets(fromReleaseJSON data: Data,
+                       via link: AssetLink = .browserDownload) -> [String: URL] {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let assets = object["assets"] as? [[String: Any]]
         else { return [:] }
         var result: [String: URL] = [:]
         for asset in assets {
+            let field: String
+            switch link {
+            case .browserDownload: field = "browser_download_url"
+            case .api: field = "url"
+            }
             guard let name = asset["name"] as? String,
-                  let raw = asset["browser_download_url"] as? String,
+                  let raw = asset[field] as? String,
                   let url = URL(string: raw),
                   // A release JSON could name any scheme, and file:// fails
                   // closed only because httpGET insists on an HTTPURLResponse.
                   // Saying so here means it does not depend on that.
                   url.scheme?.lowercased() == "https"
             else { continue }
+            // The token goes with these requests, so an API link has to be one
+            // of this repository's own release assets. A release JSON naming
+            // anywhere else would otherwise be sent the token.
+            if case .api(let source) = link, !isAssetAPIURL(url, of: source) { continue }
             result[name] = url
         }
         return result
     }
 
+    static func isAssetAPIURL(_ url: URL, of source: ExtensionSource) -> Bool {
+        guard url.host?.lowercased() == "api.github.com", url.port == nil, url.query == nil,
+              url.user == nil
+        else { return false }
+        let prefix = "/repos/\(source.owner)/\(source.repo)/releases/assets/".lowercased()
+        let path = url.path.lowercased()
+        guard path.hasPrefix(prefix) else { return false }
+        let id = path.dropFirst(prefix.count)
+        return !id.isEmpty && id.allSatisfy(\.isNumber)
+    }
+
     static let indexAssetName = "extensions-index.json"
 
-    // The catalogue lives on the app's own latest release, so there is one trust
-    // anchor and one fetch path rather than two. A release with no index at all
-    // is an older one, which is an empty catalogue rather than an error.
+    // The app's catalogue lives on its own latest release. A release with no
+    // index at all is an older one, which is an empty catalogue rather than an
+    // error. An extra source's is read the same way, from its own release.
     static func catalogue(fromReleaseJSON data: Data,
+                          via link: AssetLink = .browserDownload,
                           fetch: (URL) -> Data?) -> Result<[IndexEntry], Failure> {
-        let published = assets(fromReleaseJSON: data)
+        let published = assets(fromReleaseJSON: data, via: link)
         guard let indexURL = published[indexAssetName] else { return .success([]) }
         guard let indexData = fetch(indexURL) else {
             return .failure(.downloadFailed(indexAssetName))
@@ -468,13 +520,145 @@ enum ExtensionInstaller {
         return parseIndex(indexData)
     }
 
-    static func fetchCatalogue() -> Result<[IndexEntry], Failure> {
+    // Every source's entries in one list, the app's own first, and what
+    // couldn't be read. Built with an array literal it is a catalogue whose
+    // sources all loaded, which is what every caller before extra sources
+    // meant by one.
+    struct Catalogue: Equatable, ExpressibleByArrayLiteral {
+        var entries: [IndexEntry]
+        // Extra sources that failed, owner/repo -> why. The app's own failing
+        // fails the whole fetch, as it always has.
+        var unavailable: [String: String] = [:]
+        // Entries in the sources setting that aren't owner/repo.
+        var ignored: [String] = []
+
+        init(entries: [IndexEntry], unavailable: [String: String] = [:], ignored: [String] = []) {
+            self.entries = entries
+            self.unavailable = unavailable
+            self.ignored = ignored
+        }
+
+        init(arrayLiteral elements: IndexEntry...) {
+            self.init(entries: elements)
+        }
+
+        // Whether every source answered. Only then does an extension missing
+        // from the catalogue mean it was withdrawn rather than that its source
+        // was out of reach.
+        var isComplete: Bool { unavailable.isEmpty }
+    }
+
+    // The app's own entries, then each extra source's in the order the setting
+    // lists them. An id is the directory it installs to, so the first source
+    // to list one keeps it: an extra source can never stand in for one of the
+    // app's own extensions, or for one an earlier source already lists. Each
+    // extra entry is stamped with its source and its tier held to that source's
+    // ceiling, so everything after this (the install confirmation, the
+    // recorded tier, the grant) sees the capped tier and nothing else.
+    static func merging(builtIn: [IndexEntry],
+                        extra: [(source: ExtensionSource, result: Result<[IndexEntry], Failure>)])
+        -> Catalogue {
+        var catalogue = Catalogue(entries: builtIn)
+        var taken = Set(builtIn.map(\.id))
+        for (source, result) in extra {
+            switch result {
+            case .failure(let failure):
+                catalogue.unavailable[source.slug] = failure.message
+            case .success(let entries):
+                for var entry in entries where taken.insert(entry.id).inserted {
+                    entry.source = source.slug
+                    entry.tier = min(entry.reviewedTier, source.ceiling).rawValue
+                    catalogue.entries.append(entry)
+                }
+            }
+        }
+        return catalogue
+    }
+
+    static func fetchCatalogue(config: [String: String] = ConfigFile.read()) -> Result<Catalogue, Failure> {
         guard let release = releaseJSON() else { return .failure(.catalogueUnavailable) }
-        return catalogue(fromReleaseJSON: release, fetch: httpGET)
+        let builtIn: [IndexEntry]
+        switch catalogue(fromReleaseJSON: release, fetch: httpGET) {
+        case .success(let entries): builtIn = entries
+        case .failure(let failure): return .failure(failure)
+        }
+        let configured = ExtensionSource.configured(config)
+        let tokens = configured.sources.isEmpty ? [] : githubTokens()
+        let extra = configured.sources.map { source in
+            (source: source, result: sourceCatalogue(source, tokens: tokens))
+        }
+        var merged = merging(builtIn: builtIn, extra: extra)
+        merged.ignored = configured.ignored
+        return .success(merged)
+    }
+
+    // Where to download an entry from: its own source's release, never
+    // another's, since the entry's asset names mean something only there.
+    static func releaseSources(for entry: IndexEntry) -> Sources {
+        guard let slug = entry.source else { return releaseSources() }
+        guard let source = ExtensionSource(slug: slug) else {
+            return Sources(assets: [:], fetch: { _ in nil })
+        }
+        let tokens = githubTokens()
+        guard let (release, token) = sourceReleaseJSON(source, tokens: tokens) else {
+            return Sources(assets: [:], fetch: { _ in nil })
+        }
+        return Sources(assets: assets(fromReleaseJSON: release, via: .api(source)),
+                       fetch: { assetGET($0, token: token) })
     }
 
     static func releaseSources() -> Sources {
-        Sources(assets: releaseJSON().map(assets(fromReleaseJSON:)) ?? [:], fetch: httpGET)
+        Sources(assets: releaseJSON().map { assets(fromReleaseJSON: $0) } ?? [:], fetch: httpGET)
+    }
+
+    // MARK: - Extra sources
+
+    static func sourceCatalogue(_ source: ExtensionSource, tokens: [String]) -> Result<[IndexEntry], Failure> {
+        guard let (release, token) = sourceReleaseJSON(source, tokens: tokens) else {
+            return .failure(.sourceUnavailable(source.slug, signedIn: !tokens.isEmpty))
+        }
+        return catalogue(fromReleaseJSON: release, via: .api(source),
+                         fetch: { assetGET($0, token: token) })
+    }
+
+    static func sourceReleaseURL(_ source: ExtensionSource) -> URL? {
+        URL(string: "https://api.github.com/repos/\(source.owner)/\(source.repo)/releases/latest")
+    }
+
+    // The source's latest release, and the token that read it, which is the
+    // one its assets are then fetched with. Each token in turn, then none: a
+    // public source needs no token, and a private one answers 404 to a token
+    // that can't see it, so the next one gets its chance.
+    static func sourceReleaseJSON(_ source: ExtensionSource, tokens: [String],
+                                  get: (URL, String?) -> Data? = { apiGET($0, token: $1) })
+        -> (release: Data, token: String?)? {
+        guard let url = sourceReleaseURL(source) else { return nil }
+        for token in tokens.map(Optional.some) + [nil] {
+            if let data = get(url, token) { return (data, token) }
+        }
+        return nil
+    }
+
+    // The tokens a private source can be read with: the one stack-nudge's own
+    // GitHub sign-in holds, then the gh CLI's, without repeats. Read only when
+    // the config names an extra source, so a Mac without one never touches
+    // either.
+    static func githubTokens(signIn: () -> String? = GitHubAuth.token,
+                             gh: () -> String? = ghToken) -> [String] {
+        var tokens: [String] = []
+        for token in [signIn(), gh()].compactMap({ $0 }) where !tokens.contains(token) {
+            tokens.append(token)
+        }
+        return tokens
+    }
+
+    static func ghToken() -> String? {
+        guard let gh = ProcessOutput.gh(),
+              let output = ProcessOutput.read(gh, ["auth", "token"], timeout: 10)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !output.isEmpty, !output.contains(where: \.isWhitespace)
+        else { return nil }
+        return output
     }
 
     // The anonymous GitHub API is rate-limited per IP — sixty an hour, shared
@@ -508,8 +692,32 @@ enum ExtensionInstaller {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 20
         configuration.timeoutIntervalForResource = 60
-        return URLSession(configuration: configuration)
+        return URLSession(configuration: configuration, delegate: RedirectGuard(), delegateQueue: nil)
     }()
+
+    // A private release asset answers the API with a redirect to a signed
+    // storage URL on another host. The token must not follow it there: the
+    // storage host has no use for it, and a request carrying both its own
+    // signature and a token is refused. A redirect off https is refused
+    // outright.
+    private final class RedirectGuard: NSObject, URLSessionTaskDelegate {
+        func urlSession(_ session: URLSession, task: URLSessionTask,
+                        willPerformHTTPRedirection response: HTTPURLResponse,
+                        newRequest request: URLRequest,
+                        completionHandler: @escaping (URLRequest?) -> Void) {
+            completionHandler(ExtensionInstaller.redirect(request, from: task.originalRequest?.url))
+        }
+    }
+
+    static func redirect(_ request: URLRequest, from original: URL?) -> URLRequest? {
+        guard request.url?.scheme?.lowercased() == "https" else { return nil }
+        guard request.value(forHTTPHeaderField: "Authorization") != nil,
+              request.url?.host?.lowercased() != original?.host?.lowercased()
+        else { return request }
+        var stripped = request
+        stripped.setValue(nil, forHTTPHeaderField: "Authorization")
+        return stripped
+    }
 
     // Synchronous, because every caller is already on a background queue. The
     // wait has no deadline of its own on purpose: an abandoning wait returns
@@ -519,9 +727,25 @@ enum ExtensionInstaller {
     // resource timeout is what bounds this now, so the completion always fires
     // and always fires before the wait returns.
     private static func httpGET(_ url: URL) -> Data? {
+        get(url, token: nil, accept: "application/vnd.github+json")
+    }
+
+    // The GitHub API, with a token when there is one.
+    static func apiGET(_ url: URL, token: String?) -> Data? {
+        get(url, token: token, accept: "application/vnd.github+json")
+    }
+
+    // An extra source's release asset, through the API: octet-stream is what
+    // makes GitHub send the file rather than a description of it.
+    static func assetGET(_ url: URL, token: String?) -> Data? {
+        get(url, token: token, accept: "application/octet-stream")
+    }
+
+    private static func get(_ url: URL, token: String?, accept: String) -> Data? {
         var request = URLRequest(url: url)
         request.setValue("stack-nudge", forHTTPHeaderField: "User-Agent")
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue(accept, forHTTPHeaderField: "Accept")
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         var payload: Data?
         let done = DispatchSemaphore(value: 0)
         let task = session.dataTask(with: request) { data, response, _ in
