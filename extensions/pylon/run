@@ -27,6 +27,11 @@ already know about business hours, and they are absent on the proactive
 outreach issues we open ourselves — which otherwise look exactly like an
 unanswered customer.
 
+Email issues with no account aren't asked for: that is how the spam that gets
+past Pylon's own filter arrives. A no-account issue from anywhere else (the
+chat widget, a Slack channel) is still listed, because real customers arrive
+that way too.
+
 The host runs this every minute, tab hidden or not (`whileFocusedOnly` is
 false), but Pylon is only asked every few minutes — the Sync setting, 3 by
 default. The runs between redraw from the last sync: deadlines don't move
@@ -53,7 +58,10 @@ whole team. So does one whose owner's Pylon status is out of office. Out of hour
 morning, so the window is long and its reminders are spread across it; a
 laptop that slept through some gets one banner for the latest, not one each.
 
-Read-only against Pylon. See docs/extensions.md for the schema this prints.
+Spam is marked from the tab: x on a row, then x again on it within
+SPAM_CONFIRM_SECONDS, tags the issue Spam and closes it. That is the only
+thing ever written to Pylon; everything else only reads. See
+docs/extensions.md for the schema this prints.
 """
 
 import hashlib
@@ -152,6 +160,13 @@ NOT_ON_US = ["closed", "waiting_on_customer", "on_hold"]
 # shown whether or not an SLA is running, so it doesn't vanish while it waits.
 # It isn't reminded about, because the next move is engineering's.
 ENGINEERING_STATES = ("waiting_on_engineering",)
+
+# Tagged and closed rather than Pylon's own mark-spam, which deletes the issue
+# and blocks its sender with no undo. The tag is what reports leave spam out by.
+SPAM_TAG = "Spam"
+# The second x has to land this soon after the first, on the same row, so one
+# stray key can't close a customer's issue.
+SPAM_CONFIRM_SECONDS = 10
 
 ME_TTL = 24 * 3600
 # Hourly rather than daily: the list carries each person's status, and an
@@ -394,11 +409,15 @@ def signed_off(item):
     return any(phrase in words for phrase in SIGN_OFFS)
 
 
-def row_for(item, now):
+def row_for(item, now, armed=False):
     row = {
         "id": item["id"],
         "title": item["title"],
-        "actions": [{"id": "open", "label": "Open in Pylon", "key": "return"}],
+        "actions": [
+            {"id": "open", "label": "Open in Pylon", "key": "return"},
+            {"id": "spam", "label": "x again: mark as spam" if armed else "Mark as spam",
+             "key": "x"},
+        ],
     }
     if item["number"] is not None:
         row["lead"] = "#%s" % item["number"]
@@ -462,6 +481,8 @@ def row_for(item, now):
         if item["snoozed"]:
             notes.append("snoozed")
     row["footnote"] = " · ".join(notes)
+    if armed:
+        row["value"] = "x again: spam"
     return row
 
 
@@ -519,7 +540,7 @@ def visible(items, mine_only):
                   key=sort_key)
 
 
-def document(items, now, mine_only, identity="ok", notes=()):
+def document(items, now, mine_only, identity="ok", notes=(), armed=None):
     ordered = visible(items, mine_only)
     shown = ordered[:MAX_ROWS]
     notes = list(notes)
@@ -529,7 +550,7 @@ def document(items, now, mine_only, identity="ok", notes=()):
         "schema": 1,
         "state": "ok",
         "header": header_for(items, mine_only, identity, notes),
-        "rows": [row_for(i, now) for i in shown],
+        "rows": [row_for(i, now, armed=i["id"] == armed) for i in shown],
         "actions": [
             {"id": "refresh", "label": "Sync now", "key": "r"},
             # F, for filter, not M: on StackNudge's list pages M is mute, and
@@ -732,6 +753,53 @@ class Api:
         return json.loads(payload, parse_constant=_refuse_constant)
 
 
+def armed_spam(state, now_ts):
+    """The issue x was pressed on once, while a second x would still count."""
+    armed = _dict(state.get("spam_armed"))
+    at = armed.get("at")
+    if isinstance(at, (int, float)) and 0 <= now_ts - at < SPAM_CONFIRM_SECONDS:
+        return armed.get("id")
+    return None
+
+
+def press_spam(state, row, now):
+    """x on a row. The first press arms it; a second on the same row in time
+    tags the issue Spam and closes it. A note for the header, or None.
+
+    The row id comes from the host, so only an issue in the last snapshot can
+    be written to. Both writes are idempotent, so "try again" after a timeout
+    is safe even if the first one landed."""
+    now_ts = now.timestamp()
+    snapshot = usable_snapshot(state.get("snapshot"))
+    issues = snapshot["issues"] if snapshot else []
+    issue = next((i for i in issues if isinstance(i, dict) and str(i.get("id")) == row), None)
+    if issue is None:
+        state.pop("spam_armed", None)
+        return None
+    if armed_spam(state, now_ts) != row:
+        state["spam_armed"] = {"id": row, "at": now_ts}
+        return None
+    state.pop("spam_armed", None)
+    token = (os.environ.get(TOKEN_KEY) or "").strip()
+    # A snapshot from another token is about to be thrown away; don't act on it.
+    if not token or state.get("token") != fingerprint(token):
+        return None
+    name = "#%s" % issue["number"] if issue.get("number") is not None else "Issue"
+    api = Api(token, state, time.monotonic() + TOTAL_BUDGET)
+    try:
+        api.call("PATCH", "/issues/" + urllib.parse.quote(row, safe=""),
+                 {"tags": [SPAM_TAG], "tags_apply_mode": "append_only", "state": "closed"})
+    except Unauthorised:
+        return "%s not marked as spam: Pylon refused" % name
+    except urllib.error.HTTPError as error:
+        return "%s not marked as spam (Pylon %d)" % (name, error.code)
+    except (Transient, TimeoutError, WrongRegion, ValueError):
+        return "%s not marked as spam, try again" % name
+    # Gone now rather than at the next sync, which won't return a closed issue.
+    snapshot["issues"] = [i for i in issues if i is not issue]
+    return "%s marked as spam" % name
+
+
 def fresh(entry, ttl, now_ts):
     return isinstance(entry, dict) and now_ts - entry.get("at", 0) < ttl
 
@@ -786,6 +854,14 @@ def load_issues(api, now):
     body = {
         "filter": {"operator": "and", "subfilters": [
             {"field": "state", "operator": "not_in", "values": NOT_ON_US},
+            # Spam Pylon doesn't filter out arrives as email with no account,
+            # and would otherwise sit in the list as a first response owed.
+            # Only email: a no-account chat-widget or Slack issue can be a
+            # real customer.
+            {"operator": "or", "subfilters": [
+                {"field": "account_id", "operator": "is_set"},
+                {"field": "source", "operator": "not_in", "values": ["email"]},
+            ]},
             # A ticket with engineering can go quiet for weeks, and quiet is
             # exactly when it should still be on screen.
             {"operator": "or", "subfilters": [
@@ -1089,19 +1165,22 @@ def render_items(state, snapshot, now):
     return items, bool(me_id), identity
 
 
-def build(state, now, force=False):
+def fingerprint(token):
+    """Cached identities belong to a token. Only a short hash is kept, which is
+    enough to notice the setting changed and useless for anything else."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
+
+
+def build(state, now, force=False, told=None):
     token = (os.environ.get(TOKEN_KEY) or "").strip()
     if not token:
         return message("empty", "Add a Pylon API token in Settings → Extensions → Pylon.")
 
-    # Cached identities belong to a token. Only a short hash is kept, which is
-    # enough to notice the setting changed and useless for anything else.
-    fingerprint = hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
-    if state.get("token") != fingerprint:
+    if state.get("token") != fingerprint(token):
         for key in ("token", "base", "me", "users", "accounts", "notified", "links",
-                    "previews", "snapshot"):
+                    "previews", "snapshot", "spam_armed"):
             state.pop(key, None)
-        state["token"] = fingerprint
+        state["token"] = fingerprint(token)
 
     api = Api(token, state, time.monotonic() + TOTAL_BUDGET)
     snapshot = usable_snapshot(state.get("snapshot"))
@@ -1146,10 +1225,11 @@ def build(state, now, force=False):
     mine_only = bool(state.get("mine_only"))
     users = _dict(_dict(state.get("users")).get("by_id"))
     attach_previews(api, state, items, visible(items, mine_only)[:MAX_ROWS], users, fetch=synced)
-    notes = [note or ("synced %s ago" % short_duration(age) if age >= 60 else None)]
+    notes = [told, note or ("synced %s ago" % short_duration(age) if age >= 60 else None)]
     if snapshot.get("partial"):
         notes.append("partial sync")
-    return document(items, now, mine_only, identity, notes)
+    return document(items, now, mine_only, identity, notes,
+                    armed=armed_spam(state, now.timestamp()))
 
 
 # --- State ------------------------------------------------------------------
@@ -1195,7 +1275,13 @@ def parse_args(argv):
 
 def main(argv=None, now=None):
     action, row = parse_args(sys.argv[1:] if argv is None else argv)
+    now = now or datetime.now(timezone.utc)
     state = load_state()
+    told = None
+    # Any other key in between cancels a half-pressed spam. The host's own
+    # minutely run carries no action and leaves it alone.
+    if action is not None and action != "spam":
+        state.pop("spam_armed", None)
     # Opened from the links the last build saw, before fetching again, so the
     # browser doesn't wait on Pylon.
     if action == "open" and row:
@@ -1204,9 +1290,11 @@ def main(argv=None, now=None):
             _launcher(link)
     elif action == "mine":
         state["mine_only"] = not state.get("mine_only", False)
+    elif action == "spam" and row:
+        told = press_spam(state, row, now)
 
     try:
-        result = build(state, now or datetime.now(timezone.utc), force=action == "refresh")
+        result = build(state, now, force=action == "refresh", told=told)
     except Transient as error:
         # A non-zero exit keeps the last good document on screen, marked old,
         # which beats blanking the pane over one bad poll.
