@@ -99,7 +99,7 @@ The whole panel, key by key, is in **[docs/panel.md](docs/panel.md)**.
 
 ## Extensions
 
-Extensions add a tab, a Settings page, or a small background service, and install from **Settings → Extensions → Browse extensions**. They run as you rather than in a sandbox, so only extensions reviewed in this repo are offered. To write one, see **[docs/extensions.md](docs/extensions.md)**.
+Extensions add a tab, a Settings page, or a small background service, and install from **Settings → Extensions → Browse extensions**. They run as you rather than in a sandbox, so only extensions reviewed in this repo are offered. To write one, see **[docs/extensions.md](docs/extensions.md)**. The first service extension, **Away**, locks the Mac when you walk off with your phone; see [docs/panel.md](docs/panel.md#away).
 
 ## Configuration
 
@@ -119,6 +119,7 @@ Settings is the place to change things. Every choice is saved to `~/.stack-nudge
 ## Contributing
 
 Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). `make dev` rebuilds and restarts the app on every save, and [docs/setup.md](docs/setup.md#development) has the rest.
+
 
 ## Terms of use
 

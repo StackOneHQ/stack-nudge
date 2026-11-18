@@ -636,7 +636,7 @@ final class ExtensionSettingsPageTests: XCTestCase {
 
     func testCapabilitiesReadInPlainWords() {
         XCTAssertEqual(ExtensionCapability.bluetooth.plainWords, "Bluetooth")
-        XCTAssertEqual(ExtensionCapability.signalPresence.plainWords, "Tell StackNudge you're away")
+        XCTAssertEqual(ExtensionCapability.signalPresence.plainWords, "Lock the Mac when you're away")
         for capability in ExtensionCapability.allCases {
             XCTAssertFalse(capability.plainWords.contains(":"), "\(capability) reads as a key")
         }
@@ -679,13 +679,11 @@ final class ExtensionSettingsPageTests: XCTestCase {
     func testAKeysHelpIsItsRowsSecondLine() {
         let nav = nav()
         XCTAssertNil(nav.extensionRowDetail("away", "STACKNUDGE_EXT_A"))
-        guard let fixture = manifest(#"""
-            "config":[{"key":"STACKNUDGE_EXT_PHONE","type":"dynamic","label":"Phone",
-                       "help":"  Your phone, from the paired devices nearby.  "}]
-            """#) else { return }
-        nav.extensionSettingsPages = [ExtensionSettingsPage(id: "away", name: "Away", keys: fixture.config)]
-        XCTAssertEqual(nav.extensionRowDetail("away", "STACKNUDGE_EXT_PHONE"),
-                       "Your phone, from the paired devices nearby.")
+        let help = "Your phone, from the paired devices Away can hear nearby."
+        nav.extensionSettingsPages = [ExtensionSettingsPage(id: "away", name: "Away", keys: [
+            .init(key: "STACKNUDGE_EXT_AWAY_PHONE", label: "Phone", help: help, placeholder: nil),
+        ])]
+        XCTAssertEqual(nav.extensionRowDetail("away", "STACKNUDGE_EXT_AWAY_PHONE"), help)
     }
 
     // MARK: - The page's Update row confirms
@@ -748,8 +746,8 @@ final class ExtensionSettingsPageTests: XCTestCase {
         func page(_ allowed: [String], tab: String?) -> ExtensionSettingsPage {
             ExtensionSettingsPage(id: "x", name: "X", keys: [], allowed: allowed, tab: tab)
         }
-        XCTAssertEqual(SettingsView.extensionPageTrailerText(page(["Bluetooth", "Tell StackNudge you're away"], tab: nil)),
-                       "Allowed: Bluetooth \u{00B7} Tell StackNudge you're away")
+        XCTAssertEqual(SettingsView.extensionPageTrailerText(page(["Bluetooth", "Lock the Mac when you're away"], tab: nil)),
+                       "Allowed: Bluetooth \u{00B7} Lock the Mac when you're away")
         XCTAssertEqual(SettingsView.extensionPageTrailerText(page([], tab: "Tab \u{2318}6")),
                        "Allowed: nothing beyond running \u{00B7} Also a tab \u{00B7} \u{2318}6")
         XCTAssertEqual(SettingsView.extensionPageTrailerText(page([], tab: "Tab")),

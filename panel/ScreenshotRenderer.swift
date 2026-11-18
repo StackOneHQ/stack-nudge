@@ -161,7 +161,7 @@ enum ScreenshotRenderer {
                                    "radar": "Broken"]
         nav.extensionSettingsPages = installed.isEmpty ? [] : [
             ExtensionSettingsPage(id: "away", name: "Away", keys: awayKeys,
-                                  allowed: ["Bluetooth", "Tell StackNudge you're away"], tab: nil),
+                                  allowed: ["Bluetooth", "Lock the Mac when you're away"], tab: nil),
             ExtensionSettingsPage(id: "derby", name: "Token Derby", keys: [], tab: "Tab ⌘6"),
             ExtensionSettingsPage(id: "pylon", name: "Pylon", keys: [], tab: "Tab ⌘7"),
             ExtensionSettingsPage(id: "radar", name: "Radar", keys: []),

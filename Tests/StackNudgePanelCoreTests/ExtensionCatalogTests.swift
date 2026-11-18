@@ -750,7 +750,7 @@ final class ExtensionCatalogTests: XCTestCase {
         let again = "\u{23CE} again to install 1.0.0."
         XCTAssertEqual(ExtensionCatalog.confirmationText(for: tiered("trusted",
                                                                      capabilities: ["bluetooth", "signal:presence"])),
-                       "Runs in the background. Asks for: Bluetooth, telling StackNudge you're away. " + again)
+                       "Runs in the background. Asks for: Bluetooth, locking the Mac when you're away. " + again)
         XCTAssertEqual(ExtensionCatalog.confirmationText(for: tiered("trusted", capabilities: [])),
                        "Runs in the background. " + again)
         // Only what the tier would grant: a service-tier entry asking for
