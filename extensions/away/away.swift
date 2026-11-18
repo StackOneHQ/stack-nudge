@@ -80,6 +80,16 @@ struct PresenceTracker {
         lastSeen = nil
     }
 
+    // The phone is now a different identifier, last heard at `lastSeen`.
+    // Silence counts from there, not from the old identifier's last sighting.
+    // Unless nothing counts yet: after a sleep, or Bluetooth coming back,
+    // the phone has to be heard afresh, and the new identifier's sighting may
+    // be from before the gap.
+    mutating func rebound(lastSeen: Date) {
+        guard self.lastSeen != nil else { return }
+        self.lastSeen = lastSeen
+    }
+
     // Called on a timer. Input on the Mac always means you're there.
     @discardableResult
     mutating func evaluate(now: Date, idle: TimeInterval) -> PresenceState {
@@ -167,6 +177,23 @@ struct PhoneBinding {
             bound = only
         }
         return bound.map(Status.bound) ?? .notFound
+    }
+
+    // `resolve`, keeping `tracker` on the phone it binds to. A phone can start
+    // advertising under a new identifier while it's still in the room (Android
+    // does with Bluetooth switched off, for nearby sharing). Moving to it comes
+    // only after the old one has been silent for the whole window, so the
+    // tracker's last sighting, which is the old one's, would already be past
+    // `missingAfter` and lock the screen on the next tick. It counts from the
+    // new one's last sighting instead.
+    mutating func resolve(now: Date, window: TimeInterval,
+                          following tracker: inout PresenceTracker) -> Status {
+        let before = bound
+        let status = resolve(now: now, window: window)
+        if before != nil, let after = bound, after != before, let heard = heard[after] {
+            tracker.rebound(lastSeen: heard)
+        }
+        return status
     }
 }
 
@@ -539,7 +566,7 @@ final class Away: NSObject, CBCentralManagerDelegate {
     private func currentPhone(_ now: Date) -> Snapshot.Phone {
         guard let name = config.phone else { return .notChosen }
         guard pairedNames.contains(PhoneName.normalised(name)) else { return .notPaired }
-        switch binding.resolve(now: now, window: TimeInterval(config.silenceSeconds)) {
+        switch binding.resolve(now: now, window: TimeInterval(config.silenceSeconds), following: &tracker) {
         case .notFound:              return .notFound
         case .ambiguous(let count):  return .ambiguous(count: count)
         case .bound:                 return .bound
@@ -848,6 +875,53 @@ func selfTest() -> Int32 {
         quiet.observe(mine, at: at(0))
         _ = quiet.resolve(now: at(0), window: 120)
         check(quiet.resolve(now: at(300), window: 120) == .bound(mine), "dropped a silent phone")
+    }
+
+    // The phone moves to a new identifier while it stays in the room, and
+    // you've been idle all along. Moving to it mustn't lock: the silence
+    // counts from the new identifier's last sighting.
+    do {
+        let old = UUID(), new = UUID()
+        var binding = PhoneBinding()
+        var tracker = PresenceTracker(rule: rule(idle: 15, silence: 90))
+        // As the app runs it: a tick a second, and the new identifier
+        // advertising every 10 s from 10 s on.
+        var states: [PresenceState] = []
+        for t in stride(from: 0.0, through: 125, by: 1) {
+            if case .bound = binding.resolve(now: at(t), window: 90, following: &tracker) {
+                states.append(tracker.evaluate(now: at(t), idle: t))
+            }
+            let id: UUID? = t == 0 ? old : (t.truncatingRemainder(dividingBy: 10) == 0 ? new : nil)
+            if let id {
+                binding.observe(id, at: at(t))
+                if binding.resolve(now: at(t), window: 90, following: &tracker) == .bound(id) {
+                    tracker.observe(rssi: -60, at: at(t))
+                }
+            }
+        }
+        check(binding.bound == new, "didn't move to the new identifier")
+        check(!states.contains(.away), "locked when the phone moved to a new identifier")
+
+        // And the new one then going silent still counts.
+        _ = binding.resolve(now: at(215), window: 90, following: &tracker)
+        check(tracker.evaluate(now: at(215), idle: 215) == .away, "the new identifier's silence didn't count")
+    }
+
+    // Moving to a new identifier straight after a sleep doesn't bring back a
+    // sighting from before it: the phone has to be heard afresh.
+    do {
+        let old = UUID(), new = UUID()
+        var binding = PhoneBinding()
+        var tracker = PresenceTracker(rule: rule(idle: 15, silence: 90))
+        binding.observe(old, at: at(0))
+        _ = binding.resolve(now: at(0), window: 90, following: &tracker)
+        tracker.observe(rssi: -60, at: at(0))
+        binding.observe(new, at: at(50))
+        // Asleep from 60 to 100, then the first tick forgets, then resolves.
+        tracker.forgetHeard()
+        check(binding.resolve(now: at(100), window: 90, following: &tracker) == .bound(new), "didn't move after the sleep")
+        check(tracker.lastSeen == nil, "brought back a sighting from before the sleep")
+        check(tracker.evaluate(now: at(145), idle: 145) == .present, "counted the sleep as silence")
     }
 
     // Names compare loosely.
