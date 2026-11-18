@@ -435,11 +435,13 @@ class Rows(unittest.TestCase):
 
     # A key means the same thing on every page of StackNudge. M is mute on its
     # list pages and R is refresh on Usage, so the filter takes F and sync R.
+    # S is snooze, so spam takes X.
     def test_the_keys_keep_stacknudges_meanings(self):
         keys = {a["id"]: a["key"] for a in pylon.document([], NOW, False, "ok")["actions"]}
         self.assertEqual(keys, {"refresh": "r", "mine": "f"})
         row = pylon.row_for(item(), NOW)
-        self.assertEqual(row["actions"], [{"id": "open", "label": "Open in Pylon", "key": "return"}])
+        self.assertEqual({a["id"]: a["key"] for a in row["actions"]},
+                         {"open": "return", "spam": "x"})
 
     # Modelled on real sign-offs and asks from a live queue, names changed.
     def test_a_customer_signing_off_is_a_close_not_work(self):
@@ -676,13 +678,97 @@ class EndToEnd(unittest.TestCase):
         self.assertNotIn("issue-7", [r["id"] for r in doc["rows"]])
         self.assertNotIn("Pylon #7", " ".join(b[0] for b in self.banners))
 
+    def press_x(self, fake, row="issue-1", now=NOW, env=None):
+        return self.run_once(fake, argv=["--action", "spam", "--row", row], now=now, env=env)
+
+    @staticmethod
+    def patches(fake):
+        return [(r[2], r[3]) for r in fake.requests if r[1] == "PATCH"]
+
+    def test_x_twice_on_a_row_tags_it_spam_and_closes_it(self):
+        routes = workspace()
+        routes[("PATCH", "/issues/issue-1")] = {"data": {"id": "issue-1"}, "request_id": "r"}
+        fake = _FakePylon(routes)
+        self.run_once(fake)
+
+        # The first x only arms the row: nothing is written.
+        _, doc = self.press_x(fake)
+        self.assertEqual(self.patches(fake), [])
+        self.assertEqual({r["id"]: r for r in doc["rows"]}["issue-1"]["value"], "x again: spam")
+
+        _, doc = self.press_x(fake, now=NOW + timedelta(seconds=3))
+        self.assertEqual(self.patches(fake), [("/issues/issue-1", {
+            "tags": ["Spam"], "tags_apply_mode": "append_only", "state": "closed"})])
+        # Gone at once, not at the next sync.
+        self.assertNotIn("issue-1", [r["id"] for r in doc["rows"]])
+        self.assertIn("#1 marked as spam", doc["header"]["title"])
+
+    def test_a_second_x_too_late_only_arms_the_row_again(self):
+        fake = _FakePylon(workspace())
+        self.run_once(fake)
+        self.press_x(fake)
+        _, doc = self.press_x(fake, now=NOW + timedelta(seconds=pylon.SPAM_CONFIRM_SECONDS))
+        self.assertEqual(self.patches(fake), [])
+        self.assertEqual({r["id"]: r for r in doc["rows"]}["issue-1"]["value"], "x again: spam")
+
+    def test_x_on_another_row_or_another_key_in_between_starts_over(self):
+        fake = _FakePylon(workspace())
+        self.run_once(fake)
+        self.press_x(fake, row="issue-1")
+        _, doc = self.press_x(fake, row="issue-2")
+        rows = {r["id"]: r for r in doc["rows"]}
+        self.assertEqual(rows["issue-2"]["value"], "x again: spam")
+        self.assertNotEqual(rows["issue-1"]["value"], "x again: spam")
+        self.run_once(fake, argv=["--action", "mine"])
+        self.press_x(fake, row="issue-2")
+        self.assertEqual(self.patches(fake), [])
+
+    def test_x_writes_only_to_an_issue_the_tab_is_showing(self):
+        fake = _FakePylon(workspace())
+        self.run_once(fake)
+        fake.requests.clear()
+        # issue-7 is on an internal account, so it was never in the list.
+        for row in ("issue-7", "issue-99", "../users"):
+            self.press_x(fake, row=row)
+            self.press_x(fake, row=row)
+        self.assertEqual(fake.requests, [])
+
+    def test_x_never_writes_with_a_token_the_list_did_not_come_from(self):
+        fake = _FakePylon(workspace())
+        self.run_once(fake)
+        self.press_x(fake)
+        self.press_x(fake, env={pylon.TOKEN_KEY: "another-token"})
+        self.assertEqual(self.patches(fake), [])
+
+    def test_a_failed_spam_keeps_the_row_and_says_why(self):
+        self.run_once(_FakePylon(workspace()))
+        for failure, said in ((http_error(403, "forbidden"), "#1 not marked as spam: Pylon refused"),
+                              (http_error(404, "not_found"), "#1 not marked as spam (Pylon 404)"),
+                              (http_error(503), "#1 not marked as spam, try again")):
+            with self.subTest(said=said):
+                routes = workspace()
+                routes[("PATCH", "/issues/issue-1")] = failure
+                fake = _FakePylon(routes)
+                self.press_x(fake)
+                status, doc = self.press_x(fake)
+                self.assertEqual(len(self.patches(fake)), 1)
+                self.assertEqual(status, 0)
+                self.assertIn("issue-1", [r["id"] for r in doc["rows"]])
+                self.assertIn(said, doc["header"]["title"])
+
     def test_the_search_asks_only_for_issues_that_could_be_on_us(self):
         fake = _FakePylon(workspace())
         self.run_once(fake)
         search = next(r[3] for r in fake.requests if r[2] == "/issues/search")
-        state_filter, either = search["filter"]["subfilters"]
+        state_filter, not_spam, either = search["filter"]["subfilters"]
         self.assertEqual(state_filter, {"field": "state", "operator": "not_in",
                                         "values": ["closed", "waiting_on_customer", "on_hold"]})
+        # Spam that gets past Pylon's own filter is email with no account:
+        # never fetched. No-account issues from anywhere else still are.
+        self.assertEqual(not_spam, {"operator": "or", "subfilters": [
+            {"field": "account_id", "operator": "is_set"},
+            {"field": "source", "operator": "not_in", "values": ["email"]},
+        ]})
         window, engineering = either["subfilters"]
         self.assertEqual(either["operator"], "or")
         # Windowed on the latest message, not on creation: a customer writing

@@ -2,7 +2,7 @@
   "id": "pylon",
   "name": "Pylon",
   "description": "Customer issues waiting on a response or with engineering, colour-coded, and a nudge before the first-response SLA runs out.",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "schema": 1,
   "tab": {
     "label": "Pylon"
@@ -15,7 +15,7 @@
     {
       "key": "STACKNUDGE_EXT_PYLON_TOKEN",
       "label": "API token",
-      "help": "Pylon \u2192 Settings \u2192 API Tokens. Under Act as user or bot, pick yourself, so the token has your access and no more, and the tab knows which issues are yours. It only reads; nothing is written back."
+      "help": "Pylon \u2192 Settings \u2192 API Tokens. Under Act as user or bot, pick yourself, so the token has your access and no more, and the tab knows which issues are yours. It only reads, except x twice on a row, which tags that issue Spam and closes it."
     },
     {
       "key": "STACKNUDGE_EXT_PYLON_EMAIL",

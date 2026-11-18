@@ -47,9 +47,10 @@ StackNudge identifier, because there isn't one.
     response. Off until you set a Pylon API token. When set, it asks
     `api.usepylon.com` (or `api.eu.usepylon.com`) for changes every 3 minutes
     by default (1 to 60, in its settings), including while the tab is hidden,
-    so it can post a banner before a first-response SLA runs out. It is read-only: it sends the token, your IP address and a
-    `stack-nudge` user agent, and reads issues, their messages, accounts and
-    users. Issue titles, account names and the first line of each issue's
+    so it can post a banner before a first-response SLA runs out. It sends the
+    token, your IP address and a `stack-nudge` user agent, and reads issues,
+    their messages, accounts and users. The one thing it writes is when you mark
+    an issue as spam (x twice on its row): that issue is tagged Spam and closed. Issue titles, account names and the first line of each issue's
     latest message are shown in the tab; banners show issue titles and account
     names, and so appear in Notification Center and, depending on your macOS
     settings, on the lock screen. A cache is kept in the
