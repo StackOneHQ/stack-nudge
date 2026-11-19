@@ -26,7 +26,8 @@ StackNudge identifier, because there isn't one.
   bot token you supply, and looks your account up by email once to find the DM
   channel. Nudge text is included only if `STACKNUDGE_SLACK_DETAIL` is on.
 - **Extensions.** The catalogue and each extension you install are fetched from
-  this repo's releases on `api.github.com` and `github.com`. If the anonymous
+  the releases of `StackOneHQ/stack-nudge-extensions-marketplace` on
+  `api.github.com` and `github.com`. If the anonymous
   GitHub API is rate-limiting your machine and you have the `gh` CLI installed,
   the catalogue fetch and the update check retry through it, which authenticates
   as you against your own GitHub account.
@@ -39,33 +40,9 @@ StackNudge identifier, because there isn't one.
   downloads to. Without that setting nothing reads either token for this.
 
   An installed extension is a separate program that stack-nudge runs, and
-  **whatever network calls it makes are its own**. Three ship with the app:
-
-  - `system` — CPU, memory and disk. Makes no network calls.
-  - `derby` — the Token Derby, a shared horse race scored on tokens produced.
-    Off until you set an organisation. When set, it makes two GET requests —
-    that organisation's race list, then the race it picks — to
-    `token-derby.mauricode.co.uk` by default, a third-party service not operated
-    by this project and covered by its own privacy policy. The endpoint is
-    overridable in Settings and must be `https`. It is read-only: what leaves
-    your machine is the organisation name you typed, your IP address and a
-    `stack-nudge` user agent. Nothing about your sessions or usage is sent.
-  - `pylon` — customer issues in your Pylon workspace that are waiting on a
-    response. Off until you set a Pylon API token. When set, it asks
-    `api.usepylon.com` (or `api.eu.usepylon.com`) for changes every 3 minutes
-    by default (1 to 60, in its settings), including while the tab is hidden,
-    so it can post a banner before a first-response SLA runs out. It sends the
-    token, your IP address and a `stack-nudge` user agent, and reads issues,
-    their messages, accounts and users. The one thing it writes is when you mark
-    an issue as spam (x twice on its row): that issue is tagged Spam and closed. Issue titles, account names and the first line of each issue's
-    latest message are shown in the tab; banners show issue titles and account
-    names, and so appear in Notification Center and, depending on your macOS
-    settings, on the lock screen. A cache is kept in the
-    extension's own directory: the issues waiting on a response (title,
-    number, link, state, source, assignee, account and SLA times), account
-    names and owners, the workspace's users (names and emails), and those
-    message previews; it is readable only by you. Nothing about your sessions
-    or usage is sent.
+  **whatever network calls it makes are its own**. What each of the app's own
+  extensions reads and sends is in the marketplace's
+  [PRIVACY.md](https://github.com/StackOneHQ/stack-nudge-extensions-marketplace/blob/main/PRIVACY.md).
 - **Voice** (`STACKNUDGE_VOICE`). Downloading a voice model runs `stackvox` in
   the bundled Python environment, which fetches the model over the network.
   That download is the only part that leaves your machine: synthesis runs

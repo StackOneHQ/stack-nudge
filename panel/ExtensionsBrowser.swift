@@ -228,7 +228,7 @@ final class ExtensionCatalog: ObservableObject {
         return syncs
     }
 
-    // The app's own release failing fails the whole fetch, so no other source
+    // The app's own catalogue failing fails the whole fetch, so no other source
     // was asked: only the app's own record says it was tried.
     static func syncs(afterFailure message: String,
                       previous: [String: SourceSync], at date: Date) -> [String: SourceSync] {

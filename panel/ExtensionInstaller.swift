@@ -46,7 +46,7 @@ enum ExtensionInstaller {
         var capabilities: [String]? = nil
         // "view" or "service", as the manifest says; nil from an older index.
         var mode: String? = nil
-        // Which source listed it: nil for the app's own release, otherwise the
+        // Which source listed it: nil for the app's own catalogue, otherwise the
         // extra source's owner/repo. The host stamps it after parsing and the
         // index can't carry it (it is not in CodingKeys), so one source's index
         // can't claim an entry belongs to another.
@@ -484,7 +484,7 @@ enum ExtensionInstaller {
 
     // MARK: - Talking to the release
 
-    // Which of an asset's URLs to download it from. The app's own release is
+    // Which of an asset's URLs to download it from. The app's own catalogue is
     // public, so the browser link works with no token. An extra source may be
     // private, and a private release's browser link only works for a signed-in
     // browser, so its assets come through the API instead: the asset's own
@@ -539,9 +539,9 @@ enum ExtensionInstaller {
 
     static let indexAssetName = "extensions-index.json"
 
-    // The app's catalogue lives on its own latest release. A release with no
-    // index at all is an older one, which is an empty catalogue rather than an
-    // error. An extra source's is read the same way, from its own release.
+    // A catalogue lives on its repository's latest release, the app's own
+    // (ExtensionSource.builtIn) included. A release with no index at all is an
+    // empty catalogue rather than an error.
     static func catalogue(fromReleaseJSON data: Data,
                           via link: AssetLink = .browserDownload,
                           fetch: (URL) -> Data?) -> Result<[IndexEntry], Failure> {
@@ -717,9 +717,13 @@ enum ExtensionInstaller {
     // different host and are not rate-limited this way.
     static func releaseJSON(http: (URL) -> Data? = httpGET,
                             gh: (String) -> Data? = ghAPI) -> Data? {
-        if let data = http(UpdateChecker.latestReleaseURL) { return data }
-        return gh(UpdateChecker.latestGHPath)
+        if let url = sourceReleaseURL(.builtIn), let data = http(url) { return data }
+        return gh(builtInGHPath)
     }
+
+    // The app's own catalogue's latest release, as the gh CLI names it.
+    static let builtInGHPath =
+        "repos/\(ExtensionSource.builtIn.owner)/\(ExtensionSource.builtIn.repo)/releases/latest"
 
     static func ghAPI(_ path: String) -> Data? {
         guard let gh = ProcessOutput.gh() else { return nil }

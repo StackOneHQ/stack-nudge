@@ -15,7 +15,7 @@ works — a shell script, a Python file, a compiled binary.
 
 Extensions are **curated, not sandboxed**. The script runs as you, with your
 permissions. Nothing installs that did not come through a reviewed pull request
-into this repository — that review is the security control, so an extension is
+into the catalogue it is published from. That review is the security control, so an extension is
 read as code, not as content. See [Trust](#trust) below for what that does and
 does not buy.
 
@@ -355,9 +355,13 @@ a new field is invisible to an older host — which also means a field that
 
 ## Publishing one
 
-Extensions live in `extensions/<id>/` in this repository. Open a PR; CI validates
-it on every push, and the release workflow packages whatever is on `main` when a
-version ships.
+The app's own extensions live in `extensions/<id>/` in
+[StackOneHQ/stack-nudge-extensions-marketplace](https://github.com/StackOneHQ/stack-nudge-extensions-marketplace), which releases them separately from the app: a merge there that changes an
+extension publishes a new catalogue, and installed copies are offered the update
+without waiting for an app release. Open a PR there; CI validates it on every
+push. The marketplace is made from
+[StackOneHQ/stack-nudge-extensions-template](https://github.com/StackOneHQ/stack-nudge-extensions-template),
+which is how to start a catalogue of your own (see [Other catalogues](#other-catalogues)).
 
 ```
 extensions/
@@ -373,7 +377,7 @@ extensions/
 Tests are optional but encouraged, and they ship inside the package on purpose:
 `derby` is what somebody reads when writing their own, and "how do I test one of
 these?" is a question the reference should answer. Any `extensions/*/test_*.py`
-is run by CI and by `make test-extensions`; a suite that discovers zero tests is
+is run by CI and by `pnpm check` there; a suite that discovers zero tests is
 a failure rather than a pass.
 
 `scripts/package-extensions.sh validate` is what CI runs, and you can run it
@@ -393,8 +397,8 @@ exists, is regular, is executable, and is not itself a symlink, because its
 *parent* is. Only walking the tree catches it, and that is exactly the manifest a
 reviewer would read as in-package.
 
-Your `run` script is also linted. CI runs shellcheck across the repository and
-picks up extensionless files by shebang, at `severity: warning`.
+A shell `run` should pass shellcheck at `severity: warning`. Run it before
+opening the PR; the marketplace's checks don't lint extension scripts.
 
 ### What a release publishes
 
@@ -406,8 +410,9 @@ extension-system-1.1.1.tar.gz.sha256
 extensions-index.json
 ```
 
-The `extension-` prefix is not decoration. Extensions share a release with the
-app, and the updater picks its own download by name — without the namespace an
+The `extension-` prefix is not decoration. Every app release carries a copy of
+the marketplace's latest catalogue for hosts that predate it, so extensions share
+a release with the app, and the updater picks its own download by name: without the namespace an
 extension called `stack-nudge` would be offered to the updater as an app build.
 
 Each index entry carries what the browser needs before anything is downloaded:
@@ -420,8 +425,10 @@ says only that the extension gets more access than a tab. Installing refuses a
 package whose manifest's mode or capabilities differ from its index entry: the
 user confirmed what the entry described.
 
-The index is attached to the app's own release. It ships even when there are no
-extensions, so the app always has something well-formed to fetch.
+The index is attached to each of the marketplace's releases, and copied, with
+the packages, onto each app release for hosts that read their catalogue from the
+app's own release. An app release fails rather than ship without that copy, since
+those hosts can't read any catalogue without it.
 
 ### Other catalogues
 

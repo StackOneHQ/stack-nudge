@@ -44,8 +44,20 @@ final class ExtensionSourceTests: XCTestCase {
     // The app's own repository is always the first source, so naming it again,
     // in any case, doesn't add a second copy of it with an extra source's rules.
     func testTheAppsOwnRepositoryIsNeverAnExtraSource() {
-        let actual = ExtensionSource.configured([ExtensionSource.configKey: "stackonehq/Stack-Nudge"])
+        let actual = ExtensionSource.configured(
+            [ExtensionSource.configKey: "stackonehq/Stack-Nudge-Extensions-Marketplace"])
         XCTAssertEqual(actual.sources, [])
+    }
+
+    // The app's own repository stopped being a catalogue when the extensions
+    // moved out. Its releases still carry a copy of the index for older hosts,
+    // so naming it is allowed, but it is an ordinary extra source, held to view.
+    func testTheAppRepositoryItselfIsNoLongerTheBuiltInCatalogue() {
+        let app = ExtensionSource(owner: "StackOneHQ", repo: "stack-nudge")
+        XCTAssertFalse(app.isBuiltIn)
+        XCTAssertEqual(app.ceiling, .view)
+        XCTAssertEqual(ExtensionSource.configured([ExtensionSource.configKey: "StackOneHQ/stack-nudge"]).sources,
+                       [app])
     }
 
     func testAnEntryThatIsNotOwnerAndRepoIsNamedAsIgnored() {
