@@ -44,8 +44,8 @@ enum ExtensionTier: String, Comparable, CaseIterable {
 // out of discovery, which skips anything that isn't a valid id.
 //
 // The tier comes from the extensions index, which carries what the reviewers
-// gave each extension (extensions/tiers.json in the repo, or in an extra
-// source's, held to that source's ceiling: see ExtensionSource), and is written here
+// gave each extension (extensions/tiers.json in its catalogue's repository,
+// held to that catalogue's ceiling: see ExtensionSource), and is written here
 // when an extension is installed from it. Every later index fetch re-checks
 // it against the source it was installed from: the record can go down to what
 // that source's index now says, never up, and an extension that source no

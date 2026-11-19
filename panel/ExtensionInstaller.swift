@@ -31,7 +31,7 @@ enum ExtensionInstaller {
         // made a strictly additive manifest change into a breaking index
         // change, for no gain.
         let config: [String]
-        // The tier the reviewers gave it (extensions/tiers.json), as a name.
+        // The tier the reviewers gave it (its catalogue's extensions/tiers.json), as a name.
         // Optional, because indexes before tiers don't carry it, and a String
         // rather than an ExtensionTier so a tier this host doesn't know
         // degrades to `view` instead of failing the whole entry. Recorded at
