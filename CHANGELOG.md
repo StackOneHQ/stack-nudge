@@ -4,6 +4,15 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [2.7.0](https://github.com/StackOneHQ/stack-nudge/compare/v2.6.0...v2.7.0) (2026-11-19)
+
+
+### Features
+
+* **extensions:** add other catalogues to settings ([#256](https://github.com/StackOneHQ/stack-nudge/issues/256)) ([e270a6a](https://github.com/StackOneHQ/stack-nudge/commit/e270a6a04e94f06f8cfd4a57de9430eb1ba4070e))
+* **extensions:** read the app's catalogue from the extensions marketplace ([#258](https://github.com/StackOneHQ/stack-nudge/issues/258)) ([6cf6ebc](https://github.com/StackOneHQ/stack-nudge/commit/6cf6ebccc688b55bb5de235dff7b79d0ec1337fe))
+* **update:** always show the update output ([#260](https://github.com/StackOneHQ/stack-nudge/issues/260)) ([a494f7b](https://github.com/StackOneHQ/stack-nudge/commit/a494f7bda22bef476e031282adc1dca0ef327b80))
+
 ## [2.6.0](https://github.com/StackOneHQ/stack-nudge/compare/v2.5.0...v2.6.0) (2026-11-19)
 
 
