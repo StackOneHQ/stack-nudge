@@ -208,7 +208,7 @@ grep -c stack-nudge-version ~/.stack-nudge/notify.sh   # 0 means the script pred
 
 ## Extensions
 
-**Settings → Extensions** lists what's installed: name, a one-line description, and a status (Update x.y, Running, Present / Away, Broken, Tab ⌘N…). `→` or `⏎` opens an extension's page: its status, its settings, what it's allowed, where it appears, and **Update** / **Remove**. **Browse extensions**, the last row, says how many are available and opens the catalogue: updates first, then what you haven't installed, ten at a time until you search, which matches names and descriptions.
+**Settings → Extensions** lists what's installed: name, a one-line description, and a status (Update x.y, Running, Present / Away, Broken, Tab ⌘N…). `→` or `⏎` opens an extension's page: its status, its settings, what it's allowed, where it appears, and **Update** / **Remove**. **Browse extensions**, below them, says how many are available and opens the catalogue: updates first, then what you haven't installed, ten at a time until you search, which matches names and descriptions.
 
 | Key | On the browse page |
 |-----|--------|
@@ -219,7 +219,15 @@ grep -c stack-nudge-version ~/.stack-nudge/notify.sh   # 0 means the script pred
 | `⌘R` | Reload the catalogue |
 | `←` | Back to Settings |
 
-To see another team's catalogue too, a private one included, name its repository in `STACKNUDGE_EXTENSIONS_SOURCES` (comma separated `owner/repo`). Its rows show the repository's name. A private one is read with your GitHub sign-in, or the `gh` CLI's if you haven't signed in here. See [Other catalogues](extensions.md#other-catalogues) for what such a source may grant.
+To see another team's catalogue too, a private one included, add its repository under **Other catalogues**, the row below **Browse extensions**. Its rows in the browser show the repository's name. A private one is read with your GitHub sign-in, or the `gh` CLI's if you haven't signed in here. The page lists `StackOneHQ/stack-nudge` first, which is always read, then each repository you added with when it last synced and how many extensions it lists, or why it couldn't be read and when it last could. Each says what it can grant: up to trusted for the catalogues the app names, view only for any other. The list is `STACKNUDGE_EXTENSIONS_SOURCES` in `~/.stack-nudge/config` (comma separated `owner/repo`), so an edit there shows up on the page and one made on the page is in the file. Every change syncs the catalogue again. Removing a repository keeps what you installed from it, but each of those drops to view on the next full sync. See [Other catalogues](extensions.md#other-catalogues) for what such a source may grant.
+
+| Key | On Other catalogues |
+|-----|--------|
+| `↑ ↓` / `⌘↑ ⌘↓` | Select / first or last |
+| `⏎`, `/`, or just type | Start adding a repository. In the field, `⏎` adds it, or says why it can't: it isn't `owner/repo`, it's the app's own, or it's already listed |
+| `⌘⌫` | Remove the selected repository (not the app's own) |
+| `⌘R` | Sync every catalogue now |
+| `←` | Back to Settings |
 
 ### Away
 

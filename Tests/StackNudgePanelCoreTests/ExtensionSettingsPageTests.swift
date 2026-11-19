@@ -513,11 +513,11 @@ final class ExtensionSettingsPageTests: XCTestCase {
         nav.presenceHolderID = "away"
         // A holder with no page (it never loaded): on the Extensions list.
         XCTAssertEqual(nav.rows(in: .extensions),
-                       [.installedExtension("away"), .awayLock, .browseExtensions])
+                       [.installedExtension("away"), .awayLock, .browseExtensions, .extensionSources])
 
         // Its page: there, and only there.
         nav.extensionSettingsPages = [ExtensionSettingsPage(id: "away", name: "Away", keys: [])]
-        XCTAssertEqual(nav.rows(in: .extensions), [.installedExtension("away"), .browseExtensions])
+        XCTAssertEqual(nav.rows(in: .extensions), [.installedExtension("away"), .browseExtensions, .extensionSources])
         XCTAssertEqual(nav.rows(in: .extensionPage("away")), [.awayLock, .extensionRemove("away")])
 
         // Nobody holding presence: no lock row anywhere.

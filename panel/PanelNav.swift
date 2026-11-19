@@ -50,6 +50,9 @@ enum PanelMode: Hashable {
     // The extension browser. Absent from orderedTabs like .phrases: it is a
     // sub-page of Settings, not a tab.
     case extensions
+    // Settings → Extensions → Other catalogues: the extra repositories the
+    // browser reads. Another sub-page of Settings.
+    case extensionSources
     // Confirmation step after the user clicks the "Update available" row.
     // Shows release notes (when available) + Cancel / Update Now buttons.
     case updateConfirm
@@ -209,7 +212,7 @@ enum SettingsRow: Hashable {
     case githubLinks, hideShipped, disconnectGithub
     case historyPerSession
     case editPhrases, checkPermissions, openConfig, releaseNotes, checkUpdates, uninstall, quit
-    case browseExtensions
+    case browseExtensions, extensionSources
     case openRepo
     // One per installed extension, rendered as a card rather than a label/value
     // row. The associated value is what costs the synthesised CaseIterable
@@ -262,7 +265,7 @@ extension SettingsRow: CaseIterable {
         .historyPerSession,
         .editPhrases, .checkPermissions, .openConfig, .releaseNotes,
         .checkUpdates, .uninstall, .quit,
-        .browseExtensions, .openRepo,
+        .browseExtensions, .extensionSources, .openRepo,
     ]
 }
 
@@ -271,6 +274,7 @@ struct SettingsActions {
     let openConfig:       () -> Void
     let editPhrases:      () -> Void
     let browseExtensions: () -> Void
+    let openExtensionSources: () -> Void
     let openExtension:     (String) -> Void
     let openReleaseNotes: () -> Void
     let checkForUpdates:  () -> Void
@@ -1152,6 +1156,8 @@ final class PanelNav: ObservableObject {
     @Published var extensionListStatus: [String: String] = [:]
     // The Browse row's trailing text (ExtensionCatalog.browseRowValue).
     @Published var browseExtensionsValue: String = ""
+    // The Other catalogues row's trailing text (ExtensionSources.settingsValue).
+    @Published var extensionSourcesValue: String = ""
 
     // A text key being typed into on its row: the extension, the key and the
     // text so far. Saved on ⏎; Esc, or ⌫ in an empty field, puts it back.
@@ -1515,7 +1521,7 @@ final class PanelNav: ObservableObject {
         // sitting directly above a card offering "Install".
         case .extensions:
             return installedExtensions.map { .installedExtension($0.id) }
-                + (lockRowOnTheList ? [.awayLock] : []) + [.browseExtensions]
+                + (lockRowOnTheList ? [.awayLock] : []) + [.browseExtensions, .extensionSources]
         case .panel:
             return [.hotkey, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin, .tabTitleNames]
         case .events:
@@ -1625,7 +1631,7 @@ final class PanelNav: ObservableObject {
     // a door to a page. Everywhere else → only steps a value being picked.
     var selectedRowOpensOnRight: Bool {
         switch selectedRow {
-        case .installedExtension, .browseExtensions: return true
+        case .installedExtension, .browseExtensions, .extensionSources: return true
         default:                                     return false
         }
     }
@@ -2035,6 +2041,7 @@ final class PanelNav: ObservableObject {
         case .disconnectGithub: disconnectGithub()
         case .editPhrases:      actions?.editPhrases()
         case .browseExtensions: actions?.browseExtensions()
+        case .extensionSources: actions?.openExtensionSources()
         // Listed explicitly. This switch ends in `default: applyCycle`, so an
         // omission here is not a build error — it is Enter quietly doing
         // nothing, on the one row whose whole purpose is being opened.
@@ -2087,7 +2094,7 @@ final class PanelNav: ObservableObject {
     var selectedRowIsPicker: Bool {
         switch selectedRow {
         case .wireAgents, .dismissAgents,
-             .disconnectGithub, .editPhrases, .browseExtensions, .installedExtension,
+             .disconnectGithub, .editPhrases, .browseExtensions, .extensionSources, .installedExtension,
              .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
              .slackPaste, .slackIdentity, .slackTest, .openRepo, .companionResetPosition, .companionTurnOn, .none:
@@ -2406,7 +2413,7 @@ final class PanelNav: ObservableObject {
         // them before it gets here.
         case .wireAgents, .dismissAgents, .permissions, .update,
              .hotkey, .speakHotkey, .downloadVoiceModel,
-             .disconnectGithub, .editPhrases, .browseExtensions, .installedExtension,
+             .disconnectGithub, .editPhrases, .browseExtensions, .extensionSources, .installedExtension,
              .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
              .slackPaste, .slackIdentity, .slackTest, .openRepo, .companionResetPosition, .companionTurnOn, .none:

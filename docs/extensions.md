@@ -429,13 +429,15 @@ A team can publish its own extensions from another repository, a private one
 included, and have them show up in the browser next to these. The repository
 publishes exactly what this one does: run `scripts/package-extensions.sh` and
 attach the index, the packages and their sidecars to its latest release. Then
-each person who wants it adds the repository to `~/.stack-nudge/config`:
+each person who wants it adds the repository under **Settings → Extensions →
+Other catalogues**, which writes it to `~/.stack-nudge/config`:
 
 ```
 STACKNUDGE_EXTENSIONS_SOURCES=StackOneHQ/stack-nudge-internal-marketplace
 ```
 
-Comma separated, as `owner/repo`. The app's own catalogue is always read first,
+Comma separated, as `owner/repo`. The page also says when each one last synced
+and why one couldn't be read. The app's own catalogue is always read first,
 and an id it lists can't be taken by another source: the first source to list
 an id keeps it. Once installed, an extension belongs to the source it came
 from: only that source's listing re-checks its tier or offers it an update,
