@@ -271,7 +271,17 @@ final class ExtensionInstallerTests: XCTestCase {
                                                       return Data("{}".utf8)
                                                   })
         XCTAssertNotNil(data)
-        XCTAssertEqual(askedGH, UpdateChecker.latestGHPath)
+        XCTAssertEqual(askedGH, "repos/StackOneHQ/stack-nudge-extensions-marketplace/releases/latest")
+    }
+
+    // The catalogue is the marketplace's latest release, not the app's: the
+    // extensions release separately from the app now.
+    func testTheCatalogueIsTheMarketplacesLatestRelease() {
+        var asked: URL?
+        _ = ExtensionInstaller.releaseJSON(http: { asked = $0; return Data("{}".utf8) }, gh: { _ in nil })
+        XCTAssertEqual(asked?.absoluteString,
+                       "https://api.github.com/repos/StackOneHQ/stack-nudge-extensions-marketplace/releases/latest")
+        XCTAssertNotEqual(asked, UpdateChecker.latestReleaseURL)
     }
 
     // The CLI is the fallback, not the first choice — it spawns a process.

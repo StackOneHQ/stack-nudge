@@ -169,10 +169,10 @@ jobs:
           security delete-keychain "$KEYCHAIN" || true
 
   # Separate job, deliberately. The release job above is a matrix over arm64 and
-  # x86_64, and extensions are arch-independent scripts — packaging them inside
+  # x86_64, and extensions are arch-independent scripts, so copying them inside
   # it would upload every asset twice and race on the index.
   extensions:
-    name: Package extensions
+    name: Mirror the extensions catalogue
     runs-on: ubuntu-latest
     # After the app, deliberately. action-gh-release creates the release when
     # none exists, and this job takes about a minute against the matrix job's
@@ -188,17 +188,28 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           ref: ${{ inputs.tag || github.ref }}
-          # This job packages and uploads; it never pushes. Leaving the default
-          # would park a repo-write token in .git/config for the rest of the run,
-          # where anything later in the job can read it — and what runs later
-          # here is a script driven by a merged extension's manifest.
+          # This job downloads and uploads; it never pushes, so no write token is
+          # left in .git/config.
           persist-credentials: false
 
-      - name: Package
-        run: ./scripts/package-extensions.sh package dist/extensions
+      # The extensions release from StackOneHQ/stack-nudge-extensions-marketplace
+      # now, and this app reads its catalogue from there. Hosts from before
+      # that read it from the app's own latest release, and fail the whole
+      # catalogue without one, so every app release carries a copy of the
+      # marketplace's latest: the index, the packages and their sidecars, byte
+      # for byte, so the hashes the index names still match. Fails rather than
+      # publishing an app release without it.
+      - name: Copy the marketplace's latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download --repo StackOneHQ/stack-nudge-extensions-marketplace \
+            --pattern extensions-index.json --pattern 'extension-*.tar.gz' \
+            --pattern 'extension-*.tar.gz.sha256' --dir dist/extensions
+          ls -l dist/extensions
+          test -s dist/extensions/extensions-index.json
+          (cd dist/extensions && for sidecar in *.tar.gz.sha256; do shasum -a 256 -c "$sidecar"; done)
 
-      # The index ships even when there are no extensions yet, so the app always
-      # has something well-formed to fetch rather than a 404 it has to special-case.
       - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
         with:
           tag_name: ${{ env.TARGET_TAG }}

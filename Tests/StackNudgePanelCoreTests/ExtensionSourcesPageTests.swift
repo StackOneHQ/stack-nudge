@@ -30,7 +30,8 @@ final class ExtensionSourcesPageTests: XCTestCase {
     func testAddingRefusesWhatCouldNeverBeRead() {
         XCTAssertEqual(ExtensionSource.adding("StackOneHQ", to: nil), .failure(.notOwnerRepo))
         XCTAssertEqual(ExtensionSource.adding("owner/repo?x=1", to: nil), .failure(.notOwnerRepo))
-        XCTAssertEqual(ExtensionSource.adding("stackonehq/STACK-NUDGE", to: nil), .failure(.builtIn))
+        XCTAssertEqual(ExtensionSource.adding("stackonehq/STACK-NUDGE-extensions-marketplace", to: nil),
+                       .failure(.builtIn))
         XCTAssertEqual(ExtensionSource.adding("stackonehq/stack-nudge-internal-marketplace", to: internalSlug),
                        .failure(.alreadyAdded), "the same repository under any case")
     }
@@ -177,7 +178,7 @@ final class ExtensionSourcesPageTests: XCTestCase {
         let bad = ExtensionSources.status(of: row("bad entry"), sync: nil, loading: false, now: now)
         XCTAssertEqual(bad.text, "Not owner/repo, so it's skipped")
         XCTAssertEqual(bad.tone, .warning)
-        XCTAssertEqual(ExtensionSources.status(of: row("stackonehq/stack-nudge"), sync: nil, loading: false,
+        XCTAssertEqual(ExtensionSources.status(of: row("stackonehq/stack-nudge-extensions-marketplace"), sync: nil, loading: false,
                                                now: now).text,
                        "Always read, so this entry does nothing")
         XCTAssertEqual(ExtensionSources.status(of: row("\(internalSlug),\(internalSlug)", at: 2), sync: nil,

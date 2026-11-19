@@ -1,7 +1,8 @@
 import Foundation
 
-// Where extensions come from. The app's own release is always the first
-// source and works as it always has. Others are GitHub repositories named in
+// Where extensions come from. The app's own catalogue is always the first
+// source: StackOneHQ/stack-nudge-extensions-marketplace, which releases them
+// separately from the app. Others are GitHub repositories named in
 // STACKNUDGE_EXTENSIONS_SOURCES (comma separated owner/repo), each publishing
 // the same index and packages on its own latest release, so a team can run a
 // catalogue of its own, a private one included, next to the public one.
@@ -24,7 +25,11 @@ struct ExtensionSource: Equatable, Hashable {
 
     var slug: String { "\(owner)/\(repo)" }
 
-    static let builtIn = ExtensionSource(owner: "StackOneHQ", repo: "stack-nudge")
+    // The extensions used to ship on the app's own release, and an app
+    // release still carries a copy of this repository's for hosts older than
+    // this one. What a host recorded as installed from the app's catalogue (no
+    // source) is from here now, so nothing installed needs migrating.
+    static let builtIn = ExtensionSource(owner: "StackOneHQ", repo: "stack-nudge-extensions-marketplace")
     static let configKey = "STACKNUDGE_EXTENSIONS_SOURCES"
 
     // The catalogues whose reviewers are ours, besides the app's own.
@@ -113,7 +118,7 @@ struct ExtensionSource: Equatable, Hashable {
         var message: String {
             switch self {
             case .notOwnerRepo: return "That isn't a repository. Write it as owner/repo, like StackOneHQ/stack-nudge-internal-marketplace."
-            case .builtIn:      return "StackOneHQ/stack-nudge is always read. It doesn't need adding."
+            case .builtIn:      return "\(ExtensionSource.builtIn.slug) is always read. It doesn't need adding."
             case .alreadyAdded: return "That repository is already in the list."
             }
         }
