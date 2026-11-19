@@ -831,6 +831,8 @@ struct SettingsView: View {
         // here too, since the whole point of the sub-page is that it explains one.
         case .browseExtensions: row(.browseExtensions, label: "Browse extensions", kind: .action,
                                     value: nav.browseExtensionsValue)
+        case .extensionSources: row(.extensionSources, label: "Other catalogues", kind: .action,
+                                    value: nav.extensionSourcesValue)
         case .checkPermissions: row(.checkPermissions, label: "Check permissions…", kind: .action, value: "")
         case .openConfig:       row(.openConfig, label: "Open config file…", kind: .action, value: "")
         case .releaseNotes:     row(.releaseNotes, label: "View release notes…", kind: .action, value: "")

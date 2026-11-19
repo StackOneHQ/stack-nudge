@@ -33,6 +33,21 @@ final class ExtensionCatalog: ObservableObject {
     // so a missing internal extension has a reason next to it.
     @Published private(set) var unavailableSources: [String: String] = [:]
     @Published private(set) var ignoredSources: [String] = []
+
+    // When each catalogue was last read and what it gave, for the Other
+    // catalogues page: the app's own and every extra one, keyed by
+    // syncKey(owner/repo). Only this run's. Nothing is kept across a restart,
+    // and Settings loads the catalogue on arrival, so a repository with no
+    // record simply hasn't been asked yet.
+    struct SourceSync: Equatable {
+        var attempted: Date
+        var synced: Date?
+        var extensions: Int?
+        var failure: String?
+    }
+    @Published private(set) var sourceSyncs: [String: SourceSync] = [:]
+
+    static func syncKey(_ slug: String) -> String { slug.lowercased() }
     // The extra source each installed extension came from, id -> owner/repo.
     // Read again whenever the catalogue loads or an install or removal lands,
     // so the rows can tell a copy from another source apart from an update.
@@ -100,6 +115,7 @@ final class ExtensionCatalog: ObservableObject {
     private let probeRequirement: (String) -> ExtensionInstaller.RequirementCheck
     private let recordedTiers: () -> [String: ExtensionTier]
     private let recordedSources: () -> [String: String]
+    private let now: () -> Date
 
     init(fetchCatalogue: @escaping () -> Result<ExtensionInstaller.Catalogue, ExtensionInstaller.Failure>,
          performInstall: @escaping (ExtensionInstaller.IndexEntry) -> Result<String, ExtensionInstaller.Failure>
@@ -115,7 +131,9 @@ final class ExtensionCatalog: ObservableObject {
          probeRequirement: @escaping (String) -> ExtensionInstaller.RequirementCheck
             = { ExtensionInstaller.checkRequirement($0) },
          recordedTiers: @escaping () -> [String: ExtensionTier] = { ExtensionTiers.read() },
-         recordedSources: @escaping () -> [String: String] = { ExtensionTiers.readSources() }) {
+         recordedSources: @escaping () -> [String: String] = { ExtensionTiers.readSources() },
+         now: @escaping () -> Date = Date.init) {
+        self.now = now
         self.probeRequirement = probeRequirement
         self.recordedTiers = recordedTiers
         self.recordedSources = recordedSources
@@ -135,6 +153,15 @@ final class ExtensionCatalog: ObservableObject {
         reload()
     }
 
+    // A reload asked for while one is running would be dropped by reload()'s
+    // gate, and the one running may have read the setting before it changed.
+    // So it is remembered and run once the current one lands.
+    private var reloadRequested = false
+
+    func requestReload() {
+        if load == .loading { reloadRequested = true } else { reload() }
+    }
+
     func reload() {
         // Gated like install and remove are. This is what both "Try again" and
         // the R key call, and each ungated call blocks a pool thread inside the
@@ -149,6 +176,12 @@ final class ExtensionCatalog: ObservableObject {
             let sources = self.recordedSources()
             self.toMain { [weak self] in
                 guard let self else { return }
+                defer {
+                    if self.reloadRequested {
+                        self.reloadRequested = false
+                        self.reload()
+                    }
+                }
                 switch result {
                 case .success(let catalogue):
                     self.installedFrom = sources
@@ -156,6 +189,7 @@ final class ExtensionCatalog: ObservableObject {
                     self.listings = catalogue.listings
                     self.unavailableSources = catalogue.unavailable
                     self.ignoredSources = catalogue.ignored
+                    self.sourceSyncs = Self.syncs(after: catalogue, previous: self.sourceSyncs, at: self.now())
                     self.load = .loaded
                     self.probeRequirements(of: catalogue.entries)
                     // An installed row has nothing to compare its version
@@ -163,10 +197,46 @@ final class ExtensionCatalog: ObservableObject {
                     // lists needs telling to do it again.
                     self.didLoadCatalogue()
                 case .failure(let failure):
+                    self.sourceSyncs = Self.syncs(afterFailure: failure.message,
+                                                  previous: self.sourceSyncs, at: self.now())
                     self.load = .failed(failure.message)
                 }
             }
         }
+    }
+
+    // A fetch that came back: every source it read is synced now, with how
+    // many extensions it lists (a listing an earlier source took the id of
+    // still counts, since the repository does publish it). One that failed
+    // keeps when it last worked, so the page can say both.
+    static func syncs(after catalogue: ExtensionInstaller.Catalogue,
+                      previous: [String: SourceSync], at date: Date) -> [String: SourceSync] {
+        var syncs = previous
+        func count(_ slug: String?) -> Int {
+            catalogue.listings.filter { ExtensionSource.same($0.source, slug) }.count
+        }
+        syncs[syncKey(ExtensionSource.builtIn.slug)] =
+            SourceSync(attempted: date, synced: date, extensions: count(nil), failure: nil)
+        for slug in catalogue.read {
+            syncs[syncKey(slug)] = SourceSync(attempted: date, synced: date, extensions: count(slug), failure: nil)
+        }
+        for (slug, reason) in catalogue.unavailable {
+            let earlier = previous[syncKey(slug)]
+            syncs[syncKey(slug)] = SourceSync(attempted: date, synced: earlier?.synced,
+                                              extensions: earlier?.extensions, failure: reason)
+        }
+        return syncs
+    }
+
+    // The app's own release failing fails the whole fetch, so no other source
+    // was asked: only the app's own record says it was tried.
+    static func syncs(afterFailure message: String,
+                      previous: [String: SourceSync], at date: Date) -> [String: SourceSync] {
+        var syncs = previous
+        let key = syncKey(ExtensionSource.builtIn.slug)
+        syncs[key] = SourceSync(attempted: date, synced: previous[key]?.synced,
+                                extensions: previous[key]?.extensions, failure: message)
+        return syncs
     }
 
     private func probeRequirements(of entries: [ExtensionInstaller.IndexEntry]) {

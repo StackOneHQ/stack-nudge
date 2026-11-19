@@ -128,6 +128,9 @@ struct PanelContentView: View {
     // the keyboard on, and the chevron here and ← in the key handler have to
     // do the identical thing.
     let onCloseExtensionsBrowser: () -> Void
+    // The Other catalogues page, and leaving it, for the same reason.
+    @ObservedObject var extensionSources: ExtensionSources
+    let onCloseExtensionSources: () -> Void
 
     // The disk-backed name store. Observed here (rather than inside EventRow)
     // so resolving a nudge's session label stays a render-time lookup that
@@ -222,6 +225,9 @@ struct PanelContentView: View {
                                    host: extensions,
                                    onConfigure: onConfigureExtension,
                                    onBack: onCloseExtensionsBrowser)
+                case .extensionSources:
+                    ExtensionSourcesView(model: extensionSources, catalog: extensionCatalog,
+                                         onBack: onCloseExtensionSources)
                 case .updateConfirm:
                     UpdateConfirmView(
                         nav: nav,
@@ -271,7 +277,7 @@ struct PanelContentView: View {
         case .extensionTab(let id): return nav.extensionTab(id: id)?.label ?? id
         // Listed, not defaulted: a new tab should fail to compile here rather
         // than render an unlabelled one.
-        case .phrases, .permissions, .extensions, .updateConfirm, .updating,
+        case .phrases, .permissions, .extensions, .extensionSources, .updateConfirm, .updating,
              .postUpdate, .bootstrap, .uninstall:
             return ""
         }
@@ -415,7 +421,7 @@ struct PanelContentView: View {
     static func tabStripAnchor(for mode: PanelMode, in tabs: [PanelMode]) -> PanelMode? {
         if tabs.contains(mode) { return mode }
         switch mode {
-        case .phrases, .permissions, .extensions, .updateConfirm, .uninstall:
+        case .phrases, .permissions, .extensions, .extensionSources, .updateConfirm, .uninstall:
             return tabs.contains(.settings) ? .settings : nil
         // No strip is drawn in these, so there is nothing to bring into view.
         case .updating, .postUpdate, .bootstrap:
@@ -1074,6 +1080,32 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         nav.mode = .settings
     }
 
+    func openExtensionSources() {
+        extensionSources.load()
+        nav.mode = .extensionSources
+    }
+
+    func closeExtensionSources() {
+        nav.settingsResumeRow = .extensionSources
+        nav.mode = .settings
+    }
+
+    // The Other catalogues page changed the setting: fetch again, so the
+    // browser and the page's own sync times describe the new list, and say
+    // how many there are on the Settings row.
+    private func extensionSourcesChanged() {
+        extensionCatalog.requestReload()
+        refreshSourcesValue()
+    }
+
+    private func refreshSourcesValue() {
+        let value = ExtensionSources.settingsValue(ConfigFile.read()[ExtensionSource.configKey])
+        if nav.extensionSourcesValue != value { nav.extensionSourcesValue = value }
+    }
+
+    private lazy var extensionSources = ExtensionSources(
+        didChange: { [weak self] in self?.extensionSourcesChanged() })
+
     // Removing goes back to the Extensions list, since the page describes
     // something about to stop existing; the list re-anchors once it has gone.
     private func removeExtension(_ id: String) {
@@ -1103,6 +1135,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                                                     catalogue: extensionCatalog.entries,
                                                     installed: nav.installedExtensions)
         if nav.browseExtensionsValue != value { nav.browseExtensionsValue = value }
+        refreshSourcesValue()
     }
 
     private lazy var extensionCatalog: ExtensionCatalog = ExtensionCatalog(
@@ -1412,6 +1445,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             extensions: extensions, extensionCatalog: extensionCatalog,
             onConfigureExtension: { [weak self] row in self?.configureExtension(row) },
             onCloseExtensionsBrowser: { [weak self] in self?.closeExtensionsBrowser() },
+            extensionSources: extensionSources,
+            onCloseExtensionSources: { [weak self] in self?.closeExtensionSources() },
             onGrantPermissions: { [weak self] in self?.handleGrantPermissions() }
         ).environmentObject(SessionPersistence.shared))
         // Don't let SwiftUI's preferred / intrinsic content size drive
@@ -1470,6 +1505,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self?.nav.mode = .phrases
             },
             browseExtensions: { [weak self] in self?.nav.mode = .extensions },
+            openExtensionSources: { [weak self] in self?.openExtensionSources() },
             openExtension: { [weak self] id in self?.openExtension(id) },
             openReleaseNotes: {
                 // Versioned tag URL when we know the bundle version,
@@ -4213,6 +4249,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         case .historyQuery:   nav.historyQuery = ""
         case .rename:         sessions.cancelRename()
         case .catalogueQuery: extensionCatalog.query = ""
+        case .sourceDraft:    extensionSources.draft = ""
         case .extensionValue: nav.cancelExtensionTextEdit()
         case .phraseDraft:    phrases.draft = ""
         case nil:             break
@@ -4223,7 +4260,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // every page's answer. Settings' is the text row being typed into on an
     // extension's page, which goes back to its saved value.
     enum FieldToCancel: Equatable {
-        case historyQuery, rename, catalogueQuery, extensionValue, phraseDraft
+        case historyQuery, rename, catalogueQuery, extensionValue, phraseDraft, sourceDraft
     }
 
     static func fieldToCancel(in mode: PanelMode, renaming: Bool) -> FieldToCancel? {
@@ -4233,6 +4270,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         case .extensions:           return .catalogueQuery
         case .settings:             return .extensionValue
         case .phrases:              return .phraseDraft
+        case .extensionSources:     return .sourceDraft
         default:                    return nil
         }
     }
@@ -4582,6 +4620,29 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             default:
                 return false
             }
+        }
+
+        // Other catalogues: the add field takes typing (and ⏎, which adds)
+        // while it has focus, so this only sees what the field declines.
+        // ⌘⌫ removes the selected repository, never the app's own.
+        if nav.mode == .extensionSources {
+            if let destructive = Self.destructiveKeyAction(for: event) {
+                guard extensionSources.selectedRow?.isRemovable == true else { return false }
+                if destructive == .act { extensionSources.removeSelected() }
+                return true
+            }
+            switch Self.extensionSourcesKeyAction(for: event) {
+            case .back:                    closeExtensionSources()
+            case .focusField:              extensionSources.focusField()
+            case .appendToDraft(let typed):
+                extensionSources.draft += typed
+                extensionSources.focusField()
+            case .moveSelection(let delta): extensionSources.move(by: delta)
+            case .sync:                    extensionCatalog.reload()
+            case .swallow:                 break
+            case nil:                      return false
+            }
+            return true
         }
 
         // In settings mode, the controller drives row selection and value
@@ -5000,6 +5061,47 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
     }
 
+    // What a key does on Other catalogues. ⏎ opens the add field (it adds
+    // once the field has it), / does the same, and a printable key starts the
+    // entry, as the browser's search does. ⌘R syncs, not on autorepeat, since
+    // each one is a fetch. ⌘⌫ is destructiveKeyAction's. Other ⌘ combinations
+    // go on to the app; every other plain key is swallowed so none reaches
+    // Events.
+    enum ExtensionSourcesKeyAction: Equatable {
+        case back
+        case focusField
+        case appendToDraft(String)
+        case moveSelection(Int)
+        case sync
+        case swallow
+    }
+
+    static func extensionSourcesKeyAction(for event: NSEvent) -> ExtensionSourcesKeyAction? {
+        extensionSourcesKeyAction(keyCode: event.keyCode, characters: event.charactersIgnoringModifiers,
+                                  modifiers: event.modifierFlags.intersection([.command, .control, .option, .shift]),
+                                  isRepeat: event.isARepeat)
+    }
+
+    static func extensionSourcesKeyAction(keyCode: UInt16, characters: String?,
+                                          modifiers: NSEvent.ModifierFlags,
+                                          isRepeat: Bool = false) -> ExtensionSourcesKeyAction? {
+        if modifiers == .command {
+            guard keyCode == KeyCode.rKey else { return nil }
+            return isRepeat ? .swallow : .sync
+        }
+        guard modifiers.intersection([.command, .control, .option]).isEmpty else { return nil }
+        switch keyCode {
+        case KeyCode.leftArrow:                            return .back
+        case KeyCode.upArrow:                              return .moveSelection(-1)
+        case KeyCode.downArrow:                            return .moveSelection(1)
+        case KeyCode.slash, KeyCode.returnKey, KeyCode.numpadEnter:
+            return isRepeat ? .swallow : .focusField
+        default:
+            guard let characters, isFilterInput(characters) else { return .swallow }
+            return .appendToDraft(characters)
+        }
+    }
+
     enum PermissionsKeyAction: Equatable {
         case back
         case moveSelection(Int)
@@ -5283,6 +5385,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             top ? nav.selectPrevCategory() : nav.selectNextCategory()
         case .phrases:
             top ? phrases.selectFirst() : phrases.selectLast()
+        case .extensionSources:
+            extensionSources.jump(toLast: !top)
         case .permissions:
             permissions.selectEdge(top: top)
         case .extensions:

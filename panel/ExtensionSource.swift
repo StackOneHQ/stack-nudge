@@ -100,4 +100,56 @@ struct ExtensionSource: Equatable, Hashable {
         }
         return (sources, ignored)
     }
+
+    // MARK: - Editing the setting
+
+    // Why the Other catalogues page didn't add what was typed, said under its
+    // field rather than saved and left for the browser to complain about.
+    enum EditProblem: Error, Equatable {
+        case notOwnerRepo
+        case builtIn
+        case alreadyAdded
+
+        var message: String {
+            switch self {
+            case .notOwnerRepo: return "That isn't a repository. Write it as owner/repo, like StackOneHQ/stack-nudge-internal-marketplace."
+            case .builtIn:      return "StackOneHQ/stack-nudge is always read. It doesn't need adding."
+            case .alreadyAdded: return "That repository is already in the list."
+            }
+        }
+    }
+
+    // The setting's entries as written, in order. Kept as text rather than
+    // parsed, so one that isn't owner/repo is still on the page to be removed
+    // instead of vanishing from a list it is still in.
+    static func entries(_ value: String?) -> [String] {
+        (value ?? "").split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    // The setting with one more repository at the end. Refused rather than
+    // written when it couldn't be read anyway: not owner/repo, the app's own,
+    // or one already there under any case.
+    static func adding(_ text: String, to value: String?) -> Result<String, EditProblem> {
+        guard let source = ExtensionSource(slug: text) else { return .failure(.notOwnerRepo) }
+        guard !source.isBuiltIn else { return .failure(.builtIn) }
+        let existing = entries(value)
+        let taken = existing.contains { ExtensionSource(slug: $0)?.sameRepository(as: source) ?? false }
+        guard !taken else { return .failure(.alreadyAdded) }
+        return .success((existing + [source.slug]).joined(separator: ","))
+    }
+
+    // The setting without an entry, and without anything else naming the same
+    // repository, so a repeat written by hand goes with it. Nil once nothing
+    // is left, which the page takes as removing the key.
+    static func removing(_ entry: String, from value: String?) -> String? {
+        let gone = ExtensionSource(slug: entry)
+        let kept = entries(value).filter { item in
+            if item == entry { return false }
+            guard let gone, let source = ExtensionSource(slug: item) else { return true }
+            return !source.sameRepository(as: gone)
+        }
+        return kept.isEmpty ? nil : kept.joined(separator: ",")
+    }
 }

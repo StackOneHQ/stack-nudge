@@ -85,7 +85,7 @@ final class SettingsCategoryTests: XCTestCase {
     // is always last so the list reads as "what you have, then how to get more".
     func testTheExtensionsCategoryListsWhatIsInstalled() {
         let nav = PanelNav()
-        XCTAssertEqual(nav.rows(in: .extensions), [.browseExtensions])
+        XCTAssertEqual(nav.rows(in: .extensions), [.browseExtensions, .extensionSources])
 
         nav.installedExtensions = [
             ExtensionRow(id: "derby", name: "Derby", description: "",
@@ -97,7 +97,7 @@ final class SettingsCategoryTests: XCTestCase {
         ]
         XCTAssertEqual(nav.rows(in: .extensions),
                        [.installedExtension("derby"), .installedExtension("system"),
-                        .browseExtensions])
+                        .browseExtensions, .extensionSources])
     }
 
     // A refusal is an installed thing that is broken, so it belongs with the
@@ -111,7 +111,7 @@ final class SettingsCategoryTests: XCTestCase {
                          refusedReason: "needs manifest schema 2", requires: [], config: []),
         ]
         XCTAssertEqual(nav.rows(in: .extensions),
-                       [.installedExtension("broken"), .browseExtensions])
+                       [.installedExtension("broken"), .browseExtensions, .extensionSources])
     }
 
     // Enter on an extension card opens it. activate()'s switch ends in
@@ -156,16 +156,41 @@ final class SettingsCategoryTests: XCTestCase {
         XCTAssertEqual(nav.selectedRow, .installedExtension("derby"))
     }
 
+    // Other catalogues is a door like Browse: ⏎ and → open it, and the arrows
+    // that only step a value can't. Driven through the real entry points, for
+    // the reason above.
+    func testOtherCataloguesOpensOnEnterAndNothingElse() {
+        let nav = PanelNav()
+        var opened = 0
+        var permissionChecks = 0
+        nav.actions = Self.actions(checkPermissions: { permissionChecks += 1 },
+                                   openExtensionSources: { opened += 1 })
+        nav.settingsCategory = .extensions
+        nav.selectedSettingIndex = nav.index(of: .extensionSources) ?? 0
+        XCTAssertEqual(nav.selectedRow, .extensionSources)
+        XCTAssertFalse(nav.selectedRowIsPicker)
+        XCTAssertTrue(nav.selectedRowOpensOnRight)
+
+        nav.cycleForward()
+        nav.cycleBackward()
+        XCTAssertEqual(opened, 0)
+        XCTAssertEqual(permissionChecks, 0)
+
+        nav.activate()
+        XCTAssertEqual(opened, 1)
+    }
+
     // SettingsActions has one closure per wired effect and a memberwise init,
     // so a stub has to name all of them — which is the point: adding an action
     // fails to compile here rather than silently going unexercised.
     private static func actions(
         openExtension: @escaping (String) -> Void = { _ in },
-        checkPermissions: @escaping () -> Void = {}
+        checkPermissions: @escaping () -> Void = {},
+        openExtensionSources: @escaping () -> Void = {}
     ) -> SettingsActions {
         SettingsActions(
             checkPermissions: checkPermissions, openConfig: {}, editPhrases: {},
-            browseExtensions: {}, openExtension: openExtension,
+            browseExtensions: {}, openExtensionSources: openExtensionSources, openExtension: openExtension,
             openReleaseNotes: {}, checkForUpdates: {}, beginUpdate: {}, runUpdate: {},
             beginUninstall: {}, runUninstall: {}, runBootstrap: {}, quit: {},
             expandFromCompact: {}, exitCompactMode: {},
@@ -410,7 +435,7 @@ final class ExtensionsCategoryTests: XCTestCase {
 
     func testTheBrowserRowLivesThere() {
         let nav = PanelNav()
-        XCTAssertEqual(nav.rows(in: .extensions), [.browseExtensions])
+        XCTAssertEqual(nav.rows(in: .extensions), [.browseExtensions, .extensionSources])
     }
 
     // It used to sit under Actions, and moving it must not leave it in both.

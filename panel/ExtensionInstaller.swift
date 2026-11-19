@@ -570,13 +570,18 @@ enum ExtensionInstaller {
         var unavailable: [String: String] = [:]
         // Entries in the sources setting that aren't owner/repo.
         var ignored: [String] = []
+        // Extra sources whose release was read, owner/repo in the setting's
+        // order: what the Other catalogues page counts as synced, an empty
+        // index included.
+        var read: [String] = []
 
         init(entries: [IndexEntry], listings: [IndexEntry]? = nil,
-             unavailable: [String: String] = [:], ignored: [String] = []) {
+             unavailable: [String: String] = [:], ignored: [String] = [], read: [String] = []) {
             self.entries = entries
             self.listings = listings ?? entries
             self.unavailable = unavailable
             self.ignored = ignored
+            self.read = read
         }
 
         init(arrayLiteral elements: IndexEntry...) {
@@ -603,6 +608,7 @@ enum ExtensionInstaller {
             case .failure(let failure):
                 catalogue.unavailable[source.slug] = failure.message
             case .success(let entries):
+                catalogue.read.append(source.slug)
                 for var entry in entries {
                     entry.source = source.slug
                     entry.tier = min(entry.reviewedTier, source.ceiling).rawValue

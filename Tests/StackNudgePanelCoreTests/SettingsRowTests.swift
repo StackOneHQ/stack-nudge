@@ -109,7 +109,7 @@ final class SettingsRowTests: XCTestCase {
         var resets = 0
         nav.actions = SettingsActions(
             checkPermissions: {}, openConfig: {}, editPhrases: {},
-            browseExtensions: {}, openExtension: { _ in },
+            browseExtensions: {}, openExtensionSources: {}, openExtension: { _ in },
             openReleaseNotes: {}, checkForUpdates: {}, beginUpdate: {}, runUpdate: {},
             beginUninstall: {}, runUninstall: {}, runBootstrap: {}, quit: {},
             expandFromCompact: {}, exitCompactMode: {},
@@ -146,7 +146,7 @@ final class SettingsRowTests: XCTestCase {
 
         for row in [SettingsRow.wireAgents, .dismissAgents, .quit, .editPhrases,
                     .openConfig, .releaseNotes, .checkUpdates, .checkPermissions,
-                    .uninstall, .disconnectGithub, .openRepo, .browseExtensions, .companionResetPosition, .companionTurnOn,
+                    .uninstall, .disconnectGithub, .openRepo, .browseExtensions, .extensionSources, .companionResetPosition, .companionTurnOn,
                     .installedExtension("derby"), .permissions, .hotkey] {
             select(row)
             XCTAssertEqual(nav.selectedRow, row)
@@ -220,7 +220,7 @@ final class SettingsRowTests: XCTestCase {
         var mutes: [Int] = []
         nav.actions = SettingsActions(
             checkPermissions: {}, openConfig: {}, editPhrases: {},
-            browseExtensions: {}, openExtension: { _ in },
+            browseExtensions: {}, openExtensionSources: {}, openExtension: { _ in },
             openReleaseNotes: {}, checkForUpdates: {}, beginUpdate: {}, runUpdate: {},
             beginUninstall: {}, runUninstall: {}, runBootstrap: {}, quit: {},
             expandFromCompact: {}, exitCompactMode: {},

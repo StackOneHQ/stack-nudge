@@ -326,6 +326,8 @@ enum ScreenshotRenderer {
                                                    probeRequirement: { _ in .works },
                                                    recordedTiers: { [:] }, recordedSources: { [:] }),
                 onConfigureExtension: { _ in }, onCloseExtensionsBrowser: {},
+                extensionSources: ExtensionSources(readValue: { nil }, writeValue: { _ in }),
+                onCloseExtensionSources: {},
                 onGrantPermissions: {}, runsOnAppear: false
             ).environmentObject(persistence))
         }
