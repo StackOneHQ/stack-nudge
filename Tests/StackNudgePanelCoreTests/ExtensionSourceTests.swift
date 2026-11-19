@@ -62,13 +62,25 @@ final class ExtensionSourceTests: XCTestCase {
 
     // MARK: - What a source may grant
 
-    func testOnlyStackOneHQRepositoriesKeepTheirReviewedTiers() {
+    func testOnlyTheReviewedRepositoriesKeepTheirTiers() {
         XCTAssertEqual(ExtensionSource.builtIn.ceiling, .trusted)
         XCTAssertEqual(internalSource.ceiling, .trusted)
-        XCTAssertEqual(ExtensionSource(owner: "stackonehq", repo: "anything").ceiling, .trusted)
+        XCTAssertEqual(ExtensionSource(owner: "stackonehq", repo: "STACK-NUDGE-INTERNAL-MARKETPLACE").ceiling,
+                       .trusted)
         XCTAssertEqual(outsideSource.ceiling, .view)
         // A lookalike owner is someone else.
         XCTAssertEqual(ExtensionSource(owner: "StackOneHQ-extensions", repo: "x").ceiling, .view)
+    }
+
+    // Owning a repository says nothing about who can publish its releases, so
+    // the rest of StackOneHQ's repositories are held to view like anyone's.
+    func testAnotherStackOneHQRepositoryIsHeldToView() {
+        XCTAssertEqual(ExtensionSource(owner: "StackOneHQ", repo: "anything").ceiling, .view)
+        let actual = ExtensionInstaller.merging(
+            builtIn: [],
+            extra: [(source: ExtensionSource(owner: "StackOneHQ", repo: "anything"),
+                     result: .success([entry("away", tier: "trusted")]))])
+        XCTAssertEqual(actual.entries.first?.reviewedTier, .view)
     }
 
     // MARK: - Merging
@@ -77,7 +89,8 @@ final class ExtensionSourceTests: XCTestCase {
         let own = entry("derby", tier: "service")
         let actual = ExtensionInstaller.merging(builtIn: [own], extra: [])
         XCTAssertEqual(actual.entries, [own])
-        XCTAssertTrue(actual.isComplete)
+        XCTAssertEqual(actual.listings, [own])
+        XCTAssertTrue(actual.unavailable.isEmpty)
     }
 
     func testAnExtraEntryIsStampedWithItsSource() {
@@ -113,6 +126,18 @@ final class ExtensionSourceTests: XCTestCase {
         XCTAssertEqual(actual.entries.last?.source, internalSource.slug)
     }
 
+    // What a later source lists under a taken id still counts for a copy
+    // installed from that source, so it's kept, stamped and capped, in
+    // `listings`.
+    func testAnEntryAnotherSourceTookIsStillListed() {
+        let actual = ExtensionInstaller.merging(
+            builtIn: [entry("derby")],
+            extra: [(source: outsideSource, result: .success([entry("derby", tier: "trusted")]))])
+        XCTAssertEqual(actual.entries.map(\.id), ["derby"])
+        XCTAssertEqual(actual.listings.map(\.source), [nil, outsideSource.slug])
+        XCTAssertEqual(actual.listings.last?.reviewedTier, .view)
+    }
+
     func testASourceThatFailsIsNamedAndTheRestStillLoad() {
         let actual = ExtensionInstaller.merging(
             builtIn: [entry("derby")],
@@ -120,7 +145,6 @@ final class ExtensionSourceTests: XCTestCase {
                     (source: internalSource, result: .success([entry("claude-usage")]))])
         XCTAssertEqual(actual.entries.map(\.id), ["derby", "claude-usage"])
         XCTAssertEqual(Array(actual.unavailable.keys), ["someone/extensions"])
-        XCTAssertFalse(actual.isComplete)
     }
 
     // The source is the host's to say. An index that writes one in is ignored,
@@ -234,20 +258,140 @@ final class ExtensionSourceTests: XCTestCase {
         XCTAssertNil(ExtensionInstaller.redirect(request, from: URL(string: "https://api.github.com/x")))
     }
 
-    // MARK: - Tiers when a source is out of reach
+    // MARK: - Re-checking tiers against the source an extension came from
+
+    private func listed(_ id: String, tier: String, from source: ExtensionSource?) -> ExtensionInstaller.IndexEntry {
+        var listing = entry(id, tier: tier)
+        listing.source = source?.slug
+        return listing
+    }
 
     // A source that didn't answer leaves its extensions out of the index. That
-    // is not the same as withdrawing them, so they keep their tier until a
-    // fetch reaches every source.
-    func testAnUnreachableSourceDoesNotDemoteItsExtensions() {
-        let actual = ExtensionTiers.reconciling(["claude-usage": .service, "away": .trusted],
-                                                with: [entry("away", tier: "service")], complete: false)
+    // is not the same as withdrawing them, so they keep their tier until it
+    // answers.
+    func testAnUnreachableSourcesOwnExtensionsKeepTheirTier() {
+        let actual = ExtensionTiers.reconciling(
+            ["claude-usage": .service, "away": .trusted],
+            installedFrom: ["claude-usage": internalSource.slug],
+            with: [listed("away", tier: "service", from: nil)],
+            unavailable: [internalSource.slug])
         XCTAssertEqual(actual, ["claude-usage": .service, "away": .service])
     }
 
-    func testOnceEverySourceAnswersAnUnlistedExtensionIsView() {
-        let actual = ExtensionTiers.reconciling(["claude-usage": .service], with: [], complete: true)
+    // One unreachable source, a mistyped one say, must not stop the app's own
+    // catalogue withdrawing an extension.
+    func testAnUnreachableSourceDoesNotHoldUpAnotherSourcesWithdrawal() {
+        let actual = ExtensionTiers.reconciling(
+            ["derby": .service, "radar": .service],
+            installedFrom: ["radar": internalSource.slug],
+            with: [], unavailable: ["someone/typo"])
+        XCTAssertEqual(actual, ["derby": .view, "radar": .view])
+    }
+
+    func testOnceItsSourceAnswersAnUnlistedExtensionIsView() {
+        let actual = ExtensionTiers.reconciling(["claude-usage": .service],
+                                                installedFrom: ["claude-usage": internalSource.slug],
+                                                with: [], unavailable: [])
         XCTAssertEqual(actual, ["claude-usage": .view])
+    }
+
+    // Another source listing the same id says nothing about the copy on disk:
+    // only its own source's listing counts, here the lower one.
+    func testOnlyTheSourceItCameFromVouchesForItsTier() {
+        let actual = ExtensionTiers.reconciling(
+            ["radar": .trusted],
+            installedFrom: ["radar": internalSource.slug],
+            with: [listed("radar", tier: "trusted", from: nil),
+                   listed("radar", tier: "view", from: internalSource)])
+        XCTAssertEqual(actual, ["radar": .view])
+    }
+
+    // An extension with no recorded source is the app's own, and an extra
+    // source's listing of the same id doesn't vouch for it either.
+    func testAnotherSourcesListingDoesNotVouchForTheAppsOwnExtension() {
+        let actual = ExtensionTiers.reconciling(
+            ["derby": .service],
+            with: [listed("derby", tier: "service", from: internalSource)])
+        XCTAssertEqual(actual, ["derby": .view])
+    }
+
+    // GitHub names compare without case, and the setting may have been
+    // retyped since the install.
+    func testTheRecordedSourceMatchesWithoutCase() {
+        let actual = ExtensionTiers.reconciling(
+            ["radar": .service],
+            installedFrom: ["radar": "stackonehq/STACK-NUDGE-INTERNAL-MARKETPLACE"],
+            with: [listed("radar", tier: "service", from: internalSource)])
+        XCTAssertEqual(actual, ["radar": .service])
+    }
+
+    func testTheSourceIsRecordedAndForgottenBesideTheTier() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tiers-\(UUID().uuidString)").path
+        addTeardownBlock { try? FileManager.default.removeItem(atPath: directory) }
+        let path = "\(directory)/.tiers.json"
+        let sourcesPath = ExtensionTiers.sourcesPath(beside: path)
+
+        ExtensionTiers.record(listed("radar", tier: "service", from: internalSource), path: path)
+        ExtensionTiers.record(listed("derby", tier: "service", from: nil), path: path)
+        XCTAssertEqual(ExtensionTiers.readSources(path: sourcesPath), ["radar": internalSource.slug])
+
+        // Removing it forgets where it came from.
+        ExtensionTiers.forget("radar", path: path)
+        XCTAssertEqual(ExtensionTiers.readSources(path: sourcesPath), [:])
+        XCTAssertEqual(ExtensionTiers.read(path: path), ["derby": .service])
+    }
+
+    // A record that isn't a valid id and owner/repo is dropped, which reads
+    // as the app's own and so matches no extra source's listing.
+    func testAMalformedSourceRecordIsDropped() throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sources-\(UUID().uuidString).json").path
+        addTeardownBlock { try? FileManager.default.removeItem(atPath: path) }
+        try Data(#"{"radar":"StackOneHQ/stack-nudge-internal-marketplace","../x":"a/b","away":"not a slug","derby":3}"#.utf8)
+            .write(to: URL(fileURLWithPath: path))
+        XCTAssertEqual(ExtensionTiers.readSources(path: path), ["radar": internalSource.slug])
+    }
+
+    // MARK: - Updating only from the source it came from
+
+    private func manifest(_ id: String, version: String) -> ExtensionManifest {
+        ExtensionManifest(id: id, name: id, version: version, schema: 1, tab: .init(label: id), run: "./run",
+                          requires: [], config: [], refresh: .never)
+    }
+
+    func testACopyIsOnlyUpdatedFromTheSourceItCameFrom() {
+        let mine = listed("radar", tier: "view", from: internalSource)
+        let theirs = listed("radar", tier: "view", from: outsideSource)
+        let sources = ["radar": internalSource.slug]
+        XCTAssertFalse(ExtensionTiers.installedFromElsewhere(mine, isInstalled: true, sources: sources))
+        XCTAssertTrue(ExtensionTiers.installedFromElsewhere(theirs, isInstalled: true, sources: sources))
+        XCTAssertTrue(ExtensionTiers.installedFromElsewhere(theirs, isInstalled: true, sources: [:]),
+                      "an extra source's package went over the app's own")
+        XCTAssertFalse(ExtensionTiers.installedFromElsewhere(theirs, isInstalled: false, sources: sources),
+                       "nothing installed, so nothing to protect")
+    }
+
+    // Another source's entry under an installed id is a different extension,
+    // not an update: the row is the installed copy, from where it came from,
+    // with nothing to update to.
+    func testABrowserRowOffersNoUpdateFromAnotherSource() {
+        var theirs = entry("radar", version: "9")
+        theirs.source = outsideSource.slug
+        let actual = ExtensionCatalog.rows(catalogue: [theirs], installed: [manifest("radar", version: "1")],
+                                           refused: [], installedFrom: ["radar": internalSource.slug])
+        XCTAssertEqual(actual.count, 1)
+        XCTAssertEqual(actual.first?.source, internalSource.slug)
+        XCTAssertNil(actual.first?.availableVersion)
+        XCTAssertEqual(actual.first?.updateAvailable, false)
+    }
+
+    func testABrowserRowOffersAnUpdateFromItsOwnSource() {
+        var mine = entry("radar", version: "2")
+        mine.source = internalSource.slug
+        let actual = ExtensionCatalog.rows(catalogue: [mine], installed: [manifest("radar", version: "1")],
+                                           refused: [], installedFrom: ["radar": internalSource.slug])
+        XCTAssertEqual(actual.first?.updateAvailable, true)
     }
 
     // MARK: - The browser
@@ -265,10 +409,11 @@ final class ExtensionSourceTests: XCTestCase {
                                                      unavailable: ["someone/extensions": "nope"],
                                                      ignored: ["nonsense"])
         let actual = ExtensionCatalog(fetchCatalogue: { .success(catalogue) },
-                                      background: { $0() }, toMain: { $0() }, recordedTiers: { [:] })
+                                      background: { $0() }, toMain: { $0() }, recordedTiers: { [:] },
+                                      recordedSources: { ["radar": "StackOneHQ/stack-nudge-internal-marketplace"] })
         actual.reload()
-        XCTAssertFalse(actual.catalogueIsComplete)
         XCTAssertEqual(actual.unavailableSources, ["someone/extensions": "nope"])
+        XCTAssertEqual(actual.installedFrom, ["radar": "StackOneHQ/stack-nudge-internal-marketplace"])
         XCTAssertEqual(actual.ignoredSources, ["nonsense"])
         XCTAssertEqual(actual.entries.map(\.id), ["derby"])
     }

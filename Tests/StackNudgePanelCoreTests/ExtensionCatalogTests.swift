@@ -25,7 +25,7 @@ final class ExtensionCatalogTests: XCTestCase {
     ) -> ExtensionCatalog {
         ExtensionCatalog(fetchCatalogue: fetch, performInstall: install, performRemove: remove,
                          background: { $0() }, toMain: { $0() }, didChange: didChange,
-                         recordedTiers: { [:] })
+                         recordedTiers: { [:] }, recordedSources: { [:] })
     }
 
     // The completion must come back through the main hop. Every other test

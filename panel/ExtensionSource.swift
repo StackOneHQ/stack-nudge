@@ -8,10 +8,16 @@ import Foundation
 //
 // What an extra source may grant is capped here, in the binary, and never by
 // configuration. Its index carries the tiers that repo's reviewers gave each
-// extension; a repository owned by StackOneHQ keeps them, because its review
-// is ours, and anyone else's is held to `view`. A setting could not be the
+// extension. A repository on the reviewed list keeps them, because its review
+// is ours, and every other one is held to `view`. A setting could not be the
 // ceiling: anything that can write ~/.stack-nudge/config could then add a
 // repository that grants itself `trusted`.
+//
+// The list names repositories, not an owner. Being StackOneHQ's says nothing
+// about who reviews a repository's releases: anyone who can publish a release
+// on any of its repositories could attach an index granting `trusted`, and the
+// config could name that repository. Adding a catalogue here is a reviewed
+// change to the app.
 struct ExtensionSource: Equatable, Hashable {
     let owner: String
     let repo: String
@@ -20,7 +26,9 @@ struct ExtensionSource: Equatable, Hashable {
 
     static let builtIn = ExtensionSource(owner: "StackOneHQ", repo: "stack-nudge")
     static let configKey = "STACKNUDGE_EXTENSIONS_SOURCES"
-    static let reviewedOwner = "StackOneHQ"
+
+    // The catalogues whose reviewers are ours, besides the app's own.
+    static let reviewed = [ExtensionSource(owner: "StackOneHQ", repo: "stack-nudge-internal-marketplace")]
 
     // GitHub compares names without case, so these do too: StackOneHQ and
     // stackonehq are the same owner, and listing the app's own repository
@@ -34,10 +42,21 @@ struct ExtensionSource: Equatable, Hashable {
 
     // The most this source's index can give an extension.
     var ceiling: ExtensionTier {
-        if isBuiltIn || owner.caseInsensitiveCompare(Self.reviewedOwner) == .orderedSame {
-            return .trusted
-        }
+        if isBuiltIn || Self.reviewed.contains(where: sameRepository) { return .trusted }
         return .view
+    }
+
+    // Whether an owner/repo, as an entry or a record carries it (nil for the
+    // app's own), names the same repository as another.
+    static func same(_ slug: String?, _ other: String?) -> Bool {
+        switch (slug, other) {
+        case (nil, nil): return true
+        case (let slug?, let other?):
+            guard let source = ExtensionSource(slug: slug), let otherSource = ExtensionSource(slug: other)
+            else { return false }
+            return source.sameRepository(as: otherSource)
+        default: return false
+        }
     }
 
     // owner/repo, as GitHub allows them. Both end up in an API path, so

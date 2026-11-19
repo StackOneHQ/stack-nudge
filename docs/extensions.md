@@ -437,9 +437,12 @@ STACKNUDGE_EXTENSIONS_SOURCES=StackOneHQ/stack-nudge-internal-marketplace
 
 Comma separated, as `owner/repo`. The app's own catalogue is always read first,
 and an id it lists can't be taken by another source: the first source to list
-an id keeps it. Rows from another source show its name in the browser, and a
-source that couldn't be read is named at the top of the list with the reason,
-while the rest still load.
+an id keeps it. Once installed, an extension belongs to the source it came
+from: only that source's listing re-checks its tier or offers it an update,
+and another source listing the same id can't be installed over it until it's
+removed. Rows from another source show its name in the browser, and a source
+that couldn't be read is named at the top of the list with the reason, while
+the rest still load.
 
 A private repository is read with a GitHub token: the one stack-nudge holds from
 its own GitHub sign-in, then the `gh` CLI's (`gh auth token`), then none, which
@@ -449,11 +452,14 @@ is only ever sent to that repository's own release assets on `api.github.com`,
 and it's dropped when GitHub redirects the download to its storage host.
 Installing checks everything it checks for the app's own catalogue.
 
-What a source can grant is fixed in the app, not in the setting. A repository
-owned by StackOneHQ keeps the tiers its own `tiers.json` gives, because its
-review is ours. Any other owner's extensions are held to `view` whatever its
-index says. If the setting could raise that, anything able to write your config
-could add a repository that grants itself `trusted`.
+What a source can grant is fixed in the app, not in the setting. The app's own
+repository and `StackOneHQ/stack-nudge-internal-marketplace` keep the tiers
+their own `tiers.json` gives, because their review is ours. Every other
+repository's extensions are held to `view` whatever its index says, other
+StackOneHQ repositories included: who owns a repository says nothing about who
+can publish its releases. If the setting could raise that, anything able to
+write your config could add a repository that grants itself `trusted`, so
+adding a catalogue to that list is a change to the app.
 
 ### Tiers
 
@@ -477,17 +483,20 @@ extension asking for something its tier can't grant: a service at `view`, or
 
 The packager folds it into each index entry as `"tier"`. Hosts that predate
 tiers ignore the field. A newer host records it in
-`~/.stack-nudge/extensions/.tiers.json` when it installs from the index, and
-re-checks the record whenever it loads the catalogue: the first time Settings
-or the extensions browser opens in each launch, and on the browser's ⌘R or Try
-again. A tier can go down to what the index now says, and drops to `view` if
-the index stops listing the extension, but it never goes up without an install
-or an update. While another catalogue can't be read, an extension missing from
-the index keeps its tier, since it may only be missing because its source
-didn't answer; one that's listed is still checked. A change found then reloads the extensions straight away, so a
-demoted service restarts with its smaller grant (or stops, below `service`).
-Until the catalogue loads, the recorded tier stands. Removing an extension
-forgets its tier.
+`~/.stack-nudge/extensions/.tiers.json` when it installs from the index, with
+the catalogue it came from in `.sources.json` beside it, and re-checks the
+record whenever it loads the catalogue: the first time Settings or the
+extensions browser opens in each launch, and on the browser's ⌘R or Try again.
+Each tier is checked against the catalogue the extension came from. It can go
+down to what that catalogue's index now says, and drops to `view` if that
+catalogue stops listing the extension, but it never goes up without an install
+or an update. While another catalogue can't be read, an extension from it keeps
+its tier, since it may only be missing because its source didn't answer.
+Nothing else waits on that catalogue, so a mistyped source can't hold up a
+withdrawal from any other. A change found then reloads the extensions straight
+away, so a demoted service restarts with its smaller grant (or stops, below
+`service`). Until the catalogue loads, the recorded tier stands. Removing an
+extension forgets its tier and its source.
 
 **For developing an extension** that no release's index lists yet, set
 `STACKNUDGE_EXTENSIONS_LOCAL_TIERS=true` in `~/.stack-nudge/config`. The host

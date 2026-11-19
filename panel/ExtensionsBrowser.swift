@@ -25,13 +25,18 @@ final class ExtensionCatalog: ObservableObject {
 
     @Published private(set) var load: Load = .idle
     @Published private(set) var entries: [ExtensionInstaller.IndexEntry] = []
+    // Every source's entries, for re-checking recorded tiers. See
+    // Catalogue.listings.
+    private(set) var listings: [ExtensionInstaller.IndexEntry] = []
     // What the last fetch couldn't use: extra sources that didn't answer, and
     // entries in the sources setting that aren't owner/repo. Said on the page,
     // so a missing internal extension has a reason next to it.
     @Published private(set) var unavailableSources: [String: String] = [:]
     @Published private(set) var ignoredSources: [String] = []
-    // Whether every source answered last time. See Catalogue.isComplete.
-    var catalogueIsComplete: Bool { unavailableSources.isEmpty }
+    // The extra source each installed extension came from, id -> owner/repo.
+    // Read again whenever the catalogue loads or an install or removal lands,
+    // so the rows can tell a copy from another source apart from an update.
+    @Published private(set) var installedFrom: [String: String] = [:]
     @Published private(set) var work: [String: Work] = [:]
     // Everything on the page the keyboard can land on, in the order it is drawn.
     // Not just the rows: the page has a back chevron above them and, when the
@@ -94,6 +99,7 @@ final class ExtensionCatalog: ObservableObject {
     private let didLoadCatalogue: () -> Void
     private let probeRequirement: (String) -> ExtensionInstaller.RequirementCheck
     private let recordedTiers: () -> [String: ExtensionTier]
+    private let recordedSources: () -> [String: String]
 
     init(fetchCatalogue: @escaping () -> Result<ExtensionInstaller.Catalogue, ExtensionInstaller.Failure>,
          performInstall: @escaping (ExtensionInstaller.IndexEntry) -> Result<String, ExtensionInstaller.Failure>
@@ -108,9 +114,11 @@ final class ExtensionCatalog: ObservableObject {
          didLoadCatalogue: @escaping () -> Void = {},
          probeRequirement: @escaping (String) -> ExtensionInstaller.RequirementCheck
             = { ExtensionInstaller.checkRequirement($0) },
-         recordedTiers: @escaping () -> [String: ExtensionTier] = { ExtensionTiers.read() }) {
+         recordedTiers: @escaping () -> [String: ExtensionTier] = { ExtensionTiers.read() },
+         recordedSources: @escaping () -> [String: String] = { ExtensionTiers.readSources() }) {
         self.probeRequirement = probeRequirement
         self.recordedTiers = recordedTiers
+        self.recordedSources = recordedSources
         self.fetchCatalogue = fetchCatalogue
         self.performInstall = performInstall
         self.performRemove = performRemove
@@ -138,11 +146,14 @@ final class ExtensionCatalog: ObservableObject {
         background { [weak self] in
             guard let self else { return }
             let result = self.fetchCatalogue()
+            let sources = self.recordedSources()
             self.toMain { [weak self] in
                 guard let self else { return }
                 switch result {
                 case .success(let catalogue):
+                    self.installedFrom = sources
                     self.entries = catalogue.entries
+                    self.listings = catalogue.listings
                     self.unavailableSources = catalogue.unavailable
                     self.ignoredSources = catalogue.ignored
                     self.load = .loaded
@@ -259,7 +270,11 @@ final class ExtensionCatalog: ObservableObject {
         background { [weak self] in
             guard let self else { return }
             let result = self.performInstall(entry)
-            self.toMain { [weak self] in self?.finish(entry.id, result) }
+            let sources = self.recordedSources()
+            self.toMain { [weak self] in
+                self?.installedFrom = sources
+                self?.finish(entry.id, result)
+            }
         }
     }
 
@@ -269,7 +284,11 @@ final class ExtensionCatalog: ObservableObject {
         background { [weak self] in
             guard let self else { return }
             let result = self.performRemove(id)
-            self.toMain { [weak self] in self?.finish(id, result) }
+            let sources = self.recordedSources()
+            self.toMain { [weak self] in
+                self?.installedFrom = sources
+                self?.finish(id, result)
+            }
         }
     }
 
@@ -398,7 +417,8 @@ final class ExtensionCatalog: ObservableObject {
     // Token Derby, Pylon and System on a Mac that had only Away.
     func settingsRows(installed: [ExtensionManifest],
                       refused: [ExtensionRuntime.Refusal]) -> [ExtensionRow] {
-        Self.rows(catalogue: entries, installed: installed, refused: refused).filter(\.isInstalled)
+        Self.rows(catalogue: entries, installed: installed, refused: refused, installedFrom: installedFrom)
+            .filter(\.isInstalled)
     }
 
     // The Browse row's trailing text: how many published extensions aren't
@@ -461,8 +481,9 @@ struct ExtensionRow: Equatable, Identifiable {
     let refusedReason: String?
     let requires: [String]
     let config: [ExtensionManifest.ConfigKey]
-    // The extra source that lists it, as owner/repo; nil for the app's own
-    // catalogue and for anything not listed at all.
+    // The extra source it comes from, as owner/repo: the one that lists it,
+    // or for an installed one the one it was installed from. nil for the app's
+    // own catalogue and for anything neither lists nor recorded.
     var source: String? = nil
 
     var isInstalled: Bool { installedVersion != nil || refusedReason != nil }
@@ -497,16 +518,26 @@ struct ExtensionRow: Equatable, Identifiable {
 
 extension ExtensionCatalog {
     // Pure, so the merge is testable without a view.
+    //
+    // `installedFrom` is the extra source each installed extension came from
+    // (none is the app's own). A catalogue entry from any other source is a
+    // different extension sharing the id, not an update to the one installed,
+    // so that one is listed as installed with nothing to update to.
     static func rows(catalogue: [ExtensionInstaller.IndexEntry],
                      installed: [ExtensionManifest],
-                     refused: [ExtensionRuntime.Refusal]) -> [ExtensionRow] {
+                     refused: [ExtensionRuntime.Refusal],
+                     installedFrom: [String: String] = [:]) -> [ExtensionRow] {
         let installedByID = Dictionary(installed.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let refusedByID = Dictionary(refused.map { ($0.id, $0.reason) }, uniquingKeysWith: { a, _ in a })
 
         var rows: [ExtensionRow] = []
         var seen = Set<String>()
 
-        for entry in catalogue where seen.insert(entry.id).inserted {
+        for entry in catalogue {
+            let isInstalled = installedByID[entry.id] != nil || refusedByID[entry.id] != nil
+            guard !ExtensionTiers.installedFromElsewhere(entry, isInstalled: isInstalled, sources: installedFrom),
+                  seen.insert(entry.id).inserted
+            else { continue }
             // The installed manifest's description when there is one: it is
             // what's on disk, and an extension the index describes differently
             // (or not at all) is still the one installed.
@@ -541,14 +572,16 @@ extension ExtensionCatalog {
                 id: manifest.id, name: manifest.name, description: manifest.description,
                 installedVersion: manifest.version, availableVersion: nil,
                 refusedReason: nil,
-                requires: manifest.requires, config: manifest.config))
+                requires: manifest.requires, config: manifest.config,
+                source: installedFrom[manifest.id]))
         }
         // A refusal has no manifest to read a name from, so the id is the name.
         for refusal in refused where seen.insert(refusal.id).inserted {
             rows.append(ExtensionRow(
                 id: refusal.id, name: refusal.id, description: "",
                 installedVersion: nil, availableVersion: nil,
-                refusedReason: refusal.reason, requires: [], config: []))
+                refusedReason: refusal.reason, requires: [], config: [],
+                source: installedFrom[refusal.id]))
         }
         // Refusals first — a refusal is what somebody opened this page to
         // understand — then installed, then the rest, each alphabetically.
@@ -793,7 +826,8 @@ struct ExtensionsView: View {
         ExtensionCatalog.browseRows(
             ExtensionCatalog.rows(catalogue: catalog.entries,
                                   installed: host.manifests,
-                                  refused: host.refused),
+                                  refused: host.refused,
+                                  installedFrom: catalog.installedFrom),
             query: catalog.query)
     }
 

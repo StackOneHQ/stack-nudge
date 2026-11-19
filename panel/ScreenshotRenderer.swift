@@ -214,7 +214,7 @@ enum ScreenshotRenderer {
                                        performRemove: { .success($0) },
                                        background: { $0() }, toMain: { $0() },
                                        probeRequirement: { $0 == "python3" ? .missing : .works },
-                                       recordedTiers: { [:] })
+                                       recordedTiers: { [:] }, recordedSources: { [:] })
         catalog.reload()
         let host = ExtensionHost(background: { _ in }, toMain: { $0() },
                                  runner: { _, _, _ in .transient("fixture") },
@@ -324,7 +324,7 @@ enum ScreenshotRenderer {
                                                    performRemove: { .success($0) },
                                                    background: { $0() }, toMain: { $0() },
                                                    probeRequirement: { _ in .works },
-                                                   recordedTiers: { [:] }),
+                                                   recordedTiers: { [:] }, recordedSources: { [:] }),
                 onConfigureExtension: { _ in }, onCloseExtensionsBrowser: {},
                 onGrantPermissions: {}, runsOnAppear: false
             ).environmentObject(persistence))
