@@ -1,7 +1,7 @@
 import Foundation
 
 // What the app does when the presence signal changes. Away itself is a service
-// extension (extensions/away); the app's half is only this reaction, so whether
+// extension (away, in the extensions marketplace); the app's half is only this reaction, so whether
 // the screen locks stays an app setting and a dead extension can't leave
 // anything locked. See docs/design/service-extensions.md, "The pilot: Away".
 //

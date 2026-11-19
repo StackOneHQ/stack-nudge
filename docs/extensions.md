@@ -380,8 +380,8 @@ these?" is a question the reference should answer. Any `extensions/*/test_*.py`
 is run by CI and by `pnpm check` there; a suite that discovers zero tests is
 a failure rather than a pass.
 
-`scripts/package-extensions.sh validate` is what CI runs, and you can run it
-yourself. It refuses:
+`scripts/package-extensions.sh validate`, in the marketplace and in every catalogue made from
+the template, is what CI runs, and you can run it yourself. It refuses:
 
 - a manifest that doesn't parse, or whose `id` disagrees with the directory name
 - an `id` outside `^[a-z0-9][a-z0-9-]{0,31}$`, or a `schema` that isn't 1 or 2
@@ -434,8 +434,10 @@ those hosts can't read any catalogue without it.
 
 A team can publish its own extensions from another repository, a private one
 included, and have them show up in the browser next to these. The repository
-publishes exactly what this one does: run `scripts/package-extensions.sh` and
-attach the index, the packages and their sidecars to its latest release. Then
+publishes exactly what the marketplace does, and the simplest way is to make it
+from [StackOneHQ/stack-nudge-extensions-template](https://github.com/StackOneHQ/stack-nudge-extensions-template),
+whose release workflow attaches the index, the packages and their sidecars to
+its latest release. Then
 each person who wants it adds the repository under **Settings → Extensions →
 Other catalogues**, which writes it to `~/.stack-nudge/config`:
 
@@ -479,7 +481,7 @@ hardware capabilities such as `bluetooth`. The full table is in the design
 note, under "Privilege tiers".
 
 The tier is the reviewers' call, not the extension's, so it lives outside the
-package, in `extensions/tiers.json`:
+package, in the catalogue's `extensions/tiers.json`:
 
 ```json
 { "away": "trusted" }
@@ -586,7 +588,7 @@ empty list, is refused.
 
 ## Away, the reference service extension
 
-`extensions/away` notices when you walk away from the Mac with your phone, and
+`extensions/away` in StackOneHQ/stack-nudge-extensions-marketplace notices when you walk away from the Mac with your phone, and
 sets the app's `presence` signal. It is the one to read when writing a service:
 
 - **`manifest.json`** asks for `bluetooth` and `signal:presence`, both

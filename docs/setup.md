@@ -99,7 +99,6 @@ make dev                 # watch sources; auto-reload on .swift / Info.plist / n
 make test                # swift test (needs full Xcode for XCTest)
 make test-without-xcode  # compile and run the tests with the Command Line Tools only
 make test-notify         # drive notify.sh against a fake panel socket (macOS, no Xcode)
-make test-extensions     # validate and test the bundled extensions
 make uninstall           # remove app, hooks, launchd agents, ~/.stack-nudge/
 ```
 
@@ -115,7 +114,6 @@ Source layout:
 - `hook-manifest.json` — which agent events get wired to `notify.sh`
 - `hooks/` — the Claude Code plugin hooks and the pi extension
 - `phrases/` — per-language voice phrase pools sourced by `notify.sh` at hook time
-- `extensions/` — the extensions in the catalogue; see [extensions.md](extensions.md)
 - `shared/` — code shared with the Linux/Windows surfaces
 - `scripts/`, `Tests/` — release and packaging scripts, and the test suite
 

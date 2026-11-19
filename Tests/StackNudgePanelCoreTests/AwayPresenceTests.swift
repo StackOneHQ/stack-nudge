@@ -4,7 +4,8 @@ import XCTest
 
 // The app's half of Away: what the presence signal makes it do, and the
 // Settings row that decides whether leaving locks the screen. The detection
-// itself is extensions/away, tested by its own suite.
+// itself is the away extension, tested by its own suite in the extensions
+// marketplace.
 final class AwayPresenceTests: XCTestCase {
 
     func testAwayLocksOnlyWhenTheSettingSaysTo() {
