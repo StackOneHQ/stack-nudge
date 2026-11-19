@@ -76,7 +76,7 @@ enum ExtensionInstaller {
         case downloadFailed(String)
         case catalogueUnavailable
         case sourceUnavailable(String, signedIn: Bool)
-        case installedFromElsewhere(String, source: String?)
+        case installedFromElsewhere(String)
         case extractFailed(String)
         case installFailed(String)
 
@@ -112,9 +112,12 @@ enum ExtensionInstaller {
                         + "GitHub account can see it."
                     : "couldn't read its latest release. If it's private, sign in to "
                         + "GitHub in Settings or with the gh CLI."
-            case .installedFromElsewhere(_, let source):
-                return "the installed copy came from \(source ?? "StackNudge's own catalogue"), "
-                    + "which is the only catalogue that can update it. Remove it to install this one."
+            case .installedFromElsewhere:
+                // Not naming where it came from: a copy put there by hand, or
+                // under STACKNUDGE_EXTENSIONS_LOCAL_TIERS, came from no
+                // catalogue at all.
+                return "the installed copy isn't from this catalogue, so this can't update it. "
+                    + "Remove it to install this one."
             case .extractFailed(let why):      return "couldn't unpack the download — \(why)"
             case .installFailed(let why):      return "couldn't install — \(why)"
             }

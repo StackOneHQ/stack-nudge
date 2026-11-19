@@ -394,6 +394,50 @@ final class ExtensionSourceTests: XCTestCase {
         XCTAssertEqual(actual.first?.updateAvailable, true)
     }
 
+    // Another source taking the id first (the app's own catalogue starting to
+    // list it, or the setting reordered) mustn't strand the copy: its own
+    // source's newer listing is still the update it's offered, and what
+    // updating installs.
+    func testAnUpdateStillComesFromItsOwnSourceWhenAnotherTookTheID() {
+        let theirs = listed("radar", tier: "view", from: nil)
+        var mine = entry("radar", version: "2")
+        mine.source = internalSource.slug
+        let sources = ["radar": internalSource.slug]
+        let actual = ExtensionCatalog.rows(catalogue: [theirs], installed: [manifest("radar", version: "1")],
+                                           refused: [], listings: [theirs, mine], installedFrom: sources)
+        XCTAssertEqual(actual.first?.availableVersion, "2")
+        XCTAssertEqual(actual.first?.source, internalSource.slug)
+        XCTAssertEqual(ExtensionCatalog.installEntry(for: "radar", isInstalled: true, entries: [theirs],
+                                                     listings: [theirs, mine], installedFrom: sources),
+                       mine)
+    }
+
+    // Not installed, it's whatever the browser shows: the first source's.
+    func testANewInstallComesFromTheFirstSourceToListIt() {
+        let theirs = listed("radar", tier: "view", from: nil)
+        let mine = listed("radar", tier: "view", from: internalSource)
+        XCTAssertEqual(ExtensionCatalog.installEntry(for: "radar", isInstalled: false, entries: [theirs],
+                                                     listings: [theirs, mine],
+                                                     installedFrom: ["radar": internalSource.slug]),
+                       theirs)
+    }
+
+    // Installs of different extensions run at once. Each rewrite of the files
+    // must keep the others' records.
+    func testInstallsAtOnceKeepEveryRecord() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tiers-\(UUID().uuidString)").path
+        addTeardownBlock { try? FileManager.default.removeItem(atPath: directory) }
+        let path = "\(directory)/.tiers.json"
+        let ids = (0..<40).map { "ext-\($0)" }
+        DispatchQueue.concurrentPerform(iterations: ids.count) { index in
+            ExtensionTiers.record(listed(ids[index], tier: "service", from: internalSource), path: path)
+        }
+        XCTAssertEqual(Set(ExtensionTiers.read(path: path).keys), Set(ids))
+        XCTAssertEqual(Set(ExtensionTiers.readSources(path: ExtensionTiers.sourcesPath(beside: path)).keys),
+                       Set(ids))
+    }
+
     // MARK: - The browser
 
     func testABrowserRowSaysWhichSourceListsIt() {

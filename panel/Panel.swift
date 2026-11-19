@@ -1085,7 +1085,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // Through the same confirmation the browser uses, since an update can
     // raise the tier: the first press asks (the row says so), the second runs.
     private func updateExtension(_ id: String) {
-        guard let entry = extensionCatalog.entries.first(where: { $0.id == id }) else { return }
+        guard let entry = extensionCatalog.installEntry(for: id, isInstalled: true) else { return }
         extensionCatalog.requestInstall(entry)
     }
 
@@ -1118,7 +1118,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 .map { FileManager.default.fileExists(atPath: $0) } ?? false
             let sources = ExtensionTiers.readSources()
             if ExtensionTiers.installedFromElsewhere(entry, isInstalled: isInstalled, sources: sources) {
-                return .failure(.installedFromElsewhere(entry.id, source: sources[entry.id]))
+                return .failure(.installedFromElsewhere(entry.id))
             }
             let result = ExtensionInstaller.install(entry, from: ExtensionInstaller.releaseSources(for: entry))
             if case .success = result { ExtensionTiers.record(entry) }
@@ -4469,6 +4469,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                     ExtensionCatalog.rows(catalogue: extensionCatalog.entries,
                                           installed: extensions.manifests,
                                           refused: extensions.refused,
+                                          listings: extensionCatalog.listings,
                                           installedFrom: extensionCatalog.installedFrom),
                     query: extensionCatalog.query).shown
             }
@@ -5290,6 +5291,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                     ExtensionCatalog.rows(catalogue: extensionCatalog.entries,
                                           installed: extensions.manifests,
                                           refused: extensions.refused,
+                                          listings: extensionCatalog.listings,
                                           installedFrom: extensionCatalog.installedFrom),
                     query: extensionCatalog.query).shown,
                 top: top)

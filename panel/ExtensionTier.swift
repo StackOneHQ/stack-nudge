@@ -203,7 +203,16 @@ enum ExtensionTiers {
 
     // MARK: - On the file
 
+    // Every read-and-rewrite of the two files goes through this. Installs of
+    // different extensions run at once, and two rewrites racing would drop
+    // one's record. A lost source is the worse loss: the copy then reads as
+    // the app's own, falls to `view`, and is refused the update from its real
+    // source that would have put it right.
+    private static let fileLock = NSLock()
+
     static func record(_ entry: ExtensionInstaller.IndexEntry, path: String = ExtensionTiers.path) {
+        fileLock.lock()
+        defer { fileLock.unlock() }
         // The source first: a tier recorded without it would be read, until
         // the source caught up, as the app's own extension's.
         let sourcesPath = sourcesPath(beside: path)
@@ -219,6 +228,8 @@ enum ExtensionTiers {
                           path: String = ExtensionTiers.path,
                           config: [String: String] = ConfigFile.read()) -> Bool {
         guard indexReconciles(config: config) else { return false }
+        fileLock.lock()
+        defer { fileLock.unlock() }
         let recorded = read(path: path)
         let next = reconciling(recorded, installedFrom: readSources(path: sourcesPath(beside: path)),
                                with: listings, unavailable: unavailable)
@@ -228,6 +239,8 @@ enum ExtensionTiers {
     }
 
     static func forget(_ id: String, path: String = ExtensionTiers.path) {
+        fileLock.lock()
+        defer { fileLock.unlock() }
         let recorded = read(path: path)
         if recorded[id] != nil { write(forgetting(id, in: recorded), path: path) }
         let sourcesPath = sourcesPath(beside: path)
