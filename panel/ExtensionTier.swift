@@ -44,10 +44,12 @@ enum ExtensionTier: String, Comparable, CaseIterable {
 // out of discovery, which skips anything that isn't a valid id.
 //
 // The tier comes from the extensions index, which carries what the reviewers
-// gave each extension (extensions/tiers.json in the repo), and is written here
+// gave each extension (extensions/tiers.json in the repo, or in an extra
+// source's, held to that source's ceiling: see ExtensionSource), and is written here
 // when an extension is installed from it. Every later index fetch re-checks
 // it: the record can go down to what the index now says, never up, and an
-// extension the index no longer lists drops to `view`. A promotion takes an
+// extension the index no longer lists drops to `view` (once a fetch has
+// reached every source). A promotion takes an
 // install or an update, so the package the user has is the one reviewed for
 // it. Anything missing from the file is `view`, which is also what an
 // extension put on disk by hand gets.
@@ -114,12 +116,19 @@ enum ExtensionTiers {
     // the index no longer lists the extension at all. Nothing goes up: the
     // installed copy may be an older version than the one the index now
     // vouches for.
+    //
+    // `complete` is false when an extra source didn't answer. Its extensions
+    // are then missing from the index because it was out of reach, not because
+    // they were withdrawn, so an unlisted extension keeps its tier until a
+    // fetch that reaches every source. A listed one is still re-checked.
     static func reconciling(_ tiers: [String: ExtensionTier],
-                            with index: [ExtensionInstaller.IndexEntry]) -> [String: ExtensionTier] {
+                            with index: [ExtensionInstaller.IndexEntry],
+                            complete: Bool = true) -> [String: ExtensionTier] {
         let listed = Dictionary(index.map { ($0.id, $0.reviewedTier) },
                                 uniquingKeysWith: { first, _ in first })
         return tiers.reduce(into: [:]) { result, pair in
-            result[pair.key] = min(pair.value, listed[pair.key] ?? .view)
+            let unlisted: ExtensionTier = complete ? .view : pair.value
+            result[pair.key] = min(pair.value, listed[pair.key] ?? unlisted)
         }
     }
 
@@ -141,11 +150,12 @@ enum ExtensionTiers {
     // with a grant it no longer has.
     @discardableResult
     static func reconcile(with index: [ExtensionInstaller.IndexEntry],
+                          complete: Bool = true,
                           path: String = ExtensionTiers.path,
                           config: [String: String] = ConfigFile.read()) -> Bool {
         guard indexReconciles(config: config) else { return false }
         let recorded = read(path: path)
-        let next = reconciling(recorded, with: index)
+        let next = reconciling(recorded, with: index, complete: complete)
         guard next != recorded else { return false }
         write(next, path: path)
         return true

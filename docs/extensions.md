@@ -420,9 +420,40 @@ says only that the extension gets more access than a tab. Installing refuses a
 package whose manifest's mode or capabilities differ from its index entry: the
 user confirmed what the entry described.
 
-The index is attached to the app's own release, so there is one trust anchor and
-one fetch path. It ships even when there are no extensions, so the app always has
-something well-formed to fetch.
+The index is attached to the app's own release. It ships even when there are no
+extensions, so the app always has something well-formed to fetch.
+
+### Other catalogues
+
+A team can publish its own extensions from another repository, a private one
+included, and have them show up in the browser next to these. The repository
+publishes exactly what this one does: run `scripts/package-extensions.sh` and
+attach the index, the packages and their sidecars to its latest release. Then
+each person who wants it adds the repository to `~/.stack-nudge/config`:
+
+```
+STACKNUDGE_EXTENSIONS_SOURCES=StackOneHQ/stack-nudge-internal-marketplace
+```
+
+Comma separated, as `owner/repo`. The app's own catalogue is always read first,
+and an id it lists can't be taken by another source: the first source to list
+an id keeps it. Rows from another source show its name in the browser, and a
+source that couldn't be read is named at the top of the list with the reason,
+while the rest still load.
+
+A private repository is read with a GitHub token: the one stack-nudge holds from
+its own GitHub sign-in, then the `gh` CLI's (`gh auth token`), then none, which
+is enough for a public one. Tokens are only read when the setting names a
+source. Packages come through the API rather than the browser link, the token
+is only ever sent to that repository's own release assets on `api.github.com`,
+and it's dropped when GitHub redirects the download to its storage host.
+Installing checks everything it checks for the app's own catalogue.
+
+What a source can grant is fixed in the app, not in the setting. A repository
+owned by StackOneHQ keeps the tiers its own `tiers.json` gives, because its
+review is ours. Any other owner's extensions are held to `view` whatever its
+index says. If the setting could raise that, anything able to write your config
+could add a repository that grants itself `trusted`.
 
 ### Tiers
 
@@ -451,7 +482,9 @@ re-checks the record whenever it loads the catalogue: the first time Settings
 or the extensions browser opens in each launch, and on the browser's ⌘R or Try
 again. A tier can go down to what the index now says, and drops to `view` if
 the index stops listing the extension, but it never goes up without an install
-or an update. A change found then reloads the extensions straight away, so a
+or an update. While another catalogue can't be read, an extension missing from
+the index keeps its tier, since it may only be missing because its source
+didn't answer; one that's listed is still checked. A change found then reloads the extensions straight away, so a
 demoted service restarts with its smaller grant (or stops, below `service`).
 Until the catalogue loads, the recorded tier stands. Removing an extension
 forgets its tier.

@@ -15,7 +15,7 @@ final class ExtensionCatalogTests: XCTestCase {
     }
 
     private func catalog(
-        fetch: @escaping () -> Result<[ExtensionInstaller.IndexEntry], ExtensionInstaller.Failure>
+        fetch: @escaping () -> Result<ExtensionInstaller.Catalogue, ExtensionInstaller.Failure>
             = { .success([]) },
         install: @escaping (ExtensionInstaller.IndexEntry) -> Result<String, ExtensionInstaller.Failure>
             = { .success($0.id) },
@@ -848,7 +848,7 @@ final class ExtensionCatalogTests: XCTestCase {
         b = .init(id: b.id, name: b.name, version: b.version, description: "", asset: b.asset,
                   sha256: "abc", requires: ["swiftc", "python3"], config: [])
         let entries = [a, b, c0]
-        let c = ExtensionCatalog(fetchCatalogue: { .success(entries) },
+        let c = ExtensionCatalog(fetchCatalogue: { .success(.init(entries: entries)) },
                                  background: { $0() }, toMain: { $0() },
                                  probeRequirement: { probed.append($0); return $0 == "python3" ? .works : .missing })
         c.reload()

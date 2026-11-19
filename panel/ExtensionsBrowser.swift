@@ -25,6 +25,13 @@ final class ExtensionCatalog: ObservableObject {
 
     @Published private(set) var load: Load = .idle
     @Published private(set) var entries: [ExtensionInstaller.IndexEntry] = []
+    // What the last fetch couldn't use: extra sources that didn't answer, and
+    // entries in the sources setting that aren't owner/repo. Said on the page,
+    // so a missing internal extension has a reason next to it.
+    @Published private(set) var unavailableSources: [String: String] = [:]
+    @Published private(set) var ignoredSources: [String] = []
+    // Whether every source answered last time. See Catalogue.isComplete.
+    var catalogueIsComplete: Bool { unavailableSources.isEmpty }
     @Published private(set) var work: [String: Work] = [:]
     // Everything on the page the keyboard can land on, in the order it is drawn.
     // Not just the rows: the page has a back chevron above them and, when the
@@ -78,7 +85,7 @@ final class ExtensionCatalog: ObservableObject {
 
     func focusSearch() { searchFocusRequests += 1 }
 
-    private let fetchCatalogue: () -> Result<[ExtensionInstaller.IndexEntry], ExtensionInstaller.Failure>
+    private let fetchCatalogue: () -> Result<ExtensionInstaller.Catalogue, ExtensionInstaller.Failure>
     private let performInstall: (ExtensionInstaller.IndexEntry) -> Result<String, ExtensionInstaller.Failure>
     private let performRemove: (String) -> Result<String, ExtensionInstaller.Failure>
     private let background: (@escaping () -> Void) -> Void
@@ -88,7 +95,7 @@ final class ExtensionCatalog: ObservableObject {
     private let probeRequirement: (String) -> ExtensionInstaller.RequirementCheck
     private let recordedTiers: () -> [String: ExtensionTier]
 
-    init(fetchCatalogue: @escaping () -> Result<[ExtensionInstaller.IndexEntry], ExtensionInstaller.Failure>,
+    init(fetchCatalogue: @escaping () -> Result<ExtensionInstaller.Catalogue, ExtensionInstaller.Failure>,
          performInstall: @escaping (ExtensionInstaller.IndexEntry) -> Result<String, ExtensionInstaller.Failure>
             = { ExtensionInstaller.install($0, from: .init(assets: [:], fetch: { _ in nil })) },
          performRemove: @escaping (String) -> Result<String, ExtensionInstaller.Failure>
@@ -134,10 +141,12 @@ final class ExtensionCatalog: ObservableObject {
             self.toMain { [weak self] in
                 guard let self else { return }
                 switch result {
-                case .success(let entries):
-                    self.entries = entries
+                case .success(let catalogue):
+                    self.entries = catalogue.entries
+                    self.unavailableSources = catalogue.unavailable
+                    self.ignoredSources = catalogue.ignored
                     self.load = .loaded
-                    self.probeRequirements(of: entries)
+                    self.probeRequirements(of: catalogue.entries)
                     // An installed row has nothing to compare its version
                     // against until this lands, so whoever merged the two
                     // lists needs telling to do it again.
@@ -452,6 +461,9 @@ struct ExtensionRow: Equatable, Identifiable {
     let refusedReason: String?
     let requires: [String]
     let config: [ExtensionManifest.ConfigKey]
+    // The extra source that lists it, as owner/repo; nil for the app's own
+    // catalogue and for anything not listed at all.
+    var source: String? = nil
 
     var isInstalled: Bool { installedVersion != nil || refusedReason != nil }
 
@@ -517,7 +529,8 @@ extension ExtensionCatalog {
                 // which is all an uninstalled row shows. isConfigurable already
                 // requires an install, so a label-less key never reaches a form.
                 config: installedByID[entry.id]?.config
-                    ?? entry.config.map { .init(key: $0, label: nil, help: nil, placeholder: nil) }))
+                    ?? entry.config.map { .init(key: $0, label: nil, help: nil, placeholder: nil) },
+                source: entry.source))
         }
         // Installed but unpublished — still listed, so it can be seen and
         // removed rather than being invisible and permanent. In the browser
@@ -835,6 +848,13 @@ struct ExtensionsView: View {
         case .idle where rows.isEmpty, .loading where rows.isEmpty:
             note("Looking for extensions…")
         default:
+            ForEach(sourceNotes, id: \.self) { line in
+                Text(line).font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+            }
             if rows.isEmpty {
                 // Distinguished, because "nothing is published" and "nothing
                 // matches what you typed" want very different next actions.
@@ -851,6 +871,15 @@ struct ExtensionsView: View {
                 }
             }
         }
+    }
+
+    // One line per extra source that couldn't be used. The rest of the
+    // catalogue still loaded, so these sit above it rather than replacing it.
+    private var sourceNotes: [String] {
+        catalog.unavailableSources.keys.sorted().map { "\($0): \(catalog.unavailableSources[$0] ?? "")" }
+            + catalog.ignoredSources.map {
+                "Skipped \u{201C}\($0)\u{201D} in \(ExtensionSource.configKey): it isn't owner/repo."
+            }
     }
 
     private func note(_ text: String) -> some View {
@@ -878,7 +907,14 @@ struct ExtensionsView: View {
                     .foregroundStyle(tint(for: row))
                     .frame(width: 18)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(row.name).font(.subheadline).lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(row.name).font(.subheadline).lineLimit(1)
+                        // Which catalogue offers it, when it isn't the app's
+                        // own: an internal extension should look like one.
+                        if let source = row.source {
+                            Text(source).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                        }
+                    }
                     let line = row.refusedReason ?? row.description
                     if !line.isEmpty {
                         Text(line).font(.caption)

@@ -1112,7 +1112,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // discovery, so a service extension starts with its grant the first
         // time rather than being refused and then restarted.
         performInstall: { entry in
-            let result = ExtensionInstaller.install(entry, from: ExtensionInstaller.releaseSources())
+            let result = ExtensionInstaller.install(entry, from: ExtensionInstaller.releaseSources(for: entry))
             if case .success = result { ExtensionTiers.record(entry) }
             return result
         },
@@ -1128,7 +1128,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             // STACKNUDGE_EXTENSIONS_LOCAL_TIERS says the file is the word.
             // Reloading is what restarts a demoted service with its smaller
             // grant (or refuses it outright once it's below the service tier).
-            if ExtensionTiers.reconcile(with: self.extensionCatalog.entries) {
+            if ExtensionTiers.reconcile(with: self.extensionCatalog.entries,
+                                        complete: self.extensionCatalog.catalogueIsComplete) {
                 self.extensions.load()
             }
             // A fetched catalogue is what gives an installed row something to
