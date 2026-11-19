@@ -47,12 +47,17 @@ enum ExtensionTier: String, Comparable, CaseIterable {
 // gave each extension (extensions/tiers.json in the repo, or in an extra
 // source's, held to that source's ceiling: see ExtensionSource), and is written here
 // when an extension is installed from it. Every later index fetch re-checks
-// it: the record can go down to what the index now says, never up, and an
-// extension the index no longer lists drops to `view` (once a fetch has
-// reached every source). A promotion takes an
-// install or an update, so the package the user has is the one reviewed for
-// it. Anything missing from the file is `view`, which is also what an
-// extension put on disk by hand gets.
+// it against the source it was installed from: the record can go down to what
+// that source's index now says, never up, and an extension that source no
+// longer lists drops to `view`, unless the source didn't answer. A promotion
+// takes an install or an update, so the package the user has is the one
+// reviewed for it. Anything missing from the file is `view`, which is also
+// what an extension put on disk by hand gets.
+//
+// Which source that was is kept beside it, in .sources.json (id -> owner/repo,
+// only for extensions from an extra source; none means the app's own). Another
+// source listing the same id says nothing about the copy on disk, so it
+// neither vouches for that copy's tier nor offers it an update.
 //
 // For developing and testing an extension that no release's index lists yet,
 // STACKNUDGE_EXTENSIONS_LOCAL_TIERS=true in ~/.stack-nudge/config makes the
@@ -71,6 +76,12 @@ enum ExtensionTiers {
     }
 
     static let path = "\(ExtensionRuntime.root)/.tiers.json"
+    static let sourcesPath = sourcesPath(beside: path)
+
+    // Always the tier file's neighbour, so the two can't be pointed apart.
+    static func sourcesPath(beside tiersPath: String) -> String {
+        "\((tiersPath as NSString).deletingLastPathComponent)/.sources.json"
+    }
 
     // Missing, unreadable or malformed reads as empty, so every extension
     // falls back to `view`: the failure mode is fewer privileges, never more.
@@ -91,7 +102,33 @@ enum ExtensionTiers {
     }
 
     static func write(_ tiers: [String: ExtensionTier], path: String = ExtensionTiers.path) {
-        let object = tiers.mapValues(\.rawValue)
+        writeJSON(tiers.mapValues(\.rawValue), path: path)
+    }
+
+    // The extra source each extension came from. An entry that isn't a valid
+    // id and owner/repo is dropped, which reads as the app's own: an extra
+    // source's listing then no longer matches it, so the failure mode is
+    // again fewer privileges.
+    static func readSources(path: String = ExtensionTiers.sourcesPath,
+                            fileManager: FileManager = .default) -> [String: String] {
+        guard let data = fileManager.contents(atPath: path),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return [:] }
+        var sources: [String: String] = [:]
+        for (id, value) in object {
+            guard ExtensionManifest.isValidID(id), let slug = value as? String,
+                  ExtensionSource(slug: slug) != nil
+            else { continue }
+            sources[id] = slug
+        }
+        return sources
+    }
+
+    static func writeSources(_ sources: [String: String], path: String = ExtensionTiers.sourcesPath) {
+        writeJSON(sources, path: path)
+    }
+
+    private static func writeJSON(_ object: [String: String], path: String) {
         guard let data = try? JSONSerialization.data(withJSONObject: object,
                                                      options: [.sortedKeys, .prettyPrinted])
         else { return }
@@ -111,25 +148,49 @@ enum ExtensionTiers {
         return tiers
     }
 
-    // A fresh index, re-checked against what's recorded. Each recorded tier
-    // goes down to the index's if the index now says less, and to `view` if
-    // the index no longer lists the extension at all. Nothing goes up: the
-    // installed copy may be an older version than the one the index now
-    // vouches for.
+    static func recordingSource(of entry: ExtensionInstaller.IndexEntry,
+                                in sources: [String: String]) -> [String: String] {
+        var sources = sources
+        sources[entry.id] = entry.source
+        return sources
+    }
+
+    // A fresh index, re-checked against what's recorded. Each recorded tier is
+    // checked against the listing from the source it was installed from
+    // (`sources`; none is the app's own): it goes down to that listing's tier
+    // if it now says less, and to `view` if that source no longer lists it.
+    // Nothing goes up: the installed copy may be an older version than the one
+    // the index now vouches for.
     //
-    // `complete` is false when an extra source didn't answer. Its extensions
-    // are then missing from the index because it was out of reach, not because
-    // they were withdrawn, so an unlisted extension keeps its tier until a
-    // fetch that reaches every source. A listed one is still re-checked.
+    // `unavailable` is the extra sources that didn't answer, as owner/repo.
+    // An extension from one of those is missing from the index because its
+    // source was out of reach, not because it was withdrawn, so it keeps its
+    // tier until its source answers. Nothing else waits on them: one
+    // unreachable source, a mistyped one included, holds up no other source's
+    // withdrawals. The app's own never appears here, since its failing fails
+    // the whole fetch.
     static func reconciling(_ tiers: [String: ExtensionTier],
-                            with index: [ExtensionInstaller.IndexEntry],
-                            complete: Bool = true) -> [String: ExtensionTier] {
-        let listed = Dictionary(index.map { ($0.id, $0.reviewedTier) },
-                                uniquingKeysWith: { first, _ in first })
-        return tiers.reduce(into: [:]) { result, pair in
-            let unlisted: ExtensionTier = complete ? .view : pair.value
-            result[pair.key] = min(pair.value, listed[pair.key] ?? unlisted)
+                            installedFrom sources: [String: String] = [:],
+                            with listings: [ExtensionInstaller.IndexEntry],
+                            unavailable: Set<String> = []) -> [String: ExtensionTier] {
+        tiers.reduce(into: [:]) { result, pair in
+            let source = sources[pair.key]
+            if let listing = listings.first(where: { $0.id == pair.key && ExtensionSource.same($0.source, source) }) {
+                result[pair.key] = min(pair.value, listing.reviewedTier)
+            } else if let source, unavailable.contains(where: { ExtensionSource.same($0, source) }) {
+                result[pair.key] = pair.value
+            } else {
+                result[pair.key] = .view
+            }
         }
+    }
+
+    // Whether installing `entry` would put one source's package over a copy
+    // another source installed. Only the source a copy came from can update
+    // it; anything else is a different extension that happens to share its id.
+    static func installedFromElsewhere(_ entry: ExtensionInstaller.IndexEntry, isInstalled: Bool,
+                                       sources: [String: String]) -> Bool {
+        isInstalled && !ExtensionSource.same(entry.source, sources[entry.id])
     }
 
     // An extension that's removed has no tier to keep. Reinstalling records
@@ -142,28 +203,48 @@ enum ExtensionTiers {
 
     // MARK: - On the file
 
+    // Every read-and-rewrite of the two files goes through this. Installs of
+    // different extensions run at once, and two rewrites racing would drop
+    // one's record. A lost source is the worse loss: the copy then reads as
+    // the app's own, falls to `view`, and is refused the update from its real
+    // source that would have put it right.
+    private static let fileLock = NSLock()
+
     static func record(_ entry: ExtensionInstaller.IndexEntry, path: String = ExtensionTiers.path) {
+        fileLock.lock()
+        defer { fileLock.unlock() }
+        // The source first: a tier recorded without it would be read, until
+        // the source caught up, as the app's own extension's.
+        let sourcesPath = sourcesPath(beside: path)
+        writeSources(recordingSource(of: entry, in: readSources(path: sourcesPath)), path: sourcesPath)
         write(recording(entry, in: read(path: path)), path: path)
     }
 
     // True when anything changed, so the caller knows to restart what runs
     // with a grant it no longer has.
     @discardableResult
-    static func reconcile(with index: [ExtensionInstaller.IndexEntry],
-                          complete: Bool = true,
+    static func reconcile(with listings: [ExtensionInstaller.IndexEntry],
+                          unavailable: Set<String> = [],
                           path: String = ExtensionTiers.path,
                           config: [String: String] = ConfigFile.read()) -> Bool {
         guard indexReconciles(config: config) else { return false }
+        fileLock.lock()
+        defer { fileLock.unlock() }
         let recorded = read(path: path)
-        let next = reconciling(recorded, with: index, complete: complete)
+        let next = reconciling(recorded, installedFrom: readSources(path: sourcesPath(beside: path)),
+                               with: listings, unavailable: unavailable)
         guard next != recorded else { return false }
         write(next, path: path)
         return true
     }
 
     static func forget(_ id: String, path: String = ExtensionTiers.path) {
+        fileLock.lock()
+        defer { fileLock.unlock() }
         let recorded = read(path: path)
-        guard recorded[id] != nil else { return }
-        write(forgetting(id, in: recorded), path: path)
+        if recorded[id] != nil { write(forgetting(id, in: recorded), path: path) }
+        let sourcesPath = sourcesPath(beside: path)
+        var sources = readSources(path: sourcesPath)
+        if sources.removeValue(forKey: id) != nil { writeSources(sources, path: sourcesPath) }
     }
 }

@@ -1085,7 +1085,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // Through the same confirmation the browser uses, since an update can
     // raise the tier: the first press asks (the row says so), the second runs.
     private func updateExtension(_ id: String) {
-        guard let entry = extensionCatalog.entries.first(where: { $0.id == id }) else { return }
+        guard let entry = extensionCatalog.installEntry(for: id, isInstalled: true) else { return }
         extensionCatalog.requestInstall(entry)
     }
 
@@ -1112,6 +1112,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // discovery, so a service extension starts with its grant the first
         // time rather than being refused and then restarted.
         performInstall: { entry in
+            // Only the source a copy came from can update it. The browser
+            // offers nothing else, and this holds whatever asks.
+            let isInstalled = ExtensionRuntime.directory(for: entry.id)
+                .map { FileManager.default.fileExists(atPath: $0) } ?? false
+            let sources = ExtensionTiers.readSources()
+            if ExtensionTiers.installedFromElsewhere(entry, isInstalled: isInstalled, sources: sources) {
+                return .failure(.installedFromElsewhere(entry.id))
+            }
             let result = ExtensionInstaller.install(entry, from: ExtensionInstaller.releaseSources(for: entry))
             if case .success = result { ExtensionTiers.record(entry) }
             return result
@@ -1128,8 +1136,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             // STACKNUDGE_EXTENSIONS_LOCAL_TIERS says the file is the word.
             // Reloading is what restarts a demoted service with its smaller
             // grant (or refuses it outright once it's below the service tier).
-            if ExtensionTiers.reconcile(with: self.extensionCatalog.entries,
-                                        complete: self.extensionCatalog.catalogueIsComplete) {
+            if ExtensionTiers.reconcile(with: self.extensionCatalog.listings,
+                                        unavailable: Set(self.extensionCatalog.unavailableSources.keys)) {
                 self.extensions.load()
             }
             // A fetched catalogue is what gives an installed row something to
@@ -4460,7 +4468,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 ExtensionCatalog.browseRows(
                     ExtensionCatalog.rows(catalogue: extensionCatalog.entries,
                                           installed: extensions.manifests,
-                                          refused: extensions.refused),
+                                          refused: extensions.refused,
+                                          listings: extensionCatalog.listings,
+                                          installedFrom: extensionCatalog.installedFrom),
                     query: extensionCatalog.query).shown
             }
             let onlyCommand = mods.intersection([.command, .control, .option, .shift]) == [.command]
@@ -5280,7 +5290,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 among: ExtensionCatalog.browseRows(
                     ExtensionCatalog.rows(catalogue: extensionCatalog.entries,
                                           installed: extensions.manifests,
-                                          refused: extensions.refused),
+                                          refused: extensions.refused,
+                                          listings: extensionCatalog.listings,
+                                          installedFrom: extensionCatalog.installedFrom),
                     query: extensionCatalog.query).shown,
                 top: top)
         default:

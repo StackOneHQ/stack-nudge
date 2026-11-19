@@ -76,6 +76,7 @@ enum ExtensionInstaller {
         case downloadFailed(String)
         case catalogueUnavailable
         case sourceUnavailable(String, signedIn: Bool)
+        case installedFromElsewhere(String)
         case extractFailed(String)
         case installFailed(String)
 
@@ -111,6 +112,12 @@ enum ExtensionInstaller {
                         + "GitHub account can see it."
                     : "couldn't read its latest release. If it's private, sign in to "
                         + "GitHub in Settings or with the gh CLI."
+            case .installedFromElsewhere:
+                // Not naming where it came from: a copy put there by hand, or
+                // under STACKNUDGE_EXTENSIONS_LOCAL_TIERS, came from no
+                // catalogue at all.
+                return "the installed copy isn't from this catalogue, so this can't update it. "
+                    + "Remove it to install this one."
             case .extractFailed(let why):      return "couldn't unpack the download — \(why)"
             case .installFailed(let why):      return "couldn't install — \(why)"
             }
@@ -551,15 +558,23 @@ enum ExtensionInstaller {
     // sources all loaded, which is what every caller before extra sources
     // meant by one.
     struct Catalogue: Equatable, ExpressibleByArrayLiteral {
+        // One per id, the first source's: what can be browsed and installed.
         var entries: [IndexEntry]
+        // Every source's entries, an id another source took first included,
+        // each stamped and capped like `entries`. What an installed
+        // extension's tier is re-checked against: the listing from the source
+        // it was installed from, which need not be the one `entries` kept.
+        var listings: [IndexEntry]
         // Extra sources that failed, owner/repo -> why. The app's own failing
         // fails the whole fetch, as it always has.
         var unavailable: [String: String] = [:]
         // Entries in the sources setting that aren't owner/repo.
         var ignored: [String] = []
 
-        init(entries: [IndexEntry], unavailable: [String: String] = [:], ignored: [String] = []) {
+        init(entries: [IndexEntry], listings: [IndexEntry]? = nil,
+             unavailable: [String: String] = [:], ignored: [String] = []) {
             self.entries = entries
+            self.listings = listings ?? entries
             self.unavailable = unavailable
             self.ignored = ignored
         }
@@ -567,11 +582,6 @@ enum ExtensionInstaller {
         init(arrayLiteral elements: IndexEntry...) {
             self.init(entries: elements)
         }
-
-        // Whether every source answered. Only then does an extension missing
-        // from the catalogue mean it was withdrawn rather than that its source
-        // was out of reach.
-        var isComplete: Bool { unavailable.isEmpty }
     }
 
     // The app's own entries, then each extra source's in the order the setting
@@ -580,7 +590,9 @@ enum ExtensionInstaller {
     // app's own extensions, or for one an earlier source already lists. Each
     // extra entry is stamped with its source and its tier held to that source's
     // ceiling, so everything after this (the install confirmation, the
-    // recorded tier, the grant) sees the capped tier and nothing else.
+    // recorded tier, the grant) sees the capped tier and nothing else. An
+    // entry whose id was taken is still kept in `listings`, for the tier
+    // re-check of a copy installed from its source.
     static func merging(builtIn: [IndexEntry],
                         extra: [(source: ExtensionSource, result: Result<[IndexEntry], Failure>)])
         -> Catalogue {
@@ -591,10 +603,11 @@ enum ExtensionInstaller {
             case .failure(let failure):
                 catalogue.unavailable[source.slug] = failure.message
             case .success(let entries):
-                for var entry in entries where taken.insert(entry.id).inserted {
+                for var entry in entries {
                     entry.source = source.slug
                     entry.tier = min(entry.reviewedTier, source.ceiling).rawValue
-                    catalogue.entries.append(entry)
+                    catalogue.listings.append(entry)
+                    if taken.insert(entry.id).inserted { catalogue.entries.append(entry) }
                 }
             }
         }
