@@ -57,7 +57,10 @@ Usage tracking (`STACKNUDGE_QUOTA_TRACKING`) reads your quota by shelling out to
 the `claude` and `codex` CLIs you already have installed, and by asking
 Antigravity's language server on `127.0.0.1`. The first two make their own calls
 to their own vendors, under those vendors' privacy policies, exactly as they
-would if you ran them yourself.
+would if you ran them yourself. If you sign in to Claude Code from more than one
+config dir (any `~/.claude-*` directory with a login, or one listed in
+`STACKNUDGE_CLAUDE_CONFIG_DIRS`), it runs `claude /usage` for each of those as
+well, with `CLAUDE_CONFIG_DIR` set to that dir, at most every five minutes.
 
 ## What is never sent, anywhere
 

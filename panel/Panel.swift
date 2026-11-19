@@ -1197,6 +1197,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private var updateChecker: UpdateChecker?
     private var updater: Updater?
     private let claudeCliQuotaProbe = ClaudeCliQuotaProbe()
+    // Claude logins other than the default one, by config dir. See
+    // refreshOtherClaudeAccounts.
+    private var otherClaudeProbes: [String: ClaudeCliQuotaProbe] = [:]
     private let codexQuotaProbe = CodexQuotaProbe()
     private let antigravityUsageProbe = AntigravityUsageProbe()
     // Lazy because it shares the nav's history store rather than opening its
@@ -2408,6 +2411,32 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             }
         }
         refreshPiUsage()
+        refreshOtherClaudeAccounts()
+    }
+
+    // Every other Claude login on this machine (see ClaudeConfigDirs) gets the
+    // same probe as the default one, run with CLAUDE_CONFIG_DIR. Nothing else
+    // refreshes those accounts' usage: Claude Code only writes it to a dir's
+    // .claude.json when something asks, and the default probe only ever asks
+    // for the default login. The answer lands in that file, which is where
+    // anything else reading usage on this machine, the claude-usage extension
+    // included, picks it up.
+    private func refreshOtherClaudeAccounts() {
+        // Discovery reads a .claude.json per dir, hundreds of KB each, so off main.
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let dirs = ClaudeConfigDirs.discover(defaultAccount: ClaudeUsageCache.currentAccount())
+            DispatchQueue.main.async {
+                guard let self, self.quotaTrackingEnabled else { return }
+                let paths = Set(dirs.map(\.path))
+                self.otherClaudeProbes = self.otherClaudeProbes.filter { paths.contains($0.key) }
+                for dir in dirs {
+                    let probe = self.otherClaudeProbes[dir.path] ?? ClaudeCliQuotaProbe(
+                        configDir: dir.path, cacheMaxAge: ClaudeCliQuotaProbe.otherAccountCacheMaxAge)
+                    self.otherClaudeProbes[dir.path] = probe
+                    probe.fetch { _ in }
+                }
+            }
+        }
     }
 
     // Pi budget, read from pi's own transcripts with no network and no CLI.
