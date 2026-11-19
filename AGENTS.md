@@ -35,7 +35,7 @@ Cancelling a field puts it back the way it was before you started and hands the 
 | `Tab` / `⇧Tab` | Next / previous row on pages that have them (Settings). Never a different action. |
 | `→` / `←` | Step into / out of a level, or through a carousel. While a value is being picked, they step the value instead (see `Space`). |
 | `⏎` | The selected row's main action: open, approve, activate. Every row that shows a `⏎` hint has to do something with it. |
-| `Space` | Flip a toggle (Phrases defaults, the update log). In Settings it does what `⏎` does on every row: flips an on/off row, fires an action row, and on a value row (a sound, a duration, a threshold) starts picking. While picking, `←` / `→` step through the values and `Space` or `⏎` settles on one; moving to another row settles it too. |
+| `Space` | Flip a toggle (Phrases defaults). In Settings it does what `⏎` does on every row: flips an on/off row, fires an action row, and on a value row (a sound, a duration, a threshold) starts picking. While picking, `←` / `→` step through the values and `Space` or `⏎` settles on one; moving to another row settles it too. |
 | `⌫` / `⌦` | Dismiss the selected item, where that loses nothing (an Events nudge, an Outcomes row). Anything destructive that has no confirmation step takes `⌘⌫` (killing a session, removing a phrase or an extension), and ignores autorepeat. |
 | `/` | Focus the page's text field, where it has one. |
 

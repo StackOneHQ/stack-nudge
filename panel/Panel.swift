@@ -4429,16 +4429,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
 
         // Updating: ← back to Settings, and only after a failure (so the user
-        // can't accidentally abandon a live install). Space toggles the log.
+        // can't accidentally abandon a live install).
         if nav.mode == .updating {
             let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
             guard plain else { return false }
             switch event.keyCode {
             case KeyCode.leftArrow where nav.updaterPhase == .failed:
                 nav.mode = .settings
-                return true
-            case KeyCode.space:
-                nav.updaterShowLog.toggle()
                 return true
             default:
                 return false

@@ -1261,8 +1261,8 @@ struct MarkdownNotesView: View {
 // MARK: - Updating view
 
 // Shown while install.sh is running. Top half: spinner + current phase
-// label + step counter. Bottom half: a disclosure that reveals the raw
-// install log (toggled via "Show output").
+// label + step counter. Bottom half: the raw install output, always shown
+// so a slow or stuck step can be read without asking for it.
 struct UpdatingView: View {
 
     @ObservedObject var nav: PanelNav
@@ -1272,7 +1272,7 @@ struct UpdatingView: View {
             VStack(alignment: .leading, spacing: 14) {
                 phaseHeader
                 progressBar
-                detailDisclosure
+                output
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 14)
@@ -1314,26 +1314,39 @@ struct UpdatingView: View {
             .tint(nav.updaterPhase == .failed ? .red : .accentColor)
     }
 
-    @ViewBuilder
-    private var detailDisclosure: some View {
-        DisclosureGroup(isExpanded: $nav.updaterShowLog) {
-            ScrollView {
-                Text(nav.updaterLog.isEmpty ? "Waiting for output…" : nav.updaterLog)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-                    .padding(8)
+    private static let outputEnd = "output-end"
+
+    private var output: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Output")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            // Takes whatever height the page has left, never more, so the panel
+            // keeps its size. Once the output outgrows it, it follows the newest
+            // line, so the step that's running is the one on screen.
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(nav.updaterLog.isEmpty ? "Waiting for output…" : nav.updaterLog)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                            .padding(8)
+                        Color.clear.frame(height: 0).id(Self.outputEnd)
+                    }
+                }
+                .background(ThinScrollers())
+                .onChange(of: nav.updaterLog) { _ in
+                    proxy.scrollTo(Self.outputEnd, anchor: .bottom)
+                }
+                .onAppear { proxy.scrollTo(Self.outputEnd, anchor: .bottom) }
             }
-            .frame(maxHeight: 140)
+            .frame(maxHeight: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color.primary.opacity(0.05))
             )
-        } label: {
-            Text("Show output")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
     }
 }
