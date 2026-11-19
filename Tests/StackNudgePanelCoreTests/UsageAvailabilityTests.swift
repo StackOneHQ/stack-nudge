@@ -85,7 +85,7 @@ final class UsageAvailabilityTests: XCTestCase {
         XCTAssertEqual(nav.availableUsageClients, [.codex])
     }
 
-    // Listing order follows UsageClient.allCases (claude, codex, antigravity),
+    // Listing order follows UsageClient.fixedCases (claude, codex, antigravity),
     // so a mix of data and errors stays in a stable order.
     func test_ordering_followsDeclarationOrder() {
         let nav = PanelNav()
@@ -93,5 +93,72 @@ final class UsageAvailabilityTests: XCTestCase {
         nav.codexQuota = codexSnapshot()
         nav.quota = claudeSnapshot()
         XCTAssertEqual(nav.availableUsageClients, [.claude, .codex, .antigravity])
+    }
+
+    // MARK: - Other Claude logins
+
+    private let team = ClaudeLogin(configDir: "/h/.claude-team", label: "Stackone")
+    private let work = ClaudeLogin(configDir: "/h/.claude-work", label: "work")
+
+    // Each login gets its own row, in the order found, straight after the
+    // default Claude row and before every other client.
+    func test_otherLoginsAreListedAfterTheDefaultClaudeRow() {
+        let nav = PanelNav()
+        nav.quota = claudeSnapshot()
+        nav.codexQuota = codexSnapshot()
+        nav.claudeLogins = [team, work]
+        nav.claudeLoginQuotas = [team.configDir: claudeSnapshot(), work.configDir: claudeSnapshot()]
+        XCTAssertEqual(nav.availableUsageClients,
+                       [.claude, .claudeLogin(team), .claudeLogin(work), .codex])
+    }
+
+    // Found but not yet probed: no row until there's something or an error to show.
+    func test_aLoginWithNothingToShowIsNotListed() {
+        let nav = PanelNav()
+        nav.claudeLogins = [team]
+        XCTAssertEqual(nav.availableUsageClients, [])
+        nav.quotaErrors[.claudeLogin(team)] = "failed"
+        XCTAssertEqual(nav.availableUsageClients, [.claudeLogin(team)])
+    }
+
+    // A login is its config dir: its label changing doesn't make it another row.
+    func test_aLoginIsTheSameRowWhateverItsLabel() {
+        XCTAssertEqual(UsageClient.claudeLogin(team),
+                       .claudeLogin(ClaudeLogin(configDir: team.configDir, label: "Renamed")))
+    }
+
+    func test_eachClaudeRowReadsItsOwnSnapshot() {
+        let nav = PanelNav()
+        nav.quota = claudeSnapshot(five: 10)
+        nav.claudeLogins = [team]
+        nav.claudeLoginQuotas = [team.configDir: claudeSnapshot(five: 90)]
+        XCTAssertEqual(nav.claudeQuota(for: .claude)?.fiveHour?.utilization, 10)
+        XCTAssertEqual(nav.claudeQuota(for: .claudeLogin(team))?.fiveHour?.utilization, 90)
+        XCTAssertNil(nav.claudeQuota(for: .codex))
+    }
+
+    // MARK: - Stress
+
+    // With a Claude row selected, a team seat running hot shows on the mascot
+    // even though the pill is showing your own plan.
+    func test_stressTakesTheHottestClaudeLoginWhileClaudeIsSelected() {
+        let nav = PanelNav()
+        nav.quota = claudeSnapshot(five: 10)
+        nav.claudeLogins = [team]
+        nav.claudeLoginQuotas = [team.configDir: claudeSnapshot(five: 90)]
+        nav.usageClientIndex = 0
+        XCTAssertEqual(nav.selectedUsageClient, .claude)
+        XCTAssertEqual(nav.widgetQuota.peakUtilization, 10)
+        XCTAssertEqual(nav.stressPeakUtilization, 90)
+    }
+
+    // Any other client keeps its own stress, as before there were extra logins.
+    func test_stressIsTheSelectedClientsOwnOtherwise() {
+        let nav = PanelNav()
+        nav.quota = claudeSnapshot(five: 95)
+        nav.codexQuota = codexSnapshot()
+        nav.usageClientIndex = 1
+        XCTAssertEqual(nav.selectedUsageClient, .codex)
+        XCTAssertEqual(nav.stressPeakUtilization, 20)
     }
 }

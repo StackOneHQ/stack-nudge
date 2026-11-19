@@ -30,6 +30,23 @@ enum ClaudeConfigDirs {
         let path: String
         // ClaudeUsageCache.currentAccount: the account and its organization.
         let account: String
+        // How the Usage tab names it. See label(for:path:).
+        var label: String = ""
+    }
+
+    // The organization's name, which is what tells a team seat from your own
+    // plan. Claude Code names a personal plan's organization "<email>'s
+    // Organization", which says nothing a row needs, so that falls back to the
+    // dir's own name ("org-publisher" for ~/.claude-org-publisher), as does a
+    // login with no name at all.
+    static func label(for login: ClaudeUsageCache.Login, path: String) -> String {
+        if let name = login.organizationName?.trimmingCharacters(in: .whitespaces), !name.isEmpty,
+           !name.hasSuffix("'s Organization") {
+            return name
+        }
+        let base = (path as NSString).lastPathComponent
+        let trimmed = base.hasPrefix(".claude-") ? String(base.dropFirst(".claude-".count)) : base
+        return trimmed.isEmpty ? base : trimmed
     }
 
     // The default login is passed in so a dir signed in to the same account and
@@ -49,11 +66,10 @@ enum ClaudeConfigDirs {
         for candidate in candidates(home: home, setting: setting, found: found) {
             let path = (candidate as NSString).resolvingSymlinksInPath
             guard !defaults.contains(path), seenPaths.insert(path).inserted,
-                  let account = ClaudeUsageCache.currentAccount(
-                      path: ClaudeUsageCache.path(configDir: path)),
-                  seenAccounts.insert(account).inserted
+                  let login = ClaudeUsageCache.login(path: ClaudeUsageCache.path(configDir: path)),
+                  seenAccounts.insert(login.id).inserted
             else { continue }
-            dirs.append(Dir(path: path, account: account))
+            dirs.append(Dir(path: path, account: login.id, label: label(for: login, path: path)))
         }
         return dirs
     }

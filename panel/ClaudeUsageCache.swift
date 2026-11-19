@@ -49,12 +49,26 @@ enum ClaudeUsageCache {
     // own plan and to a team seat has the same accountUuid in both, but the
     // quota belongs to the seat, so the two are different logins.
     static func currentAccount(path: String = ClaudeUsageCache.path) -> String? {
+        login(path: path)?.id
+    }
+
+    struct Login: Equatable {
+        // What currentAccount returns.
+        let id: String
+        let organizationName: String?
+        let email: String?
+    }
+
+    static func login(path: String = ClaudeUsageCache.path) -> Login? {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path), options: .mappedIfSafe),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let account = account(in: root)
         else { return nil }
-        let organization = (root["oauthAccount"] as? [String: Any])?["organizationUuid"] as? String
-        return organization.map { "\(account)/\($0)" } ?? account
+        let oauth = root["oauthAccount"] as? [String: Any]
+        let organization = oauth?["organizationUuid"] as? String
+        return Login(id: organization.map { "\(account)/\($0)" } ?? account,
+                     organizationName: oauth?["organizationName"] as? String,
+                     email: oauth?["emailAddress"] as? String)
     }
 
     private static func account(in root: [String: Any]) -> String? {

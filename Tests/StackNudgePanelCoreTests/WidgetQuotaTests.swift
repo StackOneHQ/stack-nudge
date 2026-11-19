@@ -152,8 +152,11 @@ final class WidgetQuotaTests: XCTestCase {
 
     // The same property for every client: a selected client with no snapshot
     // still names itself.
+    private let teamLogin = UsageClient.claudeLogin(
+        ClaudeLogin(configDir: "/h/.claude-team", label: "Stackone"))
+
     func test_everyClientKeepsItsIdentityWithNoSnapshot() {
-        for client in UsageClient.allCases {
+        for client in UsageClient.fixedCases + [teamLogin] {
             XCTAssertEqual(make(client).client, client, "\(client) lost its identity")
         }
     }
@@ -219,8 +222,18 @@ final class WidgetQuotaTests: XCTestCase {
         XCTAssertEqual(UsageClient.claude.widgetTag, "Claude")
         XCTAssertEqual(UsageClient.codex.widgetTag, "Codex")
         XCTAssertEqual(UsageClient.antigravity.widgetTag, "Agy")
-        for client in UsageClient.allCases {
+        for client in UsageClient.fixedCases + [teamLogin] {
             XCTAssertFalse(client.widgetTag.isEmpty, "\(client) has no widget tag")
         }
+    }
+
+    // Another Claude login draws the same rings from its own snapshot, under its
+    // own identity and named by the login, so the legend says whose they are.
+    func test_anotherClaudeLogin_drawsItsOwnSnapshot() {
+        let actual = make(teamLogin, claude: claudeSnapshot(five: 2, seven: 80))
+        XCTAssertEqual(actual.client, teamLogin)
+        XCTAssertEqual(actual.short?.utilization, 2)
+        XCTAssertEqual(actual.long?.utilization, 80)
+        XCTAssertEqual(teamLogin.widgetTag, "Stackone")
     }
 }

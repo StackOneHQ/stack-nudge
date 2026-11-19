@@ -210,14 +210,18 @@ extension UsageEntry {
 // where the last complete line ended.
 final class UsageHistoryStore {
 
-    enum Source {
+    enum Source: Hashable {
         case claude
+        // Another Claude login's transcripts, which Claude Code writes under that
+        // login's own config dir rather than ~/.claude.
+        case claudeLogin(configDir: String)
         case codex
         case pi
 
         var defaultRoot: String {
             switch self {
             case .claude: return "\(NSHomeDirectory())/.claude/projects"
+            case .claudeLogin(let configDir): return "\(configDir)/projects"
             case .codex:  return "\(NSHomeDirectory())/.codex/sessions"
             case .pi:     return "\(NSHomeDirectory())/.pi/agent/sessions"
             }
@@ -227,7 +231,7 @@ final class UsageHistoryStore {
         // JSON parsing.
         var marker: StaticString {
             switch self {
-            case .claude: return "\"assistant\""
+            case .claude, .claudeLogin: return "\"assistant\""
             case .codex:  return "token_count"
             case .pi:     return "\"assistant\""
             }
@@ -451,7 +455,7 @@ final class UsageHistoryStore {
 
     private static func parse(line: Data, source: Source) -> UsageEntry? {
         switch source {
-        case .claude: return parseClaude(line: line)
+        case .claude, .claudeLogin: return parseClaude(line: line)
         case .codex:  return parseCodex(line: line)
         case .pi:     return parsePi(line: line)
         }

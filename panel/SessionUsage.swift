@@ -47,18 +47,28 @@ struct QuotaSnapshot: Equatable {
 
 // A connected client shown in the Usage tab's left-hand list. Each renders its
 // own quota tiers; ↑/↓ switches between the ones that currently have data.
-enum UsageClient: String, CaseIterable, Hashable {
+enum UsageClient: Hashable {
     case claude
+    // A Claude login other than the default one, signed in from its own config
+    // dir (see ClaudeConfigDirs). Listed straight after the default Claude row.
+    case claudeLogin(ClaudeLogin)
     case codex
     case antigravity
     case pi
 
+    // Every client but the extra Claude logins, which are only known at run
+    // time, in display order.
+    static let fixedCases: [UsageClient] = [.claude, .codex, .antigravity, .pi]
+
+    // The row title. An extra login is still "Claude"; which one it is goes on
+    // the line under it (see UsageView.planLabel), since the client column is
+    // too narrow for both.
     var displayName: String {
         switch self {
-        case .claude:      return "Claude"
-        case .codex:       return "Codex"
-        case .antigravity: return "Antigravity"
-        case .pi:          return "Pi"
+        case .claude, .claudeLogin: return "Claude"
+        case .codex:                return "Codex"
+        case .antigravity:          return "Antigravity"
+        case .pi:                   return "Pi"
         }
     }
 
@@ -72,14 +82,27 @@ enum UsageClient: String, CaseIterable, Hashable {
     // client can't silently inherit another agent's transcript format.
     var historySource: UsageHistoryStore.Source? {
         switch self {
-        case .claude:      return .claude
-        case .codex:       return .codex
-        case .antigravity: return nil
-        case .pi:          return .pi
+        case .claude:                return .claude
+        case .claudeLogin(let login): return .claudeLogin(configDir: login.configDir)
+        case .codex:                 return .codex
+        case .antigravity:           return nil
+        case .pi:                    return .pi
         }
     }
 
     var hasReplayableHistory: Bool { historySource != nil }
+}
+
+// A Claude login other than the default one. Identified by its config dir
+// alone: the label is read from the login and may change under it (an
+// organization renamed), which must not make it a different row.
+struct ClaudeLogin: Hashable {
+    let configDir: String
+    // The organization's name, or what stands in for one (see ClaudeConfigDirs).
+    let label: String
+
+    static func == (lhs: ClaudeLogin, rhs: ClaudeLogin) -> Bool { lhs.configDir == rhs.configDir }
+    func hash(into hasher: inout Hasher) { hasher.combine(configDir) }
 }
 
 // Panes of the Usage tab's inner carousel, in step order. → walks forward while
@@ -275,6 +298,7 @@ struct UsageView: View {
     private func hasTier(_ client: UsageClient) -> Bool {
         switch client {
         case .claude:      return nav.quota?.hasTier ?? false
+        case .claudeLogin(let login): return nav.claudeLoginQuotas[login.configDir]?.hasTier ?? false
         case .codex:       return nav.codexQuota?.hasTier ?? false
         case .antigravity: return nav.antigravityQuota?.hasTier ?? false
         case .pi:          return nav.piQuota?.hasTier ?? false
@@ -357,8 +381,8 @@ struct UsageView: View {
 
     @ViewBuilder private func tiers(for client: UsageClient) -> some View {
         switch client {
-        case .claude:
-            if let snapshot = nav.quota {
+        case .claude, .claudeLogin:
+            if let snapshot = nav.claudeQuota(for: client) {
                 if let tier = snapshot.fiveHour {
                     section("Current session") { tierRow(tier) }
                 }
@@ -528,10 +552,15 @@ struct UsageView: View {
         .padding(.horizontal, 6)
     }
 
-    // Subscription tier shown under the client name (e.g. "Max", "Plus").
+    // Subscription tier shown under the client name (e.g. "Max", "Plus"). An
+    // extra Claude login leads with which one it is, since its title is the
+    // same "Claude" as the default row's.
     private func planLabel(for client: UsageClient) -> String? {
         switch client {
         case .claude:      return nav.quota?.planType?.capitalized
+        case .claudeLogin(let login):
+            let plan = nav.claudeLoginQuotas[login.configDir]?.planType?.capitalized
+            return plan.map { "\(login.label) · \($0)" } ?? login.label
         case .codex:       return nav.codexQuota?.planType?.capitalized
         case .antigravity: return nav.antigravityQuota?.planType?.capitalized
         case .pi:          return nav.piQuota?.planType?.capitalized
