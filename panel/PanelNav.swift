@@ -422,11 +422,10 @@ final class PanelNav: ObservableObject {
     // (e.g. private repo without auth).
     @Published var updateReleaseNotes: String?
     // Live updater state. updaterPhase advances as install.sh emits STAGE
-    // markers; updaterLog accumulates the raw install output for the
-    // expandable "Show output" detail in UpdatingView.
+    // markers; updaterLog accumulates the raw install output UpdatingView
+    // shows under the progress bar.
     @Published var updaterPhase: UpdatePhase = .idle
     @Published var updaterLog: String = ""
-    @Published var updaterShowLog: Bool = false
     // Post-update screen state. Populated on launch when the status file
     // from a previous in-flight update is found; drives the welcome-style
     // PostUpdateView (mode = .postUpdate). Cleared on dismiss.
