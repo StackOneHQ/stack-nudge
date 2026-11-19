@@ -58,9 +58,14 @@ the `claude` and `codex` CLIs you already have installed, and by asking
 Antigravity's language server on `127.0.0.1`. The first two make their own calls
 to their own vendors, under those vendors' privacy policies, exactly as they
 would if you ran them yourself. If you sign in to Claude Code from more than one
-config dir (any `~/.claude-*` directory with a login, or one listed in
-`STACKNUDGE_CLAUDE_CONFIG_DIRS`), it runs `claude /usage` for each of those as
-well, with `CLAUDE_CONFIG_DIR` set to that dir, at most every five minutes.
+config dir, it runs `claude /usage` for each of those as well, with
+`CLAUDE_CONFIG_DIR` set to that dir, at most every five minutes. To find them it
+looks for a `.claude.json` up to two levels under your home folder (never inside
+Desktop, Documents, Downloads, Library or the media folders), reads
+`CLAUDE_CONFIG_DIR` from the environment of any `claude` you have running, and
+reads `STACKNUDGE_CLAUDE_CONFIG_DIRS`. Dirs found from a running `claude` are
+listed in `~/.stack-nudge/claude-config-dirs`, and nothing about them leaves your
+Mac.
 
 ## What is never sent, anywhere
 

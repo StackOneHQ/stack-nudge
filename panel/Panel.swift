@@ -1200,6 +1200,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // Claude logins other than the default one, by config dir. See
     // refreshOtherClaudeAccounts.
     private var otherClaudeProbes: [String: ClaudeCliQuotaProbe] = [:]
+    // The last ClaudeConfigDirs.scan, kept between polls since it only reruns
+    // every scanInterval.
+    private var claudeConfigDirScan: (at: Date, dirs: [String])?
     private let codexQuotaProbe = CodexQuotaProbe()
     private let antigravityUsageProbe = AntigravityUsageProbe()
     // Lazy because it shares the nav's history store rather than opening its
@@ -2422,11 +2425,22 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // anything else reading usage on this machine, the claude-usage extension
     // included, picks it up.
     private func refreshOtherClaudeAccounts() {
-        // Discovery reads a .claude.json per dir, hundreds of KB each, so off main.
+        let lastScan = claudeConfigDirScan
+        // Discovery lists dirs, runs ps and reads a .claude.json per dir,
+        // hundreds of KB each, so off main.
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let dirs = ClaudeConfigDirs.discover(defaultAccount: ClaudeUsageCache.currentAccount())
+            let scan = lastScan.flatMap {
+                Date().timeIntervalSince($0.at) < ClaudeConfigDirs.scanInterval ? $0 : nil
+            } ?? (at: Date(), dirs: ClaudeConfigDirs.scan())
+            let running = ClaudeConfigDirs.running()
+            ClaudeConfigDirs.remember(running)
+            let dirs = ClaudeConfigDirs.discover(
+                found: scan.dirs + ClaudeConfigDirs.remembered() + running,
+                defaultAccount: ClaudeUsageCache.currentAccount())
             DispatchQueue.main.async {
-                guard let self, self.quotaTrackingEnabled else { return }
+                guard let self else { return }
+                self.claudeConfigDirScan = scan
+                guard self.quotaTrackingEnabled else { return }
                 let paths = Set(dirs.map(\.path))
                 self.otherClaudeProbes = self.otherClaudeProbes.filter { paths.contains($0.key) }
                 for dir in dirs {

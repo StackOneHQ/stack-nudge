@@ -24,15 +24,40 @@ final class ClaudeConfigDirsTests: XCTestCase {
         return path
     }
 
-    func testFindsEverySignedInClaudeDashDirInNameOrder() throws {
+    private func discover(_ home: String, setting: String? = nil,
+                          defaultAccount: String?) -> [ClaudeConfigDirs.Dir] {
+        ClaudeConfigDirs.discover(home: home, setting: setting,
+                                  found: ClaudeConfigDirs.scan(home: home),
+                                  defaultAccount: defaultAccount)
+    }
+
+    // Named however anyone likes: the .claude.json is what marks one.
+    func testFindsEverySignedInDirWhateverItIsCalled() throws {
         let home = try makeHome()
-        try makeDir("\(home)/.claude-work", account: "work")
         try makeDir("\(home)/.claude-org-publisher", account: "org")
-        let actual = ClaudeConfigDirs.discover(home: home, setting: nil, defaultAccount: "me")
+        try makeDir("\(home)/work-claude", account: "work")
+        try makeDir("\(home)/accounts/side", account: "side")
+        let actual = discover(home, defaultAccount: "me")
         XCTAssertEqual(actual, [
             .init(path: "\(home)/.claude-org-publisher", account: "org"),
-            .init(path: "\(home)/.claude-work", account: "work"),
+            .init(path: "\(home)/accounts/side", account: "side"),
+            .init(path: "\(home)/work-claude", account: "work"),
         ])
+    }
+
+    func testScansTwoLevelsDownAndNoFurther() throws {
+        let home = try makeHome()
+        try makeDir("\(home)/a/b/c", account: "deep")
+        XCTAssertEqual(ClaudeConfigDirs.scan(home: home), [])
+    }
+
+    // Looking inside Documents and friends raises a macOS permission prompt.
+    func testNeverLooksInsideTheFoldersMacOSGuards() throws {
+        let home = try makeHome()
+        try makeDir("\(home)/Documents/claude", account: "docs")
+        try makeDir("\(home)/Library/claude", account: "lib")
+        try makeDir("\(home)/code/node_modules", account: "pkg")
+        XCTAssertEqual(ClaudeConfigDirs.scan(home: home), [])
     }
 
     func testSkipsADirWithNoLogin() throws {
@@ -40,14 +65,7 @@ final class ClaudeConfigDirsTests: XCTestCase {
         try makeDir("\(home)/.claude-empty", account: nil)
         try FileManager.default.createDirectory(atPath: "\(home)/.claude-nofile",
                                                 withIntermediateDirectories: true)
-        XCTAssertEqual(ClaudeConfigDirs.discover(home: home, setting: nil, defaultAccount: nil), [])
-    }
-
-    // ~/.claude.json.backup.* and friends sit beside the dirs; only dirs count.
-    func testIgnoresFilesThatShareThePrefix() throws {
-        let home = try makeHome()
-        try Data("{}".utf8).write(to: URL(fileURLWithPath: "\(home)/.claude-notes.json"))
-        XCTAssertEqual(ClaudeConfigDirs.candidates(home: home, setting: nil), [])
+        XCTAssertEqual(discover(home, defaultAccount: nil), [])
     }
 
     // The default login is probed already; a second dir signed in to the same
@@ -57,8 +75,7 @@ final class ClaudeConfigDirsTests: XCTestCase {
         try makeDir("\(home)/.claude-a", account: "me")
         try makeDir("\(home)/.claude-b", account: "other")
         try makeDir("\(home)/.claude-c", account: "other")
-        let actual = ClaudeConfigDirs.discover(home: home, setting: nil, defaultAccount: "me")
-        XCTAssertEqual(actual.map(\.path), ["\(home)/.claude-b"])
+        XCTAssertEqual(discover(home, defaultAccount: "me").map(\.path), ["\(home)/.claude-b"])
     }
 
     // The case that started this: your own plan by default and a team seat in
@@ -66,24 +83,54 @@ final class ClaudeConfigDirsTests: XCTestCase {
     func testKeepsTheSameAccountSignedInToAnotherOrganization() throws {
         let home = try makeHome()
         try makeDir("\(home)/.claude-team", account: "me", organization: "team")
-        let actual = ClaudeConfigDirs.discover(home: home, setting: nil, defaultAccount: "me/personal")
+        let actual = discover(home, defaultAccount: "me/personal")
         XCTAssertEqual(actual, [.init(path: "\(home)/.claude-team", account: "me/team")])
     }
 
     func testReadsTheSettingFirstAndOnlyOnce() throws {
         let home = try makeHome()
-        let elsewhere = try makeDir("\(home)/accounts/work", account: "work")
+        let elsewhere = try makeDir("\(home)/Documents/work", account: "work")
         try makeDir("\(home)/.claude-x", account: "x")
-        let actual = ClaudeConfigDirs.discover(
-            home: home, setting: "~/accounts/work, ~/.claude-x", defaultAccount: nil)
+        let actual = discover(home, setting: "~/Documents/work, ~/.claude-x", defaultAccount: nil)
         XCTAssertEqual(actual.map(\.path), [elsewhere, "\(home)/.claude-x"])
     }
 
-    func testNeverProbesTheDefaultDirAsAnotherLogin() throws {
+    // Home holds the default login's .claude.json, and ~/.claude is its dir.
+    func testNeverProbesTheDefaultLoginAsAnotherOne() throws {
         let home = try makeHome()
+        try makeDir(home, account: "me")
         try makeDir("\(home)/.claude", account: "inside")
-        XCTAssertEqual(ClaudeConfigDirs.discover(home: home, setting: "~/.claude",
+        XCTAssertEqual(ClaudeConfigDirs.discover(home: home, setting: "~, ~/.claude",
+                                                 found: [home, "\(home)/.claude"],
                                                  defaultAccount: nil), [])
+    }
+
+    // MARK: - Running and remembered
+
+    func testFindsTheClaudeProcessesAndNothingElse() {
+        let ps = """
+          101 /Users/me/.local/bin/claude --resume abc
+          102 claude
+          103 /usr/bin/vim notes.md
+          104 /Users/me/.local/bin/claude daemon run
+          105 /bin/zsh -c claude-ish
+        """
+        XCTAssertEqual(ClaudeConfigDirs.claudePids(psOutput: ps), [101, 102])
+    }
+
+    // The point of remembering: a dir found only because a session was using it
+    // keeps its row after the session ends.
+    func testRemembersARunningDirUntilItsDeleted() throws {
+        let home = try makeHome()
+        let file = "\(home)/remembered"
+        let work = try makeDir("\(home)/anywhere/work", account: "work")
+        ClaudeConfigDirs.remember([work], path: file)
+        ClaudeConfigDirs.remember([], path: file)
+        XCTAssertEqual(ClaudeConfigDirs.remembered(path: file), [work])
+
+        try FileManager.default.removeItem(atPath: work)
+        ClaudeConfigDirs.remember([], path: file)
+        XCTAssertEqual(ClaudeConfigDirs.remembered(path: file), [])
     }
 
     func testExpandsTildeAndDropsRelativeEntries() {
