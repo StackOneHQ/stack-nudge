@@ -86,7 +86,7 @@ final class ExtensionInstallTests: XCTestCase {
                               "drwxr-xr-x 0 root wheel 0 Jan 1 00:00 derby/\n")
                          },
                          extract: @escaping (String, String) -> Bool,
-                         requires: @escaping (String) -> Bool = { _ in true })
+                         requires: @escaping (String) -> ExtensionInstaller.RequirementCheck = { _ in .works })
         -> Result<String, ExtensionInstaller.Failure> {
         ExtensionInstaller.install(e, from: sources(assets), into: root,
                                    listArchive: list, extract: extract,
@@ -117,7 +117,7 @@ final class ExtensionInstallTests: XCTestCase {
         let e = entry(sha: "irrelevant", requires: ["python3"])
         let result = install(e, assets: [:], extract: { _, _ in
             XCTFail("must not extract"); return false
-        }, requires: { _ in false })
+        }, requires: { _ in .missing })
 
         XCTAssertEqual(result, .failure(.missingRequirement("python3")))
         XCTAssertTrue(fetched.isEmpty, "downloaded despite an unmet requirement")

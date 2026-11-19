@@ -60,6 +60,7 @@ enum ExtensionInstaller {
         case checksumMismatch(expected: String, actual: String)
         case unsafeArchive(String)
         case missingRequirement(String)
+        case requirementWontRun(String, path: String)
         case manifestRejected(String)
         case differsFromIndex(String)
         case downloadFailed(String)
@@ -78,6 +79,8 @@ enum ExtensionInstaller {
             case .checksumMismatch:            return "the download didn't match its checksum"
             case .unsafeArchive(let why):      return "the package contains \(why)"
             case .missingRequirement(let what): return "needs \(what), which isn't installed"
+            case .requirementWontRun(let what, let path):
+                return "needs \(what), and \(path) is there but failed to run"
             case .manifestRejected(let why):   return "the package's manifest was refused — \(why)"
             case .differsFromIndex(let what):
                 return "the package asks for something other than the catalogue said (\(what)), so it wasn't installed"
@@ -236,15 +239,38 @@ enum ExtensionInstaller {
 
     // MARK: - Requirements
 
+    // What checking one requirement found. Found-but-broken is its own answer:
+    // a Command Line Tools stub left broken by an Xcode update resolves and then
+    // fails, and "isn't installed" sent people looking for an interpreter they
+    // already had rather than at Xcode.
+    enum RequirementCheck: Equatable {
+        case works
+        case missing
+        case wontRun(path: String)
+    }
+
+    // A requirement this Mac doesn't meet, as the extensions browser shows it.
+    struct UnmetRequirement: Equatable {
+        let name: String
+        let check: RequirementCheck
+    }
+
     // Executed, not resolved. `command -v python3` succeeds on the Command Line
     // Tools stub and then fails the moment anything runs, which is precisely the
     // failure this check exists to catch before an extension is installed rather
     // than after its tab first opens.
-    static func missingRequirement(
+    static func unmetRequirement(
         in requires: [String],
-        probe: (String) -> Bool = { ExtensionInstaller.interpreterWorks($0) }
-    ) -> String? {
-        requires.first { !probe($0) }
+        probe: (String) -> RequirementCheck = { ExtensionInstaller.checkRequirement($0) }
+    ) -> Failure? {
+        for name in requires {
+            switch probe(name) {
+            case .works:              continue
+            case .missing:            return .missingRequirement(name)
+            case .wontRun(let path):  return .requirementWontRun(name, path: path)
+            }
+        }
+        return nil
     }
 
     // MARK: - Installing
@@ -275,14 +301,14 @@ enum ExtensionInstaller {
                         fileManager: FileManager = .default,
                         listArchive: (String) -> (plain: String, verbose: String)? = tarListing,
                         extract: (String, String) -> Bool = untar,
-                        probeRequirement: (String) -> Bool = interpreterWorks)
+                        probeRequirement: (String) -> RequirementCheck = { checkRequirement($0) })
         -> Result<String, Failure> {
 
         guard ExtensionManifest.isValidID(entry.id) else {
             return .failure(.invalidEntry(entry.id))
         }
-        if let missing = missingRequirement(in: entry.requires, probe: probeRequirement) {
-            return .failure(.missingRequirement(missing))
+        if let unmet = unmetRequirement(in: entry.requires, probe: probeRequirement) {
+            return .failure(unmet)
         }
         guard let assetURL = sources.assets[entry.asset] else {
             return .failure(.downloadFailed(entry.asset))
@@ -560,17 +586,44 @@ enum ExtensionInstaller {
                               timeout: 20)
     }
 
-    static func interpreterWorks(_ name: String) -> Bool {
+    // Looked up and run with the environment an extension gets, not the app's
+    // own: see ExtensionRuntime.searchPath.
+    //
+    // One that doesn't answer `--version` within `timeout` won't run either.
+    // The likely cause is a first run stuck after an Xcode update, which is
+    // what that message points at, and the catalogue checks again next load.
+    static func checkRequirement(_ name: String,
+                                 environment: [String: String] = ExtensionRuntime.probeEnvironment(),
+                                 timeout: TimeInterval = 5,
+                                 stubDirectory: String = "/usr/bin",
+                                 developerToolsInstalled: () -> Bool = ExtensionInstaller.developerToolsInstalled)
+        -> RequirementCheck {
         // Only a bare name, never a path: `requires` comes from a manifest and
         // this ends up as an executable.
         guard name.range(of: "^[A-Za-z0-9._+-]{1,32}$", options: .regularExpression) != nil
-        else { return false }
-        guard let resolved = ProcessOutput.read("/usr/bin/env", ["sh", "-c", "command -v \(name)"],
-                                                timeout: 5)?
+        else { return .missing }
+        // A path, or it isn't a program: `command -v echo` answers "echo", a
+        // shell builtin, which no extension can run as its interpreter.
+        guard let resolved = ProcessOutput.read("/bin/sh", ["-c", "command -v \(name)"],
+                                                timeout: 5, env: environment)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
-            !resolved.isEmpty
-        else { return false }
-        let completion = ProcessOutput.run(resolved, ["--version"], timeout: 5)
-        return completion?.status == 0
+            resolved.hasPrefix("/")
+        else { return .missing }
+        let completion = ProcessOutput.run(resolved, ["--version"], timeout: timeout, env: environment)
+        if completion?.status == 0 { return .works }
+        // Without the Command Line Tools, /usr/bin/python3 and swiftc are
+        // stubs that only offer to install them. That is missing, not broken:
+        // "Needs swiftc" is the true answer there, and "won't run" would send
+        // someone looking for an Xcode install they never had.
+        if (resolved as NSString).deletingLastPathComponent == stubDirectory, !developerToolsInstalled() {
+            return .missing
+        }
+        return .wontRun(path: resolved)
+    }
+
+    // Whether a developer directory is selected at all, which is what the
+    // /usr/bin stubs need to run anything.
+    static func developerToolsInstalled() -> Bool {
+        ProcessOutput.run("/usr/bin/xcode-select", ["-p"], timeout: 5)?.status == 0
     }
 }

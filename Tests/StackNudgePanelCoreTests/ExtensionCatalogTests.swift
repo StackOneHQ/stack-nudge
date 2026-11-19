@@ -704,7 +704,7 @@ final class ExtensionCatalogTests: XCTestCase {
         let c = ExtensionCatalog(fetchCatalogue: { .success([needy]) },
                                  performInstall: { installed.append($0.id); return .success($0.id) },
                                  background: { $0() }, toMain: { $0() },
-                                 probeRequirement: { _ in false }, recordedTiers: { [:] })
+                                 probeRequirement: { _ in .missing }, recordedTiers: { [:] })
         c.reload()
         let rows = ExtensionCatalog.rows(catalogue: c.entries, installed: [], refused: [])
         c.selection = .row("derby")
@@ -850,11 +850,47 @@ final class ExtensionCatalogTests: XCTestCase {
         let entries = [a, b, c0]
         let c = ExtensionCatalog(fetchCatalogue: { .success(entries) },
                                  background: { $0() }, toMain: { $0() },
-                                 probeRequirement: { probed.append($0); return $0 == "python3" })
+                                 probeRequirement: { probed.append($0); return $0 == "python3" ? .works : .missing })
         c.reload()
         XCTAssertEqual(Set(probed), ["python3", "swiftc"])
         XCTAssertEqual(probed.count, 2)
-        XCTAssertEqual(c.missingRequirements, ["away": ["swiftc"]])
+        XCTAssertEqual(c.unmetRequirements, ["away": [.init(name: "swiftc", check: .missing)]])
+    }
+
+    // One that is there but won't run blocks the install just the same, and
+    // stays told apart from one that is absent.
+    func testARequirementThatWontRunBlocksTheInstall() {
+        var installed: [String] = []
+        var needy = entry("derby")
+        needy = .init(id: "derby", name: "Derby", version: "1.0.0", description: "", asset: needy.asset,
+                      sha256: "abc", requires: ["python3"], config: [])
+        let c = ExtensionCatalog(fetchCatalogue: { .success([needy]) },
+                                 performInstall: { installed.append($0.id); return .success($0.id) },
+                                 background: { $0() }, toMain: { $0() },
+                                 probeRequirement: { _ in .wontRun(path: "/usr/bin/python3") },
+                                 recordedTiers: { [:] })
+        c.reload()
+        let rows = ExtensionCatalog.rows(catalogue: c.entries, installed: [], refused: [])
+        c.selection = .row("derby")
+
+        c.activateSelection(among: rows)
+        c.activateSelection(among: rows)
+
+        XCTAssertEqual(c.unmetRequirements,
+                       ["derby": [.init(name: "python3", check: .wontRun(path: "/usr/bin/python3"))]])
+        XCTAssertEqual(installed, [])
+    }
+
+    func testTheCardSaysWhatIsMissingAndWhatWontRun() {
+        let missing = ExtensionInstaller.UnmetRequirement(name: "swiftc", check: .missing)
+        let alsoMissing = ExtensionInstaller.UnmetRequirement(name: "ruby", check: .missing)
+        let broken = ExtensionInstaller.UnmetRequirement(name: "python3",
+                                                         check: .wontRun(path: "/usr/bin/python3"))
+
+        XCTAssertEqual(ExtensionCatalog.unmetText([missing, alsoMissing]), "Needs swiftc, ruby")
+        XCTAssertEqual(ExtensionCatalog.unmetText([broken]), "/usr/bin/python3 won't run")
+        XCTAssertEqual(ExtensionCatalog.unmetText([missing, broken]),
+                       "Needs swiftc \u{00B7} /usr/bin/python3 won't run")
     }
 
     func testLoadingTheCatalogueReportsThatItChanged() {

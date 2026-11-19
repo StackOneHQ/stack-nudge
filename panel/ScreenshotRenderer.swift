@@ -213,7 +213,7 @@ enum ScreenshotRenderer {
                                        performInstall: { .success($0.id) },
                                        performRemove: { .success($0) },
                                        background: { $0() }, toMain: { $0() },
-                                       probeRequirement: { $0 != "python3" },
+                                       probeRequirement: { $0 == "python3" ? .missing : .works },
                                        recordedTiers: { [:] })
         catalog.reload()
         let host = ExtensionHost(background: { _ in }, toMain: { $0() },
@@ -323,7 +323,7 @@ enum ScreenshotRenderer {
                                                    performInstall: { .success($0.id) },
                                                    performRemove: { .success($0) },
                                                    background: { $0() }, toMain: { $0() },
-                                                   probeRequirement: { _ in true },
+                                                   probeRequirement: { _ in .works },
                                                    recordedTiers: { [:] }),
                 onConfigureExtension: { _ in }, onCloseExtensionsBrowser: {},
                 onGrantPermissions: {}, runsOnAppear: false

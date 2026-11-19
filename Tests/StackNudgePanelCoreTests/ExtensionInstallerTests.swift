@@ -497,32 +497,121 @@ final class ExtensionInstallerTests: XCTestCase {
     // MARK: - Requirements
 
     func testTheFirstUnsatisfiedRequirementIsReported() {
-        let missing = ExtensionInstaller.missingRequirement(in: ["python3", "ruby"]) { $0 == "python3" }
-        XCTAssertEqual(missing, "ruby")
+        let unmet = ExtensionInstaller.unmetRequirement(in: ["python3", "ruby"]) {
+            $0 == "python3" ? .works : .missing
+        }
+        XCTAssertEqual(unmet, .missingRequirement("ruby"))
     }
 
     func testNoRequirementsIsSatisfied() {
-        XCTAssertNil(ExtensionInstaller.missingRequirement(in: []) { _ in false })
+        XCTAssertNil(ExtensionInstaller.unmetRequirement(in: []) { _ in .missing })
     }
 
     func testEverythingPresentIsSatisfied() {
-        XCTAssertNil(ExtensionInstaller.missingRequirement(in: ["python3"]) { _ in true })
+        XCTAssertNil(ExtensionInstaller.unmetRequirement(in: ["python3"]) { _ in .works })
+    }
+
+    // #241: a stub that resolves and then fails is not "isn't installed".
+    func testARequirementThatWontRunNamesWhereItWasFound() {
+        let unmet = ExtensionInstaller.unmetRequirement(in: ["python3"]) { _ in
+            .wontRun(path: "/usr/bin/python3")
+        }
+        XCTAssertEqual(unmet, .requirementWontRun("python3", path: "/usr/bin/python3"))
+        XCTAssertEqual(unmet?.message, "needs python3, and /usr/bin/python3 is there but failed to run")
     }
 
     // `requires` comes from a manifest and ends up as an executable name, so a
     // path or an argument is refused before it can be run.
     func testARequirementThatIsNotABareNameIsNeverSatisfied() {
         for name in ["/bin/sh", "../python3", "python3; rm -rf /", "py thon", ""] {
-            XCTAssertFalse(ExtensionInstaller.interpreterWorks(name), name)
+            XCTAssertEqual(ExtensionInstaller.checkRequirement(name), .missing, name)
         }
     }
 
     // The point of executing rather than resolving: something that exists.
     func testARealInterpreterIsDetected() {
-        XCTAssertTrue(ExtensionInstaller.interpreterWorks("sh"))
+        XCTAssertEqual(ExtensionInstaller.checkRequirement("sh"), .works)
     }
 
     func testAnAbsentInterpreterIsNotDetected() {
-        XCTAssertFalse(ExtensionInstaller.interpreterWorks("definitely-not-installed-xyz"))
+        XCTAssertEqual(ExtensionInstaller.checkRequirement("definitely-not-installed-xyz"), .missing)
+    }
+
+    // The check looks where the extension will look, in the same order: the
+    // first match on the PATH it is given is the one it runs.
+    func testTheCheckRunsTheFirstMatchOnTheGivenPath() throws {
+        let broken = try interpreterDirectory(named: "sn-fake-python", exitStatus: 1)
+        let working = try interpreterDirectory(named: "sn-fake-python", exitStatus: 0)
+        defer {
+            try? FileManager.default.removeItem(atPath: broken)
+            try? FileManager.default.removeItem(atPath: working)
+        }
+
+        let brokenFirst = ExtensionInstaller.checkRequirement(
+            "sn-fake-python", environment: ["PATH": "\(broken):\(working):/usr/bin:/bin"])
+        let workingFirst = ExtensionInstaller.checkRequirement(
+            "sn-fake-python", environment: ["PATH": "\(working):\(broken):/usr/bin:/bin"])
+
+        XCTAssertEqual(brokenFirst, .wontRun(path: "\(broken)/sn-fake-python"))
+        XCTAssertEqual(workingFirst, .works)
+    }
+
+    // One PATH for checking and running, so they can't drift apart again.
+    func testTheCheckUsesThePathAnExtensionRunsWith() throws {
+        guard case .success(let manifest) = ExtensionManifest.parse(Data("""
+            {"id":"derby","name":"Derby","version":"1.0.0","schema":1}
+            """.utf8)) else { return XCTFail("fixture manifest didn't parse") }
+
+        let runtime = ExtensionRuntime.environment(for: manifest, config: [:], home: "/Users/someone")
+        let probe = ExtensionRuntime.probeEnvironment(home: "/Users/someone")
+
+        XCTAssertEqual(probe["PATH"], runtime["PATH"])
+        XCTAssertEqual(probe["HOME"], runtime["HOME"])
+    }
+
+    // A shell builtin isn't a program an extension can run.
+    func testABuiltinIsNotAnInterpreter() {
+        XCTAssertEqual(ExtensionInstaller.checkRequirement("echo"), .missing)
+    }
+
+    // Without the Command Line Tools the /usr/bin stub only offers to install
+    // them: that's missing, and with them it really is broken.
+    func testAStubWithoutTheCommandLineToolsIsMissingRatherThanBroken() throws {
+        let stubs = try interpreterDirectory(named: "sn-fake-swiftc", exitStatus: 1)
+        defer { try? FileManager.default.removeItem(atPath: stubs) }
+        func check(toolsInstalled: Bool) -> ExtensionInstaller.RequirementCheck {
+            ExtensionInstaller.checkRequirement("sn-fake-swiftc", environment: ["PATH": "\(stubs):/usr/bin:/bin"],
+                                                stubDirectory: stubs,
+                                                developerToolsInstalled: { toolsInstalled })
+        }
+
+        XCTAssertEqual(check(toolsInstalled: false), .missing)
+        XCTAssertEqual(check(toolsInstalled: true), .wontRun(path: "\(stubs)/sn-fake-swiftc"))
+    }
+
+    // One that never answers `--version` won't run, rather than counting as
+    // there and working.
+    func testAnInterpreterThatHangsWontRun() throws {
+        let slow = try interpreterDirectory(named: "sn-fake-python", body: "sleep 5")
+        defer { try? FileManager.default.removeItem(atPath: slow) }
+
+        let actual = ExtensionInstaller.checkRequirement(
+            "sn-fake-python", environment: ["PATH": "\(slow):/usr/bin:/bin"], timeout: 0.3)
+
+        XCTAssertEqual(actual, .wontRun(path: "\(slow)/sn-fake-python"))
+    }
+
+    private func interpreterDirectory(named name: String, exitStatus: Int) throws -> String {
+        try interpreterDirectory(named: name, body: "exit \(exitStatus)")
+    }
+
+    private func interpreterDirectory(named name: String, body: String) throws -> String {
+        let directory = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("sn-requires-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        let path = (directory as NSString).appendingPathComponent(name)
+        try "#!/bin/sh\n\(body)\n".write(toFile: path, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+        return directory
     }
 }
