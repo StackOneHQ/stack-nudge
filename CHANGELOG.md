@@ -4,6 +4,20 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [2.6.0](https://github.com/StackOneHQ/stack-nudge/compare/v2.5.0...v2.6.0) (2026-11-19)
+
+
+### Features
+
+* **extensions:** read catalogues from other GitHub repos ([#251](https://github.com/StackOneHQ/stack-nudge/issues/251)) ([ec7b8e7](https://github.com/StackOneHQ/stack-nudge/commit/ec7b8e717ea4c14f90c7dd70313bd2fb75e7e39e))
+
+
+### Bug Fixes
+
+* **extensions:** check requires on the path extensions run with ([#248](https://github.com/StackOneHQ/stack-nudge/issues/248)) ([ac20c65](https://github.com/StackOneHQ/stack-nudge/commit/ac20c6527ca40a2ee07b86ccea7e5384f0b1f3e9))
+* **extensions:** stop services left running by a crash on next launch ([#249](https://github.com/StackOneHQ/stack-nudge/issues/249)) ([f19f522](https://github.com/StackOneHQ/stack-nudge/commit/f19f522caf8ecd612080bfd36212713c6b42bd30))
+* **extensions:** trust named catalogues only, check tiers per source ([#255](https://github.com/StackOneHQ/stack-nudge/issues/255)) ([03b559a](https://github.com/StackOneHQ/stack-nudge/commit/03b559ada6526f483472a74f55d6554a03a3972a))
+
 ## [2.5.0](https://github.com/StackOneHQ/stack-nudge/compare/v2.4.1...v2.5.0) (2026-11-18)
 
 
