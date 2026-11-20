@@ -17,6 +17,12 @@ enum ClaudeUsageCache {
 
     static var path: String { "\(NSHomeDirectory())/.claude.json" }
 
+    // Under CLAUDE_CONFIG_DIR the file moves into that dir; nil is the default
+    // login, whose file sits beside ~/.claude rather than in it.
+    static func path(configDir: String?) -> String {
+        configDir.map { "\($0)/.claude.json" } ?? path
+    }
+
     // `maxAge` is the caller's poll interval: within it the cache is no staler
     // than the value a fresh shell-out would have returned.
     static func read(maxAge: TimeInterval, now: Date = Date(),
@@ -38,11 +44,17 @@ enum ClaudeUsageCache {
     // The logged-in account, so the probe can tell when the user switches login
     // and drop numbers that belong to the previous one. Read with no freshness
     // gate: the login is current however old the usage cache beside it is.
+    //
+    // The account and the organization together: one person signed in to their
+    // own plan and to a team seat has the same accountUuid in both, but the
+    // quota belongs to the seat, so the two are different logins.
     static func currentAccount(path: String = ClaudeUsageCache.path) -> String? {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path), options: .mappedIfSafe),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let account = account(in: root)
         else { return nil }
-        return account(in: root)
+        let organization = (root["oauthAccount"] as? [String: Any])?["organizationUuid"] as? String
+        return organization.map { "\(account)/\($0)" } ?? account
     }
 
     private static func account(in root: [String: Any]) -> String? {

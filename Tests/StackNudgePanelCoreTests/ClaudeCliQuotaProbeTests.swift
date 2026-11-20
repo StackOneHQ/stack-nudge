@@ -271,7 +271,7 @@ final class ClaudeCliQuotaProbeTests: XCTestCase {
         // Claude replaces BOTH '/' and '.' with '-' (double dash for the
         // dot-prefix). The probe directory must match that encoding exactly,
         // or the cleanup-by-path will silently miss.
-        let dir = ClaudeCliQuotaProbe.probeSessionsDir
+        let dir = ClaudeCliQuotaProbe.probeSessionsDir()
         let encoded = ClaudeCliQuotaProbe.probeCwd
             .replacingOccurrences(of: "/", with: "-")
             .replacingOccurrences(of: ".", with: "-")

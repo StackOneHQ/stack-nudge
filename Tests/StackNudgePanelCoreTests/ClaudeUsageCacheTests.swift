@@ -129,6 +129,20 @@ final class ClaudeUsageCacheTests: XCTestCase {
         XCTAssertEqual(ClaudeUsageCache.currentAccount(path: path), owner)
     }
 
+    // Your own plan and a team seat share an accountUuid; the quota is the seat's,
+    // so signing in to the other one has to read as a different login.
+    func testTellsTwoOrganizationsOfOneAccountApart() throws {
+        func login(_ organization: String) throws -> String? {
+            let path = try writeFixture(Data(#"{"oauthAccount":{"accountUuid":"\#(owner)","organizationUuid":"\#(organization)"}}"#.utf8))
+            return ClaudeUsageCache.currentAccount(path: path)
+        }
+        let personal = try login("org-personal")
+        let team = try login("org-team")
+        XCTAssertEqual(personal, "\(owner)/org-personal")
+        XCTAssertNotEqual(personal, team)
+        XCTAssertTrue(ClaudeCliQuotaProbe.isAccountSwitch(from: personal, to: team))
+    }
+
     func testReadsNoAccountWhenLoggedOutOrTheFileIsAbsent() throws {
         let path = try writeFixture(json(loggedIn: nil))
         XCTAssertNil(ClaudeUsageCache.currentAccount(path: path))

@@ -18,6 +18,18 @@ import Foundation
 //   ok      — at least one Current bucket line parsed.
 final class ClaudeCliQuotaProbe {
 
+    // The account's config dir, or nil for the default login. Another dir is
+    // probed by running the same `claude` with CLAUDE_CONFIG_DIR pointing at it,
+    // which is how Claude Code itself is told to use that login.
+    let configDir: String?
+    private let cacheMaxAge: TimeInterval
+
+    init(configDir: String? = nil, cacheMaxAge: TimeInterval = ClaudeCliQuotaProbe.cacheMaxAge) {
+        self.configDir = configDir
+        self.cacheMaxAge = cacheMaxAge
+        probeQueue = DispatchQueue(label: "stack-nudge.claude-cli-quota\(configDir.map { "." + $0 } ?? "")")
+    }
+
     // Main-queue only (mirrors QuotaProbe's threading model).
     private(set) var lastProbeFailed = false
     // True when the last fetch found no `claude` on PATH, as distinct from the
@@ -49,6 +61,10 @@ final class ClaudeCliQuotaProbe {
     // 6%/62% against the CLI's 9%/63%. Widening this buys a spawn back in
     // exchange for numbers that are wrong during active use.
     static let cacheMaxAge: TimeInterval = 60
+    // For a login other than the default one. Each spawn is a few seconds of a
+    // whole `claude` starting up, and every extra account pays it, so they
+    // refresh at most this often however fast the panel is polling.
+    static let otherAccountCacheMaxAge: TimeInterval = 300
 
     // When the snapshot was measured: Date() for a CLI read, the cache's
     // `fetchedAt` when it came from disk. The panel dates the Usage tab from
@@ -61,7 +77,7 @@ final class ClaudeCliQuotaProbe {
     }
 
     // CLI shell-out runs off-main; completion fires on main.
-    private let probeQueue = DispatchQueue(label: "stack-nudge.claude-cli-quota")
+    private let probeQueue: DispatchQueue
 
     func fetch(completion: @escaping (QuotaSnapshot?) -> Void) {
         // Reset before the early-return gates so a rate-limited tick reports the
@@ -84,9 +100,13 @@ final class ClaudeCliQuotaProbe {
         // Captured on main like the ones above; the latch is written back on main
         // in the completion, matching this class's threading model.
         let strictSupported = strictMcpConfigSupported
+        let configDir = configDir
+        let cacheFile = ClaudeUsageCache.path(configDir: configDir)
+        let cacheMaxAge = cacheMaxAge
+        let env = Self.environment(configDir: configDir)
 
         probeQueue.async { [weak self] in
-            let account = ClaudeUsageCache.currentAccount()
+            let account = ClaudeUsageCache.currentAccount(path: cacheFile)
             let switched = Self.isAccountSwitch(from: priorAccount, to: account)
             // The plan is fetched until the CLI answers and then not again, so a
             // switch has to refetch it or the new account keeps the old one's plan.
@@ -95,7 +115,7 @@ final class ClaudeCliQuotaProbe {
             var subscriptionAnswered = false
             if needsSubscriptionFetch {
                 let status = Self.parseAuthStatus(ProcessOutput.read(
-                    path, ["auth", "status", "--json"], timeout: 5, cwd: Self.probeCwd))
+                    path, ["auth", "status", "--json"], timeout: 5, cwd: Self.probeCwd, env: env))
                 subscriptionAnswered = status.answered
                 if let plan = status.plan { fetchedPlan = plan }
             }
@@ -104,7 +124,7 @@ final class ClaudeCliQuotaProbe {
             var strictRejected = false
             var measuredAt = Date()
             let result: ParseResult
-            if let cached = ClaudeUsageCache.read(maxAge: Self.cacheMaxAge) {
+            if let cached = ClaudeUsageCache.read(maxAge: cacheMaxAge, path: cacheFile) {
                 result = .ok(cached.snapshot)
                 measuredAt = cached.fetchedAt
             } else {
@@ -118,7 +138,7 @@ final class ClaudeCliQuotaProbe {
                 // edge. runUsage drops the flag and retries once if this CLI is too
                 // old to know it (see strictMcpConfigSupported).
                 let (raw, rejected) = Self.runUsage(strictMcpConfig: strictSupported) {
-                    ProcessOutput.read(path, $0, timeout: 20, cwd: Self.probeCwd)
+                    ProcessOutput.read(path, $0, timeout: 20, cwd: Self.probeCwd, env: env)
                 }
                 strictRejected = rejected
                 result = Self.parseEnvelope(raw)
@@ -129,7 +149,7 @@ final class ClaudeCliQuotaProbe {
                 // cwd above means we know the exact directory; this scrubs the
                 // single file the probe just produced.
                 if let sid = Self.extractSessionId(raw) {
-                    Self.removeSessionFile(sid)
+                    Self.removeSessionFile(sid, configDir: configDir)
                 }
             }
 
@@ -141,7 +161,7 @@ final class ClaudeCliQuotaProbe {
             var fallback: ClaudeUsageCache.Reading?
             switch result {
             case .ok: break
-            case .softFail, .hardFail: fallback = ClaudeUsageCache.read(maxAge: .infinity)
+            case .softFail, .hardFail: fallback = ClaudeUsageCache.read(maxAge: .infinity, path: cacheFile)
             }
 
             DispatchQueue.main.async {
@@ -227,6 +247,17 @@ final class ClaudeCliQuotaProbe {
 
     // MARK: - Invocation
 
+    // nil inherits ours unchanged, which is what the default login has always
+    // run with. Otherwise ours plus CLAUDE_CONFIG_DIR: ProcessOutput replaces the
+    // child's environment rather than merging, so PATH and HOME come along.
+    static func environment(configDir: String?,
+                            inherited: [String: String] = ProcessInfo.processInfo.environment) -> [String: String]? {
+        guard let configDir else { return nil }
+        var env = inherited
+        env["CLAUDE_CONFIG_DIR"] = configDir
+        return env
+    }
+
     // Args for `claude --print /usage`. --strict-mcp-config loads zero MCP
     // servers, which the intercept never needs — see the call site in fetch().
     static func usageArgs(strictMcpConfig: Bool) -> [String] {
@@ -271,12 +302,13 @@ final class ClaudeCliQuotaProbe {
 
     // Claude derives the projects-subdirectory name by replacing every "/"
     // AND every "." in the cwd with "-". So "/Users/me/.stack-nudge" becomes
-    // "-Users-me--stack-nudge" (double dash for the dot-prefix).
-    static var probeSessionsDir: String {
+    // "-Users-me--stack-nudge" (double dash for the dot-prefix). The projects
+    // dir belongs to the config dir, so another login's rollouts land under it.
+    static func probeSessionsDir(configDir: String? = nil) -> String {
         let encoded = probeCwd
             .replacingOccurrences(of: "/", with: "-")
             .replacingOccurrences(of: ".", with: "-")
-        return "\(NSHomeDirectory())/.claude/projects/\(encoded)"
+        return "\(configDir ?? "\(NSHomeDirectory())/.claude")/projects/\(encoded)"
     }
 
     static func extractSessionId(_ raw: String?) -> String? {
@@ -287,13 +319,13 @@ final class ClaudeCliQuotaProbe {
         return obj["session_id"] as? String
     }
 
-    static func removeSessionFile(_ sessionId: String) {
+    static func removeSessionFile(_ sessionId: String, configDir: String? = nil) {
         // Guard against a malformed session_id that could escape the
         // intended directory — only accept the UUID shape Claude actually
         // emits (lower-hex + hyphens, no separators).
         guard sessionId.range(of: "^[0-9a-f-]+$", options: .regularExpression) != nil
         else { return }
-        let path = "\(probeSessionsDir)/\(sessionId).jsonl"
+        let path = "\(probeSessionsDir(configDir: configDir))/\(sessionId).jsonl"
         try? FileManager.default.removeItem(atPath: path)
     }
 
