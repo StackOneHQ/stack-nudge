@@ -4,6 +4,15 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [2.8.0](https://github.com/StackOneHQ/stack-nudge/compare/v2.7.0...v2.8.0) (2026-11-20)
+
+
+### Features
+
+* **usage:** give every Claude login its own usage row ([#262](https://github.com/StackOneHQ/stack-nudge/issues/262)) ([a7618ec](https://github.com/StackOneHQ/stack-nudge/commit/a7618ec3c2a5b8a95417f1eb5e7b04f21bb8370d))
+* **usage:** give every Codex login its own row and show its email ([#263](https://github.com/StackOneHQ/stack-nudge/issues/263)) ([79587ff](https://github.com/StackOneHQ/stack-nudge/commit/79587ffa1190374cfff37c5eaa72be8c88d209b4))
+* **usage:** refresh every Claude login on the machine ([#261](https://github.com/StackOneHQ/stack-nudge/issues/261)) ([be01f75](https://github.com/StackOneHQ/stack-nudge/commit/be01f757441ddf05dbcefb5c29cd19baad737a85))
+
 ## [2.7.0](https://github.com/StackOneHQ/stack-nudge/compare/v2.6.0...v2.7.0) (2026-11-19)
 
 
