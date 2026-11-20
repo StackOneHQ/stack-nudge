@@ -13,6 +13,24 @@ struct CodexQuotaSnapshot: Equatable {
     // reset has already passed, so a rollout left over from last week parses into
     // a snapshot with both windows nil.
     var hasTier: Bool { primary != nil || secondary != nil }
+
+    // The windows quota alerts watch, keyed and named by length rather than
+    // slot: the slot a window arrives in isn't fixed (see CodexQuotaProbe.tier),
+    // and a weekly reading landing on a session's alert state would read as a
+    // rollover.
+    var alertTiers: [(key: String, label: String, tier: QuotaTier)] {
+        [("primary", primary), ("secondary", secondary)].compactMap { slot, tier in
+            guard let tier else { return nil }
+            guard let length = tier.windowLength else { return (slot, "Limit", tier) }
+            switch length {
+            case QuotaWindow.fiveHours: return ("five_hour", "Session", tier)
+            case QuotaWindow.sevenDays: return ("seven_day", "Weekly", tier)
+            default:
+                let name = QuotaWindow.shortName(length)
+                return ("window_\(name)", name, tier)
+            }
+        }
+    }
 }
 
 // Who a Codex login is signed in as, from the app-server's `account/read`.

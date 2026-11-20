@@ -90,4 +90,44 @@ final class CodexUsageTests: XCTestCase {
         XCTAssertNil(CodexQuotaProbe.snapshot(
             fromLine: #"{"type":"event_msg","payload":{"type":"token_count","info":null}}"#))
     }
+
+    // MARK: - Alerts
+
+    private func tier(_ used: Double, minutes: Double?) -> QuotaTier {
+        QuotaTier(utilization: used, resetsAt: nil, windowLength: minutes.map { $0 * 60 })
+    }
+
+    // Keyed by the window, not the slot it came in: under `limit_id=codex` the
+    // weekly window arrives as primary, and the same key for both would read a
+    // drop from weekly to session numbers as a rollover.
+    func testAlertsNameEachWindowByItsLength() {
+        let weeklyOnly = CodexQuotaSnapshot(primary: tier(40, minutes: 10080), secondary: nil, planType: "pro")
+        XCTAssertEqual(weeklyOnly.alertTiers.map(\.key), ["seven_day"])
+        XCTAssertEqual(weeklyOnly.alertTiers.map(\.label), ["Weekly"])
+
+        let both = CodexQuotaSnapshot(primary: tier(10, minutes: 300), secondary: tier(40, minutes: 10080),
+                                      planType: "plus")
+        XCTAssertEqual(both.alertTiers.map(\.key), ["five_hour", "seven_day"])
+        XCTAssertEqual(both.alertTiers.map(\.label), ["Session", "Weekly"])
+    }
+
+    func testAnUnusualWindowIsNamedByItsLengthAndAnUnknownOneByItsSlot() {
+        let snapshot = CodexQuotaSnapshot(primary: tier(5, minutes: 1440), secondary: tier(7, minutes: nil),
+                                          planType: nil)
+        XCTAssertEqual(snapshot.alertTiers.map(\.key), ["window_1d", "secondary"])
+        XCTAssertEqual(snapshot.alertTiers.map(\.label), ["1d", "Limit"])
+    }
+
+    // Every Codex login climbs through the buckets on its own, apart from any
+    // Claude login's, and keeps its state through a switch of the default
+    // Claude login, which clears every key without a "|".
+    @MainActor
+    func testEachCodexLoginKeepsItsOwnAlertState() {
+        let work = CodexLogin(codexHome: "/h/.codex-work", label: "work")
+        let prefixes = [PanelController.codexAlertKeyPrefix(nil), PanelController.codexAlertKeyPrefix(work),
+                        PanelController.quotaAlertKeyPrefix(ClaudeLogin(configDir: "/h/.codex-work", label: "x"))]
+        XCTAssertEqual(Set(prefixes).count, 3)
+        for prefix in prefixes { XCTAssertTrue(prefix.hasSuffix("|")) }
+        XCTAssertFalse(PanelController.codexAlertKeyPrefix(work).hasPrefix(PanelController.codexAlertKeyPrefix(nil)))
+    }
 }

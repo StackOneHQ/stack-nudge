@@ -1217,6 +1217,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // CodexAccount.id of the default login, so an extra home signed in to the
     // same account isn't a second row of the same numbers.
     private var codexDefaultAccount: String?
+    // When each extra home's alerts last looked at its numbers, since its probe
+    // hands back the same reading until it's due again.
+    private var lastCodexAlertAt: [String: Date] = [:]
     private let antigravityUsageProbe = AntigravityUsageProbe()
     // Lazy because it shares the nav's history store rather than opening its
     // own, so pi's transcripts are parsed once for the graph and the budget.
@@ -2407,6 +2410,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             if let account = reading.account {
                 if self.nav.codexDefaultInfo != account.info { self.nav.codexDefaultInfo = account.info }
                 if self.codexDefaultAccount != account.id {
+                    // The old account's peaks, or the new one only alerts once
+                    // it passes them.
+                    let prefix = Self.codexAlertKeyPrefix(nil)
+                    self.quotaLastFired = self.quotaLastFired.filter { !$0.key.hasPrefix(prefix) }
                     self.codexDefaultAccount = account.id
                     self.adoptCodexLogins()
                 }
@@ -2415,6 +2422,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             self.nav.codexQuota = snapshot
             self.nav.quotaLastUpdated = Date()
             self.nav.quotaUpdatedAt[.codex] = Date()
+            self.evaluateQuotaThresholds(snapshot)
         }
         // Antigravity (agy) usage — read from the running CLI's loopback RPC
         // (localhost only, no auth). Independent of the probes above. Unlike
@@ -2561,6 +2569,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self.otherCodexProbes = self.otherCodexProbes.filter { kept.contains($0.key) }
                 self.codexHomeAccounts = self.codexHomeAccounts.filter { kept.contains($0.key) }
                 self.codexHomeSnapshots = self.codexHomeSnapshots.filter { kept.contains($0.key) }
+                self.lastCodexAlertAt = self.lastCodexAlertAt.filter { kept.contains($0.key) }
                 self.adoptCodexLogins()
                 for home in homes {
                     let probe = self.otherCodexProbes[home]
@@ -2584,12 +2593,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
         if let snapshot = reading.snapshot { codexHomeSnapshots[home] = (snapshot, reading.measuredAt) }
         adoptCodexLogins()
+        // Only a fresh reading: a held one was evaluated when it came in.
+        if let snapshot = reading.snapshot, let login = nav.codexLogins.first(where: { $0.codexHome == home }),
+           reading.measuredAt != lastCodexAlertAt[home] {
+            lastCodexAlertAt[home] = reading.measuredAt
+            evaluateQuotaThresholds(snapshot, login: login)
+        }
     }
 
     // Recomputes the extra Codex rows from what the probes last said. A login
     // that's gone (signed out, dir removed, or now the default's account) takes
-    // its row and numbers with it. One whose home is now signed in to another
-    // account keeps its row, but the old account's numbers go first.
+    // its row, numbers and alert state with it. One whose home is now signed in
+    // to another account keeps its row, but the old account's numbers and alert
+    // state go first.
     private func adoptCodexLogins() {
         let logins = CodexHomes.logins(candidates: codexHomes, accounts: codexHomeAccounts,
                                        defaultAccount: codexDefaultAccount)
@@ -2625,6 +2641,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         nav.codexLoginQuotas[login.codexHome] = nil
         nav.quotaUpdatedAt[client] = nil
         nav.quotaErrors[client] = nil
+        let prefix = Self.codexAlertKeyPrefix(login)
+        quotaLastFired = quotaLastFired.filter { !$0.key.hasPrefix(prefix) }
     }
 
     // Pi budget, read from pi's own transcripts with no network and no CLI.
@@ -2729,29 +2747,51 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // own prefix, so each login climbs through the buckets on its own numbers.
     static func quotaAlertKeyPrefix(_ login: ClaudeLogin) -> String { "\(login.configDir)|" }
 
+    // Codex's, default login and every other, under prefixes no Claude key
+    // shares. Each has a "|" so a switch of the default Claude login, which
+    // clears every key without one, leaves them be.
+    static func codexAlertKeyPrefix(_ login: CodexLogin?) -> String {
+        login.map { "codex:\($0.codexHome)|" } ?? "codex|"
+    }
+
     // `login` is nil for the default one, whose banners stay as they were; any
     // other names itself, or two logins at 80% would read as one.
     private func evaluateQuotaThresholds(_ snapshot: QuotaSnapshot, login: ClaudeLogin? = nil) {
-        guard nav.quotaAlertsEnabled else { return }
-        // Respect the global Banner notifications toggle — quota alerts
-        // are system-level banners and shouldn't bypass it.
-        guard nav.bannerEnabled else { return }
-        let threshold = Double(nav.quotaAlertThreshold)
-
         let tiers: [(name: String, label: String, tier: QuotaTier?)] = [
             ("five_hour",        "Session",         snapshot.fiveHour),
             ("seven_day",        "Weekly",          snapshot.sevenDay),
             ("seven_day_opus",   "Weekly (Opus)",   snapshot.sevenDayOpus),
             ("seven_day_sonnet", "Weekly (Sonnet)", snapshot.sevenDaySonnet),
         ]
+        let keyPrefix = login.map(Self.quotaAlertKeyPrefix) ?? ""
+        evaluateQuotaThresholds(tiers.compactMap { tierName, tierLabel, tier in
+            tier.map { (keyPrefix + tierName, login.map { "\($0.label) · \(tierLabel)" } ?? tierLabel, $0) }
+        })
+    }
+
+    // Codex's banners name Codex, the default login's included. Claude's
+    // default ones say only the tier, from before there was a second client to
+    // alert on.
+    private func evaluateQuotaThresholds(_ snapshot: CodexQuotaSnapshot, login: CodexLogin? = nil) {
+        let keyPrefix = Self.codexAlertKeyPrefix(login)
+        let client = login.map { "Codex · \($0.label)" } ?? "Codex"
+        evaluateQuotaThresholds(snapshot.alertTiers.map {
+            (keyPrefix + $0.key, "\(client) · \($0.label)", $0.tier)
+        })
+    }
+
+    // Each tier's alert state is kept under `name`; `label` is what its banner
+    // calls it.
+    private func evaluateQuotaThresholds(_ tiers: [(name: String, label: String, tier: QuotaTier)]) {
+        guard nav.quotaAlertsEnabled else { return }
+        // Respect the global Banner notifications toggle: quota alerts
+        // are system-level banners and shouldn't bypass it.
+        guard nav.bannerEnabled else { return }
+        let threshold = Double(nav.quotaAlertThreshold)
 
         let bucketSize = Self.quotaBucketSize
 
-        let keyPrefix = login.map(Self.quotaAlertKeyPrefix) ?? ""
-        for (tierName, tierLabel, tier) in tiers {
-            guard let tier else { continue }
-            let name = keyPrefix + tierName
-            let label = login.map { "\($0.label) · \(tierLabel)" } ?? tierLabel
+        for (name, label, tier) in tiers {
             var state = quotaLastFired[name] ?? (maxBucketFired: 0, peakUtil: 0)
 
             // Heuristic period-rollover: a >30 pp drop from our running

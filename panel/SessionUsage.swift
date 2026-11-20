@@ -116,8 +116,8 @@ struct CodexLogin: Hashable {
     let codexHome: String
     // The dir's name (see CodexHomes.label).
     let label: String
-    // CodexAccount.id. When it changes the row stays, but its numbers belonged
-    // to the account before.
+    // CodexAccount.id. When it changes the row stays, but its numbers and alert
+    // state belonged to the account before.
     var account = ""
     var info = AccountInfo()
 
