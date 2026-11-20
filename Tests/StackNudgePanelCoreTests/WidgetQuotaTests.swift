@@ -154,9 +154,11 @@ final class WidgetQuotaTests: XCTestCase {
     // still names itself.
     private let teamLogin = UsageClient.claudeLogin(
         ClaudeLogin(configDir: "/h/.claude-team", label: "Stackone"))
+    private let codexLogin = UsageClient.codexLogin(
+        CodexLogin(codexHome: "/h/.codex-work", label: "work"))
 
     func test_everyClientKeepsItsIdentityWithNoSnapshot() {
-        for client in UsageClient.fixedCases + [teamLogin] {
+        for client in UsageClient.fixedCases + [teamLogin, codexLogin] {
             XCTAssertEqual(make(client).client, client, "\(client) lost its identity")
         }
     }
@@ -222,7 +224,7 @@ final class WidgetQuotaTests: XCTestCase {
         XCTAssertEqual(UsageClient.claude.widgetTag, "Claude")
         XCTAssertEqual(UsageClient.codex.widgetTag, "Codex")
         XCTAssertEqual(UsageClient.antigravity.widgetTag, "Agy")
-        for client in UsageClient.fixedCases + [teamLogin] {
+        for client in UsageClient.fixedCases + [teamLogin, codexLogin] {
             XCTAssertFalse(client.widgetTag.isEmpty, "\(client) has no widget tag")
         }
     }

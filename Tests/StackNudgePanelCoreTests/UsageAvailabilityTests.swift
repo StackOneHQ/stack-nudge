@@ -152,7 +152,7 @@ final class UsageAvailabilityTests: XCTestCase {
         XCTAssertEqual(nav.stressPeakUtilization, 90)
     }
 
-    // Any other client keeps its own stress, as before there were extra logins.
+    // Another client's logins never count: a hot Claude doesn't stress Codex.
     func test_stressIsTheSelectedClientsOwnOtherwise() {
         let nav = PanelNav()
         nav.quota = claudeSnapshot(five: 95)
@@ -160,5 +160,64 @@ final class UsageAvailabilityTests: XCTestCase {
         nav.usageClientIndex = 1
         XCTAssertEqual(nav.selectedUsageClient, .codex)
         XCTAssertEqual(nav.stressPeakUtilization, 20)
+    }
+
+    // MARK: - Other Codex logins
+
+    private let codexWork = CodexLogin(codexHome: "/h/.codex-work", label: "work", account: "ws-work",
+                                       info: AccountInfo(email: "me@work.example"))
+
+    private func codexSnapshot(primary: Double) -> CodexQuotaSnapshot {
+        CodexQuotaSnapshot(primary: QuotaTier(utilization: primary, resetsAt: nil), secondary: nil, planType: "plus")
+    }
+
+    func test_otherCodexLoginsAreListedAfterTheDefaultCodexRow() {
+        let nav = PanelNav()
+        nav.codexQuota = codexSnapshot()
+        nav.codexLogins = [codexWork]
+        nav.codexLoginQuotas = [codexWork.codexHome: codexSnapshot(primary: 50)]
+        nav.quotaErrors[.antigravity] = "err"
+        XCTAssertEqual(nav.availableUsageClients, [.codex, .codexLogin(codexWork), .antigravity])
+    }
+
+    func test_eachCodexRowReadsItsOwnSnapshotAndAccount() {
+        let nav = PanelNav()
+        nav.codexQuota = codexSnapshot(primary: 10)
+        nav.codexDefaultInfo = AccountInfo(email: "me@home.example")
+        nav.codexLogins = [codexWork]
+        nav.codexLoginQuotas = [codexWork.codexHome: codexSnapshot(primary: 70)]
+        XCTAssertEqual(nav.codexQuota(for: .codex)?.primary?.utilization, 10)
+        XCTAssertEqual(nav.codexQuota(for: .codexLogin(codexWork))?.primary?.utilization, 70)
+        XCTAssertNil(nav.codexQuota(for: .claude))
+        XCTAssertEqual(nav.accountInfo(for: .codex)?.line, "me@home.example")
+        XCTAssertEqual(nav.accountInfo(for: .codexLogin(codexWork))?.line, "me@work.example")
+        XCTAssertNil(nav.accountInfo(for: .antigravity))
+    }
+
+    // The pill follows the selected Codex row's own numbers.
+    func test_theWidgetShowsTheSelectedCodexLogin() {
+        let nav = PanelNav()
+        nav.codexQuota = codexSnapshot(primary: 10)
+        nav.codexLogins = [codexWork]
+        nav.codexLoginQuotas = [codexWork.codexHome: codexSnapshot(primary: 70)]
+        nav.usageClientIndex = 1
+        XCTAssertEqual(nav.selectedUsageClient, .codexLogin(codexWork))
+        XCTAssertEqual(nav.widgetQuota.client, .codexLogin(codexWork))
+        XCTAssertEqual(nav.widgetQuota.shortUtilization, 70)
+    }
+
+    func test_stressTakesTheHottestCodexLoginWhileCodexIsSelected() {
+        let nav = PanelNav()
+        nav.codexQuota = codexSnapshot(primary: 10)
+        nav.codexLogins = [codexWork]
+        nav.codexLoginQuotas = [codexWork.codexHome: codexSnapshot(primary: 85)]
+        nav.usageClientIndex = 0
+        XCTAssertEqual(nav.selectedUsageClient, .codex)
+        XCTAssertEqual(nav.stressPeakUtilization, 85)
+    }
+
+    func test_aCodexLoginIsTheSameRowWhateverItsAccount() {
+        XCTAssertEqual(UsageClient.codexLogin(codexWork),
+                       .codexLogin(CodexLogin(codexHome: codexWork.codexHome, label: "other", account: "x")))
     }
 }

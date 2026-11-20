@@ -29,10 +29,19 @@ enum CodexAppServer {
         case cliMissing
     }
 
-    static func fetch(timeout: TimeInterval = CodexAppServer.timeout) -> Result {
+    // `codexHome` nil is the default login; any other runs with CODEX_HOME set
+    // to it.
+    static func fetch(codexHome: String? = nil, timeout: TimeInterval = CodexAppServer.timeout) -> Result {
         guard let path = ProcessOutput.codex() else { return .cliMissing }
-        guard let replies = exchange(path: path, timeout: timeout) else { return .unsupported }
+        guard let replies = exchange(path: path, environment: environment(codexHome: codexHome),
+                                     timeout: timeout)
+        else { return .unsupported }
         return result(from: replies)
+    }
+
+    static func environment(codexHome: String?,
+                            inherited: [String: String] = ProcessInfo.processInfo.environment) -> [String: String]? {
+        ProcessOutput.environment(adding: "CODEX_HOME", value: codexHome, inherited: inherited)
     }
 
     // What the two replies add up to. A `codex` that predates `account/read`
@@ -95,10 +104,12 @@ enum CodexAppServer {
     // initialize. Blocking: the caller is already on a serial probe queue, so a
     // watchdog that kills the child at the deadline bounds it; the kill closes
     // the pipe, which unblocks the read.
-    private static func exchange(path: String, timeout: TimeInterval) -> [Int: Reply]? {
+    private static func exchange(path: String, environment: [String: String]?,
+                                 timeout: TimeInterval) -> [Int: Reply]? {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: path)
         task.arguments = ["app-server"]
+        if let environment { task.environment = environment }
         let stdin = Pipe()
         let stdout = Pipe()
         task.standardInput = stdin
@@ -184,9 +195,11 @@ enum CodexAppServer {
 
     // MARK: - Parsing
 
-    // `account` is null when signed out; the workspace sits beside it rather
-    // than in it.
+    // `account` is null when signed out, which reads as an empty account rather
+    // than none: it says who's signed in (nobody), where nil says nothing. The
+    // workspace sits beside it rather than in it.
     static func account(fromResult result: [String: Any]) -> CodexAccount? {
+        if result["account"] is NSNull { return CodexAccount() }
         guard let account = result["account"] as? [String: Any] else { return nil }
         let routing = result["workspaceRouting"] as? [String: Any]
         return CodexAccount(type: account["type"] as? String,

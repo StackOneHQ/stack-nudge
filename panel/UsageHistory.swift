@@ -216,6 +216,8 @@ final class UsageHistoryStore {
         // login's own config dir rather than ~/.claude.
         case claudeLogin(configDir: String)
         case codex
+        // Another Codex login's, under its own CODEX_HOME.
+        case codexLogin(codexHome: String)
         case pi
 
         var defaultRoot: String {
@@ -223,6 +225,7 @@ final class UsageHistoryStore {
             case .claude: return "\(NSHomeDirectory())/.claude/projects"
             case .claudeLogin(let configDir): return "\(configDir)/projects"
             case .codex:  return "\(NSHomeDirectory())/.codex/sessions"
+            case .codexLogin(let codexHome): return "\(codexHome)/sessions"
             case .pi:     return "\(NSHomeDirectory())/.pi/agent/sessions"
             }
         }
@@ -232,7 +235,7 @@ final class UsageHistoryStore {
         var marker: StaticString {
             switch self {
             case .claude, .claudeLogin: return "\"assistant\""
-            case .codex:  return "token_count"
+            case .codex, .codexLogin: return "token_count"
             case .pi:     return "\"assistant\""
             }
         }
@@ -456,7 +459,7 @@ final class UsageHistoryStore {
     private static func parse(line: Data, source: Source) -> UsageEntry? {
         switch source {
         case .claude, .claudeLogin: return parseClaude(line: line)
-        case .codex:  return parseCodex(line: line)
+        case .codex, .codexLogin: return parseCodex(line: line)
         case .pi:     return parsePi(line: line)
         }
     }

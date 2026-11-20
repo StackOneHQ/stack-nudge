@@ -167,11 +167,16 @@ final class CodexAppServerTests: XCTestCase {
         XCTAssertEqual(actual?.id, "workspace-1")
     }
 
-    // Captured from a CODEX_HOME nobody signed in to.
-    func testASignedOutLoginHasNoAccount() {
-        XCTAssertNil(CodexAppServer.account(fromResult: result("""
+    // Captured from a CODEX_HOME nobody signed in to. Signed out is an answer,
+    // an empty account, so the row goes; a reply with no account field says
+    // nothing, so whatever was known is kept.
+    func testASignedOutLoginIsAnEmptyAccount() {
+        let actual = CodexAppServer.account(fromResult: result("""
         {"account":null,"requiresOpenaiAuth":true,"workspaceRouting":null}
-        """)))
+        """))
+        XCTAssertEqual(actual, CodexAccount())
+        XCTAssertNil(actual?.id)
+        XCTAssertNil(CodexAppServer.account(fromResult: result(#"{"requiresOpenaiAuth":true}"#)))
     }
 
     func testFallsBackToTheEmailWhenNoWorkspaceIsReported() {

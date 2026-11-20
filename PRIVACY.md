@@ -68,7 +68,15 @@ listed in `~/.stack-nudge/claude-config-dirs`, and nothing about them leaves you
 Mac. For Codex it asks `codex app-server` for the rate limits and,
 in the same exchange, `account/read` for the email you're signed in with, which
 it shows on the Codex card and keeps in memory only. It never opens Codex's
-`auth.json`.
+`auth.json`. If you keep more than one Codex login in its own `CODEX_HOME`, it
+runs the same exchange for each of those, with `CODEX_HOME` set to it, at most
+every five minutes. To find them it looks for an `auth.json` up to two levels
+under your home folder, beside a file Codex writes on its first run (checking
+only that the files exist, never what's in them, and with the same folders left
+out as for Claude), reads `CODEX_HOME` from the
+environment of any `codex` you have running, and reads `STACKNUDGE_CODEX_HOMES`.
+Dirs found from a running `codex` are listed in `~/.stack-nudge/codex-homes`, and
+nothing about them leaves your Mac.
 
 ## What is never sent, anywhere
 

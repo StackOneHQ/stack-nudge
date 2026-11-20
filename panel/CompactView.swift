@@ -309,10 +309,10 @@ struct CompactView: View {
     }
 
     // Passive quota-stress signal for the mascot. True when either window of
-    // the selected client is ≥75%, or of any Claude login while a Claude row is
-    // selected (PanelNav.stressPeakUtilization). The mascot shows a
-    // tired/worried expression so the user sees the budget pressure without
-    // opening the Usage tab.
+    // the selected client is ≥75%, or of any login of the same client while a
+    // Claude or Codex row is selected (PanelNav.stressPeakUtilization). The
+    // mascot shows a tired/worried expression so the user sees the budget
+    // pressure without opening the Usage tab.
     private var quotaStressed: Bool { nav.stressPeakUtilization >= 75 }
 
     private var botState: BotState {

@@ -74,8 +74,8 @@ struct WidgetQuota: Equatable {
         return QuotaWindow.shortName(length)
     }
 
-    // `claude` is the selected Claude row's snapshot, the default login's or
-    // another's; the caller resolves which.
+    // `claude` and `codex` are the selected row's snapshot, the default login's
+    // or another's; the caller resolves which.
     static func make(client: UsageClient?,
                      claude: QuotaSnapshot?,
                      codex: CodexQuotaSnapshot?,
@@ -94,10 +94,10 @@ struct WidgetQuota: Equatable {
             return WidgetQuota(client: client,
                                short: claude?.fiveHour, long: claude?.sevenDay,
                                shortLabel: "5h", longLabel: "7d")
-        case .codex:
+        case .codex, .codexLogin:
             // Named from the reported window: a hardcoded "5h" labelled a weekly
             // ring as a session one, contradicting the Usage tab.
-            return WidgetQuota(client: .codex,
+            return WidgetQuota(client: client,
                                short: codex?.primary, long: codex?.secondary,
                                shortLabel: ringLabel(codex?.primary, fallback: "5h"),
                                longLabel: ringLabel(codex?.secondary, fallback: "7d"))
@@ -150,10 +150,11 @@ extension UsageClient {
     var widgetTag: String {
         switch self {
         case .claude:      return "Claude"
-        // Which login, since "Claude" would read the same as the default one.
-        // Cut short: the legend slot is narrow.
-        case .claudeLogin(let login): return String(login.label.prefix(10))
         case .codex:       return "Codex"
+        // Which login, since "Claude" or "Codex" would read the same as the
+        // default one. Cut short: the legend slot is narrow.
+        case .claudeLogin(let login): return String(login.label.prefix(10))
+        case .codexLogin(let login):  return String(login.label.prefix(10))
         case .antigravity: return "Agy"
         case .pi:          return "Pi"
         }

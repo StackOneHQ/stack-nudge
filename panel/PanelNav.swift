@@ -490,6 +490,10 @@ final class PanelNav: ObservableObject {
     @Published var codexQuota: CodexQuotaSnapshot? { didSet { widgetQuotaCache = nil } }
     // Who the default Codex login is, from the same app-server exchange.
     @Published var codexDefaultInfo: AccountInfo?
+    // Codex logins other than the default one (CodexHomes) and the latest
+    // snapshot for each by CODEX_HOME, as claudeLogins are for Claude.
+    @Published var codexLogins:      [CodexLogin] = [] { didSet { widgetQuotaCache = nil } }
+    @Published var codexLoginQuotas: [String: CodexQuotaSnapshot] = [:] { didSet { widgetQuotaCache = nil } }
     // Antigravity (agy) usage from the running CLI's loopback RPC, populated by
     // AntigravityUsageProbe — the agy analogue of `quota`/`codexQuota`.
     @Published var antigravityQuota: AntigravityQuotaSnapshot? { didSet { widgetQuotaCache = nil } }
@@ -807,10 +811,15 @@ final class PanelNav: ObservableObject {
     private var usageSeriesScanning = false
 
     // Connected clients that currently have quota to show, in display order:
-    // the default Claude login, then every other one, then the rest.
+    // each of Claude and Codex as its default login then every other one, and
+    // the rest.
     var availableUsageClients: [UsageClient] {
-        let clients = UsageClient.fixedCases.flatMap { client in
-            client == .claude ? [client] + claudeLogins.map(UsageClient.claudeLogin) : [client]
+        let clients = UsageClient.fixedCases.flatMap { client -> [UsageClient] in
+            switch client {
+            case .claude: return [client] + claudeLogins.map(UsageClient.claudeLogin)
+            case .codex:  return [client] + codexLogins.map(UsageClient.codexLogin)
+            default:      return [client]
+            }
         }
         return clients.filter(isUsageClientAvailable)
     }
@@ -822,7 +831,17 @@ final class PanelNav: ObservableObject {
         case .claude:                 return claudeDefaultInfo
         case .claudeLogin(let login): return login.info
         case .codex:                  return codexDefaultInfo
+        case .codexLogin(let login):  return login.info
         default:                      return nil
+        }
+    }
+
+    // Either Codex row's snapshot; nil for any other client.
+    func codexQuota(for client: UsageClient) -> CodexQuotaSnapshot? {
+        switch client {
+        case .codex:                 return codexQuota
+        case .codexLogin(let login): return codexLoginQuotas[login.codexHome]
+        default:                     return nil
         }
     }
 
@@ -845,7 +864,7 @@ final class PanelNav: ObservableObject {
         if quotaErrors[client] != nil { return true }
         switch client {
         case .claude, .claudeLogin: return claudeQuota(for: client)?.hasTier == true
-        case .codex:       return codexQuota?.hasTier == true
+        case .codex, .codexLogin: return codexQuota(for: client)?.hasTier == true
         case .antigravity: return antigravityQuota?.hasTier == true
         case .pi:          return piQuota?.hasTier == true
         }
@@ -887,7 +906,7 @@ final class PanelNav: ObservableObject {
     // Memoised because CompactView reads it from ~16 places per body pass and
     // the pill re-renders at 10Hz while an agent is busy — recomputing meant
     // rebuilding availableUsageClients every time. Invalidated by didSet on each
-    // input it reads (every snapshot, the Claude logins, usageClientIndex, and
+    // input it reads (every snapshot, the extra logins, usageClientIndex, and
     // quotaErrors), so the cache can't outlive its sources.
     private var widgetQuotaCache: WidgetQuota?
 
@@ -895,7 +914,7 @@ final class PanelNav: ObservableObject {
         if let widgetQuotaCache { return widgetQuotaCache }
         let value = WidgetQuota.make(client: selectedUsageClient,
                                      claude: selectedUsageClient.flatMap(claudeQuota(for:)),
-                                     codex: codexQuota,
+                                     codex: selectedUsageClient.flatMap(codexQuota(for:)),
                                      antigravity: antigravityQuota,
                                      pi: piQuota)
         widgetQuotaCache = value
@@ -903,20 +922,25 @@ final class PanelNav: ObservableObject {
     }
 
     // The mascots' quota-stress signal: the selected client's tighter window, as
-    // the pill shows. With a Claude row selected it's every Claude login's
-    // instead, so a team seat running hot still shows while you're looking at
-    // your own plan, and the other way round.
+    // the pill shows. With a Claude or Codex row selected it's every login's of
+    // that client instead, so a team seat running hot still shows while you're
+    // looking at your own plan, and the other way round.
     var stressPeakUtilization: Double {
         let selected = widgetQuota.peakUtilization
+        let peaks: [Double]
         switch selectedUsageClient {
         case .claude, .claudeLogin:
-            let logins = ([quota] + claudeLogins.map { claudeLoginQuotas[$0.configDir] })
+            peaks = ([quota] + claudeLogins.map { claudeLoginQuotas[$0.configDir] })
                 .compactMap { $0 }
                 .map { max($0.fiveHour?.utilization ?? 0, $0.sevenDay?.utilization ?? 0) }
-            return max(selected, logins.max() ?? 0)
+        case .codex, .codexLogin:
+            peaks = ([codexQuota] + codexLogins.map { codexLoginQuotas[$0.codexHome] })
+                .compactMap { $0 }
+                .map { max($0.primary?.utilization ?? 0, $0.secondary?.utilization ?? 0) }
         default:
-            return selected
+            peaks = []
         }
+        return max(selected, peaks.max() ?? 0)
     }
 
     // The cached series, but only when it belongs to the client on screen — a

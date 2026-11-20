@@ -1204,6 +1204,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // every scanInterval.
     private var claudeConfigDirScan: (at: Date, dirs: [String])?
     private let codexQuotaProbe = CodexQuotaProbe()
+    // Codex logins other than the default one, by CODEX_HOME. See
+    // refreshOtherCodexLogins.
+    private var otherCodexProbes: [String: CodexQuotaProbe] = [:]
+    private var codexHomeScan: (at: Date, dirs: [String])?
+    // What adoptCodexLogins works from: the homes found, in order, and the
+    // latest account and snapshot each one's probe reported. Each is held
+    // across a reading that didn't say, as the default login's are.
+    private var codexHomes: [String] = []
+    private var codexHomeAccounts: [String: CodexAccount] = [:]
+    private var codexHomeSnapshots: [String: (snapshot: CodexQuotaSnapshot, at: Date)] = [:]
+    // CodexAccount.id of the default login, so an extra home signed in to the
+    // same account isn't a second row of the same numbers.
+    private var codexDefaultAccount: String?
     private let antigravityUsageProbe = AntigravityUsageProbe()
     // Lazy because it shares the nav's history store rather than opening its
     // own, so pi's transcripts are parsed once for the graph and the budget.
@@ -2391,8 +2404,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             guard let self else { return }
             // Held like the snapshot: a tick that fell back to the rollout
             // doesn't know the account, which doesn't mean it changed.
-            if let account = reading.account, self.nav.codexDefaultInfo != account.info {
-                self.nav.codexDefaultInfo = account.info
+            if let account = reading.account {
+                if self.nav.codexDefaultInfo != account.info { self.nav.codexDefaultInfo = account.info }
+                if self.codexDefaultAccount != account.id {
+                    self.codexDefaultAccount = account.id
+                    self.adoptCodexLogins()
+                }
             }
             guard let snapshot = reading.snapshot else { return }
             self.nav.codexQuota = snapshot
@@ -2424,6 +2441,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
         refreshPiUsage()
         refreshOtherClaudeAccounts()
+        refreshOtherCodexLogins()
     }
 
     // Every other Claude login on this machine (see ClaudeConfigDirs) gets the
@@ -2518,6 +2536,95 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             nav.quotaErrors[client] =
                 "Couldn't refresh. Run `CLAUDE_CONFIG_DIR=\(login.configDir) claude /usage` to check this login."
         }
+    }
+
+    // Every other Codex login on this machine (see CodexHomes) gets the default
+    // one's app-server exchange with CODEX_HOME set, at most every
+    // CodexHomes.refreshInterval, and its own row in the Usage tab once its
+    // account/read says who it is.
+    private func refreshOtherCodexLogins() {
+        let lastScan = codexHomeScan
+        // Lists dirs and runs ps, so off main.
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let scan = lastScan.flatMap {
+                Date().timeIntervalSince($0.at) < CodexHomes.scanInterval ? $0 : nil
+            } ?? (at: Date(), dirs: CodexHomes.scan())
+            let running = CodexHomes.running()
+            CodexHomes.remember(running)
+            let homes = CodexHomes.candidates(found: scan.dirs + CodexHomes.remembered() + running)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.codexHomeScan = scan
+                guard self.quotaTrackingEnabled else { return }
+                let kept = Set(homes)
+                self.codexHomes = homes
+                self.otherCodexProbes = self.otherCodexProbes.filter { kept.contains($0.key) }
+                self.codexHomeAccounts = self.codexHomeAccounts.filter { kept.contains($0.key) }
+                self.codexHomeSnapshots = self.codexHomeSnapshots.filter { kept.contains($0.key) }
+                self.adoptCodexLogins()
+                for home in homes {
+                    let probe = self.otherCodexProbes[home]
+                        ?? CodexQuotaProbe(codexHome: home, minInterval: CodexHomes.refreshInterval)
+                    self.otherCodexProbes[home] = probe
+                    probe.fetch { [weak self] reading in
+                        self?.applyCodexHomeReading(home, reading: reading)
+                    }
+                }
+            }
+        }
+    }
+
+    private func applyCodexHomeReading(_ home: String, reading: CodexQuotaProbe.Reading) {
+        // Gone while the probe ran.
+        guard codexHomes.contains(home) else { return }
+        if let account = reading.account {
+            // A held snapshot is the previous account's.
+            if codexHomeAccounts[home]?.id != account.id { codexHomeSnapshots[home] = nil }
+            codexHomeAccounts[home] = account
+        }
+        if let snapshot = reading.snapshot { codexHomeSnapshots[home] = (snapshot, reading.measuredAt) }
+        adoptCodexLogins()
+    }
+
+    // Recomputes the extra Codex rows from what the probes last said. A login
+    // that's gone (signed out, dir removed, or now the default's account) takes
+    // its row and numbers with it. One whose home is now signed in to another
+    // account keeps its row, but the old account's numbers go first.
+    private func adoptCodexLogins() {
+        let logins = CodexHomes.logins(candidates: codexHomes, accounts: codexHomeAccounts,
+                                       defaultAccount: codexDefaultAccount)
+        let previous = Dictionary(nav.codexLogins.map { ($0.codexHome, $0) }, uniquingKeysWith: { first, _ in first })
+        let kept = Set(logins.map(\.codexHome))
+        for gone in nav.codexLogins where !kept.contains(gone.codexHome) {
+            forgetCodexLogin(gone)
+        }
+        for login in logins {
+            if let before = previous[login.codexHome], before.account != login.account {
+                forgetCodexLogin(before)
+            }
+        }
+        // Compared field by field, since == only looks at the home.
+        if logins.map(\.label) != nav.codexLogins.map(\.label)
+            || logins.map(\.info) != nav.codexLogins.map(\.info)
+            || logins.map(\.account) != nav.codexLogins.map(\.account)
+            || logins != nav.codexLogins {
+            nav.codexLogins = logins
+        }
+        for login in logins {
+            guard let held = codexHomeSnapshots[login.codexHome],
+                  nav.codexLoginQuotas[login.codexHome] != held.snapshot
+                    || nav.quotaUpdatedAt[.codexLogin(login)] != held.at
+            else { continue }
+            nav.codexLoginQuotas[login.codexHome] = held.snapshot
+            nav.quotaUpdatedAt[.codexLogin(login)] = held.at
+        }
+    }
+
+    private func forgetCodexLogin(_ login: CodexLogin) {
+        let client = UsageClient.codexLogin(login)
+        nav.codexLoginQuotas[login.codexHome] = nil
+        nav.quotaUpdatedAt[client] = nil
+        nav.quotaErrors[client] = nil
     }
 
     // Pi budget, read from pi's own transcripts with no network and no CLI.
