@@ -53,20 +53,23 @@ enum UsageClient: Hashable {
     // dir (see ClaudeConfigDirs). Listed straight after the default Claude row.
     case claudeLogin(ClaudeLogin)
     case codex
+    // Likewise a Codex login other than the default one, from its own
+    // CODEX_HOME (see CodexHomes), listed straight after the default Codex row.
+    case codexLogin(CodexLogin)
     case antigravity
     case pi
 
-    // Every client but the extra Claude logins, which are only known at run
-    // time, in display order.
+    // Every client but the extra Claude and Codex logins, which are only known
+    // at run time, in display order.
     static let fixedCases: [UsageClient] = [.claude, .codex, .antigravity, .pi]
 
-    // The row title. An extra login is still "Claude"; which one it is goes on
-    // the line under it (see UsageView.planLabel), since the client column is
-    // too narrow for both.
+    // The row title. An extra login is still "Claude" or "Codex"; which one it
+    // is goes on the line under it (see UsageView.planLabel), since the client
+    // column is too narrow for both.
     var displayName: String {
         switch self {
         case .claude, .claudeLogin: return "Claude"
-        case .codex:                return "Codex"
+        case .codex, .codexLogin:   return "Codex"
         case .antigravity:          return "Antigravity"
         case .pi:                   return "Pi"
         }
@@ -85,6 +88,7 @@ enum UsageClient: Hashable {
         case .claude:                return .claude
         case .claudeLogin(let login): return .claudeLogin(configDir: login.configDir)
         case .codex:                 return .codex
+        case .codexLogin(let login): return .codexLogin(codexHome: login.codexHome)
         case .antigravity:           return nil
         case .pi:                    return .pi
         }
@@ -100,15 +104,31 @@ struct ClaudeLogin: Hashable {
     let configDir: String
     // The organization's name, or what stands in for one (see ClaudeConfigDirs).
     let label: String
-    var info = ClaudeAccountInfo()
+    var info = AccountInfo()
 
     static func == (lhs: ClaudeLogin, rhs: ClaudeLogin) -> Bool { lhs.configDir == rhs.configDir }
     func hash(into hasher: inout Hasher) { hasher.combine(configDir) }
 }
 
-// Who a Claude login is signed in as, shown at the top of its card: with two
-// logins on one machine the plan alone doesn't say which account is which.
-struct ClaudeAccountInfo: Equatable {
+// A Codex login other than the default one, identified by its CODEX_HOME for
+// the same reason a ClaudeLogin is by its config dir.
+struct CodexLogin: Hashable {
+    let codexHome: String
+    // The dir's name (see CodexHomes.label).
+    let label: String
+    // CodexAccount.id. When it changes the row stays, but its numbers and alert
+    // state belonged to the account before.
+    var account = ""
+    var info = AccountInfo()
+
+    static func == (lhs: CodexLogin, rhs: CodexLogin) -> Bool { lhs.codexHome == rhs.codexHome }
+    func hash(into hasher: inout Hasher) { hasher.combine(codexHome) }
+}
+
+// Who a login is signed in as, shown at the top of its card: with two logins
+// on one machine the plan alone doesn't say which account is which. Codex
+// reports no organization, so its line is the email alone.
+struct AccountInfo: Equatable {
     var email: String?
     var organization: String?
 
@@ -279,7 +299,7 @@ struct UsageView: View {
     private func quotaPane(for client: UsageClient) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                if let line = nav.claudeInfo(for: client)?.line {
+                if let line = nav.accountInfo(for: client)?.line {
                     accountLine(line)
                 }
                 if let message = nav.quotaErrors[client] {
@@ -315,7 +335,7 @@ struct UsageView: View {
         switch client {
         case .claude:      return nav.quota?.hasTier ?? false
         case .claudeLogin(let login): return nav.claudeLoginQuotas[login.configDir]?.hasTier ?? false
-        case .codex:       return nav.codexQuota?.hasTier ?? false
+        case .codex, .codexLogin: return nav.codexQuota(for: client)?.hasTier ?? false
         case .antigravity: return nav.antigravityQuota?.hasTier ?? false
         case .pi:          return nav.piQuota?.hasTier ?? false
         }
@@ -421,8 +441,8 @@ struct UsageView: View {
                     section("Current week (Sonnet only)") { tierRow(tier) }
                 }
             }
-        case .codex:
-            if let codex = nav.codexQuota {
+        case .codex, .codexLogin:
+            if let codex = nav.codexQuota(for: client) {
                 // Titled from the reported window, not the slot: under
                 // `limit_id=codex` the weekly window arrives as `primary`.
                 if let tier = codex.primary {
@@ -578,8 +598,8 @@ struct UsageView: View {
     }
 
     // Subscription tier shown under the client name (e.g. "Max", "Plus"). An
-    // extra Claude login leads with which one it is, since its title is the
-    // same "Claude" as the default row's.
+    // extra login leads with which one it is, since its title is the same as
+    // the default row's.
     private func planLabel(for client: UsageClient) -> String? {
         switch client {
         case .claude:      return nav.quota?.planType?.capitalized
@@ -587,6 +607,9 @@ struct UsageView: View {
             let plan = nav.claudeLoginQuotas[login.configDir]?.planType?.capitalized
             return plan.map { "\(login.label) · \($0)" } ?? login.label
         case .codex:       return nav.codexQuota?.planType?.capitalized
+        case .codexLogin(let login):
+            let plan = nav.codexLoginQuotas[login.codexHome]?.planType?.capitalized
+            return plan.map { "\(login.label) · \($0)" } ?? login.label
         case .antigravity: return nav.antigravityQuota?.planType?.capitalized
         case .pi:          return nav.piQuota?.planType?.capitalized
         }

@@ -1,9 +1,10 @@
 import Foundation
 
-// Live account rate limits from `codex app-server` — spawn it, speak
-// line-delimited JSON-RPC over stdio, ask `account/rateLimits/read`, exit.
-// Account-wide, so unlike the rollout reader it sees quota spent on the web, in
-// the IDE or on another machine. See CodexQuotaProbe for why that matters.
+// Live account rate limits from `codex app-server`: spawn it, speak
+// line-delimited JSON-RPC over stdio, ask `account/rateLimits/read` and
+// `account/read`, exit. Account-wide, so unlike the rollout reader it sees quota
+// spent on the web, in the IDE or on another machine. See CodexQuotaProbe for
+// why that matters. Both reads share the one spawn, which is the expensive part.
 //
 // Going through the binary rather than the HTTP endpoint it fronts is
 // deliberate: OpenAI refresh tokens are single-use, so a second refresher
@@ -13,27 +14,63 @@ enum CodexAppServer {
     // Room for a cold spawn; the exchange itself measured 0.59s.
     static let timeout: TimeInterval = 10
 
+    // The account rides along on every case that got an answer: it names the
+    // login on its card whether or not there were limits to show.
     enum Result: Equatable {
-        case ok(CodexQuotaSnapshot)
-        // Answered with nothing usable — API-key auth reports no limits, and an
-        // outage looks the same from here. Both are "nothing to show".
-        case empty
-        // Spawned and died with no stdout: the shape an unknown subcommand
-        // makes, so the caller latches this path off for the process.
+        case ok(CodexQuotaSnapshot, CodexAccount?)
+        // Answered with nothing usable: API-key auth reports no limits, a
+        // signed-out login is refused them, and an outage looks the same from
+        // here. All are "nothing to show".
+        case empty(CodexAccount?)
+        // Spawned and died with no answer, or answered that it has no such
+        // method: the shapes an old `codex` makes, so the caller latches this
+        // path off for the process.
         case unsupported
         case cliMissing
     }
 
-    static func fetch(timeout: TimeInterval = CodexAppServer.timeout) -> Result {
+    // `codexHome` nil is the default login; any other runs with CODEX_HOME set
+    // to it.
+    static func fetch(codexHome: String? = nil, timeout: TimeInterval = CodexAppServer.timeout) -> Result {
         guard let path = ProcessOutput.codex() else { return .cliMissing }
-        guard let response = exchange(path: path, timeout: timeout) else { return .unsupported }
-        guard let snapshot = snapshot(fromResult: response) else { return .empty }
-        return .ok(snapshot)
+        guard let replies = exchange(path: path, environment: environment(codexHome: codexHome),
+                                     timeout: timeout)
+        else { return .unsupported }
+        return result(from: replies)
     }
+
+    static func environment(codexHome: String?,
+                            inherited: [String: String] = ProcessInfo.processInfo.environment) -> [String: String]? {
+        ProcessOutput.environment(adding: "CODEX_HOME", value: codexHome, inherited: inherited)
+    }
+
+    // What the two replies add up to. A `codex` that predates `account/read`
+    // refuses it, which costs the account line and nothing else.
+    static func result(from replies: [Int: Reply]) -> Result {
+        var account: CodexAccount?
+        if case .result(let body)? = replies[accountRequestID] { account = Self.account(fromResult: body) }
+        switch replies[rateLimitsRequestID] {
+        case .result(let body)?:
+            return snapshot(fromResult: body).map { .ok($0, account) } ?? .empty(account)
+        case .error(let code)?:
+            return code == methodNotFound ? .unsupported : .empty(account)
+        case nil:
+            return .unsupported
+        }
+    }
+
+    enum Reply {
+        case result([String: Any])
+        case error(code: Int?)
+    }
+
+    // JSON-RPC's "no such method". Any other refusal (Codex answers a signed-out
+    // login with -32600) says the method exists.
+    static let methodNotFound = -32601
 
     // MARK: - Protocol
 
-    // initialize → initialized → the read. `initialized` is a notification, so
+    // initialize → initialized → the reads. `initialized` is a notification, so
     // it carries no id and gets no reply.
     static func initializeRequest(version: String) -> String {
         #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":"#
@@ -46,9 +83,16 @@ enum CodexAppServer {
     // that can act on a Reserve fallback, not passive readers.
     // excludeResetCreditDetails skips a backend lookup we never render — what
     // the Codex TUI sets on its own periodic polls.
+    static let rateLimitsRequestID = 2
     static let rateLimitsRequest =
         #"{"jsonrpc":"2.0","id":2,"method":"account/rateLimits/read",""#
         + #"params":{"supportsLunaReserve":false,"excludeResetCreditDetails":true}}"#
+
+    // refreshToken false: who's signed in is all we want, and a refresh is the
+    // CLI's to make (see the type comment).
+    static let accountRequestID = 3
+    static let accountRequest =
+        #"{"jsonrpc":"2.0","id":3,"method":"account/read","params":{"refreshToken":false}}"#
 
     private static var clientVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
@@ -56,14 +100,16 @@ enum CodexAppServer {
 
     // MARK: - Transport
 
-    // Returns the `result` of response id 2, or nil if the child never produced
-    // a usable line. Blocking: the caller is already on a serial probe queue, so
-    // a watchdog that kills the child at the deadline bounds it — the kill
-    // closes the pipe, which unblocks the read.
-    private static func exchange(path: String, timeout: TimeInterval) -> [String: Any]? {
+    // The replies to both reads by id, or nil if the child never got past
+    // initialize. Blocking: the caller is already on a serial probe queue, so a
+    // watchdog that kills the child at the deadline bounds it; the kill closes
+    // the pipe, which unblocks the read.
+    private static func exchange(path: String, environment: [String: String]?,
+                                 timeout: TimeInterval) -> [Int: Reply]? {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: path)
         task.arguments = ["app-server"]
+        if let environment { task.environment = environment }
         let stdin = Pipe()
         let stdout = Pipe()
         task.standardInput = stdin
@@ -88,11 +134,12 @@ enum CodexAppServer {
 
         let reader = LineReader(handle: stdout.fileHandleForReading)
         guard write(initializeRequest(version: clientVersion), to: stdin),
-              awaitResponse(id: 1, reader: reader) != nil,
+              case .result? = collect(ids: [1], next: reader.next)[1],
               write(initializedNotification, to: stdin),
-              write(rateLimitsRequest, to: stdin)
+              write(rateLimitsRequest, to: stdin),
+              write(accountRequest, to: stdin)
         else { return nil }
-        return awaitResponse(id: 2, reader: reader)
+        return collect(ids: [rateLimitsRequestID, accountRequestID], next: reader.next)
     }
 
     private static func write(_ line: String, to pipe: Pipe) -> Bool {
@@ -103,16 +150,24 @@ enum CodexAppServer {
         return true
     }
 
-    // Skips the notifications the server interleaves. nil on EOF or an error
-    // reply.
-    private static func awaitResponse(id: Int, reader: LineReader) -> [String: Any]? {
-        while let line = reader.next() {
+    // Reads until every id has its reply, or the stream ends. The server
+    // answers in whatever order it finishes, not the order asked (account/read
+    // came back first when measured), and interleaves notifications, which have
+    // no id and are skipped.
+    static func collect(ids: Set<Int>, next: () -> Data?) -> [Int: Reply] {
+        var replies: [Int: Reply] = [:]
+        while replies.count < ids.count, let line = next() {
             guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-                  (object["id"] as? NSNumber)?.intValue == id
+                  let id = (object["id"] as? NSNumber)?.intValue, ids.contains(id)
             else { continue }
-            return object["result"] as? [String: Any]
+            if let body = object["result"] as? [String: Any] {
+                replies[id] = .result(body)
+            } else {
+                let code = ((object["error"] as? [String: Any])?["code"] as? NSNumber)?.intValue
+                replies[id] = .error(code: code)
+            }
         }
-        return nil
+        return replies
     }
 
     // `availableData` blocks until the child writes, and returns empty at EOF —
@@ -139,6 +194,19 @@ enum CodexAppServer {
     }
 
     // MARK: - Parsing
+
+    // `account` is null when signed out, which reads as an empty account rather
+    // than none: it says who's signed in (nobody), where nil says nothing. The
+    // workspace sits beside it rather than in it.
+    static func account(fromResult result: [String: Any]) -> CodexAccount? {
+        if result["account"] is NSNull { return CodexAccount() }
+        guard let account = result["account"] as? [String: Any] else { return nil }
+        let routing = result["workspaceRouting"] as? [String: Any]
+        return CodexAccount(type: account["type"] as? String,
+                            email: account["email"] as? String,
+                            planType: account["planType"] as? String,
+                            chatgptAccountId: routing?["chatgptAccountId"] as? String)
+    }
 
     // `rateLimits` is the backward-compatible view and mirrors whichever bucket
     // the account meters against. `rateLimitsByLimitId` splits the same numbers

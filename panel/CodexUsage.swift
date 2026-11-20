@@ -13,10 +13,48 @@ struct CodexQuotaSnapshot: Equatable {
     // reset has already passed, so a rollout left over from last week parses into
     // a snapshot with both windows nil.
     var hasTier: Bool { primary != nil || secondary != nil }
+
+    // The windows quota alerts watch, keyed and named by length rather than
+    // slot: the slot a window arrives in isn't fixed (see CodexQuotaProbe.tier),
+    // and a weekly reading landing on a session's alert state would read as a
+    // rollover.
+    var alertTiers: [(key: String, label: String, tier: QuotaTier)] {
+        [("primary", primary), ("secondary", secondary)].compactMap { slot, tier in
+            guard let tier else { return nil }
+            guard let length = tier.windowLength else { return (slot, "Limit", tier) }
+            switch length {
+            case QuotaWindow.fiveHours: return ("five_hour", "Session", tier)
+            case QuotaWindow.sevenDays: return ("seven_day", "Weekly", tier)
+            default:
+                let name = QuotaWindow.shortName(length)
+                return ("window_\(name)", name, tier)
+            }
+        }
+    }
+}
+
+// Who a Codex login is signed in as, from the app-server's `account/read`.
+// Never from auth.json, which holds the tokens. An empty one is a login that's
+// signed out.
+struct CodexAccount: Equatable {
+    // "chatgpt" or "apiKey".
+    var type: String?
+    var email: String?
+    var planType: String?
+    // The ChatGPT workspace the login meters against: one person in their own
+    // plan and in a team workspace has the same email in both, but separate
+    // limits.
+    var chatgptAccountId: String?
+
+    // What tells two logins apart. The email stands in on a build that doesn't
+    // report the workspace; an API-key login has neither, and no limits either.
+    var id: String? { chatgptAccountId ?? email }
+
+    var info: AccountInfo { AccountInfo(email: email) }
 }
 
 // Codex account rate limits: `codex app-server` where it's available, and the
-// newest rollout JSONL under ~/.codex/sessions where it isn't.
+// newest rollout JSONL under the login's sessions dir where it isn't.
 //
 // The rollout records limits on each `token_count` event at
 // `payload.rate_limits`, but only while a CLI turn runs on this machine — quota
@@ -25,11 +63,27 @@ struct CodexQuotaSnapshot: Equatable {
 // two-day-old rollout read 29% against a live 36%, inside the same window
 // instance, with no 5-hour window at all. Hence app-server first.
 //
-// nil for API-key auth or when neither source has anything, which the Usage tab
-// treats as "no Codex usage to show".
+// No snapshot for API-key auth or when neither source has anything, which the
+// Usage tab treats as "no Codex usage to show".
 final class CodexQuotaProbe {
 
-    private let sessionsDir = "\(NSHomeDirectory())/.codex/sessions"
+    // nil for the default login; otherwise the CODEX_HOME it runs as, whose
+    // rollouts are under its own sessions dir.
+    let codexHome: String?
+    private let sessionsDir: String
+    // How long a reading stands before the next fetch spawns again. Zero for
+    // the default login, which follows the poll; see CodexHomes.refreshInterval.
+    private let minInterval: TimeInterval
+    // The last reading, handed back while it's under minInterval old. Only
+    // touched on probeQueue.
+    private var last: Reading?
+
+    init(codexHome: String? = nil, minInterval: TimeInterval = 0) {
+        self.codexHome = codexHome
+        self.minInterval = minInterval
+        sessionsDir = "\(codexHome ?? CodexHomes.defaultHome())/sessions"
+        probeQueue = DispatchQueue(label: "stack-nudge.codex-quota\(codexHome.map { "." + $0 } ?? "")")
+    }
 
     // Skip re-parsing a rollout we've already read at this path+size+mtime —
     // the probe runs on the same 60s/5min cadence as the Claude one, and most
@@ -37,40 +91,65 @@ final class CodexQuotaProbe {
     private var cacheKey: String?
     private var cached: CodexQuotaSnapshot?
 
-    // Latched off once app-server spawns and dies with no stdout — an unknown
-    // subcommand. Same reasoning as the --strict-mcp-config latch: detect once,
-    // stop paying for a spawn that can't work. Only touched on probeQueue.
+    // Latched off once app-server turns out too old to answer (see
+    // CodexAppServer.Result.unsupported). Same reasoning as the
+    // --strict-mcp-config latch: detect once, stop paying for a spawn that can't
+    // work. Only touched on probeQueue.
     private var appServerSupported = true
 
     // Serialises read() so overlapping polls — the 60s/5min timer firing while a
     // prior fetch is still doing disk I/O on a large ~/.codex/sessions tree —
     // can't race on cacheKey/cached. These are only ever touched on this queue.
-    private let probeQueue = DispatchQueue(label: "stack-nudge.codex-quota")
+    private let probeQueue: DispatchQueue
+
+    // The limits, and who they belong to. `account` is nil when nothing said
+    // (the rollout fallback, a `codex` without account/read), which is not the
+    // same as signed out: a caller holds the account it last knew.
+    struct Reading: Equatable {
+        var snapshot: CodexQuotaSnapshot?
+        var account: CodexAccount?
+        var measuredAt = Date()
+    }
+
+    static func isDue(_ last: Reading?, now: Date = Date(), minInterval: TimeInterval) -> Bool {
+        guard let last else { return true }
+        return now.timeIntervalSince(last.measuredAt) >= minInterval
+    }
 
     // Calls completion on the main queue. The app-server exchange and file IO
     // both run off-main.
-    func fetch(completion: @escaping (CodexQuotaSnapshot?) -> Void) {
+    func fetch(completion: @escaping (Reading) -> Void) {
         let dir = sessionsDir
         probeQueue.async { [weak self] in
-            let result = self?.read(dir: dir) ?? nil
-            DispatchQueue.main.async { completion(result) }
+            let reading = self?.read(dir: dir) ?? Reading()
+            DispatchQueue.main.async { completion(reading) }
         }
     }
 
-    private func read(dir: String) -> CodexQuotaSnapshot? {
+    private func read(dir: String) -> Reading {
+        if let last, !Self.isDue(last, minInterval: minInterval) { return last }
+        let reading = fresh(dir: dir)
+        last = reading
+        return reading
+    }
+
+    private func fresh(dir: String) -> Reading {
+        var account: CodexAccount?
         if appServerSupported {
-            switch CodexAppServer.fetch() {
-            case .ok(let snapshot):
-                return snapshot
+            switch CodexAppServer.fetch(codexHome: codexHome) {
+            case .ok(let snapshot, let reported):
+                return Reading(snapshot: snapshot, account: reported)
             case .unsupported:
                 appServerSupported = false
             // Neither says anything about whether the subcommand exists, so
-            // neither latches — but both fall through to the rollout.
-            case .empty, .cliMissing:
+            // neither latches, but both fall through to the rollout.
+            case .empty(let reported):
+                account = reported
+            case .cliMissing:
                 break
             }
         }
-        return rollout(dir: dir)
+        return Reading(snapshot: rollout(dir: dir), account: account)
     }
 
     private func rollout(dir: String) -> CodexQuotaSnapshot? {

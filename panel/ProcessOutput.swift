@@ -290,6 +290,18 @@ enum ProcessOutput {
         _ = exited.wait(timeout: .now() + 1)
     }
 
+    // For a child that has to run as another login (CLAUDE_CONFIG_DIR,
+    // CODEX_HOME). nil inherits ours unchanged, which is what the default login
+    // has always run with. Otherwise ours plus the one variable: a child's env
+    // replaces rather than merges, so PATH and HOME have to come along.
+    static func environment(adding name: String, value: String?,
+                            inherited: [String: String] = ProcessInfo.processInfo.environment) -> [String: String]? {
+        guard let value else { return nil }
+        var env = inherited
+        env[name] = value
+        return env
+    }
+
     // Resolve the `gh` CLI from common install locations. A launchd-spawned app
     // has a minimal PATH, so we probe paths directly rather than relying on env.
     // nil ⇒ not installed (callers no-op). Used for release checks/downloads.

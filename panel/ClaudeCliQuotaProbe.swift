@@ -247,15 +247,9 @@ final class ClaudeCliQuotaProbe {
 
     // MARK: - Invocation
 
-    // nil inherits ours unchanged, which is what the default login has always
-    // run with. Otherwise ours plus CLAUDE_CONFIG_DIR: ProcessOutput replaces the
-    // child's environment rather than merging, so PATH and HOME come along.
     static func environment(configDir: String?,
                             inherited: [String: String] = ProcessInfo.processInfo.environment) -> [String: String]? {
-        guard let configDir else { return nil }
-        var env = inherited
-        env["CLAUDE_CONFIG_DIR"] = configDir
-        return env
+        ProcessOutput.environment(adding: "CLAUDE_CONFIG_DIR", value: configDir, inherited: inherited)
     }
 
     // Args for `claude --print /usage`. --strict-mcp-config loads zero MCP

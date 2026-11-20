@@ -2,8 +2,9 @@ import XCTest
 
 @testable import StackNudgePanelCore
 
-// Pins the `account/rateLimits/read` response to the parser that reads it, using
-// a verbatim capture from `codex app-server` rather than a hand-built dictionary.
+// Pins the `account/rateLimits/read` and `account/read` responses to the parsers
+// that read them, using the shape of a live capture from `codex app-server`
+// rather than a hand-built dictionary.
 //
 // Also pins the request strings. They're assembled by concatenation to keep the
 // JSON readable inline, which makes a stray brace or a dropped comma a runtime
@@ -135,5 +136,107 @@ final class CodexAppServerTests: XCTestCase {
         let params = frame["params"] as? [String: Any]
         XCTAssertEqual(params?["supportsLunaReserve"] as? Bool, false)
         XCTAssertEqual(params?["excludeResetCreditDetails"] as? Bool, true)
+    }
+
+    func testAccountFrameAsksWithoutRefreshing() {
+        guard let frame = decode(CodexAppServer.accountRequest) else {
+            return XCTFail("account request is not valid JSON")
+        }
+        XCTAssertEqual(frame["method"] as? String, "account/read")
+        XCTAssertEqual((frame["id"] as? NSNumber)?.intValue, CodexAppServer.accountRequestID)
+        XCTAssertEqual((frame["params"] as? [String: Any])?["refreshToken"] as? Bool, false)
+        XCTAssertNotEqual(CodexAppServer.accountRequestID, CodexAppServer.rateLimitsRequestID)
+    }
+
+    // MARK: - Account
+
+    // The shape of a live `account/read` on a ChatGPT Plus login, values made up.
+    private var signedIn: [String: Any] {
+        result("""
+        {"account":{"type":"chatgpt","email":"me@example.com","planType":"plus"},\
+        "requiresOpenaiAuth":true,\
+        "workspaceRouting":{"chatgptAccountId":"workspace-1","backendOrigin":"https://example.com",\
+        "accountRoutingOverride":"none"}}
+        """)
+    }
+
+    func testReadsWhoTheLoginIsAndItsWorkspace() {
+        let actual = CodexAppServer.account(fromResult: signedIn)
+        XCTAssertEqual(actual, CodexAccount(type: "chatgpt", email: "me@example.com", planType: "plus",
+                                            chatgptAccountId: "workspace-1"))
+        XCTAssertEqual(actual?.id, "workspace-1")
+    }
+
+    // Captured from a CODEX_HOME nobody signed in to. Signed out is an answer,
+    // an empty account, so the row goes; a reply with no account field says
+    // nothing, so whatever was known is kept.
+    func testASignedOutLoginIsAnEmptyAccount() {
+        let actual = CodexAppServer.account(fromResult: result("""
+        {"account":null,"requiresOpenaiAuth":true,"workspaceRouting":null}
+        """))
+        XCTAssertEqual(actual, CodexAccount())
+        XCTAssertNil(actual?.id)
+        XCTAssertNil(CodexAppServer.account(fromResult: result(#"{"requiresOpenaiAuth":true}"#)))
+    }
+
+    func testFallsBackToTheEmailWhenNoWorkspaceIsReported() {
+        XCTAssertEqual(CodexAccount(email: "me@example.com").id, "me@example.com")
+        XCTAssertNil(CodexAccount(type: "apiKey").id)
+    }
+
+    // There's no organization to go with it, so the card's line is the email.
+    func testTheCardLineIsTheEmailAlone() {
+        XCTAssertEqual(CodexAccount(email: "me@example.com", planType: "plus").info.line, "me@example.com")
+    }
+
+    // MARK: - Replies
+
+    private func lines(_ frames: [String]) -> () -> Data? {
+        var remaining = frames.map { Data($0.utf8) }
+        return { remaining.isEmpty ? nil : remaining.removeFirst() }
+    }
+
+    // Measured: account/read answered before the rate limits it was sent after.
+    func testCollectsRepliesInWhateverOrderTheyArriveAndSkipsNotifications() {
+        let actual = CodexAppServer.collect(ids: [2, 3], next: lines([
+            #"{"jsonrpc":"2.0","method":"account/updated","params":{}}"#,
+            #"{"id":3,"result":{"account":null}}"#,
+            #"{"id":9,"result":{}}"#,
+            #"{"id":2,"error":{"code":-32600,"message":"codex account authentication required"}}"#,
+        ]))
+        guard case .result? = actual[3] else { return XCTFail("expected id 3's result") }
+        guard case .error(let code)? = actual[2] else { return XCTFail("expected id 2's error") }
+        XCTAssertEqual(code, -32600)
+        XCTAssertNil(actual[9])
+    }
+
+    func testStopsAtTheEndOfTheStream() {
+        let actual = CodexAppServer.collect(ids: [2, 3], next: lines([#"{"id":2,"result":{}}"#]))
+        XCTAssertEqual(Array(actual.keys), [2])
+    }
+
+    func testOneSpawnAnswersBothTheLimitsAndTheAccount() {
+        let actual = CodexAppServer.result(from: [2: .result(plusAccount), 3: .result(signedIn)])
+        guard case .ok(let snapshot, let account) = actual else { return XCTFail("expected ok, got \(actual)") }
+        XCTAssertEqual(snapshot.planType, "plus")
+        XCTAssertEqual(account?.email, "me@example.com")
+    }
+
+    // A `codex` that predates account/read still shows its limits.
+    func testAnOlderCodexWithoutAccountReadKeepsItsLimits() {
+        let actual = CodexAppServer.result(from: [2: .result(plusAccount),
+                                                  3: .error(code: CodexAppServer.methodNotFound)])
+        guard case .ok(_, nil) = actual else { return XCTFail("expected ok with no account, got \(actual)") }
+    }
+
+    // Refused for being signed out is nothing to show, not a missing method:
+    // latching app-server off on it would leave the login on the stale rollout
+    // after it signs in.
+    func testARefusalIsEmptyAndOnlyAMissingMethodIsUnsupported() {
+        XCTAssertEqual(CodexAppServer.result(from: [2: .error(code: -32600), 3: .result(signedIn)]),
+                       .empty(CodexAppServer.account(fromResult: signedIn)))
+        XCTAssertEqual(CodexAppServer.result(from: [2: .error(code: CodexAppServer.methodNotFound)]),
+                       .unsupported)
+        XCTAssertEqual(CodexAppServer.result(from: [3: .result(signedIn)]), .unsupported)
     }
 }

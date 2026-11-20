@@ -33,7 +33,7 @@ enum ClaudeConfigDirs {
         // How the Usage tab names it. See label(for:path:).
         var label: String = ""
         // Who it's signed in as, for the top of its card.
-        var info = ClaudeAccountInfo()
+        var info = AccountInfo()
     }
 
     // The organization's name, which is what tells a team seat from your own
@@ -80,92 +80,41 @@ enum ClaudeConfigDirs {
         entries(setting, home: home) + Set(found).sorted()
     }
 
-    // Comma-separated, `~` expanded. Anything else relative is dropped: it would
-    // resolve against whatever directory the app happened to launch from.
     static func entries(_ setting: String?, home: String) -> [String] {
-        (setting ?? "").split(separator: ",").compactMap { raw in
-            let entry = raw.trimmingCharacters(in: .whitespaces)
-            if entry == "~" { return home }
-            if entry.hasPrefix("~/") { return home + entry.dropFirst() }
-            return entry.hasPrefix("/") ? entry : nil
-        }
+        LoginDirs.entries(setting, home: home)
     }
 
     // MARK: - Scan
 
-    // Never listed. The folders macOS guards (Desktop, Documents, Downloads and
-    // the media ones) would each raise a permission prompt the moment we looked
-    // inside; Library and the package and VCS dirs are large and never hold a
-    // login. A dir in any of them is found once it runs, or from the setting.
-    static let skippedNames: Set<String> = [
-        "Desktop", "Documents", "Downloads", "Movies", "Music", "Pictures",
-        "Library", ".Trash", "node_modules", ".git",
-    ]
-
-    // Every dir up to two levels under home holding a .claude.json: home's own
-    // children (~/.claude-work) and theirs (~/accounts/work). It only looks for
-    // the file; whether there's a login in it is discover's question.
+    // Every dir up to two levels under home holding a .claude.json (see
+    // LoginDirs.scan). It only looks for the file; whether there's a login in it
+    // is discover's question.
     static func scan(home: String = NSHomeDirectory(),
                      fileManager: FileManager = .default) -> [String] {
-        var found: [String] = []
-        var level = [home]
-        for _ in 0..<2 {
-            var next: [String] = []
-            for parent in level {
-                let names = (try? fileManager.contentsOfDirectory(atPath: parent)) ?? []
-                for name in names where !skippedNames.contains(name) {
-                    let path = "\(parent)/\(name)"
-                    var isDirectory: ObjCBool = false
-                    guard fileManager.fileExists(atPath: path, isDirectory: &isDirectory),
-                          isDirectory.boolValue
-                    else { continue }
-                    if fileManager.fileExists(atPath: "\(path)/.claude.json") { found.append(path) }
-                    next.append(path)
-                }
-            }
-            level = next
+        LoginDirs.scan(home: home, fileManager: fileManager) {
+            fileManager.fileExists(atPath: "\($0)/.claude.json")
         }
-        return found
     }
 
     // MARK: - Running
 
-    // CLAUDE_CONFIG_DIR of every `claude` running now, from one `ps` for the
-    // pids and one `ps eww` for their environments. Only our own processes'
-    // environments are readable, which are the only ones we want.
+    // CLAUDE_CONFIG_DIR of every `claude` running now.
     static func running() -> [String] {
-        let table = ProcessOutput.read("/bin/ps", ["-axo", "pid=,args="], timeout: 2) ?? ""
-        let values = EnvVarTerminalIntegration.envValueMap(
-            forPids: claudePids(psOutput: table), envVar: "CLAUDE_CONFIG_DIR")
-        return Set(values.values).filter { $0.hasPrefix("/") }.sorted()
+        LoginDirs.running(agent: "claude", envVar: "CLAUDE_CONFIG_DIR")
     }
 
-    // Pids of the `claude` lines in `ps -axo pid=,args=` output, by
-    // SessionStore's definition of one.
     static func claudePids(psOutput: String) -> [Int] {
-        psOutput.split(separator: "\n").compactMap { raw in
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            guard let space = line.firstIndex(of: " "), let pid = Int(line[..<space]) else { return nil }
-            let args = line[space...].trimmingCharacters(in: .whitespaces)
-            return SessionStore.detectAgent(args: args) == "claude" ? pid : nil
-        }
+        LoginDirs.pids(psOutput: psOutput, agent: "claude")
     }
 
     // MARK: - Remembered
 
     static func remembered(path: String = rememberedPath) -> [String] {
-        let text = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
-        return text.split(separator: "\n").map(String.init).filter { $0.hasPrefix("/") }
+        LoginDirs.remembered(path: path)
     }
 
-    // Adds what's running to what was remembered, and drops a dir that's been
-    // deleted. One that's only signed out stays: signing back in brings its row
-    // back without waiting for that session to run again.
     static func remember(_ running: [String], path: String = rememberedPath,
                          fileManager: FileManager = .default) {
-        let previous = remembered(path: path)
-        let kept = Set(previous + running).filter { fileManager.fileExists(atPath: $0) }.sorted()
-        guard kept != previous else { return }
-        try? (kept.joined(separator: "\n") + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        LoginDirs.remember(running, path: path, fileManager: fileManager)
     }
 }

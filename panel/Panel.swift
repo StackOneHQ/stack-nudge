@@ -1204,6 +1204,22 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // every scanInterval.
     private var claudeConfigDirScan: (at: Date, dirs: [String])?
     private let codexQuotaProbe = CodexQuotaProbe()
+    // Codex logins other than the default one, by CODEX_HOME. See
+    // refreshOtherCodexLogins.
+    private var otherCodexProbes: [String: CodexQuotaProbe] = [:]
+    private var codexHomeScan: (at: Date, dirs: [String])?
+    // What adoptCodexLogins works from: the homes found, in order, and the
+    // latest account and snapshot each one's probe reported. Each is held
+    // across a reading that didn't say, as the default login's are.
+    private var codexHomes: [String] = []
+    private var codexHomeAccounts: [String: CodexAccount] = [:]
+    private var codexHomeSnapshots: [String: (snapshot: CodexQuotaSnapshot, at: Date)] = [:]
+    // CodexAccount.id of the default login, so an extra home signed in to the
+    // same account isn't a second row of the same numbers.
+    private var codexDefaultAccount: String?
+    // When each extra home's alerts last looked at its numbers, since its probe
+    // hands back the same reading until it's due again.
+    private var lastCodexAlertAt: [String: Date] = [:]
     private let antigravityUsageProbe = AntigravityUsageProbe()
     // Lazy because it shares the nav's history store rather than opening its
     // own, so pi's transcripts are parsed once for the graph and the budget.
@@ -2379,18 +2395,34 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self.nav.quotaErrors[.claude] = "Couldn't refresh — run `claude /usage` to check your session."
             }
         }
-        // Codex (ChatGPT-plan) rate limits — read locally from the newest
-        // rollout, no network. Independent of the Anthropic probe above so one
-        // failing/absent doesn't suppress the other. No error branch: a nil here
-        // means no rollout, or API-key auth (Codex emits no rate_limits) — both
+        // Codex (ChatGPT-plan) rate limits and the account they belong to, from
+        // `codex app-server`, or the newest rollout where that can't answer (see
+        // CodexQuotaProbe). Independent of the Anthropic probe above so one
+        // failing/absent doesn't suppress the other. No error branch: no snapshot
+        // means no rollout, or API-key auth (Codex emits no rate_limits), both
         // "nothing to show", not a failure. There's no signal that distinguishes
         // a genuine Codex break from simply not using it, so surfacing an error
         // would only invent phantom rows for non-Codex users.
-        codexQuotaProbe.fetch { [weak self] snapshot in
-            guard let self, let snapshot else { return }
+        codexQuotaProbe.fetch { [weak self] reading in
+            guard let self else { return }
+            // Held like the snapshot: a tick that fell back to the rollout
+            // doesn't know the account, which doesn't mean it changed.
+            if let account = reading.account {
+                if self.nav.codexDefaultInfo != account.info { self.nav.codexDefaultInfo = account.info }
+                if self.codexDefaultAccount != account.id {
+                    // The old account's peaks, or the new one only alerts once
+                    // it passes them.
+                    let prefix = Self.codexAlertKeyPrefix(nil)
+                    self.quotaLastFired = self.quotaLastFired.filter { !$0.key.hasPrefix(prefix) }
+                    self.codexDefaultAccount = account.id
+                    self.adoptCodexLogins()
+                }
+            }
+            guard let snapshot = reading.snapshot else { return }
             self.nav.codexQuota = snapshot
             self.nav.quotaLastUpdated = Date()
             self.nav.quotaUpdatedAt[.codex] = Date()
+            self.evaluateQuotaThresholds(snapshot)
         }
         // Antigravity (agy) usage — read from the running CLI's loopback RPC
         // (localhost only, no auth). Independent of the probes above. Unlike
@@ -2417,6 +2449,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
         refreshPiUsage()
         refreshOtherClaudeAccounts()
+        refreshOtherCodexLogins()
     }
 
     // Every other Claude login on this machine (see ClaudeConfigDirs) gets the
@@ -2511,6 +2544,105 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             nav.quotaErrors[client] =
                 "Couldn't refresh. Run `CLAUDE_CONFIG_DIR=\(login.configDir) claude /usage` to check this login."
         }
+    }
+
+    // Every other Codex login on this machine (see CodexHomes) gets the default
+    // one's app-server exchange with CODEX_HOME set, at most every
+    // CodexHomes.refreshInterval, and its own row in the Usage tab once its
+    // account/read says who it is.
+    private func refreshOtherCodexLogins() {
+        let lastScan = codexHomeScan
+        // Lists dirs and runs ps, so off main.
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let scan = lastScan.flatMap {
+                Date().timeIntervalSince($0.at) < CodexHomes.scanInterval ? $0 : nil
+            } ?? (at: Date(), dirs: CodexHomes.scan())
+            let running = CodexHomes.running()
+            CodexHomes.remember(running)
+            let homes = CodexHomes.candidates(found: scan.dirs + CodexHomes.remembered() + running)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.codexHomeScan = scan
+                guard self.quotaTrackingEnabled else { return }
+                let kept = Set(homes)
+                self.codexHomes = homes
+                self.otherCodexProbes = self.otherCodexProbes.filter { kept.contains($0.key) }
+                self.codexHomeAccounts = self.codexHomeAccounts.filter { kept.contains($0.key) }
+                self.codexHomeSnapshots = self.codexHomeSnapshots.filter { kept.contains($0.key) }
+                self.lastCodexAlertAt = self.lastCodexAlertAt.filter { kept.contains($0.key) }
+                self.adoptCodexLogins()
+                for home in homes {
+                    let probe = self.otherCodexProbes[home]
+                        ?? CodexQuotaProbe(codexHome: home, minInterval: CodexHomes.refreshInterval)
+                    self.otherCodexProbes[home] = probe
+                    probe.fetch { [weak self] reading in
+                        self?.applyCodexHomeReading(home, reading: reading)
+                    }
+                }
+            }
+        }
+    }
+
+    private func applyCodexHomeReading(_ home: String, reading: CodexQuotaProbe.Reading) {
+        // Gone while the probe ran.
+        guard codexHomes.contains(home) else { return }
+        if let account = reading.account {
+            // A held snapshot is the previous account's.
+            if codexHomeAccounts[home]?.id != account.id { codexHomeSnapshots[home] = nil }
+            codexHomeAccounts[home] = account
+        }
+        if let snapshot = reading.snapshot { codexHomeSnapshots[home] = (snapshot, reading.measuredAt) }
+        adoptCodexLogins()
+        // Only a fresh reading: a held one was evaluated when it came in.
+        if let snapshot = reading.snapshot, let login = nav.codexLogins.first(where: { $0.codexHome == home }),
+           reading.measuredAt != lastCodexAlertAt[home] {
+            lastCodexAlertAt[home] = reading.measuredAt
+            evaluateQuotaThresholds(snapshot, login: login)
+        }
+    }
+
+    // Recomputes the extra Codex rows from what the probes last said. A login
+    // that's gone (signed out, dir removed, or now the default's account) takes
+    // its row, numbers and alert state with it. One whose home is now signed in
+    // to another account keeps its row, but the old account's numbers and alert
+    // state go first.
+    private func adoptCodexLogins() {
+        let logins = CodexHomes.logins(candidates: codexHomes, accounts: codexHomeAccounts,
+                                       defaultAccount: codexDefaultAccount)
+        let previous = Dictionary(nav.codexLogins.map { ($0.codexHome, $0) }, uniquingKeysWith: { first, _ in first })
+        let kept = Set(logins.map(\.codexHome))
+        for gone in nav.codexLogins where !kept.contains(gone.codexHome) {
+            forgetCodexLogin(gone)
+        }
+        for login in logins {
+            if let before = previous[login.codexHome], before.account != login.account {
+                forgetCodexLogin(before)
+            }
+        }
+        // Compared field by field, since == only looks at the home.
+        if logins.map(\.label) != nav.codexLogins.map(\.label)
+            || logins.map(\.info) != nav.codexLogins.map(\.info)
+            || logins.map(\.account) != nav.codexLogins.map(\.account)
+            || logins != nav.codexLogins {
+            nav.codexLogins = logins
+        }
+        for login in logins {
+            guard let held = codexHomeSnapshots[login.codexHome],
+                  nav.codexLoginQuotas[login.codexHome] != held.snapshot
+                    || nav.quotaUpdatedAt[.codexLogin(login)] != held.at
+            else { continue }
+            nav.codexLoginQuotas[login.codexHome] = held.snapshot
+            nav.quotaUpdatedAt[.codexLogin(login)] = held.at
+        }
+    }
+
+    private func forgetCodexLogin(_ login: CodexLogin) {
+        let client = UsageClient.codexLogin(login)
+        nav.codexLoginQuotas[login.codexHome] = nil
+        nav.quotaUpdatedAt[client] = nil
+        nav.quotaErrors[client] = nil
+        let prefix = Self.codexAlertKeyPrefix(login)
+        quotaLastFired = quotaLastFired.filter { !$0.key.hasPrefix(prefix) }
     }
 
     // Pi budget, read from pi's own transcripts with no network and no CLI.
@@ -2615,29 +2747,51 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // own prefix, so each login climbs through the buckets on its own numbers.
     static func quotaAlertKeyPrefix(_ login: ClaudeLogin) -> String { "\(login.configDir)|" }
 
+    // Codex's, default login and every other, under prefixes no Claude key
+    // shares. Each has a "|" so a switch of the default Claude login, which
+    // clears every key without one, leaves them be.
+    static func codexAlertKeyPrefix(_ login: CodexLogin?) -> String {
+        login.map { "codex:\($0.codexHome)|" } ?? "codex|"
+    }
+
     // `login` is nil for the default one, whose banners stay as they were; any
     // other names itself, or two logins at 80% would read as one.
     private func evaluateQuotaThresholds(_ snapshot: QuotaSnapshot, login: ClaudeLogin? = nil) {
-        guard nav.quotaAlertsEnabled else { return }
-        // Respect the global Banner notifications toggle — quota alerts
-        // are system-level banners and shouldn't bypass it.
-        guard nav.bannerEnabled else { return }
-        let threshold = Double(nav.quotaAlertThreshold)
-
         let tiers: [(name: String, label: String, tier: QuotaTier?)] = [
             ("five_hour",        "Session",         snapshot.fiveHour),
             ("seven_day",        "Weekly",          snapshot.sevenDay),
             ("seven_day_opus",   "Weekly (Opus)",   snapshot.sevenDayOpus),
             ("seven_day_sonnet", "Weekly (Sonnet)", snapshot.sevenDaySonnet),
         ]
+        let keyPrefix = login.map(Self.quotaAlertKeyPrefix) ?? ""
+        evaluateQuotaThresholds(tiers.compactMap { tierName, tierLabel, tier in
+            tier.map { (keyPrefix + tierName, login.map { "\($0.label) · \(tierLabel)" } ?? tierLabel, $0) }
+        })
+    }
+
+    // Codex's banners name Codex, the default login's included. Claude's
+    // default ones say only the tier, from before there was a second client to
+    // alert on.
+    private func evaluateQuotaThresholds(_ snapshot: CodexQuotaSnapshot, login: CodexLogin? = nil) {
+        let keyPrefix = Self.codexAlertKeyPrefix(login)
+        let client = login.map { "Codex · \($0.label)" } ?? "Codex"
+        evaluateQuotaThresholds(snapshot.alertTiers.map {
+            (keyPrefix + $0.key, "\(client) · \($0.label)", $0.tier)
+        })
+    }
+
+    // Each tier's alert state is kept under `name`; `label` is what its banner
+    // calls it.
+    private func evaluateQuotaThresholds(_ tiers: [(name: String, label: String, tier: QuotaTier)]) {
+        guard nav.quotaAlertsEnabled else { return }
+        // Respect the global Banner notifications toggle: quota alerts
+        // are system-level banners and shouldn't bypass it.
+        guard nav.bannerEnabled else { return }
+        let threshold = Double(nav.quotaAlertThreshold)
 
         let bucketSize = Self.quotaBucketSize
 
-        let keyPrefix = login.map(Self.quotaAlertKeyPrefix) ?? ""
-        for (tierName, tierLabel, tier) in tiers {
-            guard let tier else { continue }
-            let name = keyPrefix + tierName
-            let label = login.map { "\($0.label) · \(tierLabel)" } ?? tierLabel
+        for (name, label, tier) in tiers {
             var state = quotaLastFired[name] ?? (maxBucketFired: 0, peakUtil: 0)
 
             // Heuristic period-rollover: a >30 pp drop from our running
