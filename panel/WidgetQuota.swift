@@ -74,22 +74,24 @@ struct WidgetQuota: Equatable {
         return QuotaWindow.shortName(length)
     }
 
+    // `claude` is the selected Claude row's snapshot, the default login's or
+    // another's; the caller resolves which.
     static func make(client: UsageClient?,
                      claude: QuotaSnapshot?,
                      codex: CodexQuotaSnapshot?,
                      antigravity: AntigravityQuotaSnapshot?,
                      pi: PiQuotaSnapshot?) -> WidgetQuota {
         switch client {
-        case .claude:
+        case .claude, .claudeLogin:
             // A verified Ultra account has no session window: the usage API
             // reports `five_hour: null`. The week is then the window that blocks
             // you first, so it takes the inner ring, and with it the countdown
             // and the border, as Codex's weekly-only window already does.
             if claude?.fiveHour == nil, let week = claude?.sevenDay {
-                return WidgetQuota(client: .claude, short: week, long: nil,
+                return WidgetQuota(client: client, short: week, long: nil,
                                    shortLabel: ringLabel(week, fallback: "7d"), longLabel: "7d")
             }
-            return WidgetQuota(client: .claude,
+            return WidgetQuota(client: client,
                                short: claude?.fiveHour, long: claude?.sevenDay,
                                shortLabel: "5h", longLabel: "7d")
         case .codex:
@@ -148,6 +150,9 @@ extension UsageClient {
     var widgetTag: String {
         switch self {
         case .claude:      return "Claude"
+        // Which login, since "Claude" would read the same as the default one.
+        // Cut short: the legend slot is narrow.
+        case .claudeLogin(let login): return String(login.label.prefix(10))
         case .codex:       return "Codex"
         case .antigravity: return "Agy"
         case .pi:          return "Pi"

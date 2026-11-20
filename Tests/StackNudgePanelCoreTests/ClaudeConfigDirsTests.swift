@@ -38,11 +38,9 @@ final class ClaudeConfigDirsTests: XCTestCase {
         try makeDir("\(home)/work-claude", account: "work")
         try makeDir("\(home)/accounts/side", account: "side")
         let actual = discover(home, defaultAccount: "me")
-        XCTAssertEqual(actual, [
-            .init(path: "\(home)/.claude-org-publisher", account: "org"),
-            .init(path: "\(home)/accounts/side", account: "side"),
-            .init(path: "\(home)/work-claude", account: "work"),
-        ])
+        XCTAssertEqual(actual.map(\.path), ["\(home)/.claude-org-publisher", "\(home)/accounts/side",
+                                            "\(home)/work-claude"])
+        XCTAssertEqual(actual.map(\.account), ["org", "side", "work"])
     }
 
     func testScansTwoLevelsDownAndNoFurther() throws {
@@ -84,7 +82,8 @@ final class ClaudeConfigDirsTests: XCTestCase {
         let home = try makeHome()
         try makeDir("\(home)/.claude-team", account: "me", organization: "team")
         let actual = discover(home, defaultAccount: "me/personal")
-        XCTAssertEqual(actual, [.init(path: "\(home)/.claude-team", account: "me/team")])
+        XCTAssertEqual(actual.map(\.path), ["\(home)/.claude-team"])
+        XCTAssertEqual(actual.map(\.account), ["me/team"])
     }
 
     func testReadsTheSettingFirstAndOnlyOnce() throws {
@@ -131,6 +130,55 @@ final class ClaudeConfigDirsTests: XCTestCase {
         try FileManager.default.removeItem(atPath: work)
         ClaudeConfigDirs.remember([], path: file)
         XCTAssertEqual(ClaudeConfigDirs.remembered(path: file), [])
+    }
+
+    // MARK: - Labels
+
+    private func login(_ organizationName: String?) -> ClaudeUsageCache.Login {
+        ClaudeUsageCache.Login(id: "x", organizationName: organizationName, email: "a@b.c")
+    }
+
+    func testNamesALoginByItsOrganization() {
+        XCTAssertEqual(ClaudeConfigDirs.label(for: login("Stackone"), path: "/h/.claude-org-publisher"),
+                       "Stackone")
+    }
+
+    // A personal plan's organization is named after the email, which says
+    // nothing the row needs; the dir's own name does.
+    func testNamesAPersonalPlanByItsDir() {
+        XCTAssertEqual(ClaudeConfigDirs.label(for: login("a@b.c's Organization"), path: "/h/.claude-side"),
+                       "side")
+        XCTAssertEqual(ClaudeConfigDirs.label(for: login(nil), path: "/h/elsewhere/work"), "work")
+        XCTAssertEqual(ClaudeConfigDirs.label(for: login("  "), path: "/h/.claude-x"), "x")
+    }
+
+    // The card's account line: the email, then the team, or "Personal" for
+    // your own plan rather than the "<email>'s Organization" it's filed under.
+    func testDescribesWhoALoginIsSignedInAs() {
+        XCTAssertEqual(login("Stackone").info.line, "a@b.c · Stackone")
+        XCTAssertEqual(login("a@b.c's Organization").info.line, "a@b.c · Personal")
+        XCTAssertEqual(ClaudeAccountInfo().line, nil)
+    }
+
+    func testLabelsTheDirsItFinds() throws {
+        let home = try makeHome()
+        let path = try makeDir("\(home)/.claude-team", account: "me", organization: "team")
+        let file = "\(path)/.claude.json"
+        try Data(#"{"oauthAccount":{"accountUuid":"me","organizationUuid":"team","organizationName":"Stackone"}}"#.utf8)
+            .write(to: URL(fileURLWithPath: file))
+        let actual = discover(home, defaultAccount: nil)
+        XCTAssertEqual(actual.map(\.label), ["Stackone"])
+        XCTAssertEqual(actual.map(\.info.organization), ["Stackone"])
+    }
+
+    // MARK: - History
+
+    // Another login's transcripts are under its own dir, and parse as Claude's.
+    func testReadsAnotherLoginsHistoryFromItsOwnDir() {
+        XCTAssertEqual(UsageHistoryStore.Source.claudeLogin(configDir: "/h/.claude-team").defaultRoot,
+                       "/h/.claude-team/projects")
+        XCTAssertEqual(UsageClient.claudeLogin(ClaudeLogin(configDir: "/h/.claude-team", label: "t")).historySource,
+                       .claudeLogin(configDir: "/h/.claude-team"))
     }
 
     func testExpandsTildeAndDropsRelativeEntries() {

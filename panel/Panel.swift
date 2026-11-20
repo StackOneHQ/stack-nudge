@@ -2326,7 +2326,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self.nav.quotaClaudeLastUpdated = nil
                 self.nav.quotaUpdatedAt[.claude] = nil
                 self.nav.quotaErrors[.claude] = nil
-                self.quotaLastFired.removeAll()
+                // The default login's own keys: the others are prefixed (see
+                // quotaAlertKeyPrefix) and didn't switch.
+                self.quotaLastFired = self.quotaLastFired.filter { $0.key.contains("|") }
             }
             if let snapshot {
                 // When the numbers were measured, not when they arrived: a
@@ -2418,12 +2420,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     }
 
     // Every other Claude login on this machine (see ClaudeConfigDirs) gets the
-    // same probe as the default one, run with CLAUDE_CONFIG_DIR. Nothing else
-    // refreshes those accounts' usage: Claude Code only writes it to a dir's
-    // .claude.json when something asks, and the default probe only ever asks
-    // for the default login. The answer lands in that file, which is where
-    // anything else reading usage on this machine, the claude-usage extension
-    // included, picks it up.
+    // same probe as the default one, run with CLAUDE_CONFIG_DIR, and its own row
+    // in the Usage tab. Nothing else refreshes those accounts' usage: Claude
+    // Code only writes it to a dir's .claude.json when something asks, and the
+    // default probe only ever asks for the default login. The answer also lands
+    // in that file, which is where anything else reading usage on this machine,
+    // the claude-usage extension included, picks it up.
     private func refreshOtherClaudeAccounts() {
         let lastScan = claudeConfigDirScan
         // Discovery lists dirs, runs ps and reads a .claude.json per dir,
@@ -2434,22 +2436,80 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             } ?? (at: Date(), dirs: ClaudeConfigDirs.scan())
             let running = ClaudeConfigDirs.running()
             ClaudeConfigDirs.remember(running)
+            let defaultLogin = ClaudeUsageCache.login()
             let dirs = ClaudeConfigDirs.discover(
                 found: scan.dirs + ClaudeConfigDirs.remembered() + running,
-                defaultAccount: ClaudeUsageCache.currentAccount())
+                defaultAccount: defaultLogin?.id)
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.claudeConfigDirScan = scan
                 guard self.quotaTrackingEnabled else { return }
-                let paths = Set(dirs.map(\.path))
-                self.otherClaudeProbes = self.otherClaudeProbes.filter { paths.contains($0.key) }
-                for dir in dirs {
-                    let probe = self.otherClaudeProbes[dir.path] ?? ClaudeCliQuotaProbe(
-                        configDir: dir.path, cacheMaxAge: ClaudeCliQuotaProbe.otherAccountCacheMaxAge)
-                    self.otherClaudeProbes[dir.path] = probe
-                    probe.fetch { _ in }
+                if self.nav.claudeDefaultInfo != defaultLogin?.info {
+                    self.nav.claudeDefaultInfo = defaultLogin?.info
+                }
+                self.adoptClaudeLogins(dirs)
+                for login in self.nav.claudeLogins {
+                    let probe = self.otherClaudeProbes[login.configDir] ?? ClaudeCliQuotaProbe(
+                        configDir: login.configDir, cacheMaxAge: ClaudeCliQuotaProbe.otherAccountCacheMaxAge)
+                    self.otherClaudeProbes[login.configDir] = probe
+                    probe.fetch { [weak self] snapshot in
+                        self?.applyClaudeLoginProbe(login, probe: probe, snapshot: snapshot)
+                    }
                 }
             }
+        }
+    }
+
+    // A login that's gone (signed out, dir removed, or now the same account as
+    // the default) takes its row, its numbers and its alert state with it.
+    private func adoptClaudeLogins(_ dirs: [ClaudeConfigDirs.Dir]) {
+        let logins = dirs.map { ClaudeLogin(configDir: $0.path, label: $0.label, info: $0.info) }
+        let kept = Set(logins.map(\.configDir))
+        for gone in nav.claudeLogins where !kept.contains(gone.configDir) {
+            forgetClaudeLogin(gone)
+        }
+        otherClaudeProbes = otherClaudeProbes.filter { kept.contains($0.key) }
+        // Compared with the labels and accounts, which == ignores, so a renamed
+        // organization or a changed email still reaches the row.
+        if logins.map(\.label) != nav.claudeLogins.map(\.label)
+            || logins.map(\.info) != nav.claudeLogins.map(\.info)
+            || logins != nav.claudeLogins {
+            nav.claudeLogins = logins
+        }
+    }
+
+    private func forgetClaudeLogin(_ login: ClaudeLogin) {
+        let client = UsageClient.claudeLogin(login)
+        nav.claudeLoginQuotas[login.configDir] = nil
+        nav.quotaUpdatedAt[client] = nil
+        nav.quotaErrors[client] = nil
+        quotaLastFired = quotaLastFired.filter { !$0.key.hasPrefix(Self.quotaAlertKeyPrefix(login)) }
+    }
+
+    // The default probe's handling, per login. No missing-CLI branch: the
+    // default probe reports that once for every Claude row, and a login whose
+    // dir can't be probed has no row until it can.
+    private func applyClaudeLoginProbe(_ login: ClaudeLogin, probe: ClaudeCliQuotaProbe,
+                                       snapshot: QuotaSnapshot?) {
+        // Gone while the probe ran.
+        guard nav.claudeLogins.contains(login) else { return }
+        let client = UsageClient.claudeLogin(login)
+        if probe.accountChanged { forgetClaudeLogin(login) }
+        if let snapshot {
+            let measuredAt = probe.snapshotAsOf ?? Date()
+            nav.claudeLoginQuotas[login.configDir] = snapshot
+            nav.quotaErrors[client] = nil
+            nav.quotaUpdatedAt[client] = measuredAt
+            evaluateQuotaThresholds(snapshot, login: login)
+        } else if probe.cliMissing {
+            return
+        } else if probe.isRateLimited {
+            if nav.claudeLoginQuotas[login.configDir] == nil {
+                nav.quotaErrors[client] = "Claude Code didn't report this login's limits. Retrying shortly."
+            }
+        } else {
+            nav.quotaErrors[client] =
+                "Couldn't refresh. Run `CLAUDE_CONFIG_DIR=\(login.configDir) claude /usage` to check this login."
         }
     }
 
@@ -2551,7 +2611,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private static let quotaBucketSize: Int = 5
     private static let quotaResetDropThreshold: Double = 30   // pp
 
-    private func evaluateQuotaThresholds(_ snapshot: QuotaSnapshot) {
+    // An extra login's alert state is kept beside the default one's under its
+    // own prefix, so each login climbs through the buckets on its own numbers.
+    static func quotaAlertKeyPrefix(_ login: ClaudeLogin) -> String { "\(login.configDir)|" }
+
+    // `login` is nil for the default one, whose banners stay as they were; any
+    // other names itself, or two logins at 80% would read as one.
+    private func evaluateQuotaThresholds(_ snapshot: QuotaSnapshot, login: ClaudeLogin? = nil) {
         guard nav.quotaAlertsEnabled else { return }
         // Respect the global Banner notifications toggle — quota alerts
         // are system-level banners and shouldn't bypass it.
@@ -2567,8 +2633,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
         let bucketSize = Self.quotaBucketSize
 
-        for (name, label, tier) in tiers {
+        let keyPrefix = login.map(Self.quotaAlertKeyPrefix) ?? ""
+        for (tierName, tierLabel, tier) in tiers {
             guard let tier else { continue }
+            let name = keyPrefix + tierName
+            let label = login.map { "\($0.label) · \(tierLabel)" } ?? tierLabel
             var state = quotaLastFired[name] ?? (maxBucketFired: 0, peakUtil: 0)
 
             // Heuristic period-rollover: a >30 pp drop from our running

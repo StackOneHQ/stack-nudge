@@ -99,7 +99,7 @@ final class CompanionController {
             preview: nav.companionPreviewPose,
             muted: nav.isMuted,
             permissionWaiting: waiting.contains { $0.kind == .permission },
-            quotaStressed: nav.widgetQuota.peakUtilization >= Double(nav.quotaAlertThreshold),
+            quotaStressed: nav.stressPeakUtilization >= Double(nav.quotaAlertThreshold),
             eventWaiting: !waiting.isEmpty,
             sessionBusy: live.contains { $0.liveStatus == "busy" },
             quietFor: now.timeIntervalSince(quietSince))

@@ -436,6 +436,13 @@ final class PanelNav: ObservableObject {
     // poller in PanelController. nil before the first probe completes, or
     // when the probe failed (no `claude` on PATH, not signed in, parse error).
     @Published var quota:            QuotaSnapshot? { didSet { widgetQuotaCache = nil } }
+    // Claude logins other than the default one, in the order they were found
+    // (ClaudeConfigDirs), and the latest snapshot for each by config dir. Each
+    // gets its own row straight after the default Claude one.
+    @Published var claudeLogins:      [ClaudeLogin] = [] { didSet { widgetQuotaCache = nil } }
+    // Who the default login is, read with the others' (see ClaudeAccountInfo).
+    @Published var claudeDefaultInfo: ClaudeAccountInfo?
+    @Published var claudeLoginQuotas: [String: QuotaSnapshot] = [:] { didSet { widgetQuotaCache = nil } }
     // Any client's quota — all three stamp it — so "Updated Xm ago" describes the
     // pane as a whole.
     @Published var quotaLastUpdated: Date?
@@ -797,9 +804,30 @@ final class PanelNav: ObservableObject {
     private var usageSeriesScannedAt: Date?
     private var usageSeriesScanning = false
 
-    // Connected clients that currently have quota to show, in display order.
+    // Connected clients that currently have quota to show, in display order:
+    // the default Claude login, then every other one, then the rest.
     var availableUsageClients: [UsageClient] {
-        UsageClient.allCases.filter(isUsageClientAvailable)
+        let clients = UsageClient.fixedCases.flatMap { client in
+            client == .claude ? [client] + claudeLogins.map(UsageClient.claudeLogin) : [client]
+        }
+        return clients.filter(isUsageClientAvailable)
+    }
+
+    // Either Claude row's snapshot; nil for any other client.
+    func claudeInfo(for client: UsageClient) -> ClaudeAccountInfo? {
+        switch client {
+        case .claude:                 return claudeDefaultInfo
+        case .claudeLogin(let login): return login.info
+        default:                      return nil
+        }
+    }
+
+    func claudeQuota(for client: UsageClient) -> QuotaSnapshot? {
+        switch client {
+        case .claude:                 return quota
+        case .claudeLogin(let login): return claudeLoginQuotas[login.configDir]
+        default:                      return nil
+        }
     }
 
     // A client earns a row when it has a drawable tier, or when it has an error
@@ -811,7 +839,7 @@ final class PanelNav: ObservableObject {
     private func isUsageClientAvailable(_ client: UsageClient) -> Bool {
         if quotaErrors[client] != nil { return true }
         switch client {
-        case .claude:      return quota?.hasTier == true
+        case .claude, .claudeLogin: return claudeQuota(for: client)?.hasTier == true
         case .codex:       return codexQuota?.hasTier == true
         case .antigravity: return antigravityQuota?.hasTier == true
         case .pi:          return piQuota?.hasTier == true
@@ -854,19 +882,36 @@ final class PanelNav: ObservableObject {
     // Memoised because CompactView reads it from ~16 places per body pass and
     // the pill re-renders at 10Hz while an agent is busy — recomputing meant
     // rebuilding availableUsageClients every time. Invalidated by didSet on each
-    // of the five inputs it reads (the three snapshots, usageClientIndex, and
+    // input it reads (every snapshot, the Claude logins, usageClientIndex, and
     // quotaErrors), so the cache can't outlive its sources.
     private var widgetQuotaCache: WidgetQuota?
 
     var widgetQuota: WidgetQuota {
         if let widgetQuotaCache { return widgetQuotaCache }
         let value = WidgetQuota.make(client: selectedUsageClient,
-                                     claude: quota,
+                                     claude: selectedUsageClient.flatMap(claudeQuota(for:)),
                                      codex: codexQuota,
                                      antigravity: antigravityQuota,
                                      pi: piQuota)
         widgetQuotaCache = value
         return value
+    }
+
+    // The mascots' quota-stress signal: the selected client's tighter window, as
+    // the pill shows. With a Claude row selected it's every Claude login's
+    // instead, so a team seat running hot still shows while you're looking at
+    // your own plan, and the other way round.
+    var stressPeakUtilization: Double {
+        let selected = widgetQuota.peakUtilization
+        switch selectedUsageClient {
+        case .claude, .claudeLogin:
+            let logins = ([quota] + claudeLogins.map { claudeLoginQuotas[$0.configDir] })
+                .compactMap { $0 }
+                .map { max($0.fiveHour?.utilization ?? 0, $0.sevenDay?.utilization ?? 0) }
+            return max(selected, logins.max() ?? 0)
+        default:
+            return selected
+        }
     }
 
     // The cached series, but only when it belongs to the client on screen — a
