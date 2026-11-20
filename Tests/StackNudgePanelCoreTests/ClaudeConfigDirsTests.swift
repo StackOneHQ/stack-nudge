@@ -152,6 +152,14 @@ final class ClaudeConfigDirsTests: XCTestCase {
         XCTAssertEqual(ClaudeConfigDirs.label(for: login("  "), path: "/h/.claude-x"), "x")
     }
 
+    // The card's account line: the email, then the team, or "Personal" for
+    // your own plan rather than the "<email>'s Organization" it's filed under.
+    func testDescribesWhoALoginIsSignedInAs() {
+        XCTAssertEqual(login("Stackone").info.line, "a@b.c · Stackone")
+        XCTAssertEqual(login("a@b.c's Organization").info.line, "a@b.c · Personal")
+        XCTAssertEqual(ClaudeAccountInfo().line, nil)
+    }
+
     func testLabelsTheDirsItFinds() throws {
         let home = try makeHome()
         let path = try makeDir("\(home)/.claude-team", account: "me", organization: "team")
@@ -160,6 +168,7 @@ final class ClaudeConfigDirsTests: XCTestCase {
             .write(to: URL(fileURLWithPath: file))
         let actual = discover(home, defaultAccount: nil)
         XCTAssertEqual(actual.map(\.label), ["Stackone"])
+        XCTAssertEqual(actual.map(\.info.organization), ["Stackone"])
     }
 
     // MARK: - History

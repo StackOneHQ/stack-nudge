@@ -440,6 +440,8 @@ final class PanelNav: ObservableObject {
     // (ClaudeConfigDirs), and the latest snapshot for each by config dir. Each
     // gets its own row straight after the default Claude one.
     @Published var claudeLogins:      [ClaudeLogin] = [] { didSet { widgetQuotaCache = nil } }
+    // Who the default login is, read with the others' (see ClaudeAccountInfo).
+    @Published var claudeDefaultInfo: ClaudeAccountInfo?
     @Published var claudeLoginQuotas: [String: QuotaSnapshot] = [:] { didSet { widgetQuotaCache = nil } }
     // Any client's quota — all three stamp it — so "Updated Xm ago" describes the
     // pane as a whole.
@@ -812,6 +814,14 @@ final class PanelNav: ObservableObject {
     }
 
     // Either Claude row's snapshot; nil for any other client.
+    func claudeInfo(for client: UsageClient) -> ClaudeAccountInfo? {
+        switch client {
+        case .claude:                 return claudeDefaultInfo
+        case .claudeLogin(let login): return login.info
+        default:                      return nil
+        }
+    }
+
     func claudeQuota(for client: UsageClient) -> QuotaSnapshot? {
         switch client {
         case .claude:                 return quota

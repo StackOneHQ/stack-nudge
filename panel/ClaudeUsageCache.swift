@@ -57,6 +57,18 @@ enum ClaudeUsageCache {
         let id: String
         let organizationName: String?
         let email: String?
+
+        // The organization's name, unless it's a personal plan's: Claude Code
+        // names those "<email>'s Organization", which says nothing the email
+        // doesn't.
+        var teamName: String? {
+            guard let name = organizationName?.trimmingCharacters(in: .whitespaces), !name.isEmpty,
+                  !name.hasSuffix("'s Organization")
+            else { return nil }
+            return name
+        }
+
+        var info: ClaudeAccountInfo { ClaudeAccountInfo(email: email, organization: teamName ?? "Personal") }
     }
 
     static func login(path: String = ClaudeUsageCache.path) -> Login? {

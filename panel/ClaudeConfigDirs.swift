@@ -32,6 +32,8 @@ enum ClaudeConfigDirs {
         let account: String
         // How the Usage tab names it. See label(for:path:).
         var label: String = ""
+        // Who it's signed in as, for the top of its card.
+        var info = ClaudeAccountInfo()
     }
 
     // The organization's name, which is what tells a team seat from your own
@@ -40,10 +42,7 @@ enum ClaudeConfigDirs {
     // dir's own name ("org-publisher" for ~/.claude-org-publisher), as does a
     // login with no name at all.
     static func label(for login: ClaudeUsageCache.Login, path: String) -> String {
-        if let name = login.organizationName?.trimmingCharacters(in: .whitespaces), !name.isEmpty,
-           !name.hasSuffix("'s Organization") {
-            return name
-        }
+        if let name = login.teamName { return name }
         let base = (path as NSString).lastPathComponent
         let trimmed = base.hasPrefix(".claude-") ? String(base.dropFirst(".claude-".count)) : base
         return trimmed.isEmpty ? base : trimmed
@@ -69,7 +68,8 @@ enum ClaudeConfigDirs {
                   let login = ClaudeUsageCache.login(path: ClaudeUsageCache.path(configDir: path)),
                   seenAccounts.insert(login.id).inserted
             else { continue }
-            dirs.append(Dir(path: path, account: login.id, label: label(for: login, path: path)))
+            dirs.append(Dir(path: path, account: login.id, label: label(for: login, path: path),
+                            info: login.info))
         }
         return dirs
     }

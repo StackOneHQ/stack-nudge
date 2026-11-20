@@ -2436,13 +2436,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             } ?? (at: Date(), dirs: ClaudeConfigDirs.scan())
             let running = ClaudeConfigDirs.running()
             ClaudeConfigDirs.remember(running)
+            let defaultLogin = ClaudeUsageCache.login()
             let dirs = ClaudeConfigDirs.discover(
                 found: scan.dirs + ClaudeConfigDirs.remembered() + running,
-                defaultAccount: ClaudeUsageCache.currentAccount())
+                defaultAccount: defaultLogin?.id)
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.claudeConfigDirScan = scan
                 guard self.quotaTrackingEnabled else { return }
+                if self.nav.claudeDefaultInfo != defaultLogin?.info {
+                    self.nav.claudeDefaultInfo = defaultLogin?.info
+                }
                 self.adoptClaudeLogins(dirs)
                 for login in self.nav.claudeLogins {
                     let probe = self.otherClaudeProbes[login.configDir] ?? ClaudeCliQuotaProbe(
@@ -2459,15 +2463,17 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // A login that's gone (signed out, dir removed, or now the same account as
     // the default) takes its row, its numbers and its alert state with it.
     private func adoptClaudeLogins(_ dirs: [ClaudeConfigDirs.Dir]) {
-        let logins = dirs.map { ClaudeLogin(configDir: $0.path, label: $0.label) }
+        let logins = dirs.map { ClaudeLogin(configDir: $0.path, label: $0.label, info: $0.info) }
         let kept = Set(logins.map(\.configDir))
         for gone in nav.claudeLogins where !kept.contains(gone.configDir) {
             forgetClaudeLogin(gone)
         }
         otherClaudeProbes = otherClaudeProbes.filter { kept.contains($0.key) }
-        // Compared with the labels, which == ignores, so a renamed organization
-        // still reaches the row.
-        if logins.map(\.label) != nav.claudeLogins.map(\.label) || logins != nav.claudeLogins {
+        // Compared with the labels and accounts, which == ignores, so a renamed
+        // organization or a changed email still reaches the row.
+        if logins.map(\.label) != nav.claudeLogins.map(\.label)
+            || logins.map(\.info) != nav.claudeLogins.map(\.info)
+            || logins != nav.claudeLogins {
             nav.claudeLogins = logins
         }
     }

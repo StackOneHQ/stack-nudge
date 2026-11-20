@@ -100,9 +100,22 @@ struct ClaudeLogin: Hashable {
     let configDir: String
     // The organization's name, or what stands in for one (see ClaudeConfigDirs).
     let label: String
+    var info = ClaudeAccountInfo()
 
     static func == (lhs: ClaudeLogin, rhs: ClaudeLogin) -> Bool { lhs.configDir == rhs.configDir }
     func hash(into hasher: inout Hasher) { hasher.combine(configDir) }
+}
+
+// Who a Claude login is signed in as, shown at the top of its card: with two
+// logins on one machine the plan alone doesn't say which account is which.
+struct ClaudeAccountInfo: Equatable {
+    var email: String?
+    var organization: String?
+
+    var line: String? {
+        let parts = [email, organization].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
 }
 
 // Panes of the Usage tab's inner carousel, in step order. → walks forward while
@@ -266,6 +279,9 @@ struct UsageView: View {
     private func quotaPane(for client: UsageClient) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                if let line = nav.claudeInfo(for: client)?.line {
+                    accountLine(line)
+                }
                 if let message = nav.quotaErrors[client] {
                     if hasTier(client) {
                         // Held-stale: mark the bars as not-current, but keep
@@ -303,6 +319,15 @@ struct UsageView: View {
         case .antigravity: return nav.antigravityQuota?.hasTier ?? false
         case .pi:          return nav.piQuota?.hasTier ?? false
         }
+    }
+
+    private func accountLine(_ line: String) -> some View {
+        Label(line, systemImage: "person.crop.circle")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .padding(.horizontal, 6)
     }
 
     // Shown above a client's bars when its latest refresh failed but a prior
