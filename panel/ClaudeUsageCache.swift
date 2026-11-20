@@ -68,7 +68,7 @@ enum ClaudeUsageCache {
             return name
         }
 
-        var info: ClaudeAccountInfo { ClaudeAccountInfo(email: email, organization: teamName ?? "Personal") }
+        var info: AccountInfo { AccountInfo(email: email, organization: teamName ?? "Personal") }
     }
 
     static func login(path: String = ClaudeUsageCache.path) -> Login? {

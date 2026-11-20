@@ -15,6 +15,25 @@ struct CodexQuotaSnapshot: Equatable {
     var hasTier: Bool { primary != nil || secondary != nil }
 }
 
+// Who a Codex login is signed in as, from the app-server's `account/read`.
+// Never from auth.json, which holds the tokens.
+struct CodexAccount: Equatable {
+    // "chatgpt" or "apiKey".
+    var type: String?
+    var email: String?
+    var planType: String?
+    // The ChatGPT workspace the login meters against: one person in their own
+    // plan and in a team workspace has the same email in both, but separate
+    // limits.
+    var chatgptAccountId: String?
+
+    // What tells two logins apart. The email stands in on a build that doesn't
+    // report the workspace; an API-key login has neither, and no limits either.
+    var id: String? { chatgptAccountId ?? email }
+
+    var info: AccountInfo { AccountInfo(email: email) }
+}
+
 // Codex account rate limits: `codex app-server` where it's available, and the
 // newest rollout JSONL under ~/.codex/sessions where it isn't.
 //
@@ -25,8 +44,8 @@ struct CodexQuotaSnapshot: Equatable {
 // two-day-old rollout read 29% against a live 36%, inside the same window
 // instance, with no 5-hour window at all. Hence app-server first.
 //
-// nil for API-key auth or when neither source has anything, which the Usage tab
-// treats as "no Codex usage to show".
+// No snapshot for API-key auth or when neither source has anything, which the
+// Usage tab treats as "no Codex usage to show".
 final class CodexQuotaProbe {
 
     private let sessionsDir = "\(NSHomeDirectory())/.codex/sessions"
@@ -47,30 +66,40 @@ final class CodexQuotaProbe {
     // can't race on cacheKey/cached. These are only ever touched on this queue.
     private let probeQueue = DispatchQueue(label: "stack-nudge.codex-quota")
 
+    // The limits, and who they belong to when app-server said. The rollout
+    // fallback never knows the account.
+    struct Reading: Equatable {
+        var snapshot: CodexQuotaSnapshot?
+        var account: CodexAccount?
+    }
+
     // Calls completion on the main queue. The app-server exchange and file IO
     // both run off-main.
-    func fetch(completion: @escaping (CodexQuotaSnapshot?) -> Void) {
+    func fetch(completion: @escaping (Reading) -> Void) {
         let dir = sessionsDir
         probeQueue.async { [weak self] in
-            let result = self?.read(dir: dir) ?? nil
-            DispatchQueue.main.async { completion(result) }
+            let reading = self?.read(dir: dir) ?? Reading()
+            DispatchQueue.main.async { completion(reading) }
         }
     }
 
-    private func read(dir: String) -> CodexQuotaSnapshot? {
+    private func read(dir: String) -> Reading {
+        var account: CodexAccount?
         if appServerSupported {
             switch CodexAppServer.fetch() {
-            case .ok(let snapshot):
-                return snapshot
+            case .ok(let snapshot, let reported):
+                return Reading(snapshot: snapshot, account: reported)
             case .unsupported:
                 appServerSupported = false
             // Neither says anything about whether the subcommand exists, so
-            // neither latches — but both fall through to the rollout.
-            case .empty, .cliMissing:
+            // neither latches, but both fall through to the rollout.
+            case .empty(let reported):
+                account = reported
+            case .cliMissing:
                 break
             }
         }
-        return rollout(dir: dir)
+        return Reading(snapshot: rollout(dir: dir), account: account)
     }
 
     private func rollout(dir: String) -> CodexQuotaSnapshot? {

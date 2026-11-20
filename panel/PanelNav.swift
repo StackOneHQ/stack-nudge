@@ -440,8 +440,8 @@ final class PanelNav: ObservableObject {
     // (ClaudeConfigDirs), and the latest snapshot for each by config dir. Each
     // gets its own row straight after the default Claude one.
     @Published var claudeLogins:      [ClaudeLogin] = [] { didSet { widgetQuotaCache = nil } }
-    // Who the default login is, read with the others' (see ClaudeAccountInfo).
-    @Published var claudeDefaultInfo: ClaudeAccountInfo?
+    // Who the default login is, read with the others' (see AccountInfo).
+    @Published var claudeDefaultInfo: AccountInfo?
     @Published var claudeLoginQuotas: [String: QuotaSnapshot] = [:] { didSet { widgetQuotaCache = nil } }
     // Any client's quota — all three stamp it — so "Updated Xm ago" describes the
     // pane as a whole.
@@ -488,6 +488,8 @@ final class PanelNav: ObservableObject {
     // Codex (ChatGPT-plan) rate limits for the Usage tab, populated by
     // CodexQuotaProbe — the Codex analogue of `quota` above.
     @Published var codexQuota: CodexQuotaSnapshot? { didSet { widgetQuotaCache = nil } }
+    // Who the default Codex login is, from the same app-server exchange.
+    @Published var codexDefaultInfo: AccountInfo?
     // Antigravity (agy) usage from the running CLI's loopback RPC, populated by
     // AntigravityUsageProbe — the agy analogue of `quota`/`codexQuota`.
     @Published var antigravityQuota: AntigravityQuotaSnapshot? { didSet { widgetQuotaCache = nil } }
@@ -813,15 +815,18 @@ final class PanelNav: ObservableObject {
         return clients.filter(isUsageClientAvailable)
     }
 
-    // Either Claude row's snapshot; nil for any other client.
-    func claudeInfo(for client: UsageClient) -> ClaudeAccountInfo? {
+    // Who the row's login is, for the top of its card; nil for a client with
+    // no login to name.
+    func accountInfo(for client: UsageClient) -> AccountInfo? {
         switch client {
         case .claude:                 return claudeDefaultInfo
         case .claudeLogin(let login): return login.info
+        case .codex:                  return codexDefaultInfo
         default:                      return nil
         }
     }
 
+    // Either Claude row's snapshot; nil for any other client.
     func claudeQuota(for client: UsageClient) -> QuotaSnapshot? {
         switch client {
         case .claude:                 return quota

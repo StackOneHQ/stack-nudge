@@ -33,7 +33,7 @@ enum ClaudeConfigDirs {
         // How the Usage tab names it. See label(for:path:).
         var label: String = ""
         // Who it's signed in as, for the top of its card.
-        var info = ClaudeAccountInfo()
+        var info = AccountInfo()
     }
 
     // The organization's name, which is what tells a team seat from your own

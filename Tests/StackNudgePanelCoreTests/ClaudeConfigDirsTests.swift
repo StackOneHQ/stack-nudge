@@ -157,7 +157,7 @@ final class ClaudeConfigDirsTests: XCTestCase {
     func testDescribesWhoALoginIsSignedInAs() {
         XCTAssertEqual(login("Stackone").info.line, "a@b.c · Stackone")
         XCTAssertEqual(login("a@b.c's Organization").info.line, "a@b.c · Personal")
-        XCTAssertEqual(ClaudeAccountInfo().line, nil)
+        XCTAssertEqual(AccountInfo().line, nil)
     }
 
     func testLabelsTheDirsItFinds() throws {

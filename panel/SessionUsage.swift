@@ -100,15 +100,16 @@ struct ClaudeLogin: Hashable {
     let configDir: String
     // The organization's name, or what stands in for one (see ClaudeConfigDirs).
     let label: String
-    var info = ClaudeAccountInfo()
+    var info = AccountInfo()
 
     static func == (lhs: ClaudeLogin, rhs: ClaudeLogin) -> Bool { lhs.configDir == rhs.configDir }
     func hash(into hasher: inout Hasher) { hasher.combine(configDir) }
 }
 
-// Who a Claude login is signed in as, shown at the top of its card: with two
-// logins on one machine the plan alone doesn't say which account is which.
-struct ClaudeAccountInfo: Equatable {
+// Who a login is signed in as, shown at the top of its card: with two logins
+// on one machine the plan alone doesn't say which account is which. Codex
+// reports no organization, so its line is the email alone.
+struct AccountInfo: Equatable {
     var email: String?
     var organization: String?
 
@@ -279,7 +280,7 @@ struct UsageView: View {
     private func quotaPane(for client: UsageClient) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                if let line = nav.claudeInfo(for: client)?.line {
+                if let line = nav.accountInfo(for: client)?.line {
                     accountLine(line)
                 }
                 if let message = nav.quotaErrors[client] {

@@ -65,7 +65,10 @@ Desktop, Documents, Downloads, Library or the media folders), reads
 `CLAUDE_CONFIG_DIR` from the environment of any `claude` you have running, and
 reads `STACKNUDGE_CLAUDE_CONFIG_DIRS`. Dirs found from a running `claude` are
 listed in `~/.stack-nudge/claude-config-dirs`, and nothing about them leaves your
-Mac.
+Mac. For Codex it asks `codex app-server` for the rate limits and,
+in the same exchange, `account/read` for the email you're signed in with, which
+it shows on the Codex card and keeps in memory only. It never opens Codex's
+`auth.json`.
 
 ## What is never sent, anywhere
 

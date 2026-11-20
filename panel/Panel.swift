@@ -2379,15 +2379,22 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self.nav.quotaErrors[.claude] = "Couldn't refresh — run `claude /usage` to check your session."
             }
         }
-        // Codex (ChatGPT-plan) rate limits — read locally from the newest
-        // rollout, no network. Independent of the Anthropic probe above so one
-        // failing/absent doesn't suppress the other. No error branch: a nil here
-        // means no rollout, or API-key auth (Codex emits no rate_limits) — both
+        // Codex (ChatGPT-plan) rate limits and the account they belong to, from
+        // `codex app-server`, or the newest rollout where that can't answer (see
+        // CodexQuotaProbe). Independent of the Anthropic probe above so one
+        // failing/absent doesn't suppress the other. No error branch: no snapshot
+        // means no rollout, or API-key auth (Codex emits no rate_limits), both
         // "nothing to show", not a failure. There's no signal that distinguishes
         // a genuine Codex break from simply not using it, so surfacing an error
         // would only invent phantom rows for non-Codex users.
-        codexQuotaProbe.fetch { [weak self] snapshot in
-            guard let self, let snapshot else { return }
+        codexQuotaProbe.fetch { [weak self] reading in
+            guard let self else { return }
+            // Held like the snapshot: a tick that fell back to the rollout
+            // doesn't know the account, which doesn't mean it changed.
+            if let account = reading.account, self.nav.codexDefaultInfo != account.info {
+                self.nav.codexDefaultInfo = account.info
+            }
+            guard let snapshot = reading.snapshot else { return }
             self.nav.codexQuota = snapshot
             self.nav.quotaLastUpdated = Date()
             self.nav.quotaUpdatedAt[.codex] = Date()
