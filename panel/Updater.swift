@@ -64,7 +64,7 @@ final class Updater {
 
     private weak var nav: PanelNav?
     private let session: URLSession
-    // Working directory under NSTemporaryDirectory() for the current run.
+    // Working directory under updatesRoot for the current run.
     // Holds the downloaded tarball and the extracted .app until the swap
     // moves the .app into ~/Applications/; cleanupTempDir() recycles it on
     // both success and failure (run() defers the call).
@@ -121,18 +121,26 @@ final class Updater {
         tmpDir = nil
     }
 
-    // Recycle any stack-nudge-update-* directory under NSTemporaryDirectory()
-    // left behind by a prior run that crashed, was force-quit, or failed
-    // before our defer-cleanup landed. Bounded by what's in /tmp; safe to
-    // call on every run() because the directories are UUID-namespaced and
-    // ours alone.
-    private static func sweepStaleTempDirs() {
+    // Every run's working directory lives in here, one UUID-named folder each.
+    // A folder of our own rather than siblings in NSTemporaryDirectory(): the
+    // sweep below used to list the whole temp dir to find them, and on a Mac
+    // where test suites had left 400k entries there that listing took
+    // minutes, with the update screen sat on "Preparing…" the whole time.
+    static func updatesRoot(temp: String = NSTemporaryDirectory()) -> URL {
+        URL(fileURLWithPath: temp).appendingPathComponent("stack-nudge-updates", isDirectory: true)
+    }
+
+    // Recycle any working directory left behind by a prior run that crashed,
+    // was force-quit, or failed before our defer-cleanup landed. Only ever
+    // lists updatesRoot, so its cost doesn't depend on what else is in the
+    // temp dir. Folders from versions before updatesRoot sit directly in the
+    // temp dir and are left to macOS's own temp cleanup.
+    static func sweepStaleTempDirs(root: URL = updatesRoot()) {
         let fm = FileManager.default
-        let root = URL(fileURLWithPath: NSTemporaryDirectory())
         guard let entries = try? fm.contentsOfDirectory(at: root,
                                                         includingPropertiesForKeys: nil)
         else { return }
-        for entry in entries where entry.lastPathComponent.hasPrefix("stack-nudge-update-") {
+        for entry in entries {
             try? fm.removeItem(at: entry)
         }
     }
@@ -509,9 +517,7 @@ final class Updater {
 
         // Write to a stable temp path so the rest of the pipeline can run
         // tar/xattr against it.
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("stack-nudge-update-\(UUID().uuidString)",
-                                    isDirectory: true)
+        let dir = Self.updatesRoot().appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: dir,
                                                 withIntermediateDirectories: true)
         // Record on the instance so cleanupTempDir() can recycle it once
