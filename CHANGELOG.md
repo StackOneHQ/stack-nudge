@@ -4,6 +4,13 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [2.9.0](https://github.com/StackOneHQ/stack-nudge/compare/v2.8.0...v2.9.0) (2026-11-22)
+
+
+### Features
+
+* **extensions:** check catalogues hourly and flag updates in Settings ([#265](https://github.com/StackOneHQ/stack-nudge/issues/265)) ([ae4b823](https://github.com/StackOneHQ/stack-nudge/commit/ae4b8233a8cb19ed34270483fde62fff1c39ca2a))
+
 ## [2.8.0](https://github.com/StackOneHQ/stack-nudge/compare/v2.7.0...v2.8.0) (2026-11-20)
 
 
