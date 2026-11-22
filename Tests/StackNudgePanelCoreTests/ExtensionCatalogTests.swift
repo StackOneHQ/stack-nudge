@@ -50,6 +50,132 @@ final class ExtensionCatalogTests: XCTestCase {
         XCTAssertEqual(hops, 3, "reload published without hopping to main")
     }
 
+    // MARK: - The background check
+
+    // A catalogue whose fetches wait until the test runs them, so it can act
+    // while one is in flight. `fetch` is read at the moment each one runs.
+    private final class Deferred {
+        var queued: [() -> Void] = []
+        var fetch: () -> Result<ExtensionInstaller.Catalogue, ExtensionInstaller.Failure> = { .success([]) }
+        var loads = 0
+        func runAll() { while !queued.isEmpty { queued.removeFirst()() } }
+    }
+
+    private func deferredCatalog(_ d: Deferred) -> ExtensionCatalog {
+        ExtensionCatalog(fetchCatalogue: { d.fetch() },
+                         performInstall: { .success($0.id) }, performRemove: { .success($0) },
+                         background: { d.queued.append($0) }, toMain: { $0() },
+                         didLoadCatalogue: { d.loads += 1 },
+                         recordedTiers: { [:] }, recordedSources: { [:] })
+    }
+
+    // Before anything has loaded there is nothing to keep quiet about, so the
+    // first check is an ordinary load.
+    func testTheFirstBackgroundCheckIsAPlainLoad() {
+        let d = Deferred()
+        d.fetch = { .success([self.entry("derby")]) }
+        let c = deferredCatalog(d)
+        c.refreshQuietly()
+        XCTAssertEqual(c.load, .loading)
+        d.runAll()
+        XCTAssertEqual(c.load, .loaded)
+        XCTAssertEqual(c.entries.map(\.version), ["1.0.0"])
+    }
+
+    // Once loaded, the check leaves the page as it is while it fetches and
+    // lands a new version like any load: didLoadCatalogue is what rebuilds the
+    // Settings rows that light the tab dot.
+    func testABackgroundCheckKeepsThePageAndLandsANewVersion() {
+        let d = Deferred()
+        d.fetch = { .success([self.entry("derby")]) }
+        let c = deferredCatalog(d)
+        c.reload(); d.runAll()
+
+        d.fetch = { .success([self.entry("derby", version: "1.1.0")]) }
+        c.refreshQuietly()
+        XCTAssertEqual(c.load, .loaded, "no loading state while it checks")
+        XCTAssertTrue(c.refreshing)
+        d.runAll()
+        XCTAssertFalse(c.refreshing)
+        XCTAssertEqual(c.entries.map(\.version), ["1.1.0"])
+        XCTAssertEqual(d.loads, 2)
+    }
+
+    // A dropped connection on an hourly check shouldn't blank the browser or
+    // the Settings rows. It only records that the source couldn't be read.
+    func testAFailedBackgroundCheckKeepsTheLoadedCatalogue() {
+        let d = Deferred()
+        d.fetch = { .success([self.entry("derby")]) }
+        let c = deferredCatalog(d)
+        c.reload(); d.runAll()
+
+        d.fetch = { .failure(.downloadFailed("offline")) }
+        c.refreshQuietly(); d.runAll()
+        XCTAssertEqual(c.load, .loaded)
+        XCTAssertEqual(c.entries.map(\.id), ["derby"])
+        let own = c.sourceSyncs[ExtensionCatalog.syncKey(ExtensionSource.builtIn.slug)]
+        XCTAssertNotNil(own?.failure)
+        XCTAssertNotNil(own?.synced, "still says when it last worked")
+    }
+
+    // Not while something is being installed or waits on its second ⏎.
+    func testABackgroundCheckWaitsForAnInstallOrAConfirmation() {
+        let d = Deferred()
+        d.fetch = { .success([self.entry("derby")]) }
+        let c = deferredCatalog(d)
+        c.reload(); d.runAll()
+
+        c.requestInstall(entry("derby"))
+        XCTAssertEqual(c.confirming, "derby")
+        c.refreshQuietly()
+        XCTAssertTrue(d.queued.isEmpty, "skipped while a confirmation is pending")
+
+        c.requestInstall(entry("derby"))
+        XCTAssertTrue(c.isBusy("derby"))
+        let install = d.queued.count
+        c.refreshQuietly()
+        XCTAssertEqual(d.queued.count, install, "skipped while the install runs")
+    }
+
+    // ⌘R during a background check isn't dropped: it runs once the check lands,
+    // since the check may have read the setting before whatever asked changed it.
+    func testAReloadDuringABackgroundCheckRunsAfterIt() {
+        let d = Deferred()
+        let c = deferredCatalog(d)
+        c.reload(); d.runAll()
+
+        c.refreshQuietly()
+        c.reload()
+        XCTAssertEqual(c.load, .loaded, "the reload waits")
+        XCTAssertEqual(d.queued.count, 1)
+        d.queued.removeFirst()()
+        XCTAssertEqual(c.load, .loading, "then runs")
+        d.runAll()
+        XCTAssertEqual(c.load, .loaded)
+        XCTAssertEqual(d.loads, 3)
+    }
+
+    // A ⏎ pressed while a check was fetching armed the version the page showed
+    // then. If the check brings a different listing for it, the question no
+    // longer describes what would install, so it is withdrawn.
+    func testABackgroundCheckWithdrawsAConfirmationItChanged() {
+        let d = Deferred()
+        d.fetch = { .success([self.entry("derby"), self.entry("pulse")]) }
+        let c = deferredCatalog(d)
+        c.reload(); d.runAll()
+
+        d.fetch = { .success([self.entry("derby", version: "1.1.0"), self.entry("pulse")]) }
+        c.refreshQuietly()
+        c.requestInstall(entry("derby"))
+        d.runAll()
+        XCTAssertNil(c.confirming)
+
+        c.refreshQuietly()
+        c.requestInstall(entry("pulse"))
+        d.runAll()
+        XCTAssertEqual(c.confirming, "pulse", "an unchanged listing keeps its question")
+    }
+
     // MARK: - The merged row model
 
     private func manifest(_ id: String, version: String,

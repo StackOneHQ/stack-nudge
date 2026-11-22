@@ -153,7 +153,7 @@ Reachable from the tab strip, `Cmd+,`, or the last `Cmd`-number. A sidebar of ca
 | **Actions** | Edit phrases, Check permissions, Open config file, View release notes, Check for updates, Uninstall, Quit |
 | **About** | The version and hook-script status, and a link to this repo |
 
-An extension that asks for a Settings page gets one under Extensions. A pending update, a missing permission, or an agent whose hooks aren't wired yet shows as a row above every category.
+An extension that asks for a Settings page gets one under Extensions. A pending update, an extension update, a missing permission, or an agent whose hooks aren't wired yet shows as a row above every category. An app or extension update also puts a dot on the Settings tab.
 
 | Key | Action |
 |-----|--------|
@@ -214,7 +214,7 @@ grep -c stack-nudge-version ~/.stack-nudge/notify.sh   # 0 means the script pred
 
 ## Extensions
 
-**Settings → Extensions** lists what's installed: name, a one-line description, and a status (Update x.y, Running, Present / Away, Broken, Tab ⌘N…). `→` or `⏎` opens an extension's page: its status, its settings, what it's allowed, where it appears, and **Update** / **Remove**. **Browse extensions**, below them, says how many are available and opens the catalogue: updates first, then what you haven't installed, ten at a time until you search, which matches names and descriptions.
+**Settings → Extensions** lists what's installed: name, a one-line description, and a status (Update x.y, Running, Present / Away, Broken, Tab ⌘N…). `→` or `⏎` opens an extension's page: its status, its settings, what it's allowed, where it appears, and **Update** / **Remove**. The catalogues are checked for updates in the background, a minute after launch and then hourly, so an extension update shows without opening Settings: an **Extension update** row above every category names each one and the version it would get, and `⏎` on it opens the browser. Nothing installs from there without the browser's two presses. **Browse extensions**, below them, says how many are available and opens the catalogue: updates first, then what you haven't installed, ten at a time until you search, which matches names and descriptions.
 
 | Key | On the browse page |
 |-----|--------|
@@ -225,7 +225,7 @@ grep -c stack-nudge-version ~/.stack-nudge/notify.sh   # 0 means the script pred
 | `⌘R` | Reload the catalogue |
 | `←` | Back to Settings |
 
-To see another team's catalogue too, a private one included, add its repository under **Other catalogues**, the row below **Browse extensions**. Its rows in the browser show the repository's name. A private one is read with your GitHub sign-in, or the `gh` CLI's if you haven't signed in here. The page lists `StackOneHQ/stack-nudge-extensions-marketplace`, the app's own catalogue, first, which is always read, then each repository you added with when it last synced and how many extensions it lists, or why it couldn't be read and when it last could. Each says what it can grant: up to trusted for the catalogues the app names, view only for any other. The list is `STACKNUDGE_EXTENSIONS_SOURCES` in `~/.stack-nudge/config` (comma separated `owner/repo`), so an edit there shows up on the page and one made on the page is in the file. Every change syncs the catalogue again. Removing a repository keeps what you installed from it, but each of those drops to view on the next full sync. See [Other catalogues](extensions.md#other-catalogues) for what such a source may grant.
+To see another team's catalogue too, a private one included, add its repository under **Other catalogues**, the row below **Browse extensions**. Its rows in the browser show the repository's name. A private one is read with your GitHub sign-in, or the `gh` CLI's if you haven't signed in here. The page lists `StackOneHQ/stack-nudge-extensions-marketplace`, the app's own catalogue, first, which is always read, then each repository you added with when it last synced and how many extensions it lists, or why it couldn't be read and when it last could, plus how many updates it has for what you installed from it ("· 1 update"). Each says what it can grant: up to trusted for the catalogues the app names, view only for any other. The list is `STACKNUDGE_EXTENSIONS_SOURCES` in `~/.stack-nudge/config` (comma separated `owner/repo`), so an edit there shows up on the page and one made on the page is in the file. Every change syncs the catalogue again. Removing a repository keeps what you installed from it, but each of those drops to view on the next full sync. See [Other catalogues](extensions.md#other-catalogues) for what such a source may grant.
 
 | Key | On Other catalogues |
 |-----|--------|

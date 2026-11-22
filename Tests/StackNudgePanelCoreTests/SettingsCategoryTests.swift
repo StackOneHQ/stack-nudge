@@ -30,7 +30,7 @@ final class SettingsCategoryTests: XCTestCase {
         let nav = PanelNav()
         // Attention rows are conditional, so name them rather than reading a
         // state where they happen to be absent.
-        var covered: Set<SettingsRow> = [.wireAgents, .dismissAgents, .permissions, .update]
+        var covered: Set<SettingsRow> = [.wireAgents, .dismissAgents, .permissions, .update, .extensionUpdates]
         // The Extensions category lists one row per installed extension, so the
         // representative that SettingsRow.allCases carries needs an extension
         // to be a row for. Seeding it here rather than excusing the case is the

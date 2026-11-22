@@ -135,8 +135,12 @@ final class ExtensionSources: ObservableObject {
     // A row's status line. The time is the reason the page exists: a
     // repository that stopped answering looks the same as one that never
     // listed anything until you can see when it last did.
+    //
+    // `updates` is how many installed extensions from this repository have a
+    // newer version in it, said after the count so a repository with news
+    // reads differently from one without.
     static func status(of row: Row, sync: ExtensionCatalog.SourceSync?, loading: Bool,
-                       now: Date) -> (text: String, tone: Tone) {
+                       now: Date, updates: Int = 0) -> (text: String, tone: Tone) {
         guard let source = row.source else {
             return ("Not owner/repo, so it's skipped", .warning)
         }
@@ -149,15 +153,24 @@ final class ExtensionSources: ObservableObject {
         guard let sync else {
             return (loading ? "Syncing…" : "Not synced yet", .normal)
         }
+        let pending = updates == 1 ? " · 1 update" : updates > 1 ? " · \(updates) updates" : ""
         if let failure = sync.failure {
             var text = "Couldn't read it \(ago(sync.attempted, now: now)): \(failure)"
-            if let synced = sync.synced { text += " Last synced \(ago(synced, now: now))." }
+            if let synced = sync.synced { text += " Last synced \(ago(synced, now: now))\(pending)." }
             return (text, .warning)
         }
         let synced = sync.synced ?? sync.attempted
         let count = sync.extensions ?? 0
         let listed = count == 1 ? "1 extension" : "\(count) extensions"
-        return ("Synced \(ago(synced, now: now)) · \(listed)", .normal)
+        return ("Synced \(ago(synced, now: now)) · \(listed)\(pending)", .normal)
+    }
+
+    // How many of `installed` came from this row's repository and have an
+    // update there. An installed row's source is nil for the app's own.
+    static func updates(for row: Row, installed: [ExtensionRow]) -> Int {
+        guard let source = row.source, !row.repeatsEarlier else { return 0 }
+        let slug = row.isBuiltIn ? nil : source.slug
+        return installed.filter { $0.updateAvailable && ExtensionSource.same($0.source, slug) }.count
     }
 
     static func ago(_ date: Date, now: Date) -> String {
@@ -186,6 +199,8 @@ struct ExtensionSourcesView: View {
 
     @ObservedObject var model: ExtensionSources
     @ObservedObject var catalog: ExtensionCatalog
+    // For each repository's update count.
+    let installed: [ExtensionRow]
     let onBack: () -> Void
     @Environment(\.editingText) private var editingText
     @FocusState private var fieldFocused: Bool
@@ -292,7 +307,8 @@ struct ExtensionSourcesView: View {
 
     private func rowView(_ row: ExtensionSources.Row, selected: Bool, now: Date) -> some View {
         let sync = row.source.flatMap { catalog.sourceSyncs[ExtensionCatalog.syncKey($0.slug)] }
-        let status = ExtensionSources.status(of: row, sync: sync, loading: catalog.load == .loading, now: now)
+        let status = ExtensionSources.status(of: row, sync: sync, loading: catalog.load == .loading, now: now,
+                                             updates: ExtensionSources.updates(for: row, installed: installed))
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
                 Text(row.entry)

@@ -197,6 +197,9 @@ enum SettingsRow: Hashable {
     // keyboard-reachable rather than mouse-only.
     case wireAgents, dismissAgents
     case permissions, update, hotkey
+    // Installed extensions with a newer version published: pinned like
+    // `update`, and opens the browser, which lists updates first.
+    case extensionUpdates
     case banner, muteWhenFocused, mute, muteDuration, remindUnanswered, stalledSessions,
          tabTitleNames, pinPanel, keepOpenWhenEmpty, launchAtLogin
     case floatingWidget, snapToCorners, widgetCorner, widgetOpacity, widgetContent, mascot, theme
@@ -247,7 +250,7 @@ extension SettingsRow: CaseIterable {
 
     private static let staticCases: [SettingsRow] = [
         .wireAgents, .dismissAgents,
-        .permissions, .update, .hotkey,
+        .permissions, .update, .extensionUpdates, .hotkey,
         .banner, .muteWhenFocused, .mute, .muteDuration, .remindUnanswered,
         .stalledSessions, .tabTitleNames, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin,
         .floatingWidget, .snapToCorners, .widgetCorner, .widgetOpacity, .widgetContent,
@@ -1282,6 +1285,10 @@ final class PanelNav: ObservableObject {
     // SettingsView takes only nav — and because nav is already where the host
     // pushes its tab list, so this extends one data flow rather than adding a
     // second.
+    // Installed extensions whose source publishes a newer version: the Settings
+    // tab dot and the attention row read this.
+    var extensionsWithUpdates: [ExtensionRow] { installedExtensions.filter(\.updateAvailable) }
+
     @Published var installedExtensions: [ExtensionRow] = [] {
         // The one list that is genuinely dynamic *within* a category, and the
         // only one that had no hook. Every other input that reshapes
@@ -1534,6 +1541,7 @@ final class PanelNav: ObservableObject {
         if !unwiredAgents.isEmpty { rows += [.wireAgents, .dismissAgents] }
         if !missingPermissions.isEmpty { rows.append(.permissions) }
         if updateAvailable != nil { rows.append(.update) }
+        if !extensionsWithUpdates.isEmpty { rows.append(.extensionUpdates) }
         return rows
     }
 
@@ -2105,6 +2113,7 @@ final class PanelNav: ObservableObject {
         case .dismissAgents: dismissAllUnwiredAgents()
         case .permissions: actions?.checkPermissions()
         case .update: actions?.beginUpdate()
+        case .extensionUpdates: actions?.browseExtensions()
         case .hotkey: startRecordingHotkey()
         case .speakHotkey: startRecordingSpeakHotkey()
         case .downloadVoiceModel:
@@ -2183,7 +2192,7 @@ final class PanelNav: ObservableObject {
              .githubLinks, .hideShipped, .eventHistory,
              .slackEnabled, .slackDetail, .slackStop, .awayLock:
             return false
-        case .permissions, .update, .hotkey, .speakHotkey, .downloadVoiceModel:
+        case .permissions, .update, .extensionUpdates, .hotkey, .speakHotkey, .downloadVoiceModel:
             return false
         case .muteDuration, .remindUnanswered, .stalledSessions,
              .floatingWidget, .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme, .companionSize, .companionPreviewPose,
@@ -2484,7 +2493,7 @@ final class PanelNav: ObservableObject {
             ConfigFile.write(key: "STACKNUDGE_EVENTS_PER_SESSION", value: String(eventsPerSession))
         // Action rows have nothing to cycle, and activate() handles each of
         // them before it gets here.
-        case .wireAgents, .dismissAgents, .permissions, .update,
+        case .wireAgents, .dismissAgents, .permissions, .update, .extensionUpdates,
              .hotkey, .speakHotkey, .downloadVoiceModel,
              .disconnectGithub, .editPhrases, .browseExtensions, .extensionSources, .installedExtension,
              .checkPermissions, .openConfig,

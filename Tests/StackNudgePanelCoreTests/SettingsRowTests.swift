@@ -44,6 +44,62 @@ final class SettingsRowTests: XCTestCase {
         XCTAssertEqual(nav.index(of: .update), 0)
     }
 
+    private func installed(_ id: String, _ version: String, available: String?) -> ExtensionRow {
+        ExtensionRow(id: id, name: id.capitalized, description: "",
+                     installedVersion: version, availableVersion: available,
+                     refusedReason: nil, requires: [], config: [])
+    }
+
+    // Pinned with the app's own update, under it, and only while an installed
+    // extension actually has a newer version published.
+    func test_extensionUpdatesRow_pinnedWhileAnInstalledExtensionHasAnUpdate() {
+        let nav = PanelNav()
+        nav.installedExtensions = [installed("derby", "1.0.0", available: "1.0.0")]
+        XCTAssertFalse(nav.settingsRows.contains(.extensionUpdates))
+
+        nav.installedExtensions = [installed("derby", "1.0.0", available: "1.1.0"),
+                                   installed("pulse", "0.1.0", available: nil)]
+        XCTAssertEqual(nav.extensionsWithUpdates.map(\.id), ["derby"])
+        XCTAssertEqual(nav.settingsRows.first, .extensionUpdates)
+
+        nav.updateAvailable = "1.2.3"
+        XCTAssertEqual(nav.index(of: .update), 0)
+        XCTAssertEqual(nav.index(of: .extensionUpdates), 1)
+    }
+
+    // ⏎ opens the browser, which lists updates first and asks twice before
+    // installing; the arrows do nothing on it.
+    func test_extensionUpdatesRow_opensTheBrowserOnActivateOnly() {
+        let nav = PanelNav()
+        var browsed = 0
+        nav.actions = SettingsActions(
+            checkPermissions: {}, openConfig: {}, editPhrases: {},
+            browseExtensions: { browsed += 1 }, openExtensionSources: {}, openExtension: { _ in },
+            openReleaseNotes: {}, checkForUpdates: {}, beginUpdate: {}, runUpdate: {},
+            beginUninstall: {}, runUninstall: {}, runBootstrap: {}, quit: {},
+            expandFromCompact: {}, exitCompactMode: {},
+            muteFor: { _ in }, resumeNotifications: {}, resetCompanionPosition: {},
+            applyEventHistorySetting: {}, clearEventHistory: {},
+            pasteSlackSetup: {}, detectSlackUser: {}, sendSlackTest: {})
+        nav.installedExtensions = [installed("derby", "1.0.0", available: "1.1.0")]
+        nav.selectedSettingIndex = nav.index(of: .extensionUpdates)
+        XCTAssertEqual(nav.selectedRow, .extensionUpdates)
+        XCTAssertFalse(nav.selectedRowIsPicker)
+        nav.cycleForward()
+        nav.cycleBackward()
+        XCTAssertEqual(browsed, 0, "arrows must not open the browser")
+        nav.activate()
+        XCTAssertEqual(browsed, 1)
+    }
+
+    func test_extensionUpdatesRow_saysWhatEachWouldUpdateTo() {
+        let rows = [installed("derby", "1.0.0", available: "1.1.0"),
+                    installed("pulse", "0.1.0", available: "0.2.0")]
+        XCTAssertEqual(SettingsView.extensionUpdatesTitle(count: 1), "Extension update")
+        XCTAssertEqual(SettingsView.extensionUpdatesTitle(count: 2), "2 extension updates")
+        XCTAssertEqual(SettingsView.extensionUpdatesDetail(rows), "Derby 1.1.0 · Pulse 0.2.0")
+    }
+
     func test_permissionsRow_prependedWhenMissing() {
         let nav = PanelNav()
         XCTAssertFalse(nav.settingsRows.contains(.permissions))
