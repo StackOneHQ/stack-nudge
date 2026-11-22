@@ -497,7 +497,9 @@ tiers ignore the field. A newer host records it in
 `~/.stack-nudge/extensions/.tiers.json` when it installs from the index, with
 the catalogue it came from in `.sources.json` beside it, and re-checks the
 record whenever it loads the catalogue: the first time Settings or the
-extensions browser opens in each launch, and on the browser's ⌘R or Try again.
+extensions browser opens in each launch, on the browser's ⌘R or Try again, and
+in the background a minute after launch and then hourly. A background check
+that can't read a catalogue keeps what the last one read.
 Each tier is checked against the catalogue the extension came from. It can go
 down to what that catalogue's index now says, and drops to `view` if that
 catalogue stops listing the extension, but it never goes up without an install
@@ -551,7 +553,9 @@ each: its name, its `description` (keep it to one line, it's all the row has
 room for), and a short status on the right. A pending update says "Update x.y";
 otherwise a service says what it's doing (Running, Starting, Broken, Stopped,
 or Present / Away for the one holding `presence`), and a view says "Tab ⌘N"
-when it has a tab. Below the list, **Browse extensions** opens the catalogue,
+when it has a tab. While any update is pending, an **Extension update** row
+also sits above every Settings category, with a dot on the Settings tab.
+Below the list, **Browse extensions** opens the catalogue,
 where every install and update takes two presses of `⏎`: the first says what it
 is, and for anything that gets more than a tab, what it asks for.
 

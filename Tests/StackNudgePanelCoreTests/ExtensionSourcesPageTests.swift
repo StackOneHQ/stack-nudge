@@ -156,6 +156,34 @@ final class ExtensionSourcesPageTests: XCTestCase {
         XCTAssertEqual(status.tone, .normal)
     }
 
+    // A repository with news reads differently from one without: the count of
+    // installed extensions it has an update for, after what it lists.
+    func testARowSaysHowManyUpdatesItHasForWhatIsInstalled() {
+        let sync = ExtensionCatalog.SourceSync(attempted: now, synced: now, extensions: 4, failure: nil)
+        func installed(_ id: String, from source: String?, available: String) -> ExtensionRow {
+            ExtensionRow(id: id, name: id, description: "", installedVersion: "1.0.0",
+                         availableVersion: available, refusedReason: nil, requires: [], config: [],
+                         source: source)
+        }
+        let rows = [installed("claude-usage", from: internalSlug, available: "1.1.0"),
+                    installed("derby", from: internalSlug.uppercased(), available: "2.0.0"),
+                    installed("same", from: internalSlug, available: "1.0.0"),
+                    installed("own", from: nil, available: "1.1.0")]
+        let builtIn = ExtensionSources.rows(value: internalSlug)[0]
+        XCTAssertEqual(ExtensionSources.updates(for: row(internalSlug), installed: rows), 2)
+        XCTAssertEqual(ExtensionSources.updates(for: builtIn, installed: rows), 1,
+                       "the app's own catalogue counts the copies with no recorded source")
+        XCTAssertEqual(ExtensionSources.status(of: row(internalSlug), sync: sync, loading: false, now: now,
+                                               updates: 2).text,
+                       "Synced just now · 4 extensions · 2 updates")
+        XCTAssertEqual(ExtensionSources.status(of: row(internalSlug), sync: sync, loading: false, now: now,
+                                               updates: 1).text,
+                       "Synced just now · 4 extensions · 1 update")
+        let failed = ExtensionCatalog.SourceSync(attempted: now, synced: now, extensions: 4, failure: "nope.")
+        XCTAssertTrue(ExtensionSources.status(of: row(internalSlug), sync: failed, loading: false, now: now,
+                                              updates: 1).text.hasSuffix(" · 1 update."))
+    }
+
     func testAFailedReadSaysWhyAndWhenItLastWorked() {
         let never = ExtensionCatalog.SourceSync(attempted: now, synced: nil, extensions: nil, failure: "nope.")
         let first = ExtensionSources.status(of: row(internalSlug), sync: never, loading: false, now: now)

@@ -227,6 +227,7 @@ struct PanelContentView: View {
                                    onBack: onCloseExtensionsBrowser)
                 case .extensionSources:
                     ExtensionSourcesView(model: extensionSources, catalog: extensionCatalog,
+                                         installed: nav.installedExtensions,
                                          onBack: onCloseExtensionSources)
                 case .updateConfirm:
                     UpdateConfirmView(
@@ -295,7 +296,7 @@ struct PanelContentView: View {
     private func tabDot(_ mode: PanelMode) -> Color? {
         guard mode == .settings else { return nil }
         if !nav.missingPermissions.isEmpty { return .orange }
-        return nav.updateAvailable != nil ? .accentColor : nil
+        return nav.updateAvailable != nil || !nav.extensionsWithUpdates.isEmpty ? .accentColor : nil
     }
 
     private var tabStrip: some View {
@@ -1121,6 +1122,24 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         extensionCatalog.requestInstall(entry)
     }
 
+    // The catalogues are otherwise only read when Settings or the browser
+    // opens, so an update published since launch went unseen until somebody
+    // went looking. Checked hourly in the background instead, the first a
+    // minute after launch so it doesn't compete with startup; each lands
+    // through didLoadCatalogue like any other load, which is what lights the
+    // Settings tab dot and its attention row.
+    static let extensionCheckInterval: TimeInterval = 60 * 60
+
+    private func startExtensionUpdateChecks() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self] in
+            self?.extensionCatalog.refreshQuietly()
+        }
+        extensionCheckTimer = Timer.scheduledTimer(withTimeInterval: Self.extensionCheckInterval,
+                                                   repeats: true) { [weak self] _ in
+            self?.extensionCatalog.refreshQuietly()
+        }
+    }
+
     // Installed and refused, as the Extensions settings category renders them.
     // Rebuilt from the host on every change it already reports, so the settings
     // list and the tab strip can't disagree about what is installed.
@@ -1196,6 +1215,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private var companion: CompanionController?
     private var updateChecker: UpdateChecker?
     private var updater: Updater?
+    private var extensionCheckTimer: Timer?
     private let claudeCliQuotaProbe = ClaudeCliQuotaProbe()
     // Claude logins other than the default one, by config dir. See
     // refreshOtherClaudeAccounts.
@@ -1601,6 +1621,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
         updateChecker = UpdateChecker(nav: nav)
         updateChecker?.start()
+        startExtensionUpdateChecks()
         updater = Updater(nav: nav)
 
         startQuotaPolling()

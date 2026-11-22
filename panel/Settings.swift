@@ -413,6 +413,56 @@ struct SettingsView: View {
         }
     }
 
+    // Pinned under the app's own update row while any installed extension has
+    // a newer version published, which the hourly catalogue check finds
+    // without Settings being opened. Same accent as that row, since it is the
+    // same kind of news; ⏎ or a click opens the browser, which lists updates
+    // first and still asks twice before installing any of them.
+    @ViewBuilder
+    private func extensionUpdatesRow(_ rows: [ExtensionRow]) -> some View {
+        let selected = nav.selectedSettingIndex == nav.index(of: .extensionUpdates)
+        HStack(spacing: 10) {
+            Image(systemName: "puzzlepiece.extension.fill")
+                .font(.body)
+                .foregroundStyle(Color.accentColor)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(Self.extensionUpdatesTitle(count: rows.count))
+                    .font(.subheadline.weight(.medium))
+                Text(Self.extensionUpdatesDetail(rows))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.accentColor.opacity(selected ? 0.32 : 0.18))
+        )
+        .contentShape(Rectangle())
+        .id(nav.index(of: .extensionUpdates))
+        .onTapGesture {
+            nav.selectedSettingIndex = nav.index(of: .extensionUpdates)
+            nav.activate()
+        }
+    }
+
+    static func extensionUpdatesTitle(count: Int) -> String {
+        count == 1 ? "Extension update" : "\(count) extension updates"
+    }
+
+    // "Claude usage 0.2.0 · Derby 1.3.0": what each would update to.
+    static func extensionUpdatesDetail(_ rows: [ExtensionRow]) -> String {
+        rows.map { row in row.availableVersion.map { "\(row.name) \($0)" } ?? row.name }
+            .joined(separator: " · ")
+    }
+
     // Runtime-permission nudge pinned above the settings sections when one or
     // more grants (Accessibility / Automation / Notifications) aren't set.
     // Keyboard-navigable like the update row — selecting + Enter, or a click,
@@ -846,7 +896,7 @@ struct SettingsView: View {
                 value: PanelNav.repositoryURL.replacingOccurrences(of: "https://", with: ""))
 
         // Drawn by settingsBanners, above the category's rows.
-        case .wireAgents, .dismissAgents, .permissions, .update:
+        case .wireAgents, .dismissAgents, .permissions, .update, .extensionUpdates:
             EmptyView()
         }
     }
@@ -857,7 +907,8 @@ struct SettingsView: View {
     // nothing to open, so they render here without taking a keyboard slot.
     @ViewBuilder private var settingsBanners: some View {
         let any = nav.isMuted || !nav.unwiredAgents.isEmpty || !nav.recentlyWiredAgents.isEmpty
-            || !nav.missingPermissions.isEmpty || nav.updateAvailable != nil || hookScriptStale
+            || !nav.missingPermissions.isEmpty || nav.updateAvailable != nil
+            || !nav.extensionsWithUpdates.isEmpty || hookScriptStale
         VStack(alignment: .leading, spacing: 10) {
             muteBanner
             if !nav.unwiredAgents.isEmpty {
@@ -870,6 +921,9 @@ struct SettingsView: View {
             }
             if let version = nav.updateAvailable {
                 updateRow(version: version)
+            }
+            if !nav.extensionsWithUpdates.isEmpty {
+                extensionUpdatesRow(nav.extensionsWithUpdates)
             }
             if hookScriptStale {
                 hookScriptRow

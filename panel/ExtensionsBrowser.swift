@@ -159,7 +159,7 @@ final class ExtensionCatalog: ObservableObject {
     private var reloadRequested = false
 
     func requestReload() {
-        if load == .loading { reloadRequested = true } else { reload() }
+        if load == .loading || refreshing { reloadRequested = true } else { reload() }
     }
 
     func reload() {
@@ -168,14 +168,43 @@ final class ExtensionCatalog: ObservableObject {
         // fetch — key autorepeat alone was enough to starve the queue the
         // session poll and the quota probes share.
         guard load != .loading else { return }
+        // A background check is already fetching: take its answer, then fetch
+        // again, since it may have started before whatever asked for this.
+        guard !refreshing else { reloadRequested = true; return }
         cancelConfirmation()
         load = .loading
+        fetch(quietly: false)
+    }
+
+    // A background fetch in flight. See refreshQuietly.
+    private(set) var refreshing = false
+
+    // The periodic check (PanelController's catalogue timer), so an update is
+    // known without opening Settings. Unlike reload it leaves the page as it
+    // is while it fetches, and a failure keeps the catalogue already loaded:
+    // a dropped connection once an hour shouldn't blank the browser or the
+    // Settings rows, only mark the source as unread on Other catalogues. Never
+    // while an install or removal runs or waits on its second ⏎, since a
+    // fresh index under a question already asked could change its answer; a
+    // ⏎ pressed while it fetches is dropped when it lands if that extension's
+    // listing changed. Before the first load there is nothing to keep, so it
+    // is a plain reload.
+    func refreshQuietly() {
+        guard load != .loading, !refreshing, confirming == nil,
+              !work.keys.contains(where: isBusy) else { return }
+        guard load == .loaded else { reload(); return }
+        refreshing = true
+        fetch(quietly: true)
+    }
+
+    private func fetch(quietly: Bool) {
         background { [weak self] in
             guard let self else { return }
             let result = self.fetchCatalogue()
             let sources = self.recordedSources()
             self.toMain { [weak self] in
                 guard let self else { return }
+                self.refreshing = false
                 defer {
                     if self.reloadRequested {
                         self.reloadRequested = false
@@ -184,6 +213,10 @@ final class ExtensionCatalog: ObservableObject {
                 }
                 switch result {
                 case .success(let catalogue):
+                    if quietly, let id = self.confirming,
+                       catalogue.listings.filter({ $0.id == id }) != self.listings.filter({ $0.id == id }) {
+                        self.cancelConfirmation()
+                    }
                     self.installedFrom = sources
                     self.entries = catalogue.entries
                     self.listings = catalogue.listings
@@ -199,7 +232,7 @@ final class ExtensionCatalog: ObservableObject {
                 case .failure(let failure):
                     self.sourceSyncs = Self.syncs(afterFailure: failure.message,
                                                   previous: self.sourceSyncs, at: self.now())
-                    self.load = .failed(failure.message)
+                    if !quietly { self.load = .failed(failure.message) }
                 }
             }
         }
