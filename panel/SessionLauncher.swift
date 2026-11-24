@@ -85,7 +85,7 @@ enum RecentSessions {
                 let id = (name as NSString).deletingPathExtension
                 // The id is typed into a shell as `claude --resume <id>`, so
                 // only the shape Claude Code writes (a UUID) is offered.
-                guard isSessionID(id), !running.contains(id),
+                guard SessionLauncher.isSessionID(id), !running.contains(id),
                       let modified = (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date
                 else { continue }
                 files.append((path, modified))
