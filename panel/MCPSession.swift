@@ -64,9 +64,11 @@ final class MCPSession {
         }
         if let version = (params["_meta"] as? [String: Any])?[MCPProtocol.metaProtocolVersion] as? String,
            version != MCPProtocol.currentVersion {
+            // Only the revisions that carry _meta: the older ones are reached
+            // through initialize, never named per request.
             send(MCPProtocol.error(id: id, code: MCPProtocol.unsupportedProtocolVersion,
                                    message: "Unsupported protocol version \(version)",
-                                   data: ["supported": [MCPProtocol.currentVersion] + MCPProtocol.legacyVersions]))
+                                   data: ["supported": [MCPProtocol.currentVersion]]))
             return
         }
         let modern = (params["_meta"] as? [String: Any])?[MCPProtocol.metaProtocolVersion] != nil

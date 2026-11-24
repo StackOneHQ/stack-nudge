@@ -71,6 +71,14 @@ final class MCPSessionTests: XCTestCase {
         XCTAssertEqual(lastError?["code"] as? Int, MCPProtocol.unsupportedProtocolVersion)
     }
 
+    func testAnOlderRevisionNamedPerRequestIsRefusedWithOnlyTheCurrentOne() {
+        let session = session()
+        session.receive(["jsonrpc": "2.0", "id": 3, "method": "tools/list",
+                         "params": ["_meta": [MCPProtocol.metaProtocolVersion: MCPProtocol.legacyVersions[0]]]])
+        XCTAssertEqual(lastError?["code"] as? Int, MCPProtocol.unsupportedProtocolVersion)
+        XCTAssertEqual((lastError?["data"] as? [String: Any])?["supported"] as? [String], [MCPProtocol.currentVersion])
+    }
+
     func testNotificationsAreNeverAnswered() {
         let session = session()
         session.receive(["jsonrpc": "2.0", "method": "notifications/initialized"])

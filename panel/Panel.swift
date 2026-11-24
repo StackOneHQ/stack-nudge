@@ -1660,7 +1660,6 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         _ = registerSpeakHotkey(spec: config.speakSelectionHotkeySpec)
 
         startListener()
-        startMCPServer()
         menuBar = MenuBarController(panelController: self)
         companion = CompanionController(
             store: store, sessions: sessions, nav: nav,
@@ -1771,6 +1770,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             MainActor.assumeIsolated { self?.companion?.noteArrival(event) }
         }
         nav.loadFromConfig()  // populate panelPinned + other live values up-front
+        // After the config, so the server's first view of the settings is the
+        // user's: started earlier, the load reads to its clients as every
+        // non-default setting changing at once.
+        startMCPServer()
         // Scan agent configs for missing wires (post-update / post-install
         // reconciliation). Surfaces a "Set up X" banner in Settings when
         // any detected agent lacks our notify.sh hook.
