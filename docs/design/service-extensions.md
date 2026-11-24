@@ -206,15 +206,35 @@ dead extension can never leave the app locked or muted.
 ## Events
 
 What the app tells service extensions, each behind an `event:*` capability.
-*Not yet delivered*: the capabilities can be declared and granted, but the host
-sends no events yet.
+`session` is delivered. The others can be declared and granted, but the host
+doesn't send them yet (*not yet delivered*).
 
 | Event | Payload | Why |
 |---|---|---|
 | `idle` | seconds since the last input, every 2 s | so a script needn't call CoreGraphics. The app reads it with one `CGEventSource` call that needs no TCC grant (`IdleTime`, already on main), and a compiled extension can make the same call itself |
 | `panel` | `open` | refresh what's on screen when it matters |
-| `session` | session started, stopped or waiting, with agent and repo | token counting, insights |
+| `session` | one session's whole state whenever it starts, changes or ends (below) | token counting, insights, the direct exchange's roster |
 | `nudge` | an agent nudge as delivered, without FIFO paths or PIDs | voice, Slack-style relays |
+
+`session` is sent for each session that's new or changed, and once as `ended`
+when it goes. A service that has just started gets every current session first,
+so it never needs to have heard an earlier event:
+
+```json
+{"type": "event", "name": "session", "session": "claude-4120", "pid": 4120, "agent": "claude",
+ "state": "waiting", "repo": "api", "title": "api work", "claude_session": "5f0c…"}
+```
+
+`state` is `busy`, `idle`, `waiting` (a permission prompt from it is waiting on
+you), `active` (running, but the agent reports no live state) or `ended`.
+`session` is the handle, stable for the process's life. `repo`, `title` (only a
+name someone chose) and `claude_session` are left out when unknown. No paths,
+tab names or prompt text: `pid` and `claude_session` are there so a caller seen
+elsewhere, such as an MCP bridge, can be matched to its session. The shape is
+`SessionSnapshot`, which the MCP server is to read too, so the two can't
+disagree about what waiting means. It's worked out again whenever Events or the
+session poll changes, so `waiting` can still show for up to one poll (10 s while
+the panel is hidden) after a hook has given up on its prompt.
 
 `nudge` carries prompt and tool text, the same content as the event log, so it
 gets its own capability and its own line in the install prompt.
