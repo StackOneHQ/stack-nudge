@@ -115,8 +115,8 @@ STACKNUDGE_FLOATING_WIDGET=companion
 #STACKNUDGE_GITHUB_USE_GH=false
 
 # Which builds the in-app updater offers: stable (tagged releases) or nightly
-# (main, rebuilt on every merge, as the rolling `nightly` pre-release). Also
-# Settings → Actions → Update channel.
+# (main, rebuilt each night it has moved, as the rolling `nightly`
+# pre-release). Also Settings → Actions → Update channel.
 # Default: stable
 #STACKNUDGE_UPDATE_CHANNEL=nightly
 

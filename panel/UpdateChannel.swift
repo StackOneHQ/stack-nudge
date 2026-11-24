@@ -3,7 +3,7 @@ import Foundation
 // Which releases the updater follows. Stable is the tagged releases, read
 // from GitHub's /releases/latest, which leaves pre-releases out, so nothing
 // here can reach someone who never opted in. Nightly is the rolling
-// `nightly` pre-release that nightly.yml rebuilds on every merge to main.
+// `nightly` pre-release that nightly.yml rebuilds from main each night.
 enum UpdateChannel: String, CaseIterable {
     case stable, nightly
 
@@ -36,9 +36,11 @@ enum UpdateChannel: String, CaseIterable {
     }
 }
 
-// A build's identity. "2.10.0" is a release. "2.10.0-nightly.812" is a
-// nightly: built from main after 2.10.0, where 812 is main's commit count,
-// so a later merge always has a larger number.
+// A build's identity. "2.10.1" is a release. "2.10.1-nightly.812" is a
+// nightly: a semver pre-release of 2.10.1, the release main is heading for
+// (nightly.yml reads it from release-please's open release PR), where 812 is
+// main's commit count, so a later build always has a larger number. As in
+// semver, it comes before 2.10.1 itself.
 struct BuildVersion: Equatable {
     let base: String
     let nightly: Int?
@@ -101,24 +103,25 @@ struct BuildVersion: Equatable {
 enum UpdateOffer {
 
     // Whether `available`, from `channel`'s release, is worth offering to
-    // the build that's running.
+    // the build that's running. Semver order throughout: X-nightly.n comes
+    // before X.
     //
-    // Stable offers a release newer than what's running, nightly or not: a
-    // nightly is ahead of its own base, so switching back to Stable waits
-    // for the next release rather than stepping back.
+    // Stable offers a newer release. To a nightly that includes the release
+    // it was leading up to, so switching back to Stable waits for that
+    // release rather than stepping back to the one before.
     //
-    // Nightly offers a later nightly, or to a release build, any nightly
-    // built on top of it or something newer.
+    // Nightly offers a later nightly, or to a release build, a nightly of a
+    // later version: one of its own version would be a step back.
     static func shouldOffer(_ available: BuildVersion, to current: BuildVersion, on channel: UpdateChannel) -> Bool {
+        let newerBase = UpdateChecker.isNewer(available.base, than: current.base)
         switch channel {
         case .stable:
-            return available.nightly == nil && UpdateChecker.isNewer(available.base, than: current.base)
+            guard available.nightly == nil else { return false }
+            return newerBase || (current.nightly != nil && available.base == current.base)
         case .nightly:
             guard let build = available.nightly else { return false }
-            if let running = current.nightly {
-                return build > running && !UpdateChecker.isNewer(current.base, than: available.base)
-            }
-            return !UpdateChecker.isNewer(current.base, than: available.base)
+            guard let running = current.nightly else { return newerBase }
+            return build > running && !UpdateChecker.isNewer(current.base, than: available.base)
         }
     }
 }

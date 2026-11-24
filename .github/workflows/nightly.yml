@@ -1,28 +1,32 @@
 name: Nightly
 
-# Builds, signs and notarizes main after every merge and publishes it as the
+# Builds, signs and notarizes main once a night and publishes it as the
 # rolling `nightly` pre-release, for anyone who picks Settings → Actions →
-# Update channel → Nightly. Nightly in spirit: it runs on merge, not on a clock.
+# Update channel → Nightly. A night when main hasn't moved is skipped, and
+# "Run workflow" builds one on demand.
 #
 # Nothing here reaches anyone else. The Stable channel, and every app from
 # before channels existed, reads /releases/latest, which never returns a
 # pre-release.
 #
-# A build is named <base>-nightly.<n>: base is the release main was last cut
-# from (.release-please-manifest.json) and n is main's commit count, so a
-# later merge always has the larger number (UpdateOffer compares them).
+# A build is named <next>-nightly.<n>, a semver pre-release of the release it
+# leads up to: next is the version release-please's open release PR proposes
+# (a patch bump of the last release when there's none), and n is main's commit
+# count, so a later build always has the larger number (UpdateOffer compares
+# them).
 #
 # The build, sign and notarize steps mirror release.yml's. Keep them in step.
 
 on:
-  push:
-    branches: [main]
+  schedule:
+    # 02:00 UTC: 2am in UK winter, 3am in summer. GitHub's cron has no zones.
+    - cron: '0 2 * * *'
   workflow_dispatch:
 
-# A newer merge supersedes a build still in flight.
+# A build already running finishes; a second request waits for it.
 concurrency:
   group: nightly
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   prepare:
@@ -33,17 +37,45 @@ jobs:
     outputs:
       base: ${{ steps.version.outputs.base }}
       build: ${{ steps.version.outputs.build }}
+      changed: ${{ steps.changed.outputs.changed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           fetch-depth: 0  # the commit count is the build number
           persist-credentials: false
 
-      - name: Work out the version
-        id: version
+      # Nothing to build when the nightly tag is already this commit, unless
+      # someone asked for one by hand.
+      - name: Check main has moved
+        id: changed
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          base=$(jq -r '."."' .release-please-manifest.json)
+          built=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/nightly" --jq .object.sha 2>/dev/null || true)
+          if [[ "$built" == "$GITHUB_SHA" && "$GITHUB_EVENT_NAME" == "schedule" ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "main is still ${GITHUB_SHA}, already built"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Work out the version
+        if: steps.changed.outputs.changed == 'true'
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          last=$(jq -r '."."' .release-please-manifest.json)
+          # release-please recomputes its release PR from the commits on every
+          # push to main, so its title is the next version.
+          base=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --label "autorelease: pending" \
+                   --json title --jq '.[0].title // ""' \
+                 | sed -n 's/^chore(main): release \([0-9.]*\)$/\1/p')
+          if [[ -z "$base" ]]; then
+            base=$(awk -F. '{ printf "%d.%d.%d", $1, $2, $3 + 1 }' <<<"$last")
+          fi
           build=$(git rev-list --count HEAD)
           echo "base=$base" >> "$GITHUB_OUTPUT"
           echo "build=$build" >> "$GITHUB_OUTPUT"
@@ -53,6 +85,7 @@ jobs:
       # run. Never marked latest, so /releases/latest keeps returning the last
       # stable release.
       - name: Move the tag and update the release
+        if: steps.changed.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.base }}-nightly.${{ steps.version.outputs.build }}
@@ -61,7 +94,7 @@ jobs:
           repo="$GITHUB_REPOSITORY"
           gh api -X PATCH "repos/$repo/git/refs/tags/nightly" -f sha="$GITHUB_SHA" -F force=true >/dev/null \
             || gh api -X POST "repos/$repo/git/refs" -f ref=refs/tags/nightly -f sha="$GITHUB_SHA" >/dev/null
-          notes="Built from ${GITHUB_SHA} on main. Not a release: this is what Settings → Actions → Update channel → Nightly installs, rebuilt on every merge. Changes since the last release: https://github.com/${repo}/compare/v$(jq -r '."."' .release-please-manifest.json)...${GITHUB_SHA}"
+          notes="Built from ${GITHUB_SHA} on main. Not a release: this is what Settings → Actions → Update channel → Nightly installs, rebuilt each night main has moved. Changes since the last release: https://github.com/${repo}/compare/v$(jq -r '."."' .release-please-manifest.json)...${GITHUB_SHA}"
           if gh release view nightly --repo "$repo" >/dev/null 2>&1; then
             gh release edit nightly --repo "$repo" --prerelease --latest=false \
               --title "Nightly ${VERSION}" --notes "$notes"
@@ -73,6 +106,7 @@ jobs:
   build:
     name: Build, sign, notarize (${{ matrix.arch }})
     needs: prepare
+    if: needs.prepare.outputs.changed == 'true'
     runs-on: macos-15
     permissions:
       contents: write
@@ -93,7 +127,7 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      # The release it builds on, plus the build number the app compares
+      # The release it leads up to, plus the build number the app compares
       # (BuildVersion.current reads StackNudgeNightlyBuild).
       - name: Stamp the nightly version
         run: |

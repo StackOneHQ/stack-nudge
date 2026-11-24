@@ -3,14 +3,14 @@ import XCTest
 @testable import StackNudgePanelCore
 
 // Stable follows tagged releases; Nightly follows the rolling `nightly`
-// pre-release that nightly.yml rebuilds on every merge to main.
+// pre-release that nightly.yml rebuilds from main each night.
 @MainActor
 final class UpdateChannelTests: XCTestCase {
 
     // MARK: - Versions
 
     func testAVersionReadsAsAReleaseOrANightly() {
-        XCTAssertEqual(BuildVersion("2.10.0"), BuildVersion(base: "2.10.0"))
+        XCTAssertEqual(BuildVersion("2.10.1"), BuildVersion(base: "2.10.1"))
         XCTAssertEqual(BuildVersion("2.10.0-nightly.812"), BuildVersion(base: "2.10.0", nightly: 812))
         XCTAssertEqual(BuildVersion("2.10.0-nightly.x"), BuildVersion(base: "2.10.0-nightly.x"),
                        "a nightly needs a number")
@@ -50,26 +50,30 @@ final class UpdateChannelTests: XCTestCase {
 
     // MARK: - What each channel offers
 
-    func testStableOffersOnlyANewerRelease() {
+    // Semver: 2.10.1-nightly.812 comes before 2.10.1.
+    func testStableOffersANewerReleaseIncludingTheOneANightlyLedUpTo() {
         let offer = { UpdateOffer.shouldOffer(BuildVersion($0), to: BuildVersion($1), on: .stable) }
         XCTAssertTrue(offer("2.11.0", "2.10.0"))
         XCTAssertFalse(offer("2.10.0", "2.10.0"))
-        // Switching back from Nightly waits for the next release rather than
-        // stepping back to the one the nightly was built on.
-        XCTAssertFalse(offer("2.10.0", "2.10.0-nightly.812"))
-        XCTAssertTrue(offer("2.11.0", "2.10.0-nightly.812"))
+        // Back on Stable, a nightly waits for the release it was heading for
+        // rather than stepping back to the one before it.
+        XCTAssertFalse(offer("2.10.0", "2.10.1-nightly.812"))
+        XCTAssertTrue(offer("2.10.1", "2.10.1-nightly.812"))
+        XCTAssertTrue(offer("2.11.0", "2.10.1-nightly.812"))
+        XCTAssertFalse(offer("2.10.1-nightly.900", "2.10.0"), "the stable channel offers releases only")
     }
 
-    func testNightlyOffersALaterBuildOrMovesAReleaseOnToIt() {
+    func testNightlyOffersALaterBuildOrMovesAReleaseOnToTheNextVersion() {
         let offer = { UpdateOffer.shouldOffer(BuildVersion($0), to: BuildVersion($1), on: .nightly) }
-        XCTAssertTrue(offer("2.10.0-nightly.813", "2.10.0-nightly.812"))
-        XCTAssertFalse(offer("2.10.0-nightly.812", "2.10.0-nightly.812"))
-        XCTAssertFalse(offer("2.10.0-nightly.811", "2.10.0-nightly.812"))
-        // Built after the release it names, so ahead of it.
-        XCTAssertTrue(offer("2.10.0-nightly.812", "2.10.0"))
-        XCTAssertTrue(offer("2.11.0-nightly.830", "2.10.0"))
-        // A nightly from before the release that's running would step back.
-        XCTAssertFalse(offer("2.9.0-nightly.700", "2.10.0"))
+        XCTAssertTrue(offer("2.10.1-nightly.813", "2.10.1-nightly.812"))
+        XCTAssertFalse(offer("2.10.1-nightly.812", "2.10.1-nightly.812"))
+        XCTAssertFalse(offer("2.10.1-nightly.811", "2.10.1-nightly.812"))
+        // A feat landing moves the next version from a patch to a minor.
+        XCTAssertTrue(offer("2.11.0-nightly.815", "2.10.1-nightly.812"))
+        // After 2.10.0 the nightlies lead up to 2.10.1, which is ahead of it.
+        XCTAssertTrue(offer("2.10.1-nightly.812", "2.10.0"))
+        // A nightly of the release that's running comes before it.
+        XCTAssertFalse(offer("2.10.1-nightly.812", "2.10.1"))
         XCTAssertFalse(offer("2.11.0", "2.10.0"), "the nightly channel offers nightlies only")
     }
 
