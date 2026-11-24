@@ -206,6 +206,7 @@ struct PanelContentView: View {
                 case .sessions: SessionsView(store: sessions, events: store, nav: nav)
                 case .usage:    UsageView(nav: nav)
                 case .outcomes: OutcomesTabView(nav: nav)
+                case .prs:      PullRequestsView(nav: nav)
                 // .id(id) or the two extension tabs share one view identity: a
                 // ViewBuilder switch case is a single branch, and the associated
                 // value isn't part of identity, so switching between them reused
@@ -276,6 +277,7 @@ struct PanelContentView: View {
         case .sessions: return "Sessions"
         case .usage:    return "Usage"
         case .outcomes: return "Outcomes"
+        case .prs:      return "PRs"
         case .settings: return "Settings"
         case .extensionTab(let id): return nav.extensionTab(id: id)?.label ?? id
         // Listed, not defaulted: a new tab should fail to compile here rather
@@ -291,6 +293,7 @@ struct PanelContentView: View {
         case .events:   return store.pendingCount
         case .sessions: return sessions.liveSessions.count
         case .outcomes: return ticketGroupCount
+        case .prs:      return nav.pullRequestRows.count
         default:        return 0
         }
     }
@@ -1346,6 +1349,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private var listener: EventListener?
     private var menuBar: MenuBarController?
     private var companion: CompanionController?
+    private var githubFeed: GitHubFeedPoller?
     private var updateChecker: UpdateChecker?
     private var updater: Updater?
     private var extensionCheckTimer: Timer?
@@ -1665,6 +1669,24 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             guard let self, self.panel.isVisible, !self.nav.compactMode else { return }
             self.positionPanel()
         }
+        let feed = GitHubFeedPoller(run: { [weak self] body in Self.githubGraphQL(body, useGH: self?.nav.githubUseGH ?? true) },
+                                    deliver: { [weak self] events in events.forEach { self?.store.append($0) } },
+                                    snapshot: { [weak self] snapshot, login in
+                                        self?.nav.pullRequestSnapshot = snapshot
+                                        self?.nav.pullRequestLogin = login
+                                    })
+        githubFeed = feed
+        nav.$githubActivityEnabled
+            .removeDuplicates()
+            .sink { feed.setEnabled($0) }
+            .store(in: &cancellables)
+        // A fresh sign-in polls at once rather than at the next 3-minute tick.
+        nav.$githubSignedIn
+            .removeDuplicates()
+            .dropFirst()
+            .filter { $0 }
+            .sink { [weak self] _ in if self?.nav.githubActivityEnabled == true { feed.pollNow() } }
+            .store(in: &cancellables)
 
         nav.actions = SettingsActions(
             checkPermissions: { [weak self] in self?.showPermissions() },
@@ -3331,7 +3353,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     func refreshPullRequestsNow() { pullRequestGate.force() }
 
     private func performRefreshPullRequests() {
-        guard nav.githubLinkingEnabled, let token = GitHubAuth.token() else { return }
+        guard nav.githubLinkingEnabled, nav.githubSignedIn else { return }
+        let useGH = nav.githubUseGH
         // Ledger order is newest-first, so repoOrder puts the most recently active
         // repo first and its chips resolve first.
         var repoOrder: [String] = []
@@ -3352,7 +3375,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 let byBranch = GitHubAPI.pullRequests(
                     owner: slug.owner, repo: slug.repo, branches: branches
                 ) { body in
-                    Self.graphQLPOST(body, token: token)
+                    Self.githubGraphQL(body, useGH: useGH)
                 }
                 guard !byBranch.isEmpty else { continue }
                 let keyed = Dictionary(uniqueKeysWithValues: byBranch.map {
@@ -3375,6 +3398,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             }
         }
         return nil
+    }
+
+    // Every GitHub GraphQL request goes through here: the gh CLI when it is
+    // logged in (gh sends its own credential; the app never reads it), else
+    // the app's own sign-in token from the Keychain. nil when neither exists.
+    static func githubGraphQL(_ body: String, useGH: Bool) -> String? {
+        if useGH, GitHubCLI.isLoggedIn() { return GitHubCLI.graphQL(body: body) }
+        guard let token = GitHubAuth.token() else { return nil }
+        return graphQLPOST(body, token: token)
     }
 
     // Synchronous GraphQL POST (called from the off-main fetch loop) — blocks on
@@ -3414,6 +3446,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 }
                 self.nav.githubSignIn = .awaitingApproval(
                     userCode: response.userCode, verificationURI: response.verificationURI)
+                // Started from Settings or the PRs tab: hand over the code and
+                // GitHub's page at once, so all that's left is to paste.
+                if self.nav.githubSignInOpensBrowser {
+                    self.nav.githubSignInOpensBrowser = false
+                    PanelNav.copyGithubCodeAndOpen(code: response.userCode, url: response.verificationURI)
+                }
                 self.pollGithubSignIn(clientID: clientID,
                                       deviceCode: response.deviceCode,
                                       interval: response.interval,
@@ -5283,6 +5321,19 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return true
         }
 
+        if nav.mode == .prs {
+            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            guard plain else { return false }
+            switch event.keyCode {
+            case KeyCode.escape:                       hidePanel()
+            case KeyCode.upArrow:                      nav.movePullRequestSelection(-1)
+            case KeyCode.downArrow:                    nav.movePullRequestSelection(1)
+            case KeyCode.returnKey, KeyCode.numpadEnter: nav.openSelectedPullRequest()
+            default: break
+            }
+            return true
+        }
+
         // Only Events gets what follows. Without this, a mode that declined a
         // key fell through to bindings that include Return → approve.
         guard Self.eventsOwnsKeyboard(nav.mode) else { return false }
@@ -5987,6 +6038,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             } else {
                 top ? nav.selectFirstUsageClient() : nav.selectLastUsageClient()
             }
+        case .prs:
+            nav.jumpPullRequestSelection(toLast: !top)
         case .outcomes:
             // Overview pane scrolls; the tickets list jumps its selection.
             if nav.outcomesPane == .overview { scrollDetailToEdge(top: top) }

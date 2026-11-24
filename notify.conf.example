@@ -108,6 +108,12 @@ STACKNUDGE_FLOATING_WIDGET=companion
 # iterm. Default: Ghostty when installed, else Terminal.app.
 #STACKNUDGE_SESSION_TERMINAL=iterm
 
+# GitHub requests (PR links, GitHub activity) use the GitHub CLI's login when
+# gh is installed and logged in, else the app's own sign-in. false always uses
+# the sign-in.
+# Default: true
+#STACKNUDGE_GITHUB_USE_GH=false
+
 # Fair-usage budget for pi, in tokens per day, per lane. pi enforces no quota
 # of its own — API models bill per token against your keys, local models are
 # free — so these are your own allowances and nothing cuts you off at them. The

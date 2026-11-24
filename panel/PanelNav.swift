@@ -40,6 +40,8 @@ enum PanelMode: Hashable {
     case sessions
     case usage
     case outcomes
+    // Your open PRs and reviews waiting on you; shown while GitHub activity is on.
+    case prs
     // A tab contributed by an installed extension, keyed by its id.
     case extensionTab(String)
     case settings
@@ -212,7 +214,7 @@ enum SettingsRow: Hashable {
     case quotaTracking, quotaAlerts, alertThreshold, pollFrequency, contextAlert, showRemaining
     case piApiBudget, piLocalBudget
     case awayLock
-    case githubLinks, hideShipped, connectGithub, disconnectGithub
+    case githubLinks, githubActivity, hideShipped, connectGithub, disconnectGithub
     case historyPerSession
     case editPhrases, checkPermissions, openConfig, releaseNotes, checkUpdates, uninstall, quit
     case browseExtensions, extensionSources
@@ -267,7 +269,7 @@ extension SettingsRow: CaseIterable {
         .quotaTracking, .quotaAlerts, .alertThreshold, .pollFrequency,
         .contextAlert, .showRemaining, .piApiBudget, .piLocalBudget,
         .awayLock,
-        .githubLinks, .hideShipped, .connectGithub, .disconnectGithub,
+        .githubLinks, .githubActivity, .hideShipped, .connectGithub, .disconnectGithub,
         .historyPerSession,
         .editPhrases, .checkPermissions, .openConfig, .releaseNotes,
         .checkUpdates, .uninstall, .quit,
@@ -628,6 +630,36 @@ final class PanelNav: ObservableObject {
     // Mirror of STACKNUDGE_GITHUB; gates the PR fetch. Off by default — local
     // git tracking stays fully functional without a GitHub token.
     @Published var githubLinkingEnabled: Bool = false
+    // Activity on your PRs and requests for your review, as feed events
+    // (STACKNUDGE_GITHUB_ACTIVITY). Needs the same GitHub sign-in.
+    @Published var githubActivityEnabled: Bool = false
+    // STACKNUDGE_GITHUB_USE_GH, and whether the gh login is what's in use.
+    @Published var githubUseGH = true
+    @Published var githubUsesCLILogin = false
+    // The PRs tab's data: the latest poll's snapshot and whose it is.
+    @Published var pullRequestSnapshot: GitHubFeed.Snapshot?
+    @Published var pullRequestLogin: String?
+    @Published var prSelectedIndex = 0
+
+    var pullRequestRows: [PRRow] {
+        pullRequestSnapshot.map { PRRows.rows($0, login: pullRequestLogin) } ?? []
+    }
+
+    func movePullRequestSelection(_ delta: Int) {
+        let count = pullRequestRows.count
+        guard count > 0 else { return }
+        prSelectedIndex = max(0, min(count - 1, prSelectedIndex + delta))
+    }
+
+    func jumpPullRequestSelection(toLast: Bool) {
+        prSelectedIndex = toLast ? max(0, pullRequestRows.count - 1) : 0
+    }
+
+    func openSelectedPullRequest() {
+        let rows = pullRequestRows
+        guard rows.indices.contains(prSelectedIndex), let url = rows[prSelectedIndex].url else { return }
+        NSWorkspace.shared.open(url)
+    }
     // STACKNUDGE_HIDE_SHIPPED — drop groups whose PR reads merged so the tab
     // focuses on in-flight work. Needs GitHub linking to know "merged".
     @Published var hideShippedTickets: Bool = false
@@ -782,12 +814,18 @@ final class PanelNav: ObservableObject {
         }
     }
 
-    // Settings "Connect GitHub": the Tickets card's sign-in, started from the
-    // GitHub page. While a code waits, ⏎ copies it and opens GitHub's page for
+    // Set while a sign-in started from Settings or the PRs tab is waiting for
+    // its code, so the code is copied and GitHub's page opened the moment it
+    // arrives and all that is left is to paste. The Tickets card leaves it off.
+    var githubSignInOpensBrowser = false
+
+    // Settings "Connect GitHub" and the PRs tab's button: the Tickets card's
+    // sign-in. While a code waits, ⏎ copies it and opens GitHub's page for
     // it, as the card's button does; while one is being asked for, nothing.
     func connectGithub() {
         switch githubSignIn {
         case .idle, .failed:
+            githubSignInOpensBrowser = true
             startGithubSignIn?()
         case .requesting:
             break
@@ -807,7 +845,8 @@ final class PanelNav: ObservableObject {
     // (clearing locally stops us using it but doesn't revoke server-side).
     func disconnectGithub() {
         GitHubAuth.clearToken()
-        githubSignedIn = false
+        // The gh login stays usable; only the app's own token goes.
+        githubSignedIn = githubUsesCLILogin
         githubSignIn = .idle
         githubSignInNote = nil
         pullRequestByBranch = [:]
@@ -1388,6 +1427,7 @@ final class PanelNav: ObservableObject {
     // read this, so a tab can't be drawn fifth and answer to ⌘6.
     var orderedTabs: [PanelMode] {
         var tabs: [PanelMode] = [.events, .sessions, .usage, .outcomes]
+        if githubActivityEnabled { tabs.append(.prs) }
         // First id wins. Two tabs sharing one id are structurally equal, so
         // ForEach drops a row, firstIndex(of:) can never reach the second, and
         // the lookup returns the first one's label for both.
@@ -1643,7 +1683,7 @@ final class PanelNav: ObservableObject {
         // Connect while signed out, Disconnect once signed in: the page is
         // somewhere to sign in from, not only to sign out.
         case .integrationPage(.github):
-            return [.githubLinks, .hideShipped, githubSignedIn ? .disconnectGithub : .connectGithub]
+            return [.githubLinks, .githubActivity, .hideShipped, githubSignedIn ? .disconnectGithub : .connectGithub]
         // Its own category rather than a row under Actions: extensions declare
         // STACKNUDGE_EXT_ keys, so per-extension configuration needs somewhere
         // to live, and it should not arrive by growing an unrelated category.
@@ -1894,8 +1934,11 @@ final class PanelNav: ObservableObject {
         voice           = config["STACKNUDGE_VOICE_NAME"]       ?? "af_aoede"
         voiceSpeed      = Double(config["STACKNUDGE_VOICE_SPEED"] ?? "") ?? 1.1
         githubLinkingEnabled = ConfigFile.bool(config, "STACKNUDGE_GITHUB", default: false)
+        githubActivityEnabled = ConfigFile.bool(config, "STACKNUDGE_GITHUB_ACTIVITY", default: false)
         hideShippedTickets = ConfigFile.bool(config, "STACKNUDGE_HIDE_SHIPPED", default: false)
-        githubSignedIn = GitHubAuth.token() != nil
+        githubUseGH = ConfigFile.bool(config, "STACKNUDGE_GITHUB_USE_GH", default: true)
+        githubUsesCLILogin = githubUseGH && GitHubCLI.isLoggedIn()
+        githubSignedIn = githubUsesCLILogin || GitHubAuth.token() != nil
         quotaTrackingEnabled = ConfigFile.bool(config, "STACKNUDGE_QUOTA_TRACKING", default: true)
         quotaAlertsEnabled   = ConfigFile.bool(config, "STACKNUDGE_QUOTA_ALERTS",   default: true)
         quotaShowRemaining   = ConfigFile.bool(config, "STACKNUDGE_QUOTA_SHOW_REMAINING", default: false)
@@ -2270,7 +2313,7 @@ final class PanelNav: ObservableObject {
              .keepOpenWhenEmpty, .launchAtLogin, .snapToCorners, .companionBadge,
              .soundEnabled, .voiceEnabled,
              .quotaTracking, .quotaAlerts, .showRemaining,
-             .githubLinks, .hideShipped, .eventHistory,
+             .githubLinks, .githubActivity, .hideShipped, .eventHistory,
              .slackEnabled, .slackDetail, .slackStop, .awayLock:
             return false
         case .permissions, .update, .extensionUpdates, .hotkey, .speakHotkey, .downloadVoiceModel:
@@ -2542,6 +2585,9 @@ final class PanelNav: ObservableObject {
             ConfigFile.write(key: "STACKNUDGE_AWAY_LOCK", value: awayLock ? "true" : "false")
         case .githubLinks:
             toggleGithubLinking()
+        case .githubActivity:
+            githubActivityEnabled.toggle()
+            ConfigFile.write(key: "STACKNUDGE_GITHUB_ACTIVITY", value: githubActivityEnabled ? "true" : "false")
         case .hideShipped:
             toggleHideShipped()
         case .slackEnabled:

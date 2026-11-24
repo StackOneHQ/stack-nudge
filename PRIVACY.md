@@ -22,6 +22,14 @@ StackNudge identifier, because there isn't one.
   device flow on `github.com`, then queries `api.github.com` for pull requests
   on branches you have worked on. The token is stored locally and is used for
   nothing else.
+- **GitHub activity** (`STACKNUDGE_GITHUB_ACTIVITY`). With the same token,
+  every 3 minutes it asks `api.github.com` for your open pull requests and the
+  ones requesting your review, with their recent comments, reviews and CI
+  state. What it has already seen is kept in `~/.stack-nudge/github-feed.json`.
+  When the GitHub CLI is installed and logged in, these requests and PR links
+  are made by `gh api` itself, so gh sends its own credential and stack-nudge
+  never reads or holds it; otherwise the app's own Keychain token is used.
+  `STACKNUDGE_GITHUB_USE_GH=false` always uses the app's token.
 - **Slack notifications** (`STACKNUDGE_SLACK`). Posts to `slack.com` with the
   bot token you supply, and looks your account up by email once to find the DM
   channel. Nudge text is included only if `STACKNUDGE_SLACK_DETAIL` is on.

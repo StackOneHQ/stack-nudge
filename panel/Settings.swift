@@ -898,6 +898,7 @@ struct SettingsView: View {
         case .slackDetail:     row(.slackDetail, label: "Include message text", kind: .toggle, value: nav.slackIncludeDetail ? "On" : "Off", enabled: nav.slackReady && nav.slackEnabled)
         case .slackStop:       row(.slackStop, label: "Also notify on finished turns", kind: .toggle, value: nav.slackNotifyOnStop ? "On" : "Off", enabled: nav.slackReady && nav.slackEnabled)
         case .githubLinks:     row(.githubLinks, label: "GitHub PR links", kind: .toggle, value: nav.githubLinkingEnabled ? "On" : "Off")
+        case .githubActivity:  row(.githubActivity, label: "GitHub activity", kind: .toggle, value: nav.githubActivityEnabled ? "On" : "Off")
         case .hideShipped:     row(.hideShipped, label: "Hide shipped", kind: .toggle, value: nav.hideShippedTickets ? "On" : "Off", enabled: nav.githubLinkingEnabled)
         case .connectGithub:
             let connect = connectGithubRow

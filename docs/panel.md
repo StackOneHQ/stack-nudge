@@ -4,7 +4,7 @@ Everything the floating panel does, tab by tab, and the keys for each. Start wit
 
 ## Opening it and moving around
 
-If you'd rather not click banners with the mouse, stack-nudge runs a small floating panel that you summon with a hotkey. Its tabs are **Events**, **Sessions**, **Usage** and **Outcomes**, then one per installed extension that adds a tab, then **Settings**, and it is fully keyboard-driven.
+If you'd rather not click banners with the mouse, stack-nudge runs a small floating panel that you summon with a hotkey. Its tabs are **Events**, **Sessions**, **Usage** and **Outcomes**, then **PRs** while [GitHub activity](#github-activity-and-the-prs-tab) is on, then one per installed extension that adds a tab, then **Settings**, and it is fully keyboard-driven.
 
 The panel is registered as a launchd agent by the first-launch wizard (or `./install.sh` for a source install) — no opt-in needed. To run quietly without macOS banners, toggle **Settings → Notifications → Banner notifications** off (panel-only mode).
 
@@ -156,7 +156,7 @@ Reachable from the tab strip, `Cmd+,`, or the last `Cmd`-number. A sidebar of ca
 | **Appearance** | Floating widget (`Pill`, `Companion` or `Off`), then the pill's own rows: Snap to corners, Widget corner, Widget opacity, Widget type, Mascot, Accent color |
 | **Companion** | Size, Count badge, Preview pose, Reset position; **Turn on companion** while it's off. See [Companion](#companion) |
 | **Usage** | Quota tracking, Quota alerts, Alert threshold, Poll frequency, Context alert, Show remaining, and the two pi budgets |
-| **Integrations** | A card each for Slack and GitHub, with where it stands on the right; `→` or `⏎` opens its page. Slack's: paste setup, detected user, test message, on/off, idle threshold, message text, finished turns. GitHub's: PR links, Hide shipped, Connect GitHub (or Disconnect once signed in). Each page's first line says what it's doing or what's wrong |
+| **Integrations** | A card each for Slack and GitHub, with where it stands on the right; `→` or `⏎` opens its page. Slack's: paste setup, detected user, test message, on/off, idle threshold, message text, finished turns. GitHub's: PR links, GitHub activity, Hide shipped, Connect GitHub (or Disconnect once signed in). Each page's first line says what it's doing or what's wrong |
 | **Extensions** | What's installed, then **Browse extensions** (see [Extensions](#extensions)) |
 | **Panel** | Hotkey, Pin panel, Keep open when empty, Launch at login, Name from tab titles |
 | **Events** | History per session, Event history, Clear event history |
@@ -204,11 +204,12 @@ Every captured agent session rolled up **by ticket**, derived from your branch n
 
 The two panes agree by construction: both read the same per-branch outcome and PR state, so a squash-merged branch reads as shipped in each.
 
-Opt-in GitHub linking adds real **PR + CI status** (so even squash-merged work reads as *merged*). Turn it on in Settings → Integrations → GitHub → **GitHub PR links**, then sign in with **Connect GitHub** on the same page, which runs GitHub's device flow (no `gh` needed): the page's first line shows the code to enter and where, and `⏎` on the row copies it and opens GitHub. The Tickets tab's card does the same. Config keys (all optional; the toggles in Settings write the same file):
+Opt-in GitHub linking adds real **PR + CI status** (so even squash-merged work reads as *merged*). Turn it on in Settings → Integrations → GitHub → **GitHub PR links**, then sign in with **Connect GitHub** on the same page (or the PRs tab's button), which runs GitHub's device flow: the page's first line shows the code to enter and where, GitHub's page opens with the code already copied, and `⏎` on the row copies it again. The Tickets tab's card does the same. A `gh` login stands in for the sign-in (see below). Config keys (all optional; the toggles in Settings write the same file):
 
 | Key | What it does |
 |-----|--------------|
 | `STACKNUDGE_GITHUB` | `true` to enable GitHub PR/CI linking (off by default) |
+| `STACKNUDGE_GITHUB_ACTIVITY` | `true` for GitHub activity events and the PRs tab (off by default; needs the sign-in above) |
 | `STACKNUDGE_GITHUB_CLIENT_ID` | Override the embedded OAuth app Client ID (rarely needed) |
 | `STACKNUDGE_TICKET_URL` | Deep-link template for ticket rows, e.g. `https://linear.app/acme/issue/{key}`; `{key}` is replaced with the ticket |
 | `STACKNUDGE_HIDE_SHIPPED` | `true` to drop groups once their PR reads merged, keeping the list on in-flight work |
@@ -221,6 +222,18 @@ The sign-in finishes only once the token is saved to the Keychain and reads back
 grep -c stack-nudge-version ~/.stack-nudge/notify.sh   # 0 means the script predates v1.26
 ./install.sh                                            # or reinstall from the app
 ```
+
+### GitHub activity and the PRs tab
+
+With **Settings → Integrations → GitHub → GitHub activity** on (`STACKNUDGE_GITHUB_ACTIVITY=true`, off by default) and the same GitHub sign-in as PR links, stack-nudge checks GitHub every 3 minutes for what changed on your pull requests and asks of you, and posts it as events:
+
+- review comments and threads from others (one row per PR per check; link-back bots are skipped)
+- approved, changes requested, CI failing or passing again, merge conflicts, ready to merge, checks passed on a new commit
+- review requests made to you by name, and a re-request after you reviewed (requests to your teams are listed in the PRs tab, without a nudge)
+
+If the GitHub CLI (`gh`) is installed and logged in, these requests and PR links go through it (`gh api`), so gh sends its own credential and stack-nudge never reads it, and the GitHub page's first line says so ("Signed in with your gh login"); otherwise it uses its own sign-in. That matters for an org that restricts third-party OAuth apps: until an owner approves stack-nudge's app, its own sign-in can't see the org's private repos, while a `gh` login usually can. `STACKNUDGE_GITHUB_USE_GH=false` always uses the sign-in. It searches by your login across GitHub, with no org filter. The first check records what is already there without announcing it, and its state lives in `~/.stack-nudge/github-feed.json`, so a relaunch announces nothing twice. `⏎` on one of these events opens it on GitHub.
+
+The same check fills a **PRs** tab, shown while GitHub activity is on: your open PRs (with draft, review, CI and conflict chips) and the PRs waiting on your review, asked of you by name first, then through your teams (marked with the team). `↑↓` select, `⏎` or a click opens the PR, `⌘↑` / `⌘↓` jump to the first / last row, `Esc` hides.
 
 ## Extensions
 
