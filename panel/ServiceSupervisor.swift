@@ -99,7 +99,8 @@ final class ServiceSupervisor {
         // malformed stdout, so the tab says whose bug it is.
         case malformedDocument(String)
         case signal(name: String, value: String)
-        case feed(event: Data)
+        case feed(ServiceProtocol.FeedPost)
+        case retract(key: String)
         case choices(key: String, options: [ConfigOption])
         // Something was dropped: too many messages, a line over its limit.
         // Sent once per process, since the point is to say it is happening,
@@ -301,6 +302,17 @@ final class ServiceSupervisor {
         }
     }
 
+    // The same for the action on one of its feed events, pressed from Events.
+    // Unlike a tab's document, a feed event outlives a restart, so this is sent
+    // to whichever process is running; the extension decides whether the key
+    // still means anything.
+    func perform(feedAction id: String, key: String) {
+        perform { [weak self] in
+            guard let self, self.state == .running else { return }
+            self.send(.feedAction(id: id, key: key))
+        }
+    }
+
     // MARK: - Spawning
 
     private func spawn() {
@@ -470,9 +482,12 @@ final class ServiceSupervisor {
                 return onEvent(.problem("signal \"\(name)\" wasn't granted"))
             }
             onEvent(.signal(name: name, value: value))
-        case .feed(let event):
+        case .feed(let post):
             guard granted.contains(.feed) else { return onEvent(.problem("feed wasn't granted")) }
-            onEvent(.feed(event: event))
+            onEvent(.feed(post))
+        case .retract(let key):
+            guard granted.contains(.feed) else { return onEvent(.problem("feed wasn't granted")) }
+            onEvent(.retract(key: key))
         case .choices(let key, let options):
             // Needs no capability: it only fills a picker for one of the
             // extension's own keys, which the host checks it declared.

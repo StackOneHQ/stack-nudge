@@ -16,16 +16,27 @@ enum NudgeKind: String {
 // posting through the socket. They carry no agent process, session or
 // FIFO, so anything keyed on those must ask `isFeed` first.
 enum EventSource: String, CaseIterable {
-    case agent, github, calendar, script
+    // `extension` is a service extension's feed; which one is the event's
+    // `extensionID`, and each has its own cap.
+    case agent, github, calendar, script, `extension`
 
     var label: String {
         switch self {
-        case .agent:    return "Agent"
-        case .github:   return "GitHub"
-        case .calendar: return "Calendar"
-        case .script:   return "Script"
+        case .agent:     return "Agent"
+        case .github:    return "GitHub"
+        case .calendar:  return "Calendar"
+        case .script:    return "Script"
+        case .extension: return "Extension"
         }
     }
+}
+
+// What ⏎ does on an extension's feed event, in place of opening its link: the
+// press goes back to the extension, which acts on it. Never persisted, so an
+// event restored at launch comes back without it.
+struct FeedAction: Equatable {
+    let id: String
+    let label: String
 }
 
 // How much a feed event asks of you: info is a heads-up, action wants
@@ -130,6 +141,9 @@ struct NudgeEvent: Identifiable, Equatable {
     // The comments a grouped feedback row stands for, newest first; empty for
     // an ordinary event.
     let members: [FeedMember]
+    // The service extension that posted it, for source `extension`.
+    let extensionID: String?
+    let feedAction: FeedAction?
 
     var isFeed: Bool { source != .agent }
 
@@ -158,6 +172,8 @@ struct NudgeEvent: Identifiable, Equatable {
          key: String? = nil,
          isRead: Bool = false,
          members: [FeedMember] = [],
+         extensionID: String? = nil,
+         feedAction: FeedAction? = nil,
          snoozedUntil: Date? = nil,
          id: UUID = UUID()) {
         self.id = id
@@ -195,6 +211,8 @@ struct NudgeEvent: Identifiable, Equatable {
         self.key = key
         self.isRead = isRead
         self.members = members
+        self.extensionID = extensionID
+        self.feedAction = feedAction
         self.snoozedUntil = snoozedUntil
     }
 
@@ -202,15 +220,19 @@ struct NudgeEvent: Identifiable, Equatable {
 
     // A feed event: no agent process behind it, so `agent` holds the source's
     // name for the places that display it.
+    // An extension's event shows the extension's name there instead.
     static func feed(source: EventSource, tag: String?, severity: EventSeverity = .info,
                      title: String, message: String, url: URL? = nil,
                      repo: String? = nil, pr: Int? = nil, key: String? = nil,
                      timestamp: Date = Date(), isRead: Bool = false,
-                     members: [FeedMember] = [], id: UUID = UUID()) -> NudgeEvent {
-        NudgeEvent(agent: source.label, kind: .other, title: title, message: message,
+                     members: [FeedMember] = [], name: String? = nil,
+                     extensionID: String? = nil, action: FeedAction? = nil,
+                     id: UUID = UUID()) -> NudgeEvent {
+        NudgeEvent(agent: name ?? source.label, kind: .other, title: title, message: message,
                    timestamp: timestamp, source: source, tag: tag, severity: severity,
                    url: url, repo: repo, pr: pr, key: key, isRead: isRead,
-                   members: Array(members.prefix(EventStore.maxMembers)), id: id)
+                   members: Array(members.prefix(EventStore.maxMembers)),
+                   extensionID: extensionID, feedAction: action, id: id)
     }
 
     // Whole-struct copy with the snoozedUntil overridden. EventStore uses
@@ -223,7 +245,15 @@ struct NudgeEvent: Identifiable, Equatable {
         copy(snoozedUntil: snoozedUntil, isRead: isRead)
     }
 
+    func withoutAction() -> NudgeEvent {
+        copy(snoozedUntil: snoozedUntil, isRead: isRead, feedAction: nil)
+    }
+
     private func copy(snoozedUntil: Date?, isRead: Bool) -> NudgeEvent {
+        copy(snoozedUntil: snoozedUntil, isRead: isRead, feedAction: feedAction)
+    }
+
+    private func copy(snoozedUntil: Date?, isRead: Bool, feedAction: FeedAction?) -> NudgeEvent {
         NudgeEvent(
             agent: agent, kind: kind, title: title, message: message,
             projectPath: projectPath, bundleID: bundleID,
@@ -244,6 +274,7 @@ struct NudgeEvent: Identifiable, Equatable {
             source: source, tag: tag, severity: severity,
             url: url, repo: repo, pr: pr, key: key,
             isRead: isRead, members: members,
+            extensionID: extensionID, feedAction: feedAction,
             snoozedUntil: snoozedUntil,
             id: id  // preserve identity across snooze cycles
         )
@@ -283,8 +314,23 @@ final class EventStore: ObservableObject {
     static let restoreWindow: TimeInterval = 7 * 24 * 60 * 60
 
     private func sessionKey(_ e: NudgeEvent) -> String {
-        if e.isFeed { return "feed:\(e.source.rawValue)" }
+        if e.isFeed { return Self.feedKey(e) }
         return e.claudeSessionID ?? "\(e.agent):\(e.projectPath ?? "")"
+    }
+
+    // Which cap a feed event counts against: its source's, and each
+    // extension's own, so one extension can't push another's events out.
+    static func feedKey(_ e: NudgeEvent) -> String {
+        guard e.source == .extension else { return "feed:\(e.source.rawValue)" }
+        return "feed:extension:\(e.extensionID ?? "")"
+    }
+
+    // Whether `incoming` replaces `existing` by key. Only within one source,
+    // and one extension: a key is the poster's own name for its event, so one
+    // poster can't replace another's by guessing it.
+    static func replaces(_ existing: NudgeEvent, with incoming: NudgeEvent) -> Bool {
+        existing.isFeed && incoming.isFeed && incoming.key != nil && existing.key == incoming.key
+            && feedKey(existing) == feedKey(incoming)
     }
 
     private func prune() {
@@ -310,22 +356,28 @@ final class EventStore: ObservableObject {
     func append(_ event: NudgeEvent) {
         // Claude Code occasionally fires the same hook twice in rapid
         // succession (observed on Stop). Drop the second event when an
-        // identical one landed within the dedup window.
+        // identical one landed within the dedup window. The title, key and
+        // extension count too: two feed events with the same text but their
+        // own keys are two things, and a keyed one replaces its earlier self
+        // below rather than being dropped as a repeat.
         let dedupWindow: TimeInterval = 2
         if events.contains(where: { existing in
             abs(event.timestamp.timeIntervalSince(existing.timestamp)) < dedupWindow
                 && existing.agent == event.agent
                 && existing.kind == event.kind
+                && existing.title == event.title
                 && existing.message == event.message
                 && existing.claudeSessionID == event.claudeSessionID
+                && existing.key == event.key
+                && existing.extensionID == event.extensionID
         }) {
             return
         }
         clearedFeed = false
         var event = event
         // A keyed feed event replaces its earlier self rather than stacking.
-        if event.isFeed, let key = event.key,
-           let old = events.firstIndex(where: { $0.isFeed && $0.key == key }) {
+        if event.isFeed, event.key != nil,
+           let old = events.firstIndex(where: { Self.replaces($0, with: event) }) {
             let wasSelected = selectedID == events[old].id
             expandedIDs.remove(events[old].id)
             events.remove(at: old)
@@ -367,11 +419,39 @@ final class EventStore: ObservableObject {
                                 severity: event.isFeed ? event.severity.rawValue : nil,
                                 repo: event.repo,
                                 pr: event.pr,
-                                key: event.key))
+                                key: event.key,
+                                extensionID: event.extensionID))
         onAppend?(event)
         if ProcessInfo.processInfo.environment["STACKNUDGE_PANEL_DEBUG"] != nil {
             FileHandle.standardError.write(Data(
                 "panel: received \(event.agent)/\(event.kind.rawValue): \(event.message)\n".utf8))
+        }
+    }
+
+    // An extension took back its event with this key. Gone from Events as a
+    // dismissal would take it, and logged the same way.
+    func retract(key: String, extensionID: String) {
+        guard let gone = events.first(where: {
+            $0.source == .extension && $0.extensionID == extensionID && $0.key == key
+        }) else { return }
+        remove(id: gone.id)
+    }
+
+    // ⏎ sent its action. The event stays, read, without the action, so a
+    // second press can't send it again; the extension replaces or retracts it
+    // once it has acted.
+    func actionSent(id: NudgeEvent.ID) {
+        guard let idx = events.firstIndex(where: { $0.id == id }), events[idx].feedAction != nil else { return }
+        events[idx] = events[idx].withoutAction()
+        setRead(id: id, true)
+    }
+
+    // Its extension can't take the actions any more; the events stay, as
+    // ordinary ones.
+    func dropActions(extensionID: String) {
+        for (idx, event) in events.enumerated()
+        where event.extensionID == extensionID && event.feedAction != nil {
+            events[idx] = event.withoutAction()
         }
     }
 
@@ -485,24 +565,29 @@ final class EventStore: ObservableObject {
     // EventLog.load returns it. Grouped rows come back as their newest comment
     // only: members are not persisted. Nothing here fires a banner.
     func restoreFeed(from records: [EventRecord], now: Date = Date()) {
-        var counts: [EventSource: Int] = [:]
+        var counts: [String: Int] = [:]
         var restored: [NudgeEvent] = []
         for record in records {
             guard let raw = record.source, let source = EventSource(rawValue: raw), source != .agent,
+                  source != .extension || record.extensionID != nil,
                   let uid = record.uid.flatMap(UUID.init(uuidString:)),
                   record.removed != true,
                   now.timeIntervalSince(record.at) <= Self.restoreWindow,
-                  !events.contains(where: { $0.id == uid }),
-                  counts[source, default: 0] < Self.maxEventsPerFeed
+                  !events.contains(where: { $0.id == uid })
             else { continue }
-            counts[source, default: 0] += 1
-            restored.append(.feed(
+            let event = NudgeEvent.feed(
                 source: source, tag: record.tag,
                 severity: record.severity.flatMap(EventSeverity.init(rawValue:)) ?? .info,
                 title: record.title, message: record.message,
                 url: record.url.flatMap { Self.webURL($0) },
                 repo: record.repo, pr: record.pr, key: record.key,
-                timestamp: record.at, isRead: record.read == true, id: uid))
+                timestamp: record.at, isRead: record.read == true,
+                name: source == .extension ? record.agent : nil,
+                extensionID: record.extensionID, id: uid)
+            let cap = Self.feedKey(event)
+            guard counts[cap, default: 0] < Self.maxEventsPerFeed else { continue }
+            counts[cap, default: 0] += 1
+            restored.append(event)
         }
         events.append(contentsOf: restored)
         events.sort { $0.timestamp > $1.timestamp }

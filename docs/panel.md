@@ -29,7 +29,7 @@ Recent nudges in chronological order. Each shows agent, message, project name, t
 | Key | Action |
 |-----|--------|
 | `↑ ↓` | Move selection |
-| `⏎` | Approve permission / focus source editor |
+| `⏎` | Approve permission / focus source editor. On a feed event, open its link, or send its extension's action when it has one (the footer names it) |
 | `O` | Focus source editor without approving, a waiting prompt goes back to the agent to answer there |
 | `S` / `⇧S` | Snooze a waiting permission prompt for 5 / 15 minutes: the hook keeps waiting and the banner fires again afterwards |
 | `M` | Mute all notifications for the configured duration (press again to resume) |

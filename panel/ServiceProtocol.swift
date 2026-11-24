@@ -47,6 +47,9 @@ enum ServiceProtocol {
         // document the way a view's `run --action` is. `row` is set for a row's
         // own action.
         case action(id: String, row: String?)
+        // The action on one of its feed events, pressed from Events. `key` is
+        // the event's own key, which is how the extension knows which one.
+        case feedAction(id: String, key: String)
         case ping(id: Int)
         case stop
     }
@@ -70,6 +73,8 @@ enum ServiceProtocol {
         case .action(let id, let row):
             object = ["type": "action", "id": id]
             if let row { object["row"] = row }
+        case .feedAction(let id, let key):
+            object = ["type": "action", "id": id, "feed": key]
         case .ping(let id):
             object = ["type": "ping", "id": id]
         case .stop:
@@ -90,15 +95,83 @@ enum ServiceProtocol {
         case ready(protocol: Int)
         case document(ExtensionDocument)
         case signal(name: String, value: String)
-        // The feed event's object, re-serialised. Kept as bytes because nothing
-        // consumes it yet (see ServiceSupervisor), and deciding its shape here
-        // would be deciding the feed's.
-        case feed(event: Data)
+        case feed(FeedPost)
+        // Takes its feed event with this key out of Events, when whatever it
+        // stood for has been dealt with elsewhere.
+        case retract(key: String)
         case pong(id: Int)
         // The values a `dynamic` config key may take right now, for its
         // Settings picker. Whether the key is declared, and dynamic, is the
         // host's to check: this only knows the line.
         case choices(key: String, options: [ConfigOption])
+    }
+
+    // A feed event, as an extension posts one. Text is trimmed to fit, as a
+    // document's is, but what names something (the key, the tag, the action)
+    // is refused when it's wrong rather than trimmed into another name.
+    struct FeedPost: Equatable {
+        let title: String
+        let message: String
+        let tag: String?
+        let severity: EventSeverity
+        let url: URL?
+        // Replaces an earlier event of this extension's with the same key, and
+        // is what an action and a retract name.
+        let key: String?
+        let action: FeedAction?
+
+        static let maxTitle = 256
+        static let maxMessage = 4096
+        static let maxName = 64
+
+        static func parse(_ object: [String: Any]) -> Result<FeedPost, InvalidLine> {
+            guard let rawTitle = object["title"] as? String,
+                  case let title = clipped(rawTitle, maxTitle), !title.isEmpty
+            else { return .failure(.init("feed event without a title")) }
+            let message = clipped((object["message"] as? String) ?? "", maxMessage)
+            let tag = object["tag"] as? String
+            if let tag, !isName(tag) { return .failure(.init("feed event with a tag that isn't a short name")) }
+            let key = object["key"] as? String
+            if let key, !isName(key) { return .failure(.init("feed event with a key that isn't a short name")) }
+            var severity = EventSeverity.info
+            if let raw = object["severity"] {
+                guard let name = raw as? String, let parsed = EventSeverity(rawValue: name)
+                else { return .failure(.init("feed event with a severity that isn't info, action or alert")) }
+                severity = parsed
+            }
+            var action: FeedAction?
+            if let raw = object["action"] {
+                guard let entry = raw as? [String: Any],
+                      let id = entry["id"] as? String, isName(id),
+                      let label = entry["label"] as? String,
+                      case let shown = clipped(label, maxName), !shown.isEmpty
+                else { return .failure(.init("feed event with an action that needs an id and a label")) }
+                // Without a key the extension couldn't tell which event the
+                // press was for.
+                guard key != nil else { return .failure(.init("feed event with an action but no key")) }
+                action = FeedAction(id: id, label: shown)
+            }
+            return .success(FeedPost(title: title, message: message, tag: tag, severity: severity,
+                                     url: EventStore.webURL(object["url"] as? String), key: key,
+                                     action: action))
+        }
+
+        // Letters, digits and `-_.:`, up to 64. Names go into the event log and
+        // come back in an `action` line, so they stay plain.
+        static func isName(_ value: String) -> Bool {
+            !value.isEmpty && value.count <= maxName && value.unicodeScalars.allSatisfy {
+                $0.isASCII && (CharacterSet.alphanumerics.contains($0) || "-_.:".unicodeScalars.contains($0))
+            }
+        }
+
+        private static func clipped(_ value: String, _ limit: Int) -> String {
+            String(value.trimmingCharacters(in: .whitespacesAndNewlines).prefix(limit))
+        }
+    }
+
+    struct InvalidLine: Error, Equatable {
+        let message: String
+        init(_ message: String) { self.message = message }
     }
 
     // More than a picker can sensibly step through, or a label longer than a
@@ -156,10 +229,16 @@ enum ServiceProtocol {
             else { return .invalid("signal without a name and value") }
             return .message(.signal(name: name, value: value))
         case "feed":
-            guard let event = object["event"] as? [String: Any],
-                  let data = try? JSONSerialization.data(withJSONObject: event, options: .sortedKeys)
+            guard let event = object["event"] as? [String: Any]
             else { return .invalid("feed without an event object") }
-            return .message(.feed(event: data))
+            switch FeedPost.parse(event) {
+            case .success(let post):    return .message(.feed(post))
+            case .failure(let failure): return .invalid(failure.message)
+            }
+        case "retract":
+            guard let key = object["key"] as? String, FeedPost.isName(key)
+            else { return .invalid("retract without a key") }
+            return .message(.retract(key: key))
         case "pong":
             guard let id = integer(object["id"]) else { return .invalid("pong without an id") }
             return .message(.pong(id: id))

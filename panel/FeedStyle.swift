@@ -46,6 +46,7 @@ enum FeedStyle {
         case .github:   return .blue
         case .calendar: return .mint
         case .script:   return .gray
+        case .extension: return .teal
         case .agent:    return .secondary
         }
     }
@@ -55,6 +56,7 @@ enum FeedStyle {
         case .github:   return "chevron.left.forwardslash.chevron.right"
         case .calendar: return "calendar"
         case .script:   return "terminal.fill"
+        case .extension: return "puzzlepiece.extension.fill"
         case .agent:    return "checkmark.circle.fill"
         }
     }
@@ -69,7 +71,8 @@ enum FeedStyle {
     }
 
     static func chip(for event: NudgeEvent) -> String {
-        var label = event.source.label
+        // An extension's events are named for the extension, which `agent` holds.
+        var label = event.source == .extension ? event.agent : event.source.label
         if let repo = event.repo, !repo.isEmpty {
             let name = repo.split(separator: "/").last.map(String.init) ?? repo
             label += " · " + name + (event.pr.map { "#\($0)" } ?? "")

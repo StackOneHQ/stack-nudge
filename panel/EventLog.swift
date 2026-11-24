@@ -32,6 +32,8 @@ struct EventRecord: Codable, Equatable, Identifiable {
     var key: String? = nil
     var read: Bool? = nil
     var removed: Bool? = nil
+    // The service extension a feed event came from, for source "extension".
+    var extensionID: String? = nil
 
     static let markerKind = "state"
 

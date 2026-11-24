@@ -52,6 +52,99 @@ final class FeedEventTests: XCTestCase {
         XCTAssertEqual(store.selectedID, recovered.id, "the replacement keeps the selection it replaced")
     }
 
+    // MARK: - Extension feeds
+
+    private func fromExtension(_ id: String, _ title: String = "Reply", key: String? = "draft-1",
+                               action: FeedAction? = FeedAction(id: "send", label: "Send")) -> NudgeEvent {
+        .feed(source: .extension, tag: "exchange", severity: .action, title: title, message: "body",
+              key: key, name: "Direct exchange", extensionID: id, action: action)
+    }
+
+    func testAnExtensionsEventIsNamedForTheExtension() {
+        let event = fromExtension("exchange")
+        XCTAssertEqual(event.agent, "Direct exchange")
+        XCTAssertEqual(FeedStyle.chip(for: event), "Direct exchange")
+        XCTAssertEqual(event.kind, .other)
+    }
+
+    // A key is the poster's own name for its event: another extension, or a
+    // script, using the same one adds a row rather than replacing this one.
+    func testAKeyOnlyReplacesTheSameExtensionsEvent() {
+        let store = EventStore()
+        store.append(fromExtension("exchange", "one"))
+        store.append(fromExtension("other", "two"))
+        store.append(.feed(source: .script, tag: nil, title: "three", message: "", key: "draft-1"))
+        XCTAssertEqual(store.events.count, 3)
+        store.append(fromExtension("exchange", "four"))
+        XCTAssertEqual(store.events.map(\.title).sorted(), ["four", "three", "two"])
+    }
+
+    // Each extension has its own cap, so one can't push another's events out.
+    func testEachExtensionHasItsOwnCap() {
+        let store = EventStore()
+        store.append(fromExtension("quiet", "keep", key: nil))
+        for n in 0..<(EventStore.maxEventsPerFeed + 5) {
+            store.append(fromExtension("chatty", "\(n)", key: nil))
+        }
+        XCTAssertEqual(store.events.filter { $0.extensionID == "chatty" }.count, EventStore.maxEventsPerFeed)
+        XCTAssertEqual(store.events.filter { $0.extensionID == "quiet" }.map(\.title), ["keep"])
+    }
+
+    func testARetractRemovesOnlyThatExtensionsEvent() {
+        let store = EventStore()
+        store.append(fromExtension("exchange"))
+        store.append(fromExtension("other"))
+        store.retract(key: "draft-1", extensionID: "exchange")
+        XCTAssertEqual(store.events.compactMap(\.extensionID), ["other"])
+        store.retract(key: "nope", extensionID: "other")
+        XCTAssertEqual(store.events.count, 1)
+    }
+
+    // Sending marks it read and takes the action off, so a second ⏎ can't
+    // send it twice.
+    func testSendingAnActionSpendsIt() {
+        let store = EventStore()
+        let event = fromExtension("exchange")
+        store.append(event)
+        store.actionSent(id: event.id)
+        XCTAssertNil(store.events.first?.feedAction)
+        XCTAssertEqual(store.events.first?.isRead, true)
+        XCTAssertEqual(store.events.first?.key, "draft-1")
+    }
+
+    func testAnExtensionThatStopsLeavesItsEventsWithoutActions() {
+        let store = EventStore()
+        store.append(fromExtension("exchange"))
+        store.append(fromExtension("other"))
+        store.dropActions(extensionID: "exchange")
+        XCTAssertNil(store.events.first { $0.extensionID == "exchange" }?.feedAction)
+        XCTAssertNotNil(store.events.first { $0.extensionID == "other" }?.feedAction)
+    }
+
+    // Restored at launch with their extension and name, but never their
+    // action: a running extension sends its live ones again.
+    func testAnExtensionsEventIsRestoredWithoutItsAction() {
+        let posted = fromExtension("exchange")
+        let record = EventRecord(at: Date(), agent: posted.agent, kind: "other", title: posted.title,
+                                 message: posted.message, project: nil, session: nil,
+                                 source: "extension", tag: posted.tag, uid: posted.id.uuidString,
+                                 severity: "action", key: posted.key, extensionID: "exchange")
+        let store = EventStore()
+        store.restoreFeed(from: [record])
+        XCTAssertEqual(store.events.first?.extensionID, "exchange")
+        XCTAssertEqual(store.events.first?.agent, "Direct exchange")
+        XCTAssertNil(store.events.first?.feedAction)
+    }
+
+    // A script can't post as an extension: an extension's event can carry an
+    // action that ⏎ sends back to it.
+    func testAScriptCannotClaimToBeAnExtension() {
+        let event = EventListener.parseEvents(Data(#"{"agent":"x","event":"other","title":"Send","message":"m","source":"extension","key":"draft-1"}"#.utf8)).first
+        XCTAssertEqual(event?.source, .script)
+        XCTAssertNil(event?.extensionID)
+        XCTAssertNil(event?.feedAction)
+    }
+
     func testUnkeyedFeedEventsStack() {
         let store = EventStore()
         store.append(feed("one", key: nil))

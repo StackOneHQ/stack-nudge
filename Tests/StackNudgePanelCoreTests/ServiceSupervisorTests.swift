@@ -478,6 +478,27 @@ final class ServiceSupervisorTests: XCTestCase {
         XCTAssertEqual(sent.first?["row"] as? String, "d1")
     }
 
+    // A retract needs the feed grant too: without it the extension has no
+    // events of its own to take back.
+    func testARetractWithoutTheFeedGrantIsRefused() {
+        _ = running()
+        spawner.last.say(#"{"type":"retract","key":"draft-1"}"#)
+        XCTAssertFalse(events.contains { if case .retract = $0 { return true } else { return false } })
+        XCTAssertTrue(events.contains { if case .problem = $0 { return true } else { return false } })
+    }
+
+    func testAFeedActionReachesOnlyARunningExtension() {
+        let s = supervisor(granted: [.feed])
+        s.start()
+        s.perform(feedAction: "send", key: "draft-1")
+        spawner.last.ready()
+        s.perform(feedAction: "send", key: "draft-1")
+        let sent = spawner.last.messages.filter { $0["type"] as? String == "action" }
+        XCTAssertEqual(sent.count, 1)
+        XCTAssertEqual(sent.first?["feed"] as? String, "draft-1")
+        XCTAssertEqual(sent.first?["id"] as? String, "send")
+    }
+
     func testAMalformedDocumentIsReportedAsTheExtensionsBug() {
         _ = running()
         spawner.last.say(#"{"type":"document","document":{"schema":9}}"#)

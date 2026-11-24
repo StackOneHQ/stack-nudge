@@ -861,7 +861,7 @@ struct PanelContentView: View {
 
     private var primaryActionLabel: String? {
         guard let event = store.selectedEvent else { return nil }
-        if event.isFeed { return event.url == nil ? "Done" : "Open" }
+        if event.isFeed { return event.feedAction?.label ?? (event.url == nil ? "Done" : "Open") }
         return event.kind == .permission ? "Approve" : "Open editor"
     }
 
@@ -1795,6 +1795,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             FileHandle.standardError.write(Data(
                 "stack-nudge: extension \"\(leftover.id)\" was still running from the last launch (pid \(leftover.process.pid)), so it was stopped\n".utf8))
         }
+        wireExtensionFeed()
         // Discovery is a directory listing and a few small JSON reads, so it
         // runs inline; nothing is spawned until a tab is opened.
         extensions.load()
@@ -5836,8 +5837,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         let sendApproval = approve && event.hasActionButton
 
         // A feed event opens its link and stays listed, read; one without a
-        // link is simply done.
+        // link is simply done. One whose extension gave it an action sends
+        // that instead.
         if event.isFeed {
+            if sendFeedAction(event) { return }
             if event.url != nil {
                 openFeedEvent(event)
             } else {
@@ -5898,6 +5901,28 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 agent: event.agent
             )
         }
+    }
+
+    // A service extension's feed goes into Events beside GitHub's and the
+    // scripts', under its own source and cap.
+    private func wireExtensionFeed() {
+        extensions.onFeed = { [weak self] id, name, post in
+            self?.store.append(.feed(source: .extension, tag: post.tag, severity: post.severity,
+                                     title: post.title, message: post.message, url: post.url,
+                                     key: post.key, name: name, extensionID: id, action: post.action))
+        }
+        extensions.onRetract = { [weak self] id, key in self?.store.retract(key: key, extensionID: id) }
+        extensions.onFeedActionsLapsed = { [weak self] id in self?.store.dropActions(extensionID: id) }
+    }
+
+    // ⏎ on an extension's event with an action sends the action instead of
+    // opening a link. False when there's nothing to send, or nobody to send it
+    // to, and then ⏎ does what it does on any feed event.
+    private func sendFeedAction(_ event: NudgeEvent) -> Bool {
+        guard let action = event.feedAction, let key = event.key, let id = event.extensionID,
+              extensions.performFeedAction(action, key: key, on: id) else { return false }
+        store.actionSent(id: event.id)
+        return true
     }
 
     func openFeedEvent(_ event: NudgeEvent) {

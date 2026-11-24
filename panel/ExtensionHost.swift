@@ -100,6 +100,14 @@ final class ExtensionHost: ObservableObject {
     private let onTabsChanged: ([ExtensionTab]) -> Void
     private let onRefusalsChanged: (Int) -> Void
     private let onGlancesChanged: ([ExtensionGlance]) -> Void
+    // A service's feed event to post, with the extension's id and name, and a
+    // retract to apply (id, key). Set by the app, which owns the Events queue.
+    var onFeed: (String, String, ServiceProtocol.FeedPost) -> Void = { _, _, _ in }
+    var onRetract: (String, String) -> Void = { _, _ in }
+    // The extension stopped answering its feed actions (it stopped, is
+    // restarting, or broke), so its events lose them. A running process sends
+    // its live ones again, replacing the old by key.
+    var onFeedActionsLapsed: (String) -> Void = { _ in }
     // What was last published, so an unchanged glance doesn't redraw the widget
     // on every scheduled refresh.
     private var publishedGlances: [ExtensionGlance] = []
@@ -134,7 +142,6 @@ final class ExtensionHost: ObservableObject {
     private var stopping: [String: ServiceSupervisor] = [:]
     private var wanted: [String: (manifest: ExtensionManifest, allowed: [ExtensionCapability])] = [:]
     private var shuttingDown = false
-    private var reportedFeed: Set<String> = []
     private var extensionLog = ExtensionLog()
     private let writeLog: (String) -> Void
     private let now: () -> TimeInterval
@@ -619,6 +626,7 @@ final class ExtensionHost: ObservableObject {
 
     private func stopService(_ id: String) {
         guard let service = running.removeValue(forKey: id) else { return }
+        onFeedActionsLapsed(id)
         // Released now rather than when the process is finally gone: the
         // extension is no longer one the app listens to, so whatever it last
         // said must not keep acting.
@@ -684,14 +692,11 @@ final class ExtensionHost: ObservableObject {
                 return log(id, "sent choices for \(key), which it didn't declare as dynamic")
             }
             choices[id, default: [:]][key] = options
-        case .feed:
-            // Accepted and dropped. Posting it means giving EventStore a source
-            // per extension (`extension:<id>`, with its own cap), and
-            // EventSource is a closed enum that the event log persists, so that
-            // is its own change. Said once per process, not once per event.
-            if reportedFeed.insert(id).inserted {
-                log(id, "sent a feed event; those aren't shown yet, so it was dropped")
-            }
+        case .feed(let post):
+            guard let manifest = running[id]?.manifest else { return }
+            onFeed(id, manifest.name, post)
+        case .retract(let key):
+            onRetract(id, key)
         case .degraded(let why):
             log(id, "degraded \u{2014} \(why)")
         case .problem(let why):
@@ -703,18 +708,19 @@ final class ExtensionHost: ObservableObject {
         var pane = self.pane(id)
         switch state {
         case .starting:
-            reportedFeed.remove(id)
             if pane.document == nil { pane.status = .loading }
         case .running:
             pane.status = pane.document == nil ? .loading : .idle
         case .restarting(let delay):
             // A dead holder must not leave the app acting on what it last said.
             signals.reset(id)
+            onFeedActionsLapsed(id)
             let why = "restarting in \(Int(delay.rounded(.up)))s"
             pane.lastFailureWasTransient = true
             pane.status = pane.document == nil ? .broken(why) : .stale(why)
         case .broken(let termination):
             signals.reset(id)
+            onFeedActionsLapsed(id)
             pane.lastFailureWasTransient = false
             pane.status = .broken(Self.brokenMessage(termination))
         case .stopping, .stopped:
@@ -722,6 +728,20 @@ final class ExtensionHost: ObservableObject {
         }
         panes[id] = pane
         publishGlances()
+    }
+
+    // Whether ⏎ on one of this extension's feed events can reach it now. When
+    // it can't, the event acts as one without an action: its link, or done.
+    func canPerformFeedAction(for id: String) -> Bool {
+        running[id] != nil && services[id] == .running
+    }
+
+    // Sends the action on one of its feed events. False when it isn't running.
+    @discardableResult
+    func performFeedAction(_ action: FeedAction, key: String, on id: String) -> Bool {
+        guard canPerformFeedAction(for: id), let service = running[id] else { return false }
+        service.supervisor.perform(feedAction: action.id, key: key)
+        return true
     }
 
     // What a service was given, for its page's "Allowed" line. Empty for a

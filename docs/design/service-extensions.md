@@ -143,6 +143,8 @@ no capability. Additive: an extension that predates it skips the type.
 {"type": "document", "document": { "schema": 1, "header": {}, "rows": [] }}
 {"type": "signal", "name": "presence", "value": "away"}
 {"type": "feed", "event": { "title": "Left the desk", "tag": "away", "severity": "info" }}
+{"type": "feed", "event": { "title": "Reply for Sam", "message": "Looks good", "key": "draft-1", "action": { "id": "send", "label": "Send" } }}
+{"type": "retract", "key": "draft-1"}
 {"type": "pong", "id": 17}
 {"type": "choices", "key": "STACKNUDGE_EXT_AWAY_PHONE", "options": [{"value": "Pixel", "label": "Pixel · −70 dBm"}]}
 ```
@@ -150,10 +152,26 @@ no capability. Additive: an extension that predates it skips the type.
 - `document` replaces the tab's document, with the same schema and caps as a view
   extension's stdout today (8 MB).
 - `signal` sets a named value the app's features read. See [Signals](#signals).
-- `feed` (*not yet delivered*: the host accepts the line and logs it) posts a feed event on the same path as the socket's
+- `feed` posts a feed event to Events, on the same path as the socket's
   `"source":"script"` events (#235), so it can never be a permission prompt. It
-  gets its own source, `extension:<id>`, with its own cap of 20, so an extension
-  can't push the user's own script events out of the queue.
+  comes from source `extension`, named for the extension, with a cap of 20 per
+  extension, so one can't push the user's own events or another extension's out
+  of the queue. A socket script that claims that source is read as `script`. `title` is required;
+  `message` (up to 4,096 characters, trimmed), `tag`, `severity` (`info`,
+  `action`, `alert`), `url` (web links only, as from a script) and `key` are
+  optional. A `key` replaces this extension's earlier event with the same key,
+  never another poster's.
+- An event with a `key` may carry one `action`, `{"id", "label"}`. `⏎` on it in
+  Events, labelled with `label`, sends `{"type": "action", "id": "send", "feed":
+  "draft-1"}` back instead of opening the link. Sending marks it read and takes
+  the action off, so a second `⏎` can't send it twice: the extension replaces or
+  retracts the event once it has acted. A banner click never sends it. When the
+  extension stops, restarts or breaks, its events lose their actions and act as
+  ordinary feed events until it posts them again; actions aren't kept in the
+  event log, so a restored event has none either.
+- `retract` takes this extension's event with that `key` out of Events, for
+  when what it stood for was dealt with elsewhere. Both need the `feed`
+  capability.
 - `choices` offers the values a `dynamic` config key may take right now, for its
   Settings picker (see [Where an extension appears](#where-an-extension-appears)).
   Kept only for a key the manifest declared as `dynamic`; at most 64 options,

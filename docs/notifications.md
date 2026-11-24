@@ -58,7 +58,7 @@ printf '%s\n' '{"agent":"deploy-bot","event":"other","title":"Deployed","message
 
 | Field | Meaning |
 |-------|---------|
-| `source` | `script`, `github` or `calendar`. Anything else, or `agent`, makes it an ordinary agent event. A feed event is never a permission prompt: it ignores `event`, `fifo_path`, `hook_pid` and `has_action_button`. |
+| `source` | `script`, `github` or `calendar`. Anything else, or `agent`, makes it an ordinary agent event. `extension` is read as `script`: only a service extension's own process posts as one. A feed event is never a permission prompt: it ignores `event`, `fifo_path`, `hook_pid` and `has_action_button`. |
 | `tag` | Free-form label that picks the row's icon: `review`, `review-request`, `ci`, `ready`, `deploy`, `pipeline` or `calendar`. Any other tag gets the source's icon. Searchable in history. |
 | `severity` | `info` (default), `action` or `alert`. Colours the icon grey, orange or red. |
 | `url` | Opened by `⏎` or `O` (the primary action reads **Open**). Only `http` and `https` links are kept. Without one, `⏎` just dismisses the row. |
