@@ -198,6 +198,9 @@ jobs:
 
       # Upload first, then drop this arch's older build, so the release is
       # never without one. The app reads its version from the artifact's name.
+      # A grep that matches nothing exits 1, which pipefail would turn into a
+      # failed step after a good upload (the first run had nothing to drop), so
+      # each one is allowed an empty result.
       - name: Publish ${{ matrix.arch }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -206,8 +209,8 @@ jobs:
           repo="$GITHUB_REPOSITORY"
           gh release upload nightly --repo "$repo" --clobber "$ARTIFACT" "$ARTIFACT.sha256"
           gh release view nightly --repo "$repo" --json assets --jq '.assets[].name' \
-            | grep -E -- "-macos-${{ matrix.arch }}\.tar\.gz(\.sha256)?$" \
-            | grep -v -F -x -e "$ARTIFACT" -e "$ARTIFACT.sha256" \
+            | { grep -E -- "-macos-${{ matrix.arch }}\.tar\.gz(\.sha256)?$" || true; } \
+            | { grep -v -F -x -e "$ARTIFACT" -e "$ARTIFACT.sha256" || true; } \
             | while read -r old; do gh release delete-asset nightly "$old" --repo "$repo" --yes; done
 
       - name: Cleanup keychain
