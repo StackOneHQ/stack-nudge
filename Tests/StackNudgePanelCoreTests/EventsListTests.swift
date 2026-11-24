@@ -241,11 +241,12 @@ final class EventsListTests: XCTestCase {
     // A held C autorepeats, and the first repeat used to be read as the
     // confirmation, clearing the feed without ever asking.
     func testAHeldCDoesNotConfirmClearAll() {
-        let c = KeyCode.cKey
+        // KeyCode is private to Panel.swift: C is 8 and ⌫ is 51.
+        let c: UInt16 = 8
         XCTAssertEqual(PanelController.clearConfirmKeyAction(keyCode: c, shifted: false, isRepeat: true), .ignoreRepeat)
         XCTAssertEqual(PanelController.clearConfirmKeyAction(keyCode: c, shifted: false, isRepeat: false), .clear)
         XCTAssertEqual(PanelController.clearConfirmKeyAction(keyCode: c, shifted: true, isRepeat: false), .cancel)
-        XCTAssertEqual(PanelController.clearConfirmKeyAction(keyCode: KeyCode.delete, shifted: false, isRepeat: false),
+        XCTAssertEqual(PanelController.clearConfirmKeyAction(keyCode: 51, shifted: false, isRepeat: false),
                        .cancel)
     }
 
