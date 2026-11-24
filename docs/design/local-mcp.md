@@ -1,8 +1,10 @@
 # A local MCP server
 
-Status: design. Nothing here is built yet. Each phase at the end is its own PR,
-and this doc is updated as they land, the way
-[service-extensions.md](service-extensions.md) was.
+Status: phase 1 (read) is built: the bridge, the server on its own socket, the
+settings registry, `settings_list`, `settings_get`, `sessions_list` and the
+resources with their update notifications. Later phases are marked *not yet
+delivered*. Each phase is its own PR, and this doc is updated as they land, the
+way [service-extensions.md](service-extensions.md) was.
 
 ## Why
 
@@ -79,14 +81,20 @@ claude mcp add stack-nudge -- ~/Applications/StackNudge.app/Contents/MacOS/stack
 ```
 
 The bridge does no MCP itself. It connects to the running app over
-`~/.stack-nudge/panel.sock`, the socket the hooks already use (user-only, 0600),
+`~/.stack-nudge/mcp.sock` (user-only, 0600, beside the hooks' `panel.sock`),
 sends a hello naming who launched it (below), then copies JSON-RPC lines both
 ways until either side closes. Everything else lives in the app, once: one
 settings model, one event store, one place to audit.
 
+The socket is separate from `panel.sock` because that one reads each
+connection to its end, one at a time, and a bridge holds its connection open
+for as long as its client runs. Each MCP connection gets its own reader and a
+writer queue with a cap, so a client that stops reading is dropped rather than
+blocking the main thread that sends it change notifications.
+
 - **No port.** Nothing listens on TCP, so there's no DNS rebinding, Origin check
-  or bearer token to get right. The trust boundary is the one the socket has
-  today: processes running as you.
+  or bearer token to get right. The trust boundary is the one the hook socket
+  has today: processes running as you.
 - **The app isn't running.** The bridge answers `server/discover` and
   `initialize` itself with no tools and an `instructions` string saying
   stack-nudge isn't running, rather than failing the client's startup. It
