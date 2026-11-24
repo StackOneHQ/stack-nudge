@@ -26,14 +26,14 @@ final class IntegrationPageTests: XCTestCase {
         XCTAssertEqual(nav.rows(in: .integrationPage(.slack)),
                        [.slackPaste, .slackIdentity, .slackTest,
                         .slackEnabled, .slackIdle, .slackDetail, .slackStop])
-        XCTAssertEqual(nav.rows(in: .integrationPage(.github)), [.githubLinks, .hideShipped, .connectGithub])
+        XCTAssertEqual(nav.rows(in: .integrationPage(.github)), [.githubLinks, .githubActivity, .hideShipped, .connectGithub])
     }
 
     // Signed out, the page is somewhere to sign in from; signed in, to sign out.
     func testGitHubOffersConnectOrDisconnectButNeverBoth() {
         let nav = PanelNav()
         nav.githubSignedIn = true
-        XCTAssertEqual(nav.rows(in: .integrationPage(.github)), [.githubLinks, .hideShipped, .disconnectGithub])
+        XCTAssertEqual(nav.rows(in: .integrationPage(.github)), [.githubLinks, .githubActivity, .hideShipped, .disconnectGithub])
     }
 
     // The second card, so "opens the selected one" can't pass as "opens a
@@ -189,5 +189,26 @@ final class IntegrationPageTests: XCTestCase {
         nav.githubSignedIn = true
         XCTAssertEqual(nav.cardStatus(.github).text, "On")
         XCTAssertEqual(nav.pageStatus(.github).text, "Signed in, PR links on")
+    }
+
+    // A gh login counts as signed in, and the page says that is what it is.
+    func testAGhLoginReadsAsSignedInAndSaysSo() {
+        let nav = PanelNav()
+        nav.githubLinkingEnabled = true
+        nav.githubSignedIn = true
+        nav.githubUsesCLILogin = true
+        XCTAssertEqual(nav.cardStatus(.github), IntegrationStatus(text: "On"))
+        XCTAssertEqual(nav.pageStatus(.github), IntegrationStatus(text: "Signed in with your gh login, PR links on"))
+    }
+
+    // The sign-in started here hands over the code and GitHub's page as soon
+    // as the code arrives, so the flag is raised before the flow starts.
+    func testConnectGitHubOpensGitHubOnceTheCodeArrives() {
+        let nav = PanelNav()
+        var started = 0
+        nav.startGithubSignIn = { started += 1 }
+        nav.connectGithub()
+        XCTAssertEqual(started, 1)
+        XCTAssertTrue(nav.githubSignInOpensBrowser)
     }
 }

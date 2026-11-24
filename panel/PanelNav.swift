@@ -1675,10 +1675,6 @@ final class PanelNav: ObservableObject {
         // somewhere to sign in from, not only to sign out.
         case .integrationPage(.github):
             return [.githubLinks, .githubActivity, .hideShipped, githubSignedIn ? .disconnectGithub : .connectGithub]
-        // Its own category once activity joined the PR links: Integrations
-        // would otherwise pass the ten-row cap (SettingsCategoryTests).
-        case .github:
-            return [.githubLinks, .githubActivity, .hideShipped, .disconnectGithub]
         // Its own category rather than a row under Actions: extensions declare
         // STACKNUDGE_EXT_ keys, so per-extension configuration needs somewhere
         // to live, and it should not arrive by growing an unrelated category.
@@ -2875,7 +2871,7 @@ struct ExtensionTab: Equatable, Identifiable {
 // one, in install order, and are listed by PanelNav.settingsCategories, since
 // only nav knows what is installed. `allCases` is the built-in ones alone.
 enum SettingsCategory: Hashable, CaseIterable {
-    case notifications, voice, appearance, companion, usage, integrations, github, extensions, panel, events,
+    case notifications, voice, appearance, companion, usage, integrations, extensions, panel, events,
          actions, about
     // One extension's page, a level below Extensions. Not in the sidebar.
     case extensionPage(String)
@@ -2883,7 +2879,7 @@ enum SettingsCategory: Hashable, CaseIterable {
     case integrationPage(Integration)
 
     static let allCases: [SettingsCategory] = [
-        .notifications, .voice, .appearance, .companion, .usage, .integrations, .github, .extensions,
+        .notifications, .voice, .appearance, .companion, .usage, .integrations, .extensions,
         .panel, .events, .actions, .about,
     ]
 
@@ -2897,7 +2893,6 @@ enum SettingsCategory: Hashable, CaseIterable {
         case .companion:     return "Companion"
         case .usage:         return "Usage"
         case .integrations:  return "Integrations"
-        case .github:        return "GitHub"
         case .extensions:    return "Extensions"
         case .panel:         return "Panel"
         case .events:        return "Events"
