@@ -70,7 +70,7 @@ cd stack-nudge
 ./install.sh
 ```
 
-The installer wires hooks for every agent it finds. On macOS it also builds and installs the app, which needs the Xcode Command Line Tools. Requires Python ≥ 3.10.
+The installer wires hooks for every agent it finds. On macOS it also builds and installs the app, which needs the Xcode Command Line Tools. Requires Python ≥ 3.11.
 
 ## The panel
 

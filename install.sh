@@ -62,7 +62,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   echo "  Installed StackNudge.app -> ~/Applications/StackNudge.app"
 fi
 
-# Pick a Python ≥ 3.10 for the venv. stackvox requires it, but `python3` on
+# Pick a Python ≥ 3.11 for the venv. stackvox requires it, but `python3` on
 # PATH is often the system 3.9 (especially in non-interactive shells).
 find_python() {
   if [[ -n "${STACKNUDGE_PYTHON:-}" && -x "${STACKNUDGE_PYTHON}" ]]; then
@@ -70,17 +70,15 @@ find_python() {
     return
   fi
   if command -v python3 >/dev/null 2>&1; then
-    if python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+    if python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
       command -v python3
       return
     fi
   fi
   for cand in /opt/homebrew/bin/python3.14 /opt/homebrew/bin/python3.13 \
               /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.11 \
-              /opt/homebrew/bin/python3.10 \
               /usr/local/bin/python3.14 /usr/local/bin/python3.13 \
-              /usr/local/bin/python3.12 /usr/local/bin/python3.11 \
-              /usr/local/bin/python3.10; do
+              /usr/local/bin/python3.12 /usr/local/bin/python3.11; do
     [[ -x "$cand" ]] && { echo "$cand"; return; }
   done
 }
@@ -89,11 +87,11 @@ find_python() {
 echo ""
 echo "# STAGE: venv"
 echo "Setting up voice engine..."
-STACKVOX_SPEC="stackvox>=0.15.0"
+STACKVOX_SPEC="stackvox>=0.16.3"
 PYTHON=$(find_python)
 if [[ -z "$PYTHON" ]]; then
   echo ""
-  echo "  ✗ Could not find Python ≥ 3.10 — required by the bundled voice engine (stackvox)."
+  echo "  ✗ Could not find Python ≥ 3.11 — required by the bundled voice engine (stackvox)."
   echo ""
   echo "    Install one of these and re-run ./install.sh:"
   echo "      brew install python@3.13"
@@ -101,7 +99,13 @@ if [[ -z "$PYTHON" ]]; then
   echo ""
   exit 1
 fi
-if [[ ! -x "$VENV/bin/stackvox" ]]; then
+# A venv made by an older install may sit on Python 3.10, which stackvox
+# 0.16.3 no longer supports: upgrading it in place would find no matching
+# release and stop the install. Rebuild it on the Python picked above instead.
+venv_python_ok() {
+  "$VENV/bin/python3" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null
+}
+if [[ ! -x "$VENV/bin/stackvox" ]] || ! venv_python_ok; then
   # Clear any partial/incompatible venv first. `python -m venv` over an
   # existing directory can fail with "[Errno 17] File exists" — e.g. a venv
   # left by a different Python, or an interrupted earlier install — so make
