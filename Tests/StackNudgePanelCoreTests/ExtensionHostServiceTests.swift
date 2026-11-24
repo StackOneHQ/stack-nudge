@@ -131,6 +131,28 @@ final class ExtensionHostServiceTests: XCTestCase {
         XCTAssertTrue(first.messages.filter { $0["type"] as? String == "action" }.isEmpty)
     }
 
+    // Running again, the tab still shows the dead process's document until
+    // the new one sends its own, and a key resolved against it would reach a
+    // process that never offered that action.
+    func testAKeyWaitsForTheRestartedProcesssOwnDocument() {
+        tiers = ["exchange": .service]
+        let host = host()
+        host.load(.init(installed: [manifest("exchange")]))
+        spawner.last.ready()
+        spawner.last.say(#"{"type":"document","document":{"schema":1,"actions":[{"id":"sync","label":"Sync","key":"s"}]}}"#)
+        spawner.last.exit(.exited(1))
+        if case .restarting(let delay) = host.services["exchange"] { clock.advance(delay) }
+        let second = spawner.last
+        second.ready()
+        XCTAssertEqual(host.services["exchange"], .running)
+        XCTAssertNotNil(host.pane("exchange").document)
+        XCTAssertFalse(host.tabKeys("exchange").actions)
+        XCTAssertFalse(host.handle(key: "s", on: "exchange"))
+        second.say(#"{"type":"document","document":{"schema":1,"actions":[{"id":"sync","label":"Sync","key":"s"}]}}"#)
+        XCTAssertTrue(host.handle(key: "s", on: "exchange"))
+        XCTAssertEqual(second.messages.filter { $0["type"] as? String == "action" }.count, 1)
+    }
+
     // MARK: - Documents
 
     func testADocumentFillsThePaneLikeAFetchDoes() {

@@ -322,7 +322,8 @@ are ignored rather than queued.
 A service extension isn't run again. Its running process is sent the same
 press as a line, `{"type": "action", "id": "open", "row": "h1"}`, and answers
 with a new `document` if what it shows has changed. A press while it's starting
-or restarting sends nothing. See the design note's
+or restarting, or before a restarted process has sent its first document, sends
+nothing. See the design note's
 [Protocol](design/service-extensions.md#protocol).
 
 #### Key bindings are requested, not granted
