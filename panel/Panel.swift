@@ -1778,6 +1778,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
         updateChecker = UpdateChecker(nav: nav)
         updateChecker?.start()
+        nav.onUpdateChannelChanged = { [weak self] in self?.updateChecker?.check() }
         startExtensionUpdateChecks()
         updater = Updater(nav: nav)
 

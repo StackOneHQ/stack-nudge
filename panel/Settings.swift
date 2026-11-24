@@ -567,8 +567,14 @@ struct SettingsView: View {
         return hints
     }
 
+    // The release version, which is what the bundled changelog is keyed by.
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+    }
+
+    // What the build is: the release, or a nightly built after it.
+    private var buildVersion: String {
+        BuildVersion.current()?.display ?? appVersion
     }
 
     // The head of an extension's own page: what it last reported, as a
@@ -680,7 +686,7 @@ struct SettingsView: View {
     // stepping Actions → About shifts the text and reads as the page twitching.
     private var aboutHeader: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("StackNudge v\(appVersion)")
+            Text("StackNudge v\(buildVersion)")
                 .font(.subheadline.monospacedDigit())
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 10)
@@ -947,6 +953,7 @@ struct SettingsView: View {
         case .checkPermissions: row(.checkPermissions, label: "Check permissions…", kind: .action, value: "")
         case .openConfig:       row(.openConfig, label: "Open config file…", kind: .action, value: "")
         case .releaseNotes:     row(.releaseNotes, label: "View release notes…", kind: .action, value: "")
+        case .updateChannel:    row(.updateChannel, label: "Update channel", kind: .cycle, value: nav.updateChannel.label)
         case .checkUpdates:     row(.checkUpdates, label: "Check for updates…", kind: .action, value: checkForUpdatesStatus)
         case .uninstall:        row(.uninstall, label: "Uninstall StackNudge…", kind: .action, value: "")
         case .quit:             row(.quit, label: "Quit panel", kind: .action, value: "")

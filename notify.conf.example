@@ -114,6 +114,12 @@ STACKNUDGE_FLOATING_WIDGET=companion
 # Default: true
 #STACKNUDGE_GITHUB_USE_GH=false
 
+# Which builds the in-app updater offers: stable (tagged releases) or nightly
+# (main, rebuilt each night it has moved, as the rolling `nightly`
+# pre-release). Also Settings → Actions → Update channel.
+# Default: stable
+#STACKNUDGE_UPDATE_CHANNEL=nightly
+
 # Fair-usage budget for pi, in tokens per day, per lane. pi enforces no quota
 # of its own — API models bill per token against your keys, local models are
 # free — so these are your own allowances and nothing cuts you off at them. The
