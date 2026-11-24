@@ -293,7 +293,7 @@ final class GitHubCLITests: XCTestCase {
     // A first page sends `after: null`; refusing it failed every paged query.
     func testNullVariablesAreLeftOut() {
         let args = GitHubCLI.graphQLArguments(body: #"{"query":"q","variables":{"q":"x","after":null}}"#)
-        XCTAssertEqual(args, ["api", "graphql", "-f", "query=q", "-f", "q=x"])
+        XCTAssertEqual(args, ["api", "graphql", "--hostname", "github.com", "-f", "query=q", "-f", "q=x"])
     }
 
     func testAnythingElseIsRefused() {
