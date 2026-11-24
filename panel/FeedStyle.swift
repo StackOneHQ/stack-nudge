@@ -10,7 +10,10 @@ enum FeedStyle {
         symbol(tag: event.tag, source: event.source)
     }
 
+    // An extension's events keep the extension's icon and colour whatever
+    // tag they carry, so one can't dress up as a GitHub review.
     static func symbol(tag: String?, source: EventSource) -> String {
+        if source == .extension { return sourceSymbol(source) }
         switch tag {
         case "review":         return "text.bubble.fill"
         case "review-request": return "person.crop.circle.badge.questionmark"
@@ -27,6 +30,7 @@ enum FeedStyle {
     // the two match. System colours adapt to light and dark. A tag the table
     // does not know takes its source's colour.
     static func color(tag: String?, source: EventSource) -> Color {
+        if source == .extension { return sourceColor(source) }
         switch tag?.trimmingCharacters(in: .whitespaces) {
         case "review":         return .blue
         case "review-request": return .purple

@@ -3791,9 +3791,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         let center = UNUserNotificationCenter.current()
         // Agent banners clear the stack so only the live prompt shows. A feed
         // banner must not: it would wipe a permission banner's Allow/Deny. A
-        // keyed feed reuses its key, so its newer banner replaces the older.
+        // keyed feed reuses its key, so its newer banner replaces the older,
+        // but only the same poster's: the source, and the extension, are in it.
         if !event.isFeed { center.removeAllDeliveredNotifications() }
-        let identifier = event.isFeed ? (event.key.map { "feed:\($0)" } ?? UUID().uuidString) : UUID().uuidString
+        let identifier = event.isFeed
+            ? (event.key.map { "\(EventStore.feedKey(event)):\($0)" } ?? UUID().uuidString)
+            : UUID().uuidString
         let req = UNNotificationRequest(identifier: identifier,
                                         content: content, trigger: nil)
         center.add(req, withCompletionHandler: nil)
@@ -5837,10 +5840,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         let sendApproval = approve && event.hasActionButton
 
         // A feed event opens its link and stays listed, read; one without a
-        // link is simply done. One whose extension gave it an action sends
-        // that instead.
+        // link is simply done. ⏎ on one whose extension gave it an action
+        // sends that instead; O never does.
         if event.isFeed {
-            if sendFeedAction(event) { return }
+            let canSend = event.extensionID.map(extensions.canPerformFeedAction) ?? false
+            if Self.feedOutcome(event, approve: approve, canSend: canSend) == .sendAction,
+               sendFeedAction(event) { return }
             if event.url != nil {
                 openFeedEvent(event)
             } else {
@@ -5913,6 +5918,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         }
         extensions.onRetract = { [weak self] id, key in self?.store.retract(key: key, extensionID: id) }
         extensions.onFeedActionsLapsed = { [weak self] id in self?.store.dropActions(extensionID: id) }
+    }
+
+    enum FeedOutcome: Equatable {
+        case sendAction, open, done
+    }
+
+    // What ⏎ (`approve`) or O does on a feed event. Only ⏎ sends an
+    // extension's action, and only while the extension can take it; otherwise
+    // the event opens its link, or is done.
+    static func feedOutcome(_ event: NudgeEvent, approve: Bool, canSend: Bool) -> FeedOutcome {
+        if approve, canSend, event.feedAction != nil, event.key != nil { return .sendAction }
+        return event.url == nil ? .done : .open
     }
 
     // ⏎ on an extension's event with an action sends the action instead of

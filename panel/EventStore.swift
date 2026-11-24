@@ -340,6 +340,16 @@ final class EventStore: ObservableObject {
             counts[k, default: 0] += 1
             return counts[k]! <= (e.isFeed ? Self.maxEventsPerFeed : maxEventsPerSession)
         }
+        // Past the overall ceiling the oldest feed events go first, so feeds,
+        // however many sources there are, can't push a waiting prompt out.
+        var excess = events.count - maxEventsTotal
+        guard excess > 0 else { return }
+        var dropped = Set<UUID>()
+        for event in events.reversed() where excess > 0 && event.isFeed {
+            dropped.insert(event.id)
+            excess -= 1
+        }
+        events.removeAll { dropped.contains($0.id) }
         if events.count > maxEventsTotal {
             events = Array(events.prefix(maxEventsTotal))
         }
@@ -356,10 +366,10 @@ final class EventStore: ObservableObject {
     func append(_ event: NudgeEvent) {
         // Claude Code occasionally fires the same hook twice in rapid
         // succession (observed on Stop). Drop the second event when an
-        // identical one landed within the dedup window. The title, key and
-        // extension count too: two feed events with the same text but their
-        // own keys are two things, and a keyed one replaces its earlier self
-        // below rather than being dropped as a repeat.
+        // identical one landed within the dedup window. The title, key,
+        // extension and action count too: two feed events with the same text
+        // but their own keys are two things, and a keyed one replaces its
+        // earlier self below rather than being dropped as a repeat.
         let dedupWindow: TimeInterval = 2
         if events.contains(where: { existing in
             abs(event.timestamp.timeIntervalSince(existing.timestamp)) < dedupWindow
@@ -370,6 +380,7 @@ final class EventStore: ObservableObject {
                 && existing.claudeSessionID == event.claudeSessionID
                 && existing.key == event.key
                 && existing.extensionID == event.extensionID
+                && existing.feedAction == event.feedAction
         }) {
             return
         }
@@ -380,6 +391,8 @@ final class EventStore: ObservableObject {
            let old = events.firstIndex(where: { Self.replaces($0, with: event) }) {
             let wasSelected = selectedID == events[old].id
             expandedIDs.remove(events[old].id)
+            // Logged as gone, so a relaunch restores the replacement only.
+            log?.append(.marker(uid: events[old].id, at: Date(), removed: true))
             events.remove(at: old)
             if wasSelected { selectedID = event.id }
         } else if let old = events.firstIndex(where: { Self.groups($0, with: event) }) {
@@ -567,6 +580,10 @@ final class EventStore: ObservableObject {
     func restoreFeed(from records: [EventRecord], now: Date = Date()) {
         var counts: [String: Int] = [:]
         var restored: [NudgeEvent] = []
+        // Newest first, so the first event seen under a poster's key is the
+        // one that replaced the rest. Logs written before replacements were
+        // recorded as removals still have the older ones.
+        var keys = Set<String>()
         for record in records {
             guard let raw = record.source, let source = EventSource(rawValue: raw), source != .agent,
                   source != .extension || record.extensionID != nil,
@@ -585,6 +602,10 @@ final class EventStore: ObservableObject {
                 name: source == .extension ? record.agent : nil,
                 extensionID: record.extensionID, id: uid)
             let cap = Self.feedKey(event)
+            if let key = event.key {
+                guard keys.insert("\(cap)|\(key)").inserted,
+                      !events.contains(where: { Self.replaces($0, with: event) }) else { continue }
+            }
             guard counts[cap, default: 0] < Self.maxEventsPerFeed else { continue }
             counts[cap, default: 0] += 1
             restored.append(event)

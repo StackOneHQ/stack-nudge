@@ -136,6 +136,83 @@ final class FeedEventTests: XCTestCase {
         XCTAssertNil(store.events.first?.feedAction)
     }
 
+    // Re-posting under a key three times, then relaunching, brings back one
+    // row: each replacement is logged as removing the one before.
+    func testAReplacedEventStaysGoneAfterARelaunch() {
+        let path = NSTemporaryDirectory() + "sn-feed-\(UUID().uuidString).jsonl"
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let log = EventLog(path: path)
+        let store = EventStore()
+        store.log = log
+        for title in ["one", "two", "three"] { store.append(fromExtension("exchange", title)) }
+        log.flush()
+
+        let relaunched = EventStore()
+        relaunched.restoreFeed(from: log.load())
+        XCTAssertEqual(relaunched.events.map(\.title), ["three"])
+    }
+
+    // A log written before replacements were recorded still restores the
+    // newest event per poster and key only.
+    func testRestoringKeepsTheNewestEventPerPosterAndKey() {
+        func record(_ title: String, _ id: String, ago: TimeInterval) -> EventRecord {
+            EventRecord(at: Date().addingTimeInterval(-ago), agent: "Direct exchange", kind: "other",
+                        title: title, message: "", project: nil, session: nil, source: "extension",
+                        uid: UUID().uuidString, key: "draft-1", extensionID: id)
+        }
+        let store = EventStore()
+        store.restoreFeed(from: [record("newest", "exchange", ago: 10), record("older", "exchange", ago: 20),
+                                 record("other's", "other", ago: 30)])
+        XCTAssertEqual(store.events.map(\.title), ["newest", "other's"])
+    }
+
+    // However many feeds there are, a waiting prompt isn't pushed out by
+    // them: past the overall ceiling the oldest feed events go first.
+    func testFeedsCantPushAPromptPastTheOverallCeiling() {
+        let store = EventStore()
+        let waiting = prompt()
+        store.append(waiting)
+        for ext in 0..<6 {
+            for n in 0..<EventStore.maxEventsPerFeed {
+                store.append(fromExtension("ext\(ext)", "\(ext)-\(n)", key: nil))
+            }
+        }
+        XCTAssertEqual(store.events.count, 100)
+        XCTAssertTrue(store.events.contains { $0.id == waiting.id })
+    }
+
+    // An event that gained an action isn't a repeat of the one without it.
+    func testGainingAnActionIsNotARepeat() {
+        let store = EventStore()
+        store.append(fromExtension("exchange", action: nil))
+        store.append(fromExtension("exchange"))
+        XCTAssertEqual(store.events.first?.feedAction, FeedAction(id: "send", label: "Send"))
+    }
+
+    // Only ⏎ sends an extension's action, and only while it can take it.
+    // O, or an extension that can't answer, opens the link or is done.
+    func testOnlyReturnSendsTheActionAndOnlyWhenItCanBeTaken() {
+        let withAction = fromExtension("exchange")
+        XCTAssertEqual(PanelController.feedOutcome(withAction, approve: true, canSend: true), .sendAction)
+        XCTAssertEqual(PanelController.feedOutcome(withAction, approve: false, canSend: true), .done)
+        XCTAssertEqual(PanelController.feedOutcome(withAction, approve: true, canSend: false), .done)
+        let linked = NudgeEvent.feed(source: .extension, tag: nil, title: "t", message: "",
+                                     url: URL(string: "https://example.com"), key: "k",
+                                     name: "x", extensionID: "x", action: FeedAction(id: "send", label: "Send"))
+        XCTAssertEqual(PanelController.feedOutcome(linked, approve: false, canSend: true), .open)
+        XCTAssertEqual(PanelController.feedOutcome(feed(), approve: true, canSend: true), .open)
+    }
+
+    // Whatever tag it uses, an extension's row has the extension's icon and
+    // colour, so it can't pass as a GitHub review.
+    func testAnExtensionCantBorrowAnotherSourcesLook() {
+        let dressedUp = NudgeEvent.feed(source: .extension, tag: "review", title: "t", message: "",
+                                        name: "GitHub", extensionID: "x")
+        XCTAssertEqual(FeedStyle.symbol(for: dressedUp), FeedStyle.sourceSymbol(.extension))
+        XCTAssertEqual(FeedStyle.color(tag: "review", source: .extension), FeedStyle.sourceColor(.extension))
+        XCTAssertEqual(FeedStyle.symbol(for: feed()), FeedStyle.symbol(tag: "ci", source: .github))
+    }
+
     // A script can't post as an extension: an extension's event can carry an
     // action that ⏎ sends back to it.
     func testAScriptCannotClaimToBeAnExtension() {

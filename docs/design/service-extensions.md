@@ -163,7 +163,9 @@ no capability. Additive: an extension that predates it skips the type.
   never another poster's.
 - An event with a `key` may carry one `action`, `{"id", "label"}`. `⏎` on it in
   Events, labelled with `label`, sends `{"type": "action", "id": "send", "feed":
-  "draft-1"}` back instead of opening the link. Sending marks it read and takes
+  "draft-1"}` back instead of opening the link (`O` still opens it, and never
+  sends). Its row keeps the extension's icon and colour whatever its tag, so it
+  can't pass as another source's. Sending marks it read and takes
   the action off, so a second `⏎` can't send it twice: the extension replaces or
   retracts the event once it has acted. A banner click never sends it. When the
   extension stops, restarts or breaks, its events lose their actions and act as
