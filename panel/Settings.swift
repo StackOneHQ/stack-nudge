@@ -50,14 +50,13 @@ struct SettingsView: View {
                     FooterHint(label: "Move", keys: ["↑", "↓"])
                 } else {
                     if nav.settingsDetailFocused {
-                        let onPage: Bool = { if case .extensionPage = nav.settingsCategory { return true }; return false }()
                         let hints = Self.detailFooterHints(
                             picker: nav.selectedRowIsPicker,
                             opensPage: nav.selectedRowOpensOnRight,
                             removeRow: { if case .extensionRemove? = nav.selectedRow { return true }; return false }(),
                             removable: nav.selectedRemovableExtension != nil,
-                            inExtensions: onPage || nav.settingsCategory == .extensions,
-                            onPage: onPage,
+                            inExtensions: nav.sidebarCategory == .extensions,
+                            backTo: nav.settingsBackLabel,
                             editingText: nav.extensionTextEdit != nil)
                         ForEach(hints.indices, id: \.self) { FooterHintRow(spec: hints[$0]) }
                     } else {
@@ -342,28 +341,26 @@ struct SettingsView: View {
         nav.contextAlertThresholdK == 0 ? "Off" : "\(nav.contextAlertThresholdK)K"
     }
 
-    // Delivery needs both halves, so every row past setup keys off this rather
-    // than the token alone.
-    private var slackReady: Bool {
-        nav.slackTokenPresent && nav.slackMemberID != nil
-    }
-
-    // The paste row doubles as the status line for the whole section: the last
-    // paste/lookup/test outcome wins, then a delivery error, then the resting
-    // state. A stale "token stored" next to a broken integration would be worse
-    // than saying nothing.
+    // The last paste, lookup or test outcome and any delivery error are the
+    // page's status line (PanelNav.pageStatus), so these say only what each
+    // row holds.
     private var slackPasteValue: String {
-        if let note = nav.slackSetupNote { return note }
-        if let error = nav.slackError { return error }
-        return nav.slackTokenPresent ? "token stored" : "not configured"
+        nav.slackTokenPresent ? "Token stored" : "Not set up"
     }
 
-    // Names who we'd DM and where that came from, because a wrong id would send
-    // your prompts to a colleague and the source is the tell.
     private var slackUserValue: String {
-        guard let id = nav.slackMemberID else { return "not set — press ⏎ to detect" }
-        let who = nav.slackMemberLabel.map { "\($0) · \(id)" } ?? id
-        return nav.slackIdentityFromEmail ? "\(who) (from git email)" : who
+        nav.slackRecipient ?? "Not set, press ⏎ to detect"
+    }
+
+    // Connect GitHub says what ⏎ does next: start a sign-in, copy the code a
+    // sign-in is waiting on, or try again after one failed.
+    private var connectGithubRow: (label: String, value: String, enabled: Bool) {
+        switch nav.githubSignIn {
+        case .idle:                                return ("Connect GitHub", "", true)
+        case .requesting:                          return ("Connect GitHub", "Asking GitHub…", false)
+        case .awaitingApproval(let userCode, _):   return ("Copy code and open GitHub", userCode, true)
+        case .failed:                              return ("Connect GitHub", "Try again", true)
+        }
     }
 
     private var checkForUpdatesStatus: String {
@@ -540,14 +537,15 @@ struct SettingsView: View {
     // asserted. Every hint stays in place as the selection moves, dimmed where
     // it doesn't apply, so the bar never reflows.
     //
-    // On the Extensions list and an extension's page: → opens a list row's
-    // page as ⏎ does, ⌘⌫ removes the extension whose row or Remove row is
-    // selected, and ← goes back to the list from a page. ⏎ and Space do
-    // nothing on the Remove row, which takes ⌘⌫ alone, so Act dims there.
+    // On the Extensions and Integrations lists → opens a row's page as ⏎
+    // does, and ← goes back to the list from a page (`backTo` names where ←
+    // goes). On Extensions and an extension's page ⌘⌫ removes the extension
+    // whose row or Remove row is selected. ⏎ and Space do nothing on the
+    // Remove row, which takes ⌘⌫ alone, so Act dims there.
     // While a text row is being typed into, the field has the keyboard and
     // only ⏎ (save) is its own; PageFooter adds Esc.
     static func detailFooterHints(picker: Bool, opensPage: Bool, removeRow: Bool,
-                                  removable: Bool, inExtensions: Bool, onPage: Bool,
+                                  removable: Bool, inExtensions: Bool, backTo: String,
                                   editingText: Bool) -> [FooterHintSpec] {
         if editingText { return [FooterHintSpec(label: "Save", keys: ["⏎"], primary: true)] }
         var hints = [
@@ -565,7 +563,7 @@ struct SettingsView: View {
         if inExtensions {
             hints.append(FooterHintSpec(label: "Remove", keys: ["⌘⌫"], dimmed: !removable))
         }
-        hints.append(FooterHintSpec(label: onPage ? "Extensions" : "Categories", keys: ["←"]))
+        hints.append(FooterHintSpec(label: backTo, keys: ["←"]))
         return hints
     }
 
@@ -593,6 +591,26 @@ struct SettingsView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .help(status ?? "")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.bottom, 4)
+    }
+
+    // The head of an integration's page, drawn as an extension page's is: its
+    // name, and what it's doing or what's wrong, in place of a status row.
+    private func integrationPageHeader(_ integration: Integration) -> some View {
+        let status = nav.pageStatus(integration)
+        return HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(integration.name)
+                .font(.subheadline.weight(.semibold))
+            Text(status.text)
+                .font(.caption)
+                .foregroundStyle(status.problem ? Color.orange : .secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .help(status.text)
+                .textSelection(.enabled)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10)
@@ -738,6 +756,44 @@ struct SettingsView: View {
         }
     }
 
+    // One line per integration, drawn as an installed extension's card: icon,
+    // name, what it does, and a short status on the right. → or ⏎ opens its
+    // page, where its settings live.
+    private func integrationCard(_ integration: Integration) -> some View {
+        let row = SettingsRow.integration(integration)
+        let selected = nav.settingsDetailFocused && nav.selectedSettingIndex == nav.index(of: row)
+        let status = nav.cardStatus(integration)
+        return HStack(spacing: 10) {
+            Image(systemName: integration.symbol)
+                .font(.system(size: 13))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(integration.name).font(.subheadline).lineLimit(1)
+                Text(integration.summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Text(status.text).font(.caption)
+                .foregroundStyle(status.problem ? Color.orange : .secondary)
+                .lineLimit(1)
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(Color.accentColor.opacity(selected ? 0.22 : 0)))
+        .contentShape(Rectangle())
+        // Moves the keyboard selection too, then opens the page as ⏎ would.
+        .onTapGesture {
+            nav.selectedSettingIndex = nav.index(of: row)
+            nav.openIntegrationPage(integration)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
+        .id(nav.index(of: row))
+    }
+
     // Not a row: nothing to select. The Browse row follows it.
     private var noExtensionsNote: some View {
         Text("No extensions installed \u{2014} Browse to add one")
@@ -836,15 +892,18 @@ struct SettingsView: View {
         // Integrations
         case .slackPaste:      row(.slackPaste, label: "Paste Slack setup", kind: .action, value: slackPasteValue)
         case .slackIdentity:   row(.slackIdentity, label: "Slack user", kind: .action, value: slackUserValue, enabled: nav.slackTokenPresent)
-        case .slackTest:       row(.slackTest, label: "Send test message", kind: .action, value: "", enabled: slackReady)
-        case .slackEnabled:    row(.slackEnabled, label: "Slack notifications", kind: .toggle, value: nav.slackEnabled ? "On" : "Off", enabled: slackReady)
-        case .slackIdle:       row(.slackIdle, label: "Notify when idle", kind: .cycle, value: SlackDelivery.idleLabel(nav.slackIdleMinutes), enabled: slackReady && nav.slackEnabled)
-        case .slackDetail:     row(.slackDetail, label: "Include message text", kind: .toggle, value: nav.slackIncludeDetail ? "On" : "Off", enabled: slackReady && nav.slackEnabled)
-        case .slackStop:       row(.slackStop, label: "Also notify on finished turns", kind: .toggle, value: nav.slackNotifyOnStop ? "On" : "Off", enabled: slackReady && nav.slackEnabled)
+        case .slackTest:       row(.slackTest, label: "Send test message", kind: .action, value: "", enabled: nav.slackReady)
+        case .slackEnabled:    row(.slackEnabled, label: "Slack notifications", kind: .toggle, value: nav.slackEnabled ? "On" : "Off", enabled: nav.slackReady)
+        case .slackIdle:       row(.slackIdle, label: "Notify when idle", kind: .cycle, value: SlackDelivery.idleLabel(nav.slackIdleMinutes), enabled: nav.slackReady && nav.slackEnabled)
+        case .slackDetail:     row(.slackDetail, label: "Include message text", kind: .toggle, value: nav.slackIncludeDetail ? "On" : "Off", enabled: nav.slackReady && nav.slackEnabled)
+        case .slackStop:       row(.slackStop, label: "Also notify on finished turns", kind: .toggle, value: nav.slackNotifyOnStop ? "On" : "Off", enabled: nav.slackReady && nav.slackEnabled)
         case .githubLinks:     row(.githubLinks, label: "GitHub PR links", kind: .toggle, value: nav.githubLinkingEnabled ? "On" : "Off")
         case .hideShipped:     row(.hideShipped, label: "Hide shipped", kind: .toggle, value: nav.hideShippedTickets ? "On" : "Off", enabled: nav.githubLinkingEnabled)
+        case .connectGithub:
+            let connect = connectGithubRow
+            row(.connectGithub, label: connect.label, kind: .action, value: connect.value, enabled: connect.enabled)
         case .disconnectGithub:
-            row(.disconnectGithub, label: "Disconnect GitHub…", kind: .action, value: nav.githubSignedIn ? "Signed in" : "", enabled: nav.githubSignedIn)
+            row(.disconnectGithub, label: "Disconnect GitHub…", kind: .action, value: "")
             if let note = nav.githubSignInNote {
                 Text(note).font(.caption).foregroundStyle(.orange)
                     .padding(.horizontal, 14).padding(.top, 2)
@@ -874,6 +933,7 @@ struct SettingsView: View {
         // column — but it is still a SettingsRow, so the selection ring, the
         // scroll-to-index and the arrow keys work on it unchanged.
         case .installedExtension(let id): extensionCard(id)
+        case .integration(let integration): integrationCard(integration)
 
         // Actions
         case .editPhrases:      row(.editPhrases, label: "Edit phrases…", kind: .action, value: "")
@@ -1001,6 +1061,9 @@ struct SettingsView: View {
                         }
                         if case .extensionPage(let id) = nav.settingsCategory {
                             extensionPageHeader(id)
+                        }
+                        if case .integrationPage(let integration) = nav.settingsCategory {
+                            integrationPageHeader(integration)
                         }
                         detailRows
                     }

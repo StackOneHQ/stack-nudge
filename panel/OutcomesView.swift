@@ -657,7 +657,7 @@ struct OutcomesView: View {
                     .textSelection(.enabled)
                 HStack(spacing: 8) {
                     cardButton("Copy & open GitHub", prominent: true) {
-                        copyAndOpen(code: userCode, url: verificationURI)
+                        PanelNav.copyGithubCodeAndOpen(code: userCode, url: verificationURI)
                     }
                     cardButton("Cancel") { nav.cancelGithubSignIn?() }
                 }
@@ -687,12 +687,6 @@ struct OutcomesView: View {
                 .foregroundStyle(prominent ? Color.white : Color.primary)
         }
         .buttonStyle(.plain)
-    }
-
-    private func copyAndOpen(code: String, url: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(code, forType: .string)
-        if let target = URL(string: url) { NSWorkspace.shared.open(target) }
     }
 
     private func displayURL(_ url: String) -> String {

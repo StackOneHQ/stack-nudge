@@ -2,10 +2,11 @@ import AppKit
 import SwiftUI
 
 // Dev-only: renders the panel from fixture state into PNGs: the README's
-// pictures (`readme`) and the Extensions pages (`extensions`), for reviewers
+// pictures (`readme`), the Extensions pages (`extensions`) and the
+// Integrations pages (`integrations`), for reviewers
 // to see each screen without installing anything.
 //
-//     StackNudge.app/Contents/MacOS/stack-nudge --render-screenshots <dir> [readme|extensions]
+//     StackNudge.app/Contents/MacOS/stack-nudge --render-screenshots <dir> [readme|extensions|integrations]
 //
 // The real SwiftUI views, at the panel's default size, in dark appearance, in
 // an offscreen window captured with cacheDisplay, which needs no Screen
@@ -24,11 +25,11 @@ enum ScreenshotRenderer {
         let args = CommandLine.arguments
         guard let i = args.firstIndex(of: flag) else { return }
         let directory = i + 1 < args.count ? args[i + 1] : FileManager.default.currentDirectoryPath
-        // Both sets unless one is named. A name that matches neither is a
+        // Every set unless one is named. A name that matches neither is a
         // typo, not an empty set.
         let set = i + 2 < args.count ? args[i + 2] : nil
         if let set, !scenarios.contains(where: { $0.set == set }) {
-            FileHandle.standardError.write(Data("render-screenshots: unknown set \(set); use readme or extensions\n".utf8))
+            FileHandle.standardError.write(Data("render-screenshots: unknown set \(set); use readme, extensions or integrations\n".utf8))
             exit(2)
         }
         NSApplication.shared.setActivationPolicy(.prohibited)
@@ -63,7 +64,7 @@ enum ScreenshotRenderer {
         let make: () -> (AnyView, () -> Void)
     }
 
-    static let scenarios: [Scenario] = readmeScenarios + [
+    static let scenarios: [Scenario] = readmeScenarios + integrationScenarios + [
         Scenario(name: "extensions-none") {
             let nav = fixtureNav(installed: [])
             return (settings(nav), { enterExtensions(nav) })
@@ -112,6 +113,55 @@ enum ScreenshotRenderer {
             })
         },
     ]
+
+    // MARK: - Integrations
+
+    private static let integrationScenarios: [Scenario] = [
+        Scenario(name: "integrations", set: "integrations") {
+            let nav = integrationsNav()
+            return (settings(nav), { enterIntegrations(nav) })
+        },
+        Scenario(name: "integration-page-slack", set: "integrations") {
+            let nav = integrationsNav()
+            return (settings(nav), { enterIntegrations(nav); nav.openIntegrationPage(.slack) })
+        },
+        Scenario(name: "integration-page-github", set: "integrations") {
+            let nav = integrationsNav()
+            return (settings(nav), { enterIntegrations(nav); nav.openIntegrationPage(.github) })
+        },
+        // Signed out with PR links just turned on: the code to enter, on the
+        // page that asked for it.
+        Scenario(name: "integration-page-github-signing-in", set: "integrations") {
+            let nav = integrationsNav()
+            nav.githubSignedIn = false
+            nav.githubSignIn = .awaitingApproval(userCode: "ABCD-1234",
+                                                 verificationURI: "https://github.com/login/device")
+            return (settings(nav), {
+                enterIntegrations(nav)
+                nav.openIntegrationPage(.github)
+                nav.selectedSettingIndex = nav.index(of: .connectGithub)
+            })
+        },
+    ]
+
+    private static func enterIntegrations(_ nav: PanelNav) {
+        nav.settingsCategory = .integrations
+        nav.settingsDetailFocused = true
+        nav.selectFirstCategoryRow()
+    }
+
+    // Slack set up and on, GitHub signed in with PR links on: the page as
+    // someone using both sees it. Made-up identity, and no write path reached.
+    private static func integrationsNav() -> PanelNav {
+        let nav = fixtureNav(installed: [])
+        nav.slackTokenPresent = true
+        nav.slackMemberID = "U012AB3CD"
+        nav.slackMemberLabel = "Alex"
+        nav.slackEnabled = true
+        nav.githubLinkingEnabled = true
+        nav.githubSignedIn = true
+        return nav
+    }
 
     // MARK: - Fixtures
 

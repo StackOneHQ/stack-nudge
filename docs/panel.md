@@ -146,7 +146,7 @@ Reachable from the tab strip, `Cmd+,`, or the last `Cmd`-number. A sidebar of ca
 | **Appearance** | Floating widget (`Pill`, `Companion` or `Off`), then the pill's own rows: Snap to corners, Widget corner, Widget opacity, Widget type, Mascot, Accent color |
 | **Companion** | Size, Count badge, Preview pose, Reset position; **Turn on companion** while it's off. See [Companion](#companion) |
 | **Usage** | Quota tracking, Quota alerts, Alert threshold, Poll frequency, Context alert, Show remaining, and the two pi budgets |
-| **Integrations** | Slack (paste setup, detected user, test message, on/off, idle threshold, message text, finished turns) and GitHub (PR links, Hide shipped, Disconnect) |
+| **Integrations** | A card each for Slack and GitHub, with where it stands on the right; `→` or `⏎` opens its page. Slack's: paste setup, detected user, test message, on/off, idle threshold, message text, finished turns. GitHub's: PR links, Hide shipped, Connect GitHub (or Disconnect once signed in). Each page's first line says what it's doing or what's wrong |
 | **Extensions** | What's installed, then **Browse extensions** (see [Extensions](#extensions)) |
 | **Panel** | Hotkey, Pin panel, Keep open when empty, Launch at login, Name from tab titles |
 | **Events** | History per session, Event history, Clear event history |
@@ -164,9 +164,9 @@ An extension that asks for a Settings page gets one under Extensions. A pending 
 | `Space` / `⏎` | Activate (toggles flip, action rows fire, hotkey row records a new combo, an extension's text setting opens its field). On a value row (sound, voice, duration, threshold, an extension's picker) it starts picking. |
 | `←` / `→` while picking | Step through the values (sounds and voices preview as you go) |
 | `Space` / `⏎` while picking | Settle on the value. Moving to another row settles it too. |
-| `→` / `⏎` on an Extensions row | Open that extension's page (or the browser, from Browse extensions) |
+| `→` / `⏎` on an Extensions or Integrations row | Open that extension's or integration's page (or the browser, from Browse extensions) |
 | `⌘⌫` on an Extensions row or a page's Remove row | Remove the extension (no confirmation; ignores autorepeat) |
-| `←` | Back to the category list, or from an extension's page back to the Extensions list |
+| `←` | Back to the category list, or from a page back to the list it was opened from (Extensions or Integrations) |
 | `Esc` | Hide the panel |
 
 The hotkey row records live: press `⏎` on it, press the new combo, and stack-nudge re-registers the global hotkey. If the combo is already grabbed by another app, the previous one stays and an inline error explains why.
@@ -194,7 +194,7 @@ Every captured agent session rolled up **by ticket**, derived from your branch n
 
 The two panes agree by construction: both read the same per-branch outcome and PR state, so a squash-merged branch reads as shipped in each.
 
-Opt-in GitHub linking adds real **PR + CI status** (so even squash-merged work reads as *merged*). Turn it on in Settings → Integrations → **GitHub PR links**, then sign in via the in-panel device flow (no `gh` needed). Config keys (all optional; the toggles in Settings write the same file):
+Opt-in GitHub linking adds real **PR + CI status** (so even squash-merged work reads as *merged*). Turn it on in Settings → Integrations → GitHub → **GitHub PR links**, then sign in with **Connect GitHub** on the same page, which runs GitHub's device flow (no `gh` needed): the page's first line shows the code to enter and where, and `⏎` on the row copies it and opens GitHub. The Tickets tab's card does the same. Config keys (all optional; the toggles in Settings write the same file):
 
 | Key | What it does |
 |-----|--------------|
@@ -203,7 +203,7 @@ Opt-in GitHub linking adds real **PR + CI status** (so even squash-merged work r
 | `STACKNUDGE_TICKET_URL` | Deep-link template for ticket rows, e.g. `https://linear.app/acme/issue/{key}`; `{key}` is replaced with the ticket |
 | `STACKNUDGE_HIDE_SHIPPED` | `true` to drop groups once their PR reads merged, keeping the list on in-flight work |
 
-The sign-in finishes only once the token is saved to the Keychain and reads back. If the Keychain refuses the write, the sign-in card says so (with the `OSStatus`) instead of showing you as signed in, and `~/.stack-nudge/app.log` gets a line. If an earlier sign-in's token is still there, you stay signed in on it, and Settings notes under **Disconnect GitHub…** that the new sign-in didn't save.
+The sign-in finishes only once the token is saved to the Keychain and reads back. If the Keychain refuses the write, the sign-in card and the GitHub page say so (with the `OSStatus`) instead of showing you as signed in, and `~/.stack-nudge/app.log` gets a line. If an earlier sign-in's token is still there, you stay signed in on it, and Settings notes under **Disconnect GitHub…** that the new sign-in didn't save.
 
 **Nothing showing up?** A session is recorded when an agent's turn ends *inside a git repo*, and only if the hook payload carries a session id. The Tickets empty state names which of those failed; `~/.stack-nudge/app.log` has a line per dropped turn. The usual cause is an installed hook script older than the app, since updates swap the `.app` alone: the app repairs that on launch, and Settings warns in the footer if the rewrite couldn't be applied. To fix it by hand:
 

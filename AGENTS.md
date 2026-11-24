@@ -23,7 +23,7 @@ Cancelling a field puts it back the way it was before you started and hands the 
 
 ### Moving through a page
 
-- **Into and out of a level inside a tab** (Settings categories and rows, the Settings → Extensions list and each extension's page, Usage clients and detail, Outcomes overview and tickets): `→` or `⏎` steps in, `←` steps back out. Stepping in lands on the first row or pane, so the path is predictable.
+- **Into and out of a level inside a tab** (Settings categories and rows, the Settings → Extensions and Settings → Integrations lists and each one's pages, Usage clients and detail, Outcomes overview and tickets): `→` or `⏎` steps in, `←` steps back out. Stepping in lands on the first row or pane, so the path is predictable.
 - **Carousels** (Usage detail panes): `←` / `→` walk the panes. `→` stops on the last pane rather than wrapping, and `←` on the first pane steps out a level, so the key that brought you in takes you back.
 - **Sub-pages** opened from another page (Phrases, Permissions, the extensions browser, the history pane, update and uninstall confirm): `←` goes back to the page it belongs under (Settings for most; setup for Permissions when setup opened it). Never `Esc`.
 - **`⌘1`…`⌘9`** jump straight to a tab. The order comes from one list in `PanelNav`, so the strip, the numbers and `⌘←/→` can't disagree.

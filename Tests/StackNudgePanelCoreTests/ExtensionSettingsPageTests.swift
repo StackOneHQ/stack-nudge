@@ -586,7 +586,8 @@ final class ExtensionSettingsPageTests: XCTestCase {
         func hints(_ opens: Bool, removeRow: Bool = false, removable: Bool = false,
                    onPage: Bool = false) -> [FooterHintSpec] {
             SettingsView.detailFooterHints(picker: false, opensPage: opens, removeRow: removeRow,
-                                           removable: removable, inExtensions: true, onPage: onPage,
+                                           removable: removable, inExtensions: true,
+                                           backTo: onPage ? "Extensions" : "Categories",
                                            editingText: false)
         }
         let list = hints(true, removable: true)
@@ -604,11 +605,11 @@ final class ExtensionSettingsPageTests: XCTestCase {
 
         let elsewhere = SettingsView.detailFooterHints(picker: true, opensPage: false, removeRow: false,
                                                        removable: false, inExtensions: false,
-                                                       onPage: false, editingText: false)
+                                                       backTo: "Categories", editingText: false)
         XCTAssertEqual(elsewhere.map(\.label), ["Move", "Category", "Pick", "Categories"])
         XCTAssertEqual(SettingsView.detailFooterHints(picker: false, opensPage: false, removeRow: false,
-                                                      removable: false, inExtensions: true, onPage: true,
-                                                      editingText: true).map(\.label), ["Save"])
+                                                      removable: false, inExtensions: true,
+                                                      backTo: "Extensions", editingText: true).map(\.label), ["Save"])
     }
 
     // MARK: - The list's status
