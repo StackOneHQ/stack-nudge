@@ -439,6 +439,15 @@ final class PanelNav: ObservableObject {
     @Published var postUpdateVersion: String?
     @Published var postUpdateNotes:   String?
     @Published var postUpdateFocus:   PostUpdateFocus = .gotIt
+
+    // Leaving the update screen. A widget user goes back to the pill: the
+    // screen expanded it to show itself, not because they asked for the panel.
+    func dismissPostUpdate() {
+        postUpdateVersion = nil
+        postUpdateNotes = nil
+        mode = .events
+        if compactMode { compactExpanded = false }
+    }
     // Latest quota snapshot from `claude /usage`. Driven by the CLI probe
     // poller in PanelController. nil before the first probe completes, or
     // when the probe failed (no `claude` on PATH, not signed in, parse error).

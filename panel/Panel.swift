@@ -192,11 +192,7 @@ struct PanelContentView: View {
             } else if nav.mode == .postUpdate {
                 // Full-screen takeover, no tab strip — matches welcome's
                 // single-purpose first-launch feel.
-                PostUpdateView(nav: nav, onDismiss: {
-                    nav.postUpdateVersion = nil
-                    nav.postUpdateNotes = nil
-                    nav.mode = .events
-                })
+                PostUpdateView(nav: nav, onDismiss: { nav.dismissPostUpdate() })
             } else if nav.mode == .permissions, nav.permissionsReturnMode == .bootstrap {
                 // Opened from setup, which has no tab strip: without one here
                 // too, the only way on is back to setup.
@@ -2047,6 +2043,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             // the widget collapse still happens via Esc / hotkey / explicit
             // user gestures, but auto-collapse on focus loss is suppressed.
             if pinned { return .stay }
+            // The pill never draws the update screen or the first-launch
+            // wizard, so collapsing would squeeze them into its frame. They
+            // stay up until the user leaves them.
+            if mode == .postUpdate || mode == .bootstrap { return .stay }
             return compactExpanded ? .collapse : .stay
         }
         return pinned ? .stay : .hide
@@ -4851,9 +4851,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 nav.acceptCompanionOffer()
             case .dismiss:
                 globalKeys.swallowRepeats(of: event.keyCode)
-                nav.postUpdateVersion = nil
-                nav.postUpdateNotes = nil
-                nav.mode = .events
+                nav.dismissPostUpdate()
             case .swallow:              break
             }
             return true
