@@ -261,14 +261,31 @@ final class SettingsCategoryTests: XCTestCase {
                         .calendarWeekdaysOnly, .calendarSummaryEmpty, .calendarDetectJoin])
     }
 
-    // Every calendar row is a toggle or a cycle, so arrows act on it.
-    func testArrowsActOnEveryCalendarRow() {
+    // Toggles flip on Space / ⏎ and ignore the arrows. The two value rows (lead
+    // time, summary time) pick: arrows step them only once Space has started it.
+    func testOnlyTheCalendarValueRowsPickAndArrowsLeaveThemAloneUntilThen() {
         let nav = PanelNav()
         nav.settingsCategory = .calendar
+        let pickers: [SettingsRow] = [.calendarLead, .calendarSummaryTime]
         for row in nav.rows(in: .calendar) {
             nav.selectedSettingIndex = nav.index(of: row) ?? 0
             XCTAssertEqual(nav.selectedRow, row)
-            XCTAssertTrue(nav.selectedRowRespondsToArrows, "\(row)")
+            XCTAssertEqual(nav.selectedRowIsPicker, pickers.contains(row), "\(row)")
+        }
+
+        let lead = nav.calendarLeadMinutes
+        let time = nav.calendarSummaryMinutes
+        for row in pickers {
+            nav.selectedSettingIndex = nav.index(of: row) ?? 0
+            nav.cycleForward()
+            nav.cycleBackward()
+            XCTAssertEqual(nav.calendarLeadMinutes, lead, "arrows must not step \(row) nobody picked")
+            XCTAssertEqual(nav.calendarSummaryMinutes, time, "arrows must not step \(row) nobody picked")
+            XCTAssertFalse(nav.pickingValue)
+            nav.activate()
+            XCTAssertTrue(nav.pickingValue, "\(row) starts picking on ⏎")
+            nav.activate()
+            XCTAssertFalse(nav.pickingValue)
         }
     }
 
