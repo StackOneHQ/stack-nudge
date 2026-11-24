@@ -326,6 +326,20 @@ struct ThinScrollers: NSViewRepresentable {
     }
 }
 
+// A strip that drags the window. The full panel used to be movable by its
+// whole background, and AppKit then recomputed the draggable regions every
+// display cycle by asking SwiftUI for the hit path of every row on screen,
+// which was about 40% of the main thread while scrolling the Events list.
+struct WindowDragArea: NSViewRepresentable {
+    final class DragView: NSView {
+        override var mouseDownCanMoveWindow: Bool { false }
+        override func mouseDown(with event: NSEvent) { window?.performDrag(with: event) }
+    }
+
+    func makeNSView(context: Context) -> NSView { DragView(frame: .zero) }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
 // The scroll view ↑/↓ move on a page with no selection to follow. Not simply
 // the first NSScrollView: the sideways tab strip sits above every page and
 // would match first, so take the first whose content overflows vertically.

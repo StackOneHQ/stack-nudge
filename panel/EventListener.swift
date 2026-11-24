@@ -186,16 +186,18 @@ private struct NudgeEventDTO: Decodable {
     let repo: String?
     let pr: Int?
     let key: String?
+    let members: [WireMember]?
+
+    struct WireMember: Decodable {
+        let title: String?
+        let message: String
+        let url: String?
+        let timestamp: Double?
+    }
 
     // Same trust boundary as the FIFO path: whatever opens this goes through
     // NSWorkspace, so only web links pass, never file:// or an app scheme.
-    static func validatedURL(_ raw: String?) -> URL? {
-        guard let raw, let url = URL(string: raw),
-              let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http",
-              url.host?.isEmpty == false
-        else { return nil }
-        return url
-    }
+    static func validatedURL(_ raw: String?) -> URL? { EventStore.webURL(raw) }
 
     // A script may call itself github or calendar, but never an agent: an
     // agent event is what Allow/Deny and focus act on, and those need the
@@ -257,7 +259,12 @@ private struct NudgeEventDTO: Decodable {
             url: Self.validatedURL(url),
             repo: repo,
             pr: pr,
-            key: key
+            key: key,
+            members: Self.feedSource(source) == .agent ? [] : (members ?? []).prefix(EventStore.maxMembers).map {
+                FeedMember(title: $0.title ?? title, message: $0.message,
+                           url: Self.validatedURL($0.url),
+                           at: $0.timestamp.map { Date(timeIntervalSince1970: $0) } ?? Date())
+            }
         )
     }
 }

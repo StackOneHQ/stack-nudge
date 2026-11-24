@@ -33,6 +33,23 @@ enum EventSource: String, CaseIterable {
 // already says (a permission prompt is the action).
 enum EventSeverity: String, CaseIterable {
     case info, action, alert
+
+    var rank: Int {
+        switch self {
+        case .info:   return 0
+        case .action: return 1
+        case .alert:  return 2
+        }
+    }
+}
+
+// One comment folded into a grouped PR feedback row. Kept on the grouped event
+// in a bounded form (EventStore.maxMembers) so the row can expand to show each.
+struct FeedMember: Equatable {
+    let title: String
+    let message: String
+    let url: URL?
+    let at: Date
 }
 
 struct NudgeEvent: Identifiable, Equatable {
@@ -107,6 +124,12 @@ struct NudgeEvent: Identifiable, Equatable {
     // A feed event with a key replaces the one already queued under it, so a
     // PR whose CI flips twice is one row, not two.
     let key: String?
+    // Feed events start unread and go read when opened or marked. Agent events
+    // never use it: a prompt is pending until answered, not read.
+    let isRead: Bool
+    // The comments a grouped feedback row stands for, newest first; empty for
+    // an ordinary event.
+    let members: [FeedMember]
 
     var isFeed: Bool { source != .agent }
 
@@ -133,6 +156,8 @@ struct NudgeEvent: Identifiable, Equatable {
          repo: String? = nil,
          pr: Int? = nil,
          key: String? = nil,
+         isRead: Bool = false,
+         members: [FeedMember] = [],
          snoozedUntil: Date? = nil,
          id: UUID = UUID()) {
         self.id = id
@@ -168,23 +193,37 @@ struct NudgeEvent: Identifiable, Equatable {
         self.repo = repo
         self.pr = pr
         self.key = key
+        self.isRead = isRead
+        self.members = members
         self.snoozedUntil = snoozedUntil
     }
+
+    var isUnread: Bool { isFeed && !isRead }
 
     // A feed event: no agent process behind it, so `agent` holds the source's
     // name for the places that display it.
     static func feed(source: EventSource, tag: String?, severity: EventSeverity = .info,
                      title: String, message: String, url: URL? = nil,
                      repo: String? = nil, pr: Int? = nil, key: String? = nil,
-                     timestamp: Date = Date()) -> NudgeEvent {
+                     timestamp: Date = Date(), isRead: Bool = false,
+                     members: [FeedMember] = [], id: UUID = UUID()) -> NudgeEvent {
         NudgeEvent(agent: source.label, kind: .other, title: title, message: message,
                    timestamp: timestamp, source: source, tag: tag, severity: severity,
-                   url: url, repo: repo, pr: pr, key: key)
+                   url: url, repo: repo, pr: pr, key: key, isRead: isRead,
+                   members: Array(members.prefix(EventStore.maxMembers)), id: id)
     }
 
     // Whole-struct copy with the snoozedUntil overridden. EventStore uses
     // this when the user snoozes / when the snooze elapses.
     func with(snoozedUntil: Date?) -> NudgeEvent {
+        copy(snoozedUntil: snoozedUntil, isRead: isRead)
+    }
+
+    func with(isRead: Bool) -> NudgeEvent {
+        copy(snoozedUntil: snoozedUntil, isRead: isRead)
+    }
+
+    private func copy(snoozedUntil: Date?, isRead: Bool) -> NudgeEvent {
         NudgeEvent(
             agent: agent, kind: kind, title: title, message: message,
             projectPath: projectPath, bundleID: bundleID,
@@ -204,6 +243,7 @@ struct NudgeEvent: Identifiable, Equatable {
             transcriptPath: transcriptPath,
             source: source, tag: tag, severity: severity,
             url: url, repo: repo, pr: pr, key: key,
+            isRead: isRead, members: members,
             snoozedUntil: snoozedUntil,
             id: id  // preserve identity across snooze cycles
         )
@@ -214,6 +254,20 @@ final class EventStore: ObservableObject {
 
     @Published private(set) var events: [NudgeEvent] = []
     @Published var selectedID: NudgeEvent.ID?
+    // Per session, never persisted: a filter left on from yesterday would hide
+    // today's events with no sign of why.
+    @Published var tagFilter = FeedTagFilter() {
+        didSet {
+            if !visibleEvents.contains(where: { $0.id == selectedID }) {
+                selectedID = visibleEvents.first?.id
+            }
+        }
+    }
+    // Grouped rows the user has opened. Not persisted.
+    @Published var expandedIDs: Set<NudgeEvent.ID> = []
+    // True after Clear all, until the next event lands: the empty list then
+    // reads "All caught up" rather than "No nudges yet".
+    @Published private(set) var clearedFeed = false
 
     var maxEventsPerSession: Int = 5 {
         didSet { if maxEventsPerSession != oldValue { prune() } }
@@ -222,6 +276,11 @@ final class EventStore: ObservableObject {
     // Feeds have no sessions; each source gets its own allowance instead, so a
     // busy week of PRs can't push agent prompts out of the queue or vice versa.
     static let maxEventsPerFeed = 20
+    // Comments kept on a grouped feedback row. Bounded so a PR that gets a
+    // hundred comments is still one small event.
+    static let maxMembers = 50
+    // Feed events older than this are not brought back from the log at launch.
+    static let restoreWindow: TimeInterval = 7 * 24 * 60 * 60
 
     private func sessionKey(_ e: NudgeEvent) -> String {
         if e.isFeed { return "feed:\(e.source.rawValue)" }
@@ -262,12 +321,25 @@ final class EventStore: ObservableObject {
         }) {
             return
         }
+        clearedFeed = false
+        var event = event
         // A keyed feed event replaces its earlier self rather than stacking.
         if event.isFeed, let key = event.key,
            let old = events.firstIndex(where: { $0.isFeed && $0.key == key }) {
             let wasSelected = selectedID == events[old].id
+            expandedIDs.remove(events[old].id)
             events.remove(at: old)
             if wasSelected { selectedID = event.id }
+        } else if let old = events.firstIndex(where: { Self.groups($0, with: event) }) {
+            // Feedback on one PR collapses into one row that keeps each comment.
+            let previous = events[old]
+            let wasSelected = selectedID == previous.id
+            let wasExpanded = expandedIDs.remove(previous.id) != nil
+            events.remove(at: old)
+            log?.append(.marker(uid: previous.id, at: Date(), removed: true))
+            event = Self.merged(previous: previous, incoming: event)
+            if wasSelected { selectedID = event.id }
+            if wasExpanded { expandedIDs.insert(event.id) }
         }
         events.insert(event, at: 0)
         // Bound per-session first (so a chatty session can't crowd out quiet
@@ -290,7 +362,12 @@ final class EventStore: ObservableObject {
                                 session: event.claudeSessionID,
                                 source: event.isFeed ? event.source.rawValue : nil,
                                 tag: event.tag,
-                                url: event.url?.absoluteString))
+                                url: event.url?.absoluteString,
+                                uid: event.isFeed ? event.id.uuidString : nil,
+                                severity: event.isFeed ? event.severity.rawValue : nil,
+                                repo: event.repo,
+                                pr: event.pr,
+                                key: event.key))
         onAppend?(event)
         if ProcessInfo.processInfo.environment["STACKNUDGE_PANEL_DEBUG"] != nil {
             FileHandle.standardError.write(Data(
@@ -299,8 +376,146 @@ final class EventStore: ObservableObject {
     }
 
     func remove(id: NudgeEvent.ID) {
+        if let gone = events.first(where: { $0.id == id }), gone.isFeed {
+            log?.append(.marker(uid: id, at: Date(), removed: true))
+        }
         events.removeAll { $0.id == id }
-        if selectedID == id { selectedID = events.first?.id }
+        expandedIDs.remove(id)
+        if selectedID == id { selectedID = visibleEvents.first?.id }
+    }
+
+    // Same trust boundary as the FIFO path: whatever opens this goes through
+    // NSWorkspace, so only web links pass, never file:// or an app scheme.
+    static func webURL(_ raw: String?) -> URL? {
+        guard let raw, let url = URL(string: raw),
+              let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http",
+              url.host?.isEmpty == false
+        else { return nil }
+        return url
+    }
+
+    // MARK: - Feed grouping
+
+    // Review feedback on the same PR from the same source.
+    static func groups(_ existing: NudgeEvent, with incoming: NudgeEvent) -> Bool {
+        guard existing.isFeed, incoming.isFeed,
+              incoming.tag == "review", existing.tag == "review",
+              existing.source == incoming.source,
+              let repo = incoming.repo, !repo.isEmpty, existing.repo == repo,
+              let pr = incoming.pr, existing.pr == pr
+        else { return false }
+        return true
+    }
+
+    private static func members(of event: NudgeEvent) -> [FeedMember] {
+        guard event.members.isEmpty else { return event.members }
+        return [FeedMember(title: event.title, message: event.message,
+                           url: event.url, at: event.timestamp)]
+    }
+
+    static func merged(previous: NudgeEvent, incoming: NudgeEvent) -> NudgeEvent {
+        let all = Array((members(of: incoming) + members(of: previous)).prefix(maxMembers))
+        let name = incoming.repo.map { $0.split(separator: "/").last.map(String.init) ?? $0 } ?? ""
+        return .feed(source: incoming.source, tag: incoming.tag,
+                     severity: incoming.severity.rank >= previous.severity.rank
+                         ? incoming.severity : previous.severity,
+                     title: "\(all.count) new comments on \(name)#\(incoming.pr ?? 0)",
+                     message: incoming.message, url: incoming.url ?? previous.url,
+                     repo: incoming.repo, pr: incoming.pr, key: incoming.key ?? previous.key,
+                     timestamp: incoming.timestamp, members: all, id: incoming.id)
+    }
+
+    // MARK: - Read state
+
+    var unreadCount: Int { events.filter(\.isUnread).count }
+
+    // What the Events tab label counts: prompts and stops are always pending,
+    // a feed event only while unread.
+    var pendingCount: Int { events.filter { !$0.isFeed || !$0.isRead }.count }
+
+    func unreadCount(forTag tag: String) -> Int {
+        events.filter { $0.isUnread && FeedTagFilter.key(for: $0) == tag }.count
+    }
+
+    func setRead(id: NudgeEvent.ID, _ read: Bool) {
+        guard let idx = events.firstIndex(where: { $0.id == id }),
+              events[idx].isFeed, events[idx].isRead != read else { return }
+        events[idx] = events[idx].with(isRead: read)
+        log?.append(.marker(uid: id, at: Date(), read: read))
+    }
+
+    func toggleRead(id: NudgeEvent.ID) {
+        guard let event = events.first(where: { $0.id == id }) else { return }
+        setRead(id: id, !event.isRead)
+    }
+
+    func markAllRead() {
+        for event in events where event.isUnread { setRead(id: event.id, true) }
+    }
+
+    // Removes every feed event; prompts and stops stay. Returns how many went.
+    @discardableResult
+    func clearFeed() -> Int {
+        let gone = events.filter(\.isFeed)
+        for event in gone { log?.append(.marker(uid: event.id, at: Date(), removed: true)) }
+        events.removeAll(where: \.isFeed)
+        expandedIDs.subtract(gone.map(\.id))
+        if !gone.isEmpty { clearedFeed = true }
+        if !events.contains(where: { $0.id == selectedID }) { selectedID = visibleEvents.first?.id }
+        return gone.count
+    }
+
+    func toggleExpanded(id: NudgeEvent.ID) {
+        guard events.first(where: { $0.id == id })?.members.isEmpty == false else { return }
+        if expandedIDs.contains(id) { expandedIDs.remove(id) } else { expandedIDs.insert(id) }
+    }
+
+    func setExpanded(id: NudgeEvent.ID, _ expanded: Bool) {
+        guard events.first(where: { $0.id == id })?.members.isEmpty == false else { return }
+        if expanded { expandedIDs.insert(id) } else { expandedIDs.remove(id) }
+    }
+
+    // Brings feed events back from the durable log at launch, with their read
+    // state, so unread items survive a relaunch. `records` is newest first as
+    // EventLog.load returns it. Grouped rows come back as their newest comment
+    // only: members are not persisted. Nothing here fires a banner.
+    func restoreFeed(from records: [EventRecord], now: Date = Date()) {
+        var counts: [EventSource: Int] = [:]
+        var restored: [NudgeEvent] = []
+        for record in records {
+            guard let raw = record.source, let source = EventSource(rawValue: raw), source != .agent,
+                  let uid = record.uid.flatMap(UUID.init(uuidString:)),
+                  record.removed != true,
+                  now.timeIntervalSince(record.at) <= Self.restoreWindow,
+                  !events.contains(where: { $0.id == uid }),
+                  counts[source, default: 0] < Self.maxEventsPerFeed
+            else { continue }
+            counts[source, default: 0] += 1
+            restored.append(.feed(
+                source: source, tag: record.tag,
+                severity: record.severity.flatMap(EventSeverity.init(rawValue:)) ?? .info,
+                title: record.title, message: record.message,
+                url: record.url.flatMap { Self.webURL($0) },
+                repo: record.repo, pr: record.pr, key: record.key,
+                timestamp: record.at, isRead: record.read == true, id: uid))
+        }
+        events.append(contentsOf: restored)
+        events.sort { $0.timestamp > $1.timestamp }
+        prune()
+        if selectedID == nil { selectedID = visibleEvents.first?.id }
+    }
+
+    // MARK: - Filtering
+
+    // Agent events are never filtered: a hidden permission prompt would leave
+    // an agent blocked with nothing on screen to say so.
+    var visibleEvents: [NudgeEvent] {
+        events.filter { !$0.isFeed || tagFilter.shows(FeedTagFilter.key(for: $0)) }
+    }
+
+    // Feed tags in the list, in the order chips show them.
+    var presentTags: [String] {
+        FeedTagFilter.present(in: events)
     }
 
     // Replace the event in-place with a new copy that has snoozedUntil set
@@ -311,20 +526,22 @@ final class EventStore: ObservableObject {
     }
 
     func selectNext() {
-        guard !events.isEmpty else { return }
-        let idx = events.firstIndex { $0.id == selectedID } ?? 0
-        selectedID = events[min(idx + 1, events.count - 1)].id
+        let visible = visibleEvents
+        guard !visible.isEmpty else { return }
+        let idx = visible.firstIndex { $0.id == selectedID } ?? 0
+        selectedID = visible[min(idx + 1, visible.count - 1)].id
     }
 
     func selectPrevious() {
-        guard !events.isEmpty else { return }
-        let idx = events.firstIndex { $0.id == selectedID } ?? 0
-        selectedID = events[max(idx - 1, 0)].id
+        let visible = visibleEvents
+        guard !visible.isEmpty else { return }
+        let idx = visible.firstIndex { $0.id == selectedID } ?? 0
+        selectedID = visible[max(idx - 1, 0)].id
     }
 
     // ⌘↑/↓ — jump to the first / last event.
-    func selectFirst() { selectedID = events.first?.id }
-    func selectLast()  { selectedID = events.last?.id }
+    func selectFirst() { selectedID = visibleEvents.first?.id }
+    func selectLast()  { selectedID = visibleEvents.last?.id }
 
     var selectedEvent: NudgeEvent? {
         events.first { $0.id == selectedID }

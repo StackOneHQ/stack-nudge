@@ -22,6 +22,27 @@ struct EventRecord: Codable, Equatable, Identifiable {
     var source: String? = nil
     var tag: String? = nil
     var url: String? = nil
+    // Identity and read state for feed events, so the unread list survives a
+    // relaunch. All optional for the same reason as above. State changes are
+    // appended as marker lines (below) rather than rewriting the file.
+    var uid: String? = nil
+    var severity: String? = nil
+    var repo: String? = nil
+    var pr: Int? = nil
+    var key: String? = nil
+    var read: Bool? = nil
+    var removed: Bool? = nil
+
+    static let markerKind = "state"
+
+    // An append-only change to the event whose uid it carries. Folded into that
+    // event's record at load and never shown as a record of its own.
+    static func marker(uid: UUID, at: Date, read: Bool? = nil, removed: Bool? = nil) -> EventRecord {
+        EventRecord(at: at, agent: "", kind: markerKind, title: "", message: "",
+                    project: nil, session: nil, uid: uid.uuidString, read: read, removed: removed)
+    }
+
+    var isMarker: Bool { kind == Self.markerKind }
 
     // Stable within a load: the log is append-only and read in order, so the
     // index is enough for SwiftUI identity without persisting a UUID per line.
@@ -108,7 +129,7 @@ final class EventLog {
         let all = Self.parse(text)
         let kept = Self.trim(all, now: now)
         if kept.count != all.count { rewrite(kept) }
-        return kept.reversed()
+        return Self.resolve(kept).reversed()
     }
 
     // Block until queued writes have landed. Appends are fire-and-forget on the
@@ -159,6 +180,25 @@ final class EventLog {
         text.split(separator: "\n", omittingEmptySubsequences: true).compactMap { line in
             guard let data = line.data(using: .utf8) else { return nil }
             return try? decoder.decode(EventRecord.self, from: data)
+        }
+    }
+
+    // Applies marker lines to the records they name, oldest first in and out.
+    // A later marker wins; one naming a record that is gone is dropped.
+    static func resolve(_ records: [EventRecord]) -> [EventRecord] {
+        var read: [String: Bool] = [:]
+        var removed: [String: Bool] = [:]
+        for record in records where record.isMarker {
+            guard let uid = record.uid else { continue }
+            if let value = record.read { read[uid] = value }
+            if let value = record.removed { removed[uid] = value }
+        }
+        return records.filter { !$0.isMarker }.map { record in
+            guard let uid = record.uid else { return record }
+            var folded = record
+            folded.read = read[uid] ?? record.read
+            folded.removed = removed[uid] ?? record.removed
+            return folded
         }
     }
 
