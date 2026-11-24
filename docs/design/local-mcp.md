@@ -1,9 +1,9 @@
 # A local MCP server
 
-Status: phase 1 (read) is built: the bridge, the server on its own socket, the
-settings registry, `settings_list`, `settings_get`, `sessions_list` and the
-resources with their update notifications. Later phases are marked *not yet
-delivered*. Each phase is its own PR, and this doc is updated as they land, the
+Status: phases 1 and 2 are built: the bridge, the server on its own socket, the
+settings registry, every tool below, the resources with their update
+notifications, the write switch and the audit lines. Later phases are marked
+*not yet delivered*. Each phase is its own PR, and this doc is updated as they land, the
 way [service-extensions.md](service-extensions.md) was.
 
 ## Why
@@ -173,9 +173,10 @@ now, as the spec allows for types with no addressable history.
 ## Writes
 
 Settings writes are the main use, so v1 has them. One switch governs them,
-Settings → Actions → **MCP clients can change settings**, on by default once
-you've added the server. It is a client-side opt-in already: nothing reaches
-stack-nudge until you run `claude mcp add`.
+Settings → Actions → **MCP clients can change settings** (`STACKNUDGE_MCP_WRITES`),
+on by default. It is a client-side opt-in already: nothing reaches stack-nudge
+until you add the server, and **Copy MCP setup for Claude Code** on the same
+page copies the line that does it, pointing at the installed app.
 
 Any process running as you could already change these by editing the config
 file, so writes aren't a new privilege. What's new is an agent doing it in one

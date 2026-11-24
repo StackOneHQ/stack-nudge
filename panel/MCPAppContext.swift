@@ -9,11 +9,17 @@ final class MCPAppContext: MCPContext {
     private weak var nav: PanelNav?
     private weak var store: EventStore?
     private weak var sessionStore: SessionStore?
+    // The controller's mute, which owns the timer and the menu-bar badge.
+    private let muteFor: (Int, Bool) -> Void
+    private let resume: () -> Void
 
-    init(nav: PanelNav, store: EventStore, sessions: SessionStore) {
+    init(nav: PanelNav, store: EventStore, sessions: SessionStore,
+         muteFor: @escaping (Int, Bool) -> Void, resume: @escaping () -> Void) {
         self.nav = nav
         self.store = store
         self.sessionStore = sessions
+        self.muteFor = muteFor
+        self.resume = resume
     }
 
     var serverVersion: String {
@@ -28,6 +34,40 @@ final class MCPAppContext: MCPContext {
         onMain {
             guard let sessionStore else { return [] }
             return MCPSessions.list(sessionStore.sessions, events: store?.events ?? []).map(MCPSessions.json)
+        }
+    }
+
+    func writeSetting(key: String, value: Any, caller: MCPCaller) -> Result<SettingSnapshot, SettingsRegistry.WriteFailure> {
+        onMain {
+            guard let nav else { return .failure(.unknownKey(key)) }
+            let before = SettingsRegistry.snapshot(nav).first { $0.key == key }?.value
+            let result = SettingsRegistry.write(key: key, raw: value, nav: nav)
+            // Every change shows in Events, so one you didn't ask for is seen.
+            if case .success(let setting) = result, setting.value != before {
+                store?.append(MCPNudge.auditEvent(caller: caller, setting: setting))
+            }
+            return result
+        }
+    }
+
+    func raiseNudge(_ request: MCPNudge.Request, caller: MCPCaller) {
+        onMain {
+            let session = MCPNudge.session(for: caller, in: sessionStore?.sessions ?? [])
+            store?.append(MCPNudge.event(request, caller: caller, session: session))
+        }
+    }
+
+    func mute(minutes: Int, caller: MCPCaller) -> String {
+        onMain {
+            guard minutes > 0 else {
+                resume()
+                return "Notifications resumed."
+            }
+            muteFor(minutes, true)
+            store?.append(NudgeEvent.feed(source: .mcp, tag: "settings", severity: .info,
+                                          title: "\(caller.displayName) muted notifications for \(minutes) min",
+                                          message: "Permission prompts still come through."))
+            return "Muted for \(minutes) minutes. Permission prompts still come through."
         }
     }
 

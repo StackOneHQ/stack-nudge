@@ -3623,7 +3623,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // events including permission prompts and welcome. The event has
         // already been appended to the store (onAppend runs before this), so
         // it still shows in the Events list; only the interruption is muted.
-        if nav.isMuted { return }
+        // A mute an MCP client asked for spares permission prompts (see
+        // PanelNav.mutes).
+        if nav.mutes(event) { return }
 
         let config = PanelConfig.load()
 
@@ -3829,10 +3831,14 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // The state (nav.muteUntil) is transient, so a relaunch clears it. Muting
     // also dismisses any banner already on screen and cuts any in-flight voice
     // utterance, so it silences an in-flight nudge rather than only future ones.
-    func muteFor(minutes: Int) {
+    //
+    // `sparingPrompts` is an MCP client's mute: it leaves permission prompts
+    // alone, on screen and to come, so an agent can't hide what it's asking.
+    func muteFor(minutes: Int, sparingPrompts: Bool = false) {
         nav.muteUntil = Date().addingTimeInterval(TimeInterval(minutes * 60))
+        nav.muteSparesPrompts = sparingPrompts
         nav.muteTick += 1
-        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        if !sparingPrompts { UNUserNotificationCenter.current().removeAllDeliveredNotifications() }
         Speaker.stopAllAudio()
         muteTicker?.invalidate()
         muteTicker = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
@@ -3851,6 +3857,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         muteTicker?.invalidate()
         muteTicker = nil
         nav.muteUntil = nil
+        nav.muteSparesPrompts = false
         nav.muteTick += 1
         refreshStatusBadge()
     }
@@ -4211,7 +4218,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // rule postBannerIfNeeded already applies to the first nudge. Gating the
         // reminder too made the two inconsistent: muted users got the opening
         // Slack DM and then silence. Local cues are still gated, below.
-        let localEligible = !nav.isMuted
+        // Reminders are all for prompts, which an MCP client's mute spares.
+        let localEligible = !nav.isMuted || nav.muteSparesPrompts
         let slackEligible = nav.slackEnabled && nav.slackTokenPresent && nav.slackMemberID != nil
         // Nothing can be delivered, so don't spend a reminder from the budget —
         // the prompt should still get its nudges once the mute lifts.
@@ -4300,7 +4308,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             // directly, bypassing postBannerIfNeeded's mute gate, so guard it
             // here too. The snooze flag is already cleared, so the event stays
             // visible in the panel — only the banner interruption is dropped.
-            guard !self.nav.isMuted else { return }
+            guard !self.nav.mutes(current) else { return }
             self.postBanner(for: current.with(snoozedUntil: nil))
         }
     }
@@ -5859,7 +5867,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
         // A feed event opens its link and stays listed, read; one without a
         // link is simply done. ⏎ on one whose extension gave it an action
-        // sends that instead; O never does.
+        // sends that instead; O never does. An MCP client's nudge with no link
+        // takes you back to where it came from.
         if event.isFeed {
             let canSend = event.extensionID.map(extensions.canPerformFeedAction) ?? false
             if Self.feedOutcome(event, approve: approve, canSend: canSend) == .sendAction,
@@ -5868,7 +5877,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 openFeedEvent(event)
             } else {
                 store.remove(id: event.id)
-                if store.events.isEmpty { hidePanel() }
+                if event.source == .mcp {
+                    returnTo(event)
+                } else if store.events.isEmpty {
+                    hidePanel()
+                }
             }
             return
         }
@@ -5958,6 +5971,24 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
               extensions.performFeedAction(action, key: key, on: id) else { return false }
         store.actionSent(id: event.id)
         return true
+    }
+
+    // Where an MCP nudge came from: its session's terminal tab while that
+    // session is running, else the app that launched the client (Claude
+    // Desktop), else nowhere. See MCPNudge.
+    private func returnTo(_ event: NudgeEvent) {
+        if let session = MCPNudge.liveSession(for: event, in: sessions.sessions) {
+            focusSession(session)
+            return
+        }
+        guard let bundleID = event.bundleID,
+              let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+        else {
+            if store.events.isEmpty { hidePanel() }
+            return
+        }
+        hidePanel()
+        NSWorkspace.shared.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration())
     }
 
     func openFeedEvent(_ event: NudgeEvent) {
@@ -6180,6 +6211,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         guard let pid = sessions.selectedPID,
               let session = sessions.sessions.first(where: { $0.pid == pid })
         else { return }
+        focusSession(session)
+    }
+
+    // Brings a live session's terminal tab forward: from the Sessions tab, and
+    // from an MCP nudge that came from that session.
+    private func focusSession(_ session: Session) {
         // tmux: no terminalApp→bundleID mapping applies (the host emulator isn't
         // in the process tree), so focus the pane via the tmux server instead.
         if session.terminalApp == "tmux" {
@@ -6454,7 +6491,11 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // everything else carry on, so it's logged rather than shown.
     private func startMCPServer() {
         let server = MCPServer(socketPath: MCPServer.defaultSocketPath,
-                               context: MCPAppContext(nav: nav, store: store, sessions: sessions))
+                               context: MCPAppContext(nav: nav, store: store, sessions: sessions,
+                                                      muteFor: { [weak self] minutes, sparing in
+                                                          self?.muteFor(minutes: minutes, sparingPrompts: sparing)
+                                                      },
+                                                      resume: { [weak self] in self?.resumeNotifications() }))
         do {
             try server.start()
             mcpServer = server
