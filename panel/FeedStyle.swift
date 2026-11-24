@@ -45,7 +45,6 @@ enum FeedStyle {
         switch source {
         case .github:   return .blue
         case .calendar: return .mint
-        case .ai:       return .purple
         case .script:   return .gray
         case .agent:    return .secondary
         }
