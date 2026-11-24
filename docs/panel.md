@@ -204,7 +204,7 @@ Every captured agent session rolled up **by ticket**, derived from your branch n
 
 The two panes agree by construction: both read the same per-branch outcome and PR state, so a squash-merged branch reads as shipped in each.
 
-Opt-in GitHub linking adds real **PR + CI status** (so even squash-merged work reads as *merged*). Turn it on in Settings → Integrations → GitHub → **GitHub PR links**, then sign in with **Connect GitHub** on the same page, which runs GitHub's device flow (no `gh` needed): the page's first line shows the code to enter and where, and `⏎` on the row copies it and opens GitHub. The Tickets tab's card does the same. Config keys (all optional; the toggles in Settings write the same file):
+Opt-in GitHub linking adds real **PR + CI status** (so even squash-merged work reads as *merged*). Turn it on in Settings → Integrations → GitHub → **GitHub PR links**, then sign in with **Connect GitHub** on the same page (or the PRs tab's button), which runs GitHub's device flow: the page's first line shows the code to enter and where, GitHub's page opens with the code already copied, and `⏎` on the row copies it again. The Tickets tab's card does the same. A `gh` login stands in for the sign-in (see below). Config keys (all optional; the toggles in Settings write the same file):
 
 | Key | What it does |
 |-----|--------------|
