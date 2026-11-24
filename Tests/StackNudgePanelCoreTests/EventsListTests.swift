@@ -277,7 +277,7 @@ final class EventsListTests: XCTestCase {
     func testFeedHintsAppearOnlyWithAFeedAndShedFirst() {
         func hints(_ feed: FeedFooterState) -> [FooterHintSpec] {
             PanelContentView.eventsFooterHints(
-                pane: .live, filterFocused: false, filterQuery: "", liveQueueEmpty: false,
+                pane: .live, filterFocused: false, liveQueueEmpty: false,
                 primaryAction: "Open", dismissLabel: "Dismiss", snoozeEnabled: false,
                 muted: false, feed: feed)
         }
@@ -287,16 +287,16 @@ final class EventsListTests: XCTestCase {
         XCTAssertEqual(withFeed.filter { $0.shedOrder.map { $0 < 0 } == true }.map(\.keys),
                        [["F"], ["U"], ["A"], ["C"]])
         let confirm = hints(FeedFooterState(feedCount: 2, confirmingClear: true))
-        XCTAssertEqual(confirm.map(\.keys), [["C"], ["Esc"]])
+        XCTAssertEqual(confirm.map(\.keys), [["C"]])
     }
 
     func testChipKeysReplaceTheNormalHintsWhileFocused() {
         let focused = PanelContentView.eventsFooterHints(
-            pane: .live, filterFocused: false, filterQuery: "", liveQueueEmpty: false,
+            pane: .live, filterFocused: false, liveQueueEmpty: false,
             primaryAction: "Open", dismissLabel: "Dismiss", snoozeEnabled: false,
             muted: false, feed: FeedFooterState(feedCount: 2, chipsFocused: true))
-        XCTAssertEqual(focused.map(\.label), ["Move", "Toggle", "Only", "Back"])
-        XCTAssertEqual(focused.map(\.keys), [["←→"], ["⏎"], ["⇧⏎"], ["Esc"]])
+        XCTAssertEqual(focused.map(\.label), ["Move", "Toggle", "Only", "List"])
+        XCTAssertEqual(focused.map(\.keys), [["←→"], ["⏎"], ["⇧⏎"], ["F"]])
     }
 
     func testChipLabelsKeepAcronymsInCapitals() {
