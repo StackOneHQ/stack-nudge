@@ -1,9 +1,9 @@
 import Foundation
 
 // One agent session as stack-nudge describes it to anything outside the panel:
-// service extensions behind `event:session`, and the MCP server. Built from
-// SessionStore's poll and the prompts waiting in Events, so both read the same
-// shape and agree on what "waiting" means.
+// service extensions behind `event:session`, and the MCP server once it reads
+// this too. Built from SessionStore's poll and the prompts waiting in Events,
+// so both get the same shape and agree on what "waiting" means.
 //
 // What it leaves out is deliberate: no paths, no prompt or tool text, no
 // terminal or tab identifiers. The repo's name and the name a person chose for

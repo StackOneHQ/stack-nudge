@@ -529,6 +529,22 @@ final class ExtensionHostServiceTests: XCTestCase {
         XCTAssertTrue(sessionEvents(radar).isEmpty)
     }
 
+    // A restarted process starts with the whole list again, and a session
+    // that has already ended isn't in it.
+    func testARestartedServiceHearsTheWholeListWithoutEndedSessions() {
+        tiers = ["exchange": .trusted]
+        let host = host()
+        host.updateSessions([snapshot(1, .idle), snapshot(2, .ended)])
+        host.load(.init(installed: [manifest("exchange", capabilities: ["event:session"])]))
+        spawner.last.ready()
+        XCTAssertEqual(sessionEvents(spawner.last).compactMap { $0["session"] as? String }, ["claude-1"])
+        spawner.last.exit(.exited(1))
+        if case .restarting(let delay) = host.services["exchange"] { clock.advance(delay) }
+        let second = spawner.last
+        second.ready()
+        XCTAssertEqual(sessionEvents(second).compactMap { $0["session"] as? String }, ["claude-1"])
+    }
+
     // `event:session` is trusted: a service-tier extension asking for it
     // runs without it.
     func testSessionEventsNeedTheTrustedTier() {

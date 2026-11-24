@@ -2,8 +2,8 @@ import XCTest
 
 @testable import StackNudgePanelCore
 
-// The session shape `event:session` and the MCP server both read, and the
-// changes a listener is sent.
+// The session shape `event:session` sends, and the changes a listener is
+// sent.
 final class SessionSnapshotTests: XCTestCase {
 
     private func session(_ pid: Int, agent: String = "claude", live: String? = "idle",
