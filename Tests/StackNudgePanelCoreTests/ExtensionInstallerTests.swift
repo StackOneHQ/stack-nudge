@@ -281,7 +281,7 @@ final class ExtensionInstallerTests: XCTestCase {
         _ = ExtensionInstaller.releaseJSON(http: { asked = $0; return Data("{}".utf8) }, gh: { _ in nil })
         XCTAssertEqual(asked?.absoluteString,
                        "https://api.github.com/repos/StackOneHQ/stack-nudge-extensions-marketplace/releases/latest")
-        XCTAssertNotEqual(asked, UpdateChecker.latestReleaseURL)
+        XCTAssertNotEqual(asked, UpdateChannel.stable.releaseURL)
     }
 
     // The CLI is the fallback, not the first choice — it spawns a process.

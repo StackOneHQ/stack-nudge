@@ -1,0 +1,182 @@
+name: Nightly
+
+# Builds, signs and notarizes main after every merge and publishes it as the
+# rolling `nightly` pre-release, for anyone who picks Settings → Actions →
+# Update channel → Nightly. Nightly in spirit: it runs on merge, not on a clock.
+#
+# Nothing here reaches anyone else. The Stable channel, and every app from
+# before channels existed, reads /releases/latest, which never returns a
+# pre-release.
+#
+# A build is named <base>-nightly.<n>: base is the release main was last cut
+# from (.release-please-manifest.json) and n is main's commit count, so a
+# later merge always has the larger number (UpdateOffer compares them).
+#
+# The build, sign and notarize steps mirror release.yml's. Keep them in step.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer merge supersedes a build still in flight.
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    name: Point the nightly release at this commit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      base: ${{ steps.version.outputs.base }}
+      build: ${{ steps.version.outputs.build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          fetch-depth: 0  # the commit count is the build number
+          persist-credentials: false
+
+      - name: Work out the version
+        id: version
+        run: |
+          set -euo pipefail
+          base=$(jq -r '."."' .release-please-manifest.json)
+          build=$(git rev-list --count HEAD)
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "Nightly ${base}-nightly.${build} from ${GITHUB_SHA}"
+
+      # The tag moves with every build, and the release is made on the first
+      # run. Never marked latest, so /releases/latest keeps returning the last
+      # stable release.
+      - name: Move the tag and update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.base }}-nightly.${{ steps.version.outputs.build }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          gh api -X PATCH "repos/$repo/git/refs/tags/nightly" -f sha="$GITHUB_SHA" -F force=true >/dev/null \
+            || gh api -X POST "repos/$repo/git/refs" -f ref=refs/tags/nightly -f sha="$GITHUB_SHA" >/dev/null
+          notes="Built from ${GITHUB_SHA} on main. Not a release: this is what Settings → Actions → Update channel → Nightly installs, rebuilt on every merge. Changes since the last release: https://github.com/${repo}/compare/v$(jq -r '."."' .release-please-manifest.json)...${GITHUB_SHA}"
+          if gh release view nightly --repo "$repo" >/dev/null 2>&1; then
+            gh release edit nightly --repo "$repo" --prerelease --latest=false \
+              --title "Nightly ${VERSION}" --notes "$notes"
+          else
+            gh release create nightly --repo "$repo" --verify-tag --prerelease --latest=false \
+              --title "Nightly ${VERSION}" --notes "$notes"
+          fi
+
+  build:
+    name: Build, sign, notarize (${{ matrix.arch }})
+    needs: prepare
+    runs-on: macos-15
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        arch: [arm64, x86_64]
+      fail-fast: false
+
+    env:
+      STACKNUDGE_BUNDLE_VENV: "1"
+      KEYCHAIN: build-stack-nudge.keychain
+      BASE: ${{ needs.prepare.outputs.base }}
+      BUILD: ${{ needs.prepare.outputs.build }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      # The release it builds on, plus the build number the app compares
+      # (BuildVersion.current reads StackNudgeNightlyBuild).
+      - name: Stamp the nightly version
+        run: |
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $BASE" panel/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" panel/Info.plist
+          /usr/libexec/PlistBuddy -c "Add :StackNudgeNightlyBuild string $BUILD" panel/Info.plist
+
+      - name: Set up signing identity
+        env:
+          MACOS_CERTIFICATE:     ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          MACOS_KEYCHAIN_PWD:    ${{ secrets.MACOS_KEYCHAIN_PWD }}
+        run: |
+          set -euo pipefail
+          echo "$MACOS_CERTIFICATE" | base64 --decode > /tmp/cert.p12
+          security create-keychain -p "$MACOS_KEYCHAIN_PWD" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PWD" "$KEYCHAIN"
+          security set-keychain-settings -lut 7200 "$KEYCHAIN"
+          security import /tmp/cert.p12 -k "$KEYCHAIN" \
+            -P "$MACOS_CERTIFICATE_PWD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$MACOS_KEYCHAIN_PWD" "$KEYCHAIN"
+          IDENTITY=$(
+            security find-identity -v -p codesigning "$KEYCHAIN" \
+              | awk -F'"' '/"Developer ID Application/ {print $2; exit}'
+          )
+          if [[ -z "$IDENTITY" ]]; then
+            echo "::error::No Developer ID Application identity found in keychain after import"
+            exit 1
+          fi
+          echo "STACKNUDGE_SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          rm -f /tmp/cert.p12
+
+      - name: Build ${{ matrix.arch }}
+        run: bash build.sh ${{ matrix.arch }}
+
+      - name: Notarize ${{ matrix.arch }}
+        env:
+          MACOS_NOTARY_API_KEY:       ${{ secrets.MACOS_NOTARY_API_KEY }}
+          MACOS_NOTARY_API_KEY_ID:    ${{ secrets.MACOS_NOTARY_API_KEY_ID }}
+          MACOS_NOTARY_API_ISSUER_ID: ${{ secrets.MACOS_NOTARY_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          echo "$MACOS_NOTARY_API_KEY" | base64 --decode > /tmp/notary-key.p8
+          ditto -c -k --keepParent build/StackNudge.app /tmp/notarize.zip
+          xcrun notarytool submit /tmp/notarize.zip \
+            --key /tmp/notary-key.p8 \
+            --key-id "$MACOS_NOTARY_API_KEY_ID" \
+            --issuer "$MACOS_NOTARY_API_ISSUER_ID" \
+            --wait
+          xcrun stapler staple build/StackNudge.app
+          spctl -a -vv build/StackNudge.app || true
+          rm -f /tmp/notary-key.p8 /tmp/notarize.zip
+
+      - name: Package ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          ARTIFACT="stack-nudge-${BASE}-nightly.${BUILD}-macos-${{ matrix.arch }}.tar.gz"
+          tar czf "$ARTIFACT" -C build StackNudge.app
+          shasum -a 256 "$ARTIFACT" | awk -v name="$ARTIFACT" '{print $1 "  " name}' \
+            > "$ARTIFACT.sha256"
+          echo "ARTIFACT=$ARTIFACT" >> "$GITHUB_ENV"
+          ls -la "$ARTIFACT" "$ARTIFACT.sha256"
+
+      # Upload first, then drop this arch's older build, so the release is
+      # never without one. The app reads its version from the artifact's name.
+      - name: Publish ${{ matrix.arch }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          gh release upload nightly --repo "$repo" --clobber "$ARTIFACT" "$ARTIFACT.sha256"
+          gh release view nightly --repo "$repo" --json assets --jq '.assets[].name' \
+            | grep -E -- "-macos-${{ matrix.arch }}\.tar\.gz(\.sha256)?$" \
+            | grep -v -F -x -e "$ARTIFACT" -e "$ARTIFACT.sha256" \
+            | while read -r old; do gh release delete-asset nightly "$old" --repo "$repo" --yes; done
+
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          security delete-keychain "$KEYCHAIN" || true

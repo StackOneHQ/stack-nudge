@@ -8,7 +8,7 @@ import SwiftUI
 // completes — no longer driven by a shell runner's STAGE markers.
 enum UpdatePhase: String {
     case idle
-    case fetching       // GET /releases/latest
+    case fetching       // GET the channel's release (UpdateChannel.releaseURL)
     case downloading    // streaming the .tar.gz
     case verifying      // SHA256 check
     case extracting     // tar -xzf
@@ -57,10 +57,6 @@ extension UpdatePhase {
 final class Updater {
 
     static let statusPath = "/tmp/stack-nudge-update-status.json"
-    static let releasesAPI = URL(
-        string: "https://api.github.com/repos/StackOneHQ/stack-nudge/releases/latest"
-    )!
-    static let releasesGHPath = "repos/StackOneHQ/stack-nudge/releases/latest"
 
     private weak var nav: PanelNav?
     private let session: URLSession
@@ -82,6 +78,8 @@ final class Updater {
     // progress flows back via nav.updaterPhase / nav.updaterLog.
     func run() {
         guard let nav else { return }
+        // Read here, on main, before the work moves off it.
+        let channel = nav.updateChannel
         DispatchQueue.main.async {
             nav.updaterPhase = .idle
             nav.updaterLog = ""
@@ -104,7 +102,7 @@ final class Updater {
             // recycling the tarball and the empty tmpdir shell.
             defer { self.cleanupTempDir() }
             do {
-                try self.performUpdate()
+                try self.performUpdate(channel: channel)
             } catch {
                 self.fail(error)
             }
@@ -147,14 +145,14 @@ final class Updater {
 
     // MARK: - Pipeline
 
-    private func performUpdate() throws {
+    private func performUpdate(channel: UpdateChannel) throws {
         // 1. Resolve which artifact to download.
         setPhase(.fetching)
         appendLog("Fetching release manifest…")
-        let release = try fetchRelease()
-        appendLog("Latest release: v\(release.version)")
-
         let arch = currentArch()
+        let release = try fetchRelease(channel: channel, arch: arch)
+        appendLog("Latest \(channel == .nightly ? "nightly" : "release"): v\(release.version)")
+
         // Anchored at both ends. `contains` matched anywhere in the name, and
         // this release also carries extension packages — so an extension whose
         // version embedded "-macos-arm64.tar.gz" produced a name that matched,
@@ -411,16 +409,20 @@ final class Updater {
         let downloadURL: URL
     }
 
-    private func fetchRelease() throws -> ReleaseInfo {
-        if let json = httpFetchJSON(Self.releasesAPI) {
-            return try parseRelease(json)
-        }
+    private func fetchRelease(channel: UpdateChannel, arch: String) throws -> ReleaseInfo {
         // Fall back to gh CLI for private-repo dev cycles (same pattern as
         // UpdateChecker's poller).
-        if let json = ghFetchJSON(Self.releasesGHPath) {
-            return try parseRelease(json)
+        guard let json = httpFetchJSON(channel.releaseURL) ?? ghFetchJSON(channel.releaseGHPath) else {
+            throw UpdateError.releaseFetchFailed
         }
-        throw UpdateError.releaseFetchFailed
+        let release = try parseRelease(json)
+        // A nightly's tag is just "nightly": what it is comes from this arch's
+        // artifact, the same reading UpdateChecker made when it offered it.
+        guard channel == .nightly else { return release }
+        guard let build = BuildVersion.offered(by: json, channel: .nightly, arch: arch) else {
+            throw UpdateError.noArtifactForArch(arch: arch)
+        }
+        return ReleaseInfo(version: build.string, assets: release.assets)
     }
 
     private func parseRelease(_ json: [String: Any]) throws -> ReleaseInfo {

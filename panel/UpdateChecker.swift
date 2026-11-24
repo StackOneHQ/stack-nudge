@@ -1,8 +1,9 @@
 import Foundation
 
-// Polls the GitHub Releases API for stack-nudge and surfaces the latest tag
-// when it's newer than this bundle's CFBundleShortVersionString. The result
-// is published back to PanelNav (on the main thread) so the tab badge and
+// Polls the GitHub Releases API for stack-nudge and surfaces what the update
+// channel offers this build: the latest release, or on Nightly the rolling
+// nightly pre-release (see UpdateChannel and UpdateOffer). The result is
+// published back to PanelNav (on the main thread) so the tab badge and
 // "Update available" row react automatically.
 //
 // Checks fire on app launch and then every `interval` seconds while the app
@@ -10,13 +11,9 @@ import Foundation
 // signal, not a critical path.
 final class UpdateChecker {
 
-    static let latestReleaseURL = URL(
-        string: "https://api.github.com/repos/StackOneHQ/stack-nudge/releases/latest"
-    )!
     static let releasesPageURL = URL(
         string: "https://github.com/StackOneHQ/stack-nudge/releases/latest"
     )!
-    static let latestGHPath = "repos/StackOneHQ/stack-nudge/releases/latest"
 
     // Build URL + gh CLI API path for a specific tag like "1.4.2". Both
     // endpoints return the same JSON shape as /latest, so callers can reuse
@@ -63,17 +60,21 @@ final class UpdateChecker {
     // completion fires on the main thread when supplied; background
     // polls call with no completion and rely on the nav side effect.
     func check(completion: ((CheckResult) -> Void)? = nil) {
-        guard let current = Self.currentVersion() else {
+        guard let current = BuildVersion.current() else {
             DispatchQueue.main.async { completion?(.failed) }
             return
         }
-        fetchReleaseJSON(url: Self.latestReleaseURL, ghAPIPath: Self.latestGHPath) { [weak self] json in
-            guard let tag = json?["tag_name"] as? String else {
+        // Read on the caller's thread, which is main: the timer and the
+        // Settings actions both run there.
+        let channel = nav?.updateChannel ?? .stable
+        fetchReleaseJSON(url: channel.releaseURL, ghAPIPath: channel.releaseGHPath) { [weak self] json in
+            guard let available = BuildVersion.offered(by: json, channel: channel, arch: Self.currentHostArch())
+            else {
                 DispatchQueue.main.async { completion?(.failed) }
                 return
             }
-            let latest = Self.stripV(tag)
-            let newer = Self.isNewer(latest, than: current)
+            let latest = available.string
+            let newer = UpdateOffer.shouldOffer(available, to: current, on: channel)
             let body = json?["body"] as? String
             // release-please creates the GitHub Release the moment its PR
             // merges, but release.yml takes 5–15 min more to build, sign,
@@ -118,7 +119,7 @@ final class UpdateChecker {
         }
     }
 
-    private static func currentHostArch() -> String {
+    static func currentHostArch() -> String {
         var sysinfo = utsname()
         uname(&sysinfo)
         let m = withUnsafePointer(to: &sysinfo.machine) {
@@ -132,7 +133,8 @@ final class UpdateChecker {
     // the user clicks the update row before the background check has cached
     // notes. Calls completion on the main thread with the body string or nil.
     func fetchReleaseNotes(completion: @escaping (String?) -> Void) {
-        fetchReleaseJSON(url: Self.latestReleaseURL, ghAPIPath: Self.latestGHPath) { json in
+        let channel = nav?.updateChannel ?? .stable
+        fetchReleaseJSON(url: channel.releaseURL, ghAPIPath: channel.releaseGHPath) { json in
             DispatchQueue.main.async { completion(json?["body"] as? String) }
         }
     }
@@ -140,11 +142,13 @@ final class UpdateChecker {
     // Fetch release notes for a specific version tag — used by the post-update
     // view to surface exactly what shipped, even if a newer release lands in
     // between the install and the relaunch. Same gh-fallback path as the
-    // /latest case.
+    // /latest case. A nightly has no tag of its own, so its notes are the
+    // rolling nightly release's.
     func fetchReleaseNotes(for version: String, completion: @escaping (String?) -> Void) {
+        let nightly = BuildVersion(version).nightly != nil
         fetchReleaseJSON(
-            url: Self.tagReleaseURL(for: version),
-            ghAPIPath: Self.tagGHPath(for: version)
+            url: nightly ? UpdateChannel.nightly.releaseURL : Self.tagReleaseURL(for: version),
+            ghAPIPath: nightly ? UpdateChannel.nightly.releaseGHPath : Self.tagGHPath(for: version)
         ) { json in
             DispatchQueue.main.async { completion(json?["body"] as? String) }
         }
@@ -210,10 +214,6 @@ final class UpdateChecker {
     }
 
     // MARK: - Helpers
-
-    static func currentVersion() -> String? {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-    }
 
     static func stripV(_ tag: String) -> String {
         tag.hasPrefix("v") ? String(tag.dropFirst()) : tag

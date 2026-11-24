@@ -46,6 +46,12 @@ Because the swap replaces only the bundle, the hook script the agents invoke (`~
 
 No source clone, no swiftc rebuild on the user's machine — the new bundle is the already-signed-and-notarized artifact from CI. Updates are fast and don't disturb the user's Xcode CLT or Python install (or lack thereof).
 
+### Nightly builds
+
+**Settings → Actions → Update channel** picks which builds the updater offers. **Stable**, the default, is the tagged releases above. **Nightly** follows `main`: every merge is built, signed and notarized like a release (`.github/workflows/nightly.yml`) and published as the rolling [`nightly` pre-release](https://github.com/StackOneHQ/stack-nudge/releases/tag/nightly), so the update row offers each new merge within a couple of hours of it landing (or straight away from **Check for updates…**). A nightly is versioned `<release>-nightly.<n>`, the release `main` was last cut from plus `main`'s commit count, and Settings → About shows it as `2.10.0 (nightly 812)`. Switching back to Stable doesn't step back to the last release: the next release newer than the nightly you're on is offered when it ships. The channel is `STACKNUDGE_UPDATE_CHANNEL` (`stable` or `nightly`) in `~/.stack-nudge/config`. Nightlies are pre-releases, which GitHub's latest-release endpoint never returns, so nobody on Stable, and no app from before channels existed, is offered one.
+
+To grab one by hand: `gh release download nightly --repo StackOneHQ/stack-nudge --pattern "stack-nudge-*-macos-$(uname -m).tar.gz*"`.
+
 ## Uninstall
 
 ### macOS — in-app

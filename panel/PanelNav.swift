@@ -216,7 +216,7 @@ enum SettingsRow: Hashable {
     case awayLock
     case githubLinks, githubActivity, hideShipped, connectGithub, disconnectGithub
     case historyPerSession
-    case editPhrases, checkPermissions, openConfig, releaseNotes, checkUpdates, uninstall, quit
+    case editPhrases, checkPermissions, openConfig, releaseNotes, updateChannel, checkUpdates, uninstall, quit
     case browseExtensions, extensionSources
     case openRepo
     // One per built-in integration on the Integrations list, drawn as a card
@@ -272,7 +272,7 @@ extension SettingsRow: CaseIterable {
         .githubLinks, .githubActivity, .hideShipped, .connectGithub, .disconnectGithub,
         .historyPerSession,
         .editPhrases, .checkPermissions, .openConfig, .releaseNotes,
-        .checkUpdates, .uninstall, .quit,
+        .updateChannel, .checkUpdates, .uninstall, .quit,
         .browseExtensions, .extensionSources, .openRepo,
     ] + Integration.allCases.map { .integration($0) }
 }
@@ -1139,6 +1139,11 @@ final class PanelNav: ObservableObject {
     // back to .idle a few seconds after a terminal result so the
     // row reads "Check for updates…" again on subsequent visits.
     @Published var updateCheckStatus: UpdateCheckStatus = .idle
+    // Which releases the updater follows (STACKNUDGE_UPDATE_CHANNEL); see
+    // UpdateChannel. Changing it re-asks, since an offer from the other
+    // channel no longer applies.
+    @Published var updateChannel: UpdateChannel = .stable
+    var onUpdateChannelChanged: (() -> Void)?
     // Threshold-crossing notifications. quotaAlertsEnabled is the master
     // switch; quotaAlertThreshold is the single percent value used across
     // all tiers — banner fires once per period when any tier reaches it.
@@ -1712,7 +1717,7 @@ final class PanelNav: ObservableObject {
             return [.historyPerSession, .eventHistory, .clearHistory]
         case .actions:
             return [.editPhrases, .checkPermissions, .openConfig,
-                    .releaseNotes, .checkUpdates, .uninstall, .quit]
+                    .releaseNotes, .updateChannel, .checkUpdates, .uninstall, .quit]
         // Version and hook-script freshness render above this row as a plain
         // note, not as rows: they are readouts with nothing to activate, and a
         // keyboard-selectable row that ignores Enter reads as broken.
@@ -2002,6 +2007,7 @@ final class PanelNav: ObservableObject {
         compactMode   = chosen == .pill
         let rawAlpha = Double(config["STACKNUDGE_COMPACT_ALPHA"] ?? "") ?? 1.0
         compactAlpha = Self.compactAlphaOptions.min(by: { abs($0 - rawAlpha) < abs($1 - rawAlpha) }) ?? 1.0
+        updateChannel = UpdateChannel.from(config: config[UpdateChannel.configKey])
         let rawPerSession = Int(config["STACKNUDGE_EVENTS_PER_SESSION"] ?? "") ?? 5
         eventsPerSession = Self.eventsPerSessionOptions.min(by: { abs($0 - rawPerSession) < abs($1 - rawPerSession) }) ?? 5
     }
@@ -2334,7 +2340,7 @@ final class PanelNav: ObservableObject {
              .alertThreshold, .pollFrequency,
              .contextAlert, .piApiBudget, .piLocalBudget,
              .historyPerSession,
-             .slackIdle:
+             .slackIdle, .updateChannel:
             return true
         }
     }
@@ -2433,6 +2439,15 @@ final class PanelNav: ObservableObject {
         if githubUsesCLILogin != loggedIn { githubUsesCLILogin = loggedIn }
         let signedIn = loggedIn || GitHubAuth.token() != nil
         if githubSignedIn != signedIn { githubSignedIn = signedIn }
+    }
+
+    func setUpdateChannel(_ channel: UpdateChannel) {
+        guard channel != updateChannel else { return }
+        updateChannel = channel
+        ConfigFile.write(key: UpdateChannel.configKey, value: channel.rawValue)
+        updateAvailable = nil
+        updateReleaseNotes = nil
+        onUpdateChannelChanged?()
     }
 
     func toggleGithubLinking() {
@@ -2661,6 +2676,8 @@ final class PanelNav: ObservableObject {
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
             eventsPerSession = list[next]
             ConfigFile.write(key: "STACKNUDGE_EVENTS_PER_SESSION", value: String(eventsPerSession))
+        case .updateChannel:
+            setUpdateChannel(updateChannel == .stable ? .nightly : .stable)
         // Action rows have nothing to cycle, and activate() handles each of
         // them before it gets here.
         case .wireAgents, .dismissAgents, .permissions, .update, .extensionUpdates,
