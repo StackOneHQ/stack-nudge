@@ -1828,6 +1828,15 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             .sink { [weak self] _ in self?.refreshAllClaudeStats() }
             .store(in: &cancellables)
 
+        // Service extensions granted `event:session` hear each session that
+        // starts, ends or changes state, a waiting prompt included.
+        sessions.$sessions
+            .combineLatest(store.$events)
+            .map { SessionSnapshot.list(sessions: $0, events: $1) }
+            .removeDuplicates()
+            .sink { [weak self] in self?.extensions.updateSessions($0) }
+            .store(in: &cancellables)
+
         // Re-apply window layout whenever compact-mode state flips. Covers
         // both the persistent toggle (Settings → "Compact widget") and the
         // transient expanded flag (widget click → expand).

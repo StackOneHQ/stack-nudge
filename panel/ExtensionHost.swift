@@ -108,6 +108,10 @@ final class ExtensionHost: ObservableObject {
     // restarting, or broke), so its events lose them. A running process sends
     // its live ones again, replacing the old by key.
     var onFeedActionsLapsed: (String) -> Void = { _ in }
+    // The sessions as last reported, for `event:session`: what changes is
+    // sent to every running service that was granted it, and the whole list
+    // to one that has just started.
+    private(set) var sessionSnapshots: [SessionSnapshot] = []
     // What was last published, so an unchanged glance doesn't redraw the widget
     // on every scheduled refresh.
     private var publishedGlances: [ExtensionGlance] = []
@@ -711,6 +715,13 @@ final class ExtensionHost: ObservableObject {
             if pane.document == nil { pane.status = .loading }
         case .running:
             pane.status = pane.document == nil ? .loading : .idle
+            // Everything a listener would have heard had it been running all
+            // along, so it starts with the whole list.
+            if let service = running[id] {
+                for snapshot in sessionSnapshots where snapshot.state != .ended {
+                    service.supervisor.send(event: "session", fields: snapshot.fields)
+                }
+            }
         case .restarting(let delay):
             // A dead holder must not leave the app acting on what it last said.
             signals.reset(id)
@@ -728,6 +739,18 @@ final class ExtensionHost: ObservableObject {
         }
         panes[id] = pane
         publishGlances()
+    }
+
+    // The app's sessions changed. Each one that's new or different, or gone,
+    // goes to the running services; the supervisor drops it for any not
+    // granted `event:session`.
+    func updateSessions(_ snapshots: [SessionSnapshot]) {
+        let changes = SessionSnapshot.changes(from: sessionSnapshots, to: snapshots)
+        sessionSnapshots = snapshots
+        guard !changes.isEmpty else { return }
+        for service in running.values {
+            for change in changes { service.supervisor.send(event: "session", fields: change.fields) }
+        }
     }
 
     // Whether ⏎ on one of this extension's feed events can reach it now. When

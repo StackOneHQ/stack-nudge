@@ -498,6 +498,48 @@ final class ExtensionHostServiceTests: XCTestCase {
         XCTAssertEqual(host.services, [:])
     }
 
+    // MARK: - Sessions
+
+    private func snapshot(_ pid: Int, _ state: SessionSnapshot.State) -> SessionSnapshot {
+        SessionSnapshot(handle: "claude-\(pid)", pid: pid, agent: "claude", repo: "api", name: nil,
+                        claudeSessionID: nil, state: state)
+    }
+
+    private func sessionEvents(_ process: FakeProcess) -> [[String: Any]] {
+        process.messages.filter { $0["type"] as? String == "event" && $0["name"] as? String == "session" }
+    }
+
+    // A trusted service hears the whole list when it starts, then only what
+    // changes. One without the grant hears nothing.
+    func testSessionEventsGoOnlyToAServiceGrantedThem() {
+        tiers = ["exchange": .trusted, "radar": .trusted]
+        let host = host()
+        host.updateSessions([snapshot(1, .idle), snapshot(2, .busy)])
+        host.load(.init(installed: [manifest("exchange", capabilities: ["event:session"]), manifest("radar")]))
+        let exchange = spawner.spawned("exchange")[0]
+        let radar = spawner.spawned("radar")[0]
+        exchange.ready()
+        radar.ready()
+        XCTAssertEqual(sessionEvents(exchange).compactMap { $0["session"] as? String }, ["claude-1", "claude-2"])
+
+        host.updateSessions([snapshot(1, .waiting), snapshot(2, .busy)])
+        host.updateSessions([snapshot(1, .waiting)])
+        XCTAssertEqual(sessionEvents(exchange).compactMap { $0["state"] as? String },
+                       ["idle", "busy", "waiting", "ended"])
+        XCTAssertTrue(sessionEvents(radar).isEmpty)
+    }
+
+    // `event:session` is trusted: a service-tier extension asking for it
+    // runs without it.
+    func testSessionEventsNeedTheTrustedTier() {
+        tiers = ["exchange": .service]
+        let host = host()
+        host.load(.init(installed: [manifest("exchange", capabilities: ["event:session"])]))
+        spawner.last.ready()
+        host.updateSessions([snapshot(1, .idle)])
+        XCTAssertTrue(sessionEvents(spawner.last).isEmpty)
+    }
+
     // MARK: - Feed
 
     // A feed event goes to the app with the extension's id and name, a
