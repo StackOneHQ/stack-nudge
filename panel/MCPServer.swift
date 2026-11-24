@@ -13,6 +13,11 @@ final class MCPServer {
 
     private let socketPath: String
     private let context: MCPContext
+    // What every connection's event streams and polls read from.
+    let events = MCPEventHub()
+    // Who changed a setting, for settings.changed: an MCP client's write
+    // names it here just before the change watcher sees the new value.
+    let attribution = MCPAttribution()
     private var serverFD: Int32 = -1
     private var boundInode: ino_t?
     private let lock = NSLock()
@@ -88,7 +93,7 @@ final class MCPServer {
                 if errno == EINTR { continue }
                 return
             }
-            let connection = MCPConnection(fd: client, context: context) { [weak self] closed in
+            let connection = MCPConnection(fd: client, context: context, events: events) { [weak self] closed in
                 self?.forget(closed)
             }
             lock.lock()
@@ -119,6 +124,17 @@ final class MCPServer {
     func toolsListChanged() {
         sessions.forEach { $0.toolsListChanged() }
     }
+
+    // Records an event and hands it to every stream that matches. Main thread,
+    // from wherever the app notices the thing happening.
+    func emit(_ name: String, data: [String: Any], eventID: String? = nil) {
+        let occurrence = events.emit(name, data: data, eventID: eventID)
+        sessions.forEach { $0.deliver(occurrence) }
+    }
+
+    func eventsListChanged() {
+        sessions.forEach { $0.eventsListChanged() }
+    }
 }
 
 // One bridge's connection: the hello line, then JSON-RPC lines both ways.
@@ -126,6 +142,7 @@ final class MCPConnection {
 
     private let fd: Int32
     private let context: MCPContext
+    private let events: MCPEventHub
     private let onClose: (MCPConnection) -> Void
     private let writer = DispatchQueue(label: "stack-nudge.mcp.writer")
     private let lock = NSLock()
@@ -133,9 +150,10 @@ final class MCPConnection {
     private var closed = false
     private(set) var session: MCPSession?
 
-    init(fd: Int32, context: MCPContext, onClose: @escaping (MCPConnection) -> Void) {
+    init(fd: Int32, context: MCPContext, events: MCPEventHub, onClose: @escaping (MCPConnection) -> Void) {
         self.fd = fd
         self.context = context
+        self.events = events
         self.onClose = onClose
     }
 
@@ -150,6 +168,7 @@ final class MCPConnection {
         guard !closed else { lock.unlock(); return }
         closed = true
         lock.unlock()
+        session?.close()
         Darwin.shutdown(fd, SHUT_RDWR)
         writer.async { [fd] in Darwin.close(fd) }
         onClose(self)
@@ -160,7 +179,7 @@ final class MCPConnection {
         defer { close() }
         guard let first = reader.next(), let hello = MCPProtocol.parse(first), hello["type"] as? String == "hello"
         else { return }
-        let session = MCPSession(context: context, caller: .fromHello(hello)) { [weak self] message in
+        let session = MCPSession(context: context, events: events, caller: .fromHello(hello)) { [weak self] message in
             self?.write(message)
         }
         lock.lock()
@@ -231,5 +250,26 @@ struct MCPLineReader {
             }
             buffer.append(chunk, count: n)
         }
+    }
+}
+
+// Which client last changed which setting, for a few seconds: long enough for
+// the debounced change watcher to credit the change, short enough that a later
+// edit in Settings isn't credited to it.
+final class MCPAttribution {
+    private let lock = NSLock()
+    private var writes: [String: (by: String, at: Date)] = [:]
+
+    func note(_ key: String, by: String, at: Date = Date()) {
+        lock.lock()
+        writes[key] = (by, at)
+        lock.unlock()
+    }
+
+    func take(_ key: String, now: Date = Date()) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let write = writes.removeValue(forKey: key), now.timeIntervalSince(write.at) < 5 else { return nil }
+        return write.by
     }
 }

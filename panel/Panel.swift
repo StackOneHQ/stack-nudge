@@ -1766,6 +1766,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             self?.captureHandoff(for: event)
             self?.noteHistory(event)
             self?.nav.reactToEvent(event.kind)
+            if let (name, data) = MCPAppEvents.occurrence(for: event) {
+                self?.mcpServer?.emit(name, data: data, eventID: event.id.uuidString)
+            }
             // Only live arrivals reach onAppend, so events restored at launch never nod.
             MainActor.assumeIsolated { self?.companion?.noteArrival(event) }
         }
@@ -3011,6 +3014,9 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 postQuotaBanner(label: label,
                                 percent: Int(tier.utilization.rounded()),
                                 resetsAt: tier.resetsAt)
+                mcpServer?.emit("quota.threshold", data: MCPAppEvents.quota(label: label,
+                                                                            percent: Int(tier.utilization.rounded()),
+                                                                            resetsAt: tier.resetsAt))
                 state.maxBucketFired = currentBucket
             }
             quotaLastFired[name] = state
@@ -4280,6 +4286,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             else { return nil }
             return SessionPersistence.key(for: session)
         })
+        // Newly stalled only: one event per stall, not one per tick.
+        let newlyStalled = stalled.subtracting(nav.stalledSessionKeys)
+        for session in sessions.sessions {
+            guard let key = SessionPersistence.key(for: session), newlyStalled.contains(key) else { continue }
+            mcpServer?.emit("session.stalled", data: MCPAppEvents.stalled(session, quietMinutes: nav.stalledMinutes))
+        }
         if stalled != nav.stalledSessionKeys { nav.stalledSessionKeys = stalled }
     }
 
@@ -6490,12 +6502,13 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     // A failure only costs MCP clients their server: the hook socket and
     // everything else carry on, so it's logged rather than shown.
     private func startMCPServer() {
-        let server = MCPServer(socketPath: MCPServer.defaultSocketPath,
-                               context: MCPAppContext(nav: nav, store: store, sessions: sessions,
-                                                      muteFor: { [weak self] minutes, sparing in
-                                                          self?.muteFor(minutes: minutes, sparingPrompts: sparing)
-                                                      },
-                                                      resume: { [weak self] in self?.resumeNotifications() }))
+        let context = MCPAppContext(nav: nav, store: store, sessions: sessions,
+                                    muteFor: { [weak self] minutes, sparing in
+                                        self?.muteFor(minutes: minutes, sparingPrompts: sparing)
+                                    },
+                                    resume: { [weak self] in self?.resumeNotifications() })
+        let server = MCPServer(socketPath: MCPServer.defaultSocketPath, context: context)
+        context.server = server
         do {
             try server.start()
             mcpServer = server
