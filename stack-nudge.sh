@@ -35,7 +35,7 @@ case "$cmd" in
         [ $# -ge 1 ] || usage
         title=$1
         shift
-        body= url= severity= source= tag= key=
+        body='' url='' severity='' source='' tag='' key=''
         while [ $# -gt 0 ]; do
             [ $# -ge 2 ] || usage
             case "$1" in
