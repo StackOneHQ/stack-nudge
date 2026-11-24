@@ -115,6 +115,7 @@ final class ExtensionCatalog: ObservableObject {
     private let probeRequirement: (String) -> ExtensionInstaller.RequirementCheck
     private let recordedTiers: () -> [String: ExtensionTier]
     private let recordedSources: () -> [String: String]
+    private let adoptSources: ([ExtensionInstaller.IndexEntry]) -> Void
     private let now: () -> Date
 
     init(fetchCatalogue: @escaping () -> Result<ExtensionInstaller.Catalogue, ExtensionInstaller.Failure>,
@@ -132,11 +133,14 @@ final class ExtensionCatalog: ObservableObject {
             = { ExtensionInstaller.checkRequirement($0) },
          recordedTiers: @escaping () -> [String: ExtensionTier] = { ExtensionTiers.read() },
          recordedSources: @escaping () -> [String: String] = { ExtensionTiers.readSources() },
+         // Writes .sources.json, so it does nothing unless the app passes it.
+         adoptSources: @escaping ([ExtensionInstaller.IndexEntry]) -> Void = { _ in },
          now: @escaping () -> Date = Date.init) {
         self.now = now
         self.probeRequirement = probeRequirement
         self.recordedTiers = recordedTiers
         self.recordedSources = recordedSources
+        self.adoptSources = adoptSources
         self.fetchCatalogue = fetchCatalogue
         self.performInstall = performInstall
         self.performRemove = performRemove
@@ -201,6 +205,7 @@ final class ExtensionCatalog: ObservableObject {
         background { [weak self] in
             guard let self else { return }
             let result = self.fetchCatalogue()
+            if case .success(let catalogue) = result { self.adoptSources(catalogue.listings) }
             let sources = self.recordedSources()
             self.toMain { [weak self] in
                 guard let self else { return }

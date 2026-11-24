@@ -155,6 +155,29 @@ enum ExtensionTiers {
         return sources
     }
 
+    // An install from an extra source that predates .sources.json has a tier
+    // and no source, so it reads as the app's own: no source's listing is its
+    // update, and it stays on the version it was installed at. Its source is
+    // recorded here when that can only be one source: the app's own index
+    // doesn't list the id and exactly one extra source does. A copy with no
+    // tier wasn't installed from an index at all (it was put there by hand),
+    // so another source listing its id still says nothing about it, and is
+    // never adopted. Nothing else changes: the tier is then re-checked against
+    // that source's listing like any other, and an update still asks first.
+    static func adopting(_ sources: [String: String], tiered: Set<String>,
+                         listings: [ExtensionInstaller.IndexEntry]) -> [String: String] {
+        var sources = sources
+        for id in tiered where sources[id] == nil {
+            let listed = listings.filter { $0.id == id }
+            guard !listed.contains(where: { $0.source == nil }),
+                  let slug = listed.first?.source,
+                  listed.allSatisfy({ ExtensionSource.same($0.source, slug) })
+            else { continue }
+            sources[id] = slug
+        }
+        return sources
+    }
+
     // A fresh index, re-checked against what's recorded. Each recorded tier is
     // checked against the listing from the source it was installed from
     // (`sources`; none is the app's own): it goes down to that listing's tier
@@ -236,6 +259,19 @@ enum ExtensionTiers {
         guard next != recorded else { return false }
         write(next, path: path)
         return true
+    }
+
+    // See `adopting`. Run on every catalogue load, before the sources are read
+    // for the rows, so the load that can name the source is the one that shows
+    // the update.
+    static func adoptUnrecordedSources(listings: [ExtensionInstaller.IndexEntry],
+                                       path: String = ExtensionTiers.path) {
+        fileLock.lock()
+        defer { fileLock.unlock() }
+        let sourcesPath = sourcesPath(beside: path)
+        let recorded = readSources(path: sourcesPath)
+        let next = adopting(recorded, tiered: Set(read(path: path).keys), listings: listings)
+        if next != recorded { writeSources(next, path: sourcesPath) }
     }
 
     static func forget(_ id: String, path: String = ExtensionTiers.path) {

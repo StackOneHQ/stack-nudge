@@ -1331,7 +1331,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             // A fetched catalogue is what gives an installed row something to
             // compare against, so the Settings list is rebuilt when one lands.
             self.refreshInstalledExtensions()
-        })
+        },
+        adoptSources: { ExtensionTiers.adoptUnrecordedSources(listings: $0) })
     // Extensions publish their tabs through nav, so nav stays the single source
     // of tab order and this stays the single source of what's in them.
     private lazy var extensions = ExtensionHost(onTabsChanged: { [weak self] tabs in

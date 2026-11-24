@@ -511,6 +511,13 @@ away, so a demoted service restarts with its smaller grant (or stops, below
 `service`). Until the catalogue loads, the recorded tier stands. Removing an
 extension forgets its tier and its source.
 
+An install from an extra catalogue made before hosts recorded sources has a
+tier and no source, so it reads as the app's own and no catalogue offers it an
+update. When the catalogue loads, such an extension is given the source that
+must have been its own: the app's catalogue doesn't list it and exactly one
+extra catalogue does. One with no tier was put there by hand and is left alone,
+as is one that two catalogues list.
+
 **For developing an extension** that no release's index lists yet, set
 `STACKNUDGE_EXTENSIONS_LOCAL_TIERS=true` in `~/.stack-nudge/config`. The host
 then never re-checks `.tiers.json` against the index, so a tier you write there
