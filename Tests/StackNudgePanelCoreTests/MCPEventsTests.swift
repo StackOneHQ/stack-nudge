@@ -72,10 +72,10 @@ final class MCPEventHubTests: XCTestCase {
     func testAnExtensionsTypesComeAndGo() {
         let hub = hub()
         let type = MCPEventHub.EventType(name: "pylon.sla", description: "d", filters: [:], payloadSchema: [:])
-        XCTAssertTrue(hub.setExtensionTypes([type], for: "pylon"))
-        XCTAssertFalse(hub.setExtensionTypes([type], for: "pylon"), "the same list again is no change")
+        XCTAssertTrue(hub.replaceExtensionTypes(["pylon": [type]]))
+        XCTAssertFalse(hub.replaceExtensionTypes(["pylon": [type]]), "the same list again is no change")
         XCTAssertEqual(hub.type(named: "pylon.sla")?.owner, "pylon")
-        XCTAssertTrue(hub.setExtensionTypes([], for: "pylon"))
+        XCTAssertTrue(hub.replaceExtensionTypes([:]), "an extension that stops offering any drops out")
         XCTAssertNil(hub.type(named: "pylon.sla"))
     }
 }

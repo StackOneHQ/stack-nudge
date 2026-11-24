@@ -82,27 +82,16 @@ final class MCPAppContext: MCPContext {
         }
     }
 
-    // Blocks the connection's reader, never main: the extension answers on
-    // its own time, and main has to stay free to hear it.
-    func callExtensionTool(_ name: String, arguments: [String: Any], caller: MCPCaller) -> [String: Any]? {
-        guard name.contains("."), !Thread.isMainThread else { return nil }
-        let done = DispatchSemaphore(value: 0)
-        var answer: [String: Any]?
+    // Answers on main, whenever the extension does: the host times a call out
+    // itself, so `complete` always runs.
+    func callExtensionTool(_ name: String, arguments: [String: Any], caller: MCPCaller,
+                           complete: @escaping ([String: Any]?) -> Void) {
+        guard name.contains(".") else { return complete(nil) }
         DispatchQueue.main.async { [weak self] in
-            guard let self, let host = self.extensions else {
-                done.signal()
-                return
-            }
+            guard let self, let host = self.extensions else { return complete(nil) }
             let fields = MCPAppContext.callerFields(caller, live: self.sessionStore?.sessions ?? [])
-            host.callMCPTool(name, arguments: arguments, caller: fields) { result in
-                answer = result
-                done.signal()
-            }
+            host.callMCPTool(name, arguments: arguments, caller: fields, complete: complete)
         }
-        // The host times a call out itself; this only guards against it never
-        // answering at all.
-        _ = done.wait(timeout: .now() + ExtensionHost.mcpCallTimeout + 5)
-        return answer
     }
 
     // The caller as an extension hears it in mcp.call: as the bridge saw it,
@@ -111,8 +100,6 @@ final class MCPAppContext: MCPContext {
     // extension never acts on a session it can't find.
     static func callerFields(_ caller: MCPCaller, live sessions: [Session]) -> [String: ServiceProtocol.Value] {
         var fields: [String: ServiceProtocol.Value] = ["client": .string(caller.displayName)]
-        if let name = caller.clientName { fields["clientName"] = .string(name) }
-        if let app = caller.parentApp { fields["app"] = .string(app) }
         if let session = MCPNudge.session(for: caller, in: sessions) {
             fields["pid"] = .int(session.pid)
             if let id = session.claudeSessionID { fields["sessionId"] = .string(id) }

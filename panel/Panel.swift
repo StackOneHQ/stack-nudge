@@ -6518,13 +6518,22 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                 self?.extensions.broadcast(event: "settings", fields: ["key": .string(key), "value": .string(value),
                                                                        "by": .string(by)])
             }
-            // Extensions' tools and event types come and go with them.
+            // Extensions' tools and event types come and go with them. A
+            // service's every state change lands here, so clients are told
+            // only when what's offered actually differs: a restart would
+            // otherwise have them fetch the same list several times over.
+            // The name counts too, since each tool's description carries it.
+            var offeredTools: ([[String]], [[ExtensionMCP.Tool]]) = ([], [])
             extensions.onMCPChanged = { [weak self, weak server] in
                 guard let self, let server else { return }
-                let types = Dictionary(uniqueKeysWithValues: self.extensions.mcpContributions.map {
+                let contributions = self.extensions.mcpContributions
+                let types = Dictionary(uniqueKeysWithValues: contributions.map {
                     ($0.id, $0.mcp.eventTypes(owner: $0.id))
                 })
                 if server.events.replaceExtensionTypes(types) { server.eventsListChanged() }
+                let tools = (contributions.map { [$0.id, $0.name] }, contributions.map(\.mcp.tools))
+                guard tools != offeredTools else { return }
+                offeredTools = tools
                 server.toolsListChanged()
             }
             extensions.onMCPEvent = { [weak server] name, data, eventID in

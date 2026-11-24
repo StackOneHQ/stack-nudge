@@ -225,7 +225,9 @@ block declaring the tools and event types it offers, each named under its ID
 NDJSON protocol gains `mcp.call` and `mcp.result` for tool calls and `mcp.event`
 to emit an occurrence. The host passes on only an event type the extension
 declared, with an object for its data, and only a result for a call it made;
-a call unanswered in 30 seconds fails. It doesn't validate arguments or
+a call unanswered in 30 seconds fails. A call waits without holding up the
+client's other requests, and one the client cancels is never answered. It
+doesn't validate arguments or
 payloads against the declared JSON Schemas: clients see the schemas and are
 expected to keep to them, and extensions to their own. Resources from
 extensions aren't offered (yet). The tools and event types come and go with

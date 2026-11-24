@@ -15,9 +15,10 @@ protocol MCPContext: AnyObject {
     func mute(minutes: Int, caller: MCPCaller) -> String
     // Tools running extensions offer, already namespaced (ExtensionMCP).
     func extensionTools() -> [[String: Any]]
-    // Calls one, blocking until the extension answers or times out. nil when
-    // no running extension offers `name`.
-    func callExtensionTool(_ name: String, arguments: [String: Any], caller: MCPCaller) -> [String: Any]?
+    // Calls one. `complete` runs once, on any thread, with the extension's
+    // answer, or a timeout's, or nil when no running extension offers `name`.
+    func callExtensionTool(_ name: String, arguments: [String: Any], caller: MCPCaller,
+                           complete: @escaping ([String: Any]?) -> Void)
 }
 
 // One client's conversation with the server, from the bridge's hello to the
@@ -25,8 +26,8 @@ protocol MCPContext: AnyObject {
 // _meta, subscriptions/listen) and the older initialize handshake with
 // resources/subscribe, since the clients we target still send the latter.
 //
-// Thread-safe: requests arrive on the connection's reader, and change
-// notifications from the app's observer.
+// Thread-safe: requests arrive on the connection's reader, change
+// notifications from the app's observer, and extensions' answers from main.
 final class MCPSession {
 
     static let settingsURI = "stacknudge://settings"
@@ -60,6 +61,11 @@ final class MCPSession {
     // events/stream subscriptions, one per request.
     private var streams: [EventStream] = []
 
+    // Extension tool calls still waiting on their extension, by request id.
+    // One cancelled, or whose connection closed, is dropped from here and its
+    // answer goes nowhere.
+    private var pendingCalls: [Any] = []
+
     private final class EventStream {
         let id: Any
         let name: String
@@ -92,6 +98,7 @@ final class MCPSession {
         let open = streams
         streams.removeAll()
         listeners.removeAll()
+        pendingCalls.removeAll()
         lock.unlock()
         open.forEach { $0.timer?.cancel() }
     }
@@ -131,7 +138,7 @@ final class MCPSession {
             case "server/discover":           respond(id, discover(), modern: true)
             case "ping":                      respond(id, [:], modern: modern)
             case "tools/list":                respond(id, cacheable(["tools": tools()]), modern: modern)
-            case "tools/call":                respond(id, try callTool(params), modern: modern)
+            case "tools/call":                try callTool(id: id, params: params, modern: modern)
             case "resources/list":            respond(id, cacheable(["resources": resources()]), modern: modern)
             case "resources/templates/list":  respond(id, cacheable(["resourceTemplates": resourceTemplates()]), modern: modern)
             case "resources/read":            respond(id, cacheable(try readResource(params)), modern: modern)
@@ -300,9 +307,17 @@ final class MCPSession {
         ]
     }
 
-    private func callTool(_ params: [String: Any]) throws -> [String: Any] {
+    private func callTool(id: Any, params: [String: Any], modern: Bool) throws {
         guard let name = params["name"] as? String else { throw MCPFailure.invalidParams("Missing tool name") }
         let arguments = params["arguments"] as? [String: Any] ?? [:]
+        if let result = try appTool(name, arguments: arguments) {
+            return respond(id, result, modern: modern)
+        }
+        callExtensionTool(id: id, name: name, arguments: arguments, modern: modern)
+    }
+
+    // The app's own tools, answered at once. nil for any other name.
+    private func appTool(_ name: String, arguments: [String: Any]) throws -> [String: Any]? {
         switch name {
         case "settings_list":
             let category = arguments["category"] as? String
@@ -342,12 +357,33 @@ final class MCPSession {
             else { return MCPProtocol.toolError("minutes is from 0 to \(MCPSession.maxMuteMinutes).") }
             return MCPProtocol.toolResult(context.mute(minutes: minutes, caller: currentCaller))
         default:
-            // An extension's, by its namespaced name. Its result is its own.
-            if let result = context.callExtensionTool(name, arguments: arguments, caller: currentCaller) {
-                return result
-            }
-            throw MCPFailure.invalidParams("Unknown tool: \(name)")
+            return nil
         }
+    }
+
+    // An extension's tool, by its namespaced name. It answers on its own time,
+    // so the response is sent from the host's completion rather than here:
+    // this client's other requests, and a cancel for this one, aren't held
+    // behind it. Its result is its own.
+    private func callExtensionTool(id: Any, name: String, arguments: [String: Any], modern: Bool) {
+        lock.lock()
+        pendingCalls.append(id)
+        lock.unlock()
+        context.callExtensionTool(name, arguments: arguments, caller: currentCaller) { [weak self] result in
+            guard let self, self.takePendingCall(id) else { return }
+            guard let result else {
+                return self.send(MCPProtocol.error(id: id, code: MCPProtocol.invalidParams, message: "Unknown tool: \(name)"))
+            }
+            self.respond(id, result, modern: modern)
+        }
+    }
+
+    private func takePendingCall(_ id: Any) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let index = pendingCalls.firstIndex(where: { MCPProtocol.sameID($0, id) }) else { return false }
+        pendingCalls.remove(at: index)
+        return true
     }
 
     // MARK: - Resources
@@ -436,6 +472,7 @@ final class MCPSession {
     private func cancel(_ requestID: Any?) {
         lock.lock()
         listeners.removeAll { MCPProtocol.sameID($0.id, requestID) }
+        pendingCalls.removeAll { MCPProtocol.sameID($0, requestID) }
         let cancelled = streams.filter { MCPProtocol.sameID($0.id, requestID) }
         streams.removeAll { MCPProtocol.sameID($0.id, requestID) }
         lock.unlock()

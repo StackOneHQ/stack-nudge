@@ -108,18 +108,6 @@ final class MCPEventHub {
         return before != extensionTypes.map(\.name)
     }
 
-    // An extension's event types replace whatever it offered before. Returns
-    // whether the list changed, so the server can say so.
-    @discardableResult
-    func setExtensionTypes(_ types: [EventType], for owner: String) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        let before = extensionTypes.filter { $0.owner == owner }.map(\.name)
-        extensionTypes.removeAll { $0.owner == owner }
-        extensionTypes += types.map { var type = $0; type.owner = owner; return type }
-        return before != types.map(\.name)
-    }
-
     private static let sessionFilters = ["agent": "Only this agent: claude, codex, gemini, agy or pi.",
                                          "repo": "Only sessions in the repo with this folder name."]
 

@@ -31,8 +31,13 @@ final class MCPSessionTests: XCTestCase {
         func mute(minutes: Int, caller: MCPCaller) -> String { mutes.append(minutes); return "ok" }
         var extensionToolList: [[String: Any]] = []
         func extensionTools() -> [[String: Any]] { extensionToolList }
-        func callExtensionTool(_ name: String, arguments: [String: Any], caller: MCPCaller) -> [String: Any]? {
-            name == "pylon.open_issues" ? MCPProtocol.toolResult("3 open") : nil
+        // Answered at once unless held, when the test answers it.
+        var holdExtensionCalls = false
+        var heldCalls: [([String: Any]?) -> Void] = []
+        func callExtensionTool(_ name: String, arguments: [String: Any], caller: MCPCaller,
+                               complete: @escaping ([String: Any]?) -> Void) {
+            guard !holdExtensionCalls else { return heldCalls.append(complete) }
+            complete(name == "pylon.open_issues" ? MCPProtocol.toolResult("3 open") : nil)
         }
     }
 
@@ -188,6 +193,26 @@ final class MCPSessionTests: XCTestCase {
                        "3 open")
         session.receive(request(6, "tools/call", ["name": "pylon.nope"]))
         XCTAssertEqual(lastError?["code"] as? Int, MCPProtocol.invalidParams)
+    }
+
+    func testAWaitingExtensionCallHoldsUpNothingElse() {
+        let session = session()
+        context.holdExtensionCalls = true
+        session.receive(request(7, "tools/call", ["name": "pylon.open_issues"]))
+        session.receive(request(8, "ping"))
+        XCTAssertTrue(MCPProtocol.sameID(sent.last?["id"], 8))
+        context.heldCalls.removeFirst()(MCPProtocol.toolResult("3 open"))
+        XCTAssertTrue(MCPProtocol.sameID(sent.last?["id"], 7))
+    }
+
+    func testACancelledExtensionCallIsNeverAnswered() {
+        let session = session()
+        context.holdExtensionCalls = true
+        session.receive(request(7, "tools/call", ["name": "pylon.open_issues"]))
+        session.receive(["jsonrpc": "2.0", "method": "notifications/cancelled", "params": ["requestId": 7]])
+        let before = sent.count
+        context.heldCalls.removeFirst()(MCPProtocol.toolResult("3 open"))
+        XCTAssertEqual(sent.count, before)
     }
 
     func testMuteIsBoundedToADay() {
