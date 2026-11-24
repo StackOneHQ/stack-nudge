@@ -79,7 +79,7 @@ Press `⌘⌥N` from anywhere. `⌘1`…`⌘9` or `⌘←` / `⌘→` switch tab
 | Tab | What's there |
 |-----|--------------|
 | **Events** | Finished turns and permission prompts, newest first. `⏎` approves or jumps to the agent, `S` snoozes, `M` mutes everything for a while, `H` opens the full history. |
-| **Sessions** | Every running agent: busy or idle, its terminal tab, and for Claude Code how full its context is. `⏎` focuses it, `N` renames, `M` mutes just that session. |
+| **Sessions** | Every running agent: busy or idle, its terminal tab, and for Claude Code how full its context is. `⏎` focuses it, `N` renames, `M` mutes just that session, `O` resumes a recent Claude Code session, `T` starts a new one in a repo. |
 | **Usage** | Claude, Codex, Antigravity and pi quota, with a warning when you're spending faster than the window resets, and alerts at a threshold you pick. |
 | **Outcomes** | How much of your agents' token spend ended up shipped (pushed or merged), by ticket and by agent. |
 | **Settings** | Everything above, plus voice, the floating widget, Slack and extensions. `⌘,` opens it. |
