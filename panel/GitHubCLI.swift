@@ -35,7 +35,9 @@ enum GitHubCLI {
         guard let object = try? JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any],
               let query = object["query"] as? String
         else { return nil }
-        var args = ["api", "graphql", "-f", "query=\(query)"]
+        // github.com always: gh otherwise takes its host from GH_HOST, which
+        // the app inherits from whatever launched it.
+        var args = ["api", "graphql", "--hostname", "github.com", "-f", "query=\(query)"]
         let variables = object["variables"] as? [String: Any] ?? [:]
         for key in variables.keys.sorted() {
             switch variables[key] {

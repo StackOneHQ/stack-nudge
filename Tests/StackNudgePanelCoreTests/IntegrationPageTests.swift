@@ -135,6 +135,51 @@ final class IntegrationPageTests: XCTestCase {
         XCTAssertEqual(nav.selectedRow, .githubLinks)
     }
 
+    // MARK: - The gh login
+
+    // `gh auth status` checks its token with github.com. It used to run on main
+    // at every config load for anyone with gh installed, GitHub on or not.
+    private func navCheckingGh(_ answer: Bool, asked: @escaping () -> Void) -> PanelNav {
+        let nav = PanelNav()
+        nav.checkGitHubCLILogin = { asked(); return answer }
+        nav.runOffMain = { $0() }
+        nav.runOnMain = { $0() }
+        return nav
+    }
+
+    func testTheGhLoginIsNotAskedWithGitHubOff() {
+        var asked = 0
+        let nav = navCheckingGh(true) { asked += 1 }
+        var done = false
+        nav.refreshGitHubCLILogin { done = true }
+        XCTAssertEqual(asked, 0)
+        XCTAssertFalse(nav.githubUsesCLILogin)
+        XCTAssertTrue(done, "the follow-up still runs")
+    }
+
+    func testTheGhLoginIsAskedOffMainOnceGitHubIsOn() {
+        var asked = 0
+        let nav = navCheckingGh(true) { asked += 1 }
+        var offMain = 0
+        nav.runOffMain = { offMain += 1; $0() }
+        nav.githubActivityEnabled = true
+        nav.refreshGitHubCLILogin()
+        XCTAssertEqual(asked, 1)
+        XCTAssertEqual(offMain, 1, "gh is asked off main")
+        XCTAssertTrue(nav.githubUsesCLILogin)
+        XCTAssertTrue(nav.githubSignedIn)
+    }
+
+    func testTurningGhOffInTheConfigSkipsTheCheck() {
+        var asked = 0
+        let nav = navCheckingGh(true) { asked += 1 }
+        nav.githubLinkingEnabled = true
+        nav.githubUseGH = false
+        nav.refreshGitHubCLILogin()
+        XCTAssertEqual(asked, 0)
+        XCTAssertFalse(nav.githubUsesCLILogin)
+    }
+
     // MARK: - Status
 
     func testSlackStatusSaysWhatsMissingBeforeWhetherItsOn() {

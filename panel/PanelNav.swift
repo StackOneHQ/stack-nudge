@@ -329,7 +329,9 @@ final class PanelNav: ObservableObject {
         // when a tab is picked and when the panel reopens on a different tab.
         didSet {
             if mode != .settings, extensionTextEdit != nil { cancelExtensionTextEdit() }
-            if mode != .events { chipsFocused = false }
+            // An armed Clear all doesn't survive leaving the page: coming back
+            // and pressing C must ask again, not clear.
+            if mode != .events { chipsFocused = false; confirmingClear = false }
             guard mode != oldValue else { return }
             modeJustChanged = true
             dropUpdateConfirmationIfLeft()
@@ -634,8 +636,15 @@ final class PanelNav: ObservableObject {
     // (STACKNUDGE_GITHUB_ACTIVITY). Needs the same GitHub sign-in.
     @Published var githubActivityEnabled: Bool = false
     // STACKNUDGE_GITHUB_USE_GH, and whether the gh login is what's in use.
+    // The second is only ever known once a GitHub feature is on: see
+    // refreshGitHubCLILogin.
     @Published var githubUseGH = true
     @Published var githubUsesCLILogin = false
+    // `gh auth status` and the queues it runs across, injectable so a test can
+    // answer it without spawning gh.
+    var checkGitHubCLILogin: () -> Bool = { GitHubCLI.isLoggedIn() }
+    var runOffMain: (@escaping () -> Void) -> Void = { DispatchQueue.global(qos: .utility).async(execute: $0) }
+    var runOnMain: (@escaping () -> Void) -> Void = { DispatchQueue.main.async(execute: $0) }
     // The PRs tab's data: the latest poll's snapshot and whose it is.
     @Published var pullRequestSnapshot: GitHubFeed.Snapshot?
     @Published var pullRequestLogin: String?
@@ -1937,8 +1946,8 @@ final class PanelNav: ObservableObject {
         githubActivityEnabled = ConfigFile.bool(config, "STACKNUDGE_GITHUB_ACTIVITY", default: false)
         hideShippedTickets = ConfigFile.bool(config, "STACKNUDGE_HIDE_SHIPPED", default: false)
         githubUseGH = ConfigFile.bool(config, "STACKNUDGE_GITHUB_USE_GH", default: true)
-        githubUsesCLILogin = githubUseGH && GitHubCLI.isLoggedIn()
         githubSignedIn = githubUsesCLILogin || GitHubAuth.token() != nil
+        refreshGitHubCLILogin()
         quotaTrackingEnabled = ConfigFile.bool(config, "STACKNUDGE_QUOTA_TRACKING", default: true)
         quotaAlertsEnabled   = ConfigFile.bool(config, "STACKNUDGE_QUOTA_ALERTS",   default: true)
         quotaShowRemaining   = ConfigFile.bool(config, "STACKNUDGE_QUOTA_SHOW_REMAINING", default: false)
@@ -2398,12 +2407,45 @@ final class PanelNav: ObservableObject {
     // kicks an immediate PR fetch so chips appear without waiting for the next
     // tab visit, on disable drops cached PR state so chips revert to the local
     // outcome.
+    // Whether the gh login is in use. `gh auth status` checks its token with
+    // github.com, so it runs off main, where a slow network can't freeze the
+    // panel, and only once PR links or activity is on: nobody who never
+    // turned GitHub on has it contacted (PRIVACY.md). `then` runs on main
+    // with the answer applied.
+    func refreshGitHubCLILogin(then: (() -> Void)? = nil) {
+        guard githubUseGH, githubLinkingEnabled || githubActivityEnabled else {
+            applyGitHubCLILogin(false)
+            then?()
+            return
+        }
+        let check = checkGitHubCLILogin
+        let toMain = runOnMain
+        runOffMain { [weak self] in
+            let loggedIn = check()
+            toMain {
+                self?.applyGitHubCLILogin(loggedIn)
+                then?()
+            }
+        }
+    }
+
+    private func applyGitHubCLILogin(_ loggedIn: Bool) {
+        if githubUsesCLILogin != loggedIn { githubUsesCLILogin = loggedIn }
+        let signedIn = loggedIn || GitHubAuth.token() != nil
+        if githubSignedIn != signedIn { githubSignedIn = signedIn }
+    }
+
     func toggleGithubLinking() {
         githubLinkingEnabled.toggle()
         ConfigFile.write(key: "STACKNUDGE_GITHUB",
                          value: githubLinkingEnabled ? "true" : "false")
         if githubLinkingEnabled {
-            if githubSignedIn { refreshPullRequestsNow?() } else { startGithubSignIn?() }
+            // The gh login isn't known until a GitHub feature is on, so ask
+            // before deciding whether a sign-in is needed at all.
+            refreshGitHubCLILogin { [weak self] in
+                guard let self, self.githubLinkingEnabled else { return }
+                if self.githubSignedIn { self.refreshPullRequestsNow?() } else { self.startGithubSignIn?() }
+            }
         } else {
             pullRequestByBranch = [:]
             githubSignIn = .idle
@@ -2588,6 +2630,7 @@ final class PanelNav: ObservableObject {
         case .githubActivity:
             githubActivityEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_GITHUB_ACTIVITY", value: githubActivityEnabled ? "true" : "false")
+            refreshGitHubCLILogin()
         case .hideShipped:
             toggleHideShipped()
         case .slackEnabled:

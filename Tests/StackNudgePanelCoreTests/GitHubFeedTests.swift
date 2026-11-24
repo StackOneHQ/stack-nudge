@@ -287,7 +287,7 @@ final class GitHubCLITests: XCTestCase {
 
     func testNumbersUseTypedFields() {
         let args = GitHubCLI.graphQLArguments(body: #"{"query":"q","variables":{"n":3}}"#)
-        XCTAssertEqual(args, ["api", "graphql", "-f", "query=q", "-F", "n=3"])
+        XCTAssertEqual(args, ["api", "graphql", "--hostname", "github.com", "-f", "query=q", "-F", "n=3"])
     }
 
     // A first page sends `after: null`; refusing it failed every paged query.

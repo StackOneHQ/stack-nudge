@@ -219,6 +219,45 @@ final class EventsListTests: XCTestCase {
         XCTAssertEqual(store.events.count, 3)
     }
 
+    // GitHub's approved and changes-requested decisions are keyed review events.
+    // Folded into the comment row they vanished there and gave it their key,
+    // so the next decision replaced every comment.
+    func testAKeyedReviewEventStaysOutOfTheCommentGroup() {
+        let store = EventStore()
+        store.append(feed("first", tag: "review", repo: "o/r", pr: 7))
+        store.append(feed("second", tag: "review", repo: "o/r", pr: 7))
+        store.append(feed("approved", tag: "review", key: "decision:o/r#7", repo: "o/r", pr: 7))
+        XCTAssertEqual(store.events.count, 2)
+        XCTAssertEqual(store.events.first { $0.key == nil }?.members.count, 2)
+
+        store.append(feed("changes requested", tag: "review", key: "decision:o/r#7", repo: "o/r", pr: 7))
+        XCTAssertEqual(store.events.count, 2, "the decision replaces only itself")
+        XCTAssertEqual(store.events.first { $0.key == nil }?.members.count, 2, "the comments survive it")
+        XCTAssertEqual(store.events.first { $0.key != nil }?.message, "changes requested")
+    }
+
+    // MARK: Clear all
+
+    // A held C autorepeats, and the first repeat used to be read as the
+    // confirmation, clearing the feed without ever asking.
+    func testAHeldCDoesNotConfirmClearAll() {
+        let c = KeyCode.cKey
+        XCTAssertEqual(PanelController.clearConfirmKeyAction(keyCode: c, shifted: false, isRepeat: true), .ignoreRepeat)
+        XCTAssertEqual(PanelController.clearConfirmKeyAction(keyCode: c, shifted: false, isRepeat: false), .clear)
+        XCTAssertEqual(PanelController.clearConfirmKeyAction(keyCode: c, shifted: true, isRepeat: false), .cancel)
+        XCTAssertEqual(PanelController.clearConfirmKeyAction(keyCode: KeyCode.delete, shifted: false, isRepeat: false),
+                       .cancel)
+    }
+
+    func testLeavingEventsDisarmsClearAll() {
+        let nav = PanelNav()
+        nav.mode = .events
+        nav.confirmingClear = true
+        nav.mode = .sessions
+        nav.mode = .events
+        XCTAssertFalse(nav.confirmingClear)
+    }
+
     func testMembersAreBoundedAndExpansionOnlyForGroups() {
         let store = EventStore()
         for i in 0..<(EventStore.maxMembers + 10) {

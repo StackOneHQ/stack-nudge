@@ -396,9 +396,14 @@ final class EventStore: ObservableObject {
 
     // MARK: - Feed grouping
 
-    // Review feedback on the same PR from the same source.
+    // Review feedback on the same PR from the same source. Keyed events are
+    // never comments: a key means "this replaces its earlier self" (GitHub's
+    // approved and changes-requested decisions carry one), and folding one into
+    // the comment row would hide it there and hand the row its key, so the
+    // next decision would replace every comment with it.
     static func groups(_ existing: NudgeEvent, with incoming: NudgeEvent) -> Bool {
         guard existing.isFeed, incoming.isFeed,
+              incoming.key == nil, existing.key == nil,
               incoming.tag == "review", existing.tag == "review",
               existing.source == incoming.source,
               let repo = incoming.repo, !repo.isEmpty, existing.repo == repo,
@@ -421,7 +426,7 @@ final class EventStore: ObservableObject {
                          ? incoming.severity : previous.severity,
                      title: "\(all.count) new comments on \(name)#\(incoming.pr ?? 0)",
                      message: incoming.message, url: incoming.url ?? previous.url,
-                     repo: incoming.repo, pr: incoming.pr, key: incoming.key ?? previous.key,
+                     repo: incoming.repo, pr: incoming.pr, key: nil,
                      timestamp: incoming.timestamp, members: all, id: incoming.id)
     }
 
