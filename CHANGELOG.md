@@ -4,6 +4,23 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [2.10.0](https://github.com/StackOneHQ/stack-nudge/compare/v2.9.0...v2.10.0) (2026-11-24)
+
+
+### Features
+
+* **events:** tag chips, read state, Clear all and grouped feedback ([#273](https://github.com/StackOneHQ/stack-nudge/issues/273)) ([7d13847](https://github.com/StackOneHQ/stack-nudge/commit/7d138479625eb05f88d94600abdcc09bf6d5cb20))
+* **github:** GitHub activity in the feed and a PRs tab ([#270](https://github.com/StackOneHQ/stack-nudge/issues/270)) ([7951835](https://github.com/StackOneHQ/stack-nudge/commit/7951835c5d95cf4c91d422882a03cf039747b924))
+* **sessions:** resume a recent Claude Code session or start one in a repo ([#234](https://github.com/StackOneHQ/stack-nudge/issues/234)) ([73107f4](https://github.com/StackOneHQ/stack-nudge/commit/73107f482310242e8e44ecd1aabd6a5483ba6567))
+* **settings:** give each integration its own page ([#269](https://github.com/StackOneHQ/stack-nudge/issues/269)) ([a51eb1d](https://github.com/StackOneHQ/stack-nudge/commit/a51eb1df75a25cf28a8453aa7a9d29791d719d7e))
+
+
+### Bug Fixes
+
+* **panel:** follow-ups to the events, GitHub and session launcher changes ([#276](https://github.com/StackOneHQ/stack-nudge/issues/276)) ([b67ac3c](https://github.com/StackOneHQ/stack-nudge/commit/b67ac3c5608cf535ae7c1d26d5eb8bb252a2eb6d))
+* **update:** keep downloads in a folder of their own so Preparing doesn't stall ([#267](https://github.com/StackOneHQ/stack-nudge/issues/267)) ([b25b31b](https://github.com/StackOneHQ/stack-nudge/commit/b25b31b47f6c9711c9363ffb2e7ec54461580a0e))
+* **widget:** the update screen stays up in the widget and returns to the pill ([#244](https://github.com/StackOneHQ/stack-nudge/issues/244)) ([fc980a6](https://github.com/StackOneHQ/stack-nudge/commit/fc980a6d1bbeb546881a501bff043b0a0d8e550f))
+
 ## [2.9.0](https://github.com/StackOneHQ/stack-nudge/compare/v2.8.0...v2.9.0) (2026-11-22)
 
 
