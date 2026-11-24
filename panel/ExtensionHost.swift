@@ -407,13 +407,23 @@ final class ExtensionHost: ObservableObject {
 
     // True when the key belonged to this extension. The caller swallows it
     // either way — an unbound letter must not fall through to another tab's
-    // handler — but the return says whether anything was spawned.
+    // handler — but the return says whether anything was run or sent.
+    //
+    // A view runs `run --action` for it. A service is sent an `action` line
+    // instead, only while it's running: the keys `tabKeys` offers, so the
+    // footer and a key press agree on what does something.
     @discardableResult
     func handle(key: String, on id: String) -> Bool {
         let pane = self.pane(id)
-        guard manifest(id)?.mode == .view, !pane.busy, let document = pane.document,
+        guard let mode = manifest(id)?.mode, tabKeys(id).actions, !pane.busy,
+              let document = pane.document,
               let hit = Self.resolve(key: key, in: document, selectedRow: pane.selectedRow)
         else { return false }
+        if mode == .service {
+            guard let service = running[id] else { return false }
+            service.supervisor.perform(action: hit.action, row: hit.row)
+            return true
+        }
         perform(action: hit.action, row: hit.row, on: id)
         return true
     }
@@ -527,9 +537,9 @@ final class ExtensionHost: ObservableObject {
 
     // Which keys an extension's tab answers, for the router and the footer to
     // agree on. A view's ⌘R refetches and its document's actions run it. A
-    // service has neither: its documents arrive by themselves, and its actions
-    // would need a message the protocol doesn't have yet. Its ⌘R comes back
-    // only once it is broken, as the way to try again.
+    // service's documents arrive by themselves, so it has no refresh, and its
+    // actions are sent to it as `action` lines, only while it's running. Its
+    // ⌘R comes back only once it is broken, as the way to try again.
     struct TabKeys: Equatable {
         // The ⌘R hint's label, or nil when ⌘R does nothing here.
         var refresh: String?
@@ -540,8 +550,11 @@ final class ExtensionHost: ObservableObject {
 
     static func tabKeys(mode: ExtensionManifest.Mode, state: ServiceSupervisor.State?) -> TabKeys {
         guard mode == .service else { return .view }
-        if case .broken? = state { return TabKeys(refresh: "Retry", actions: false) }
-        return TabKeys(refresh: nil, actions: false)
+        switch state {
+        case .broken?:  return TabKeys(refresh: "Retry", actions: false)
+        case .running?: return TabKeys(refresh: nil, actions: true)
+        default:        return TabKeys(refresh: nil, actions: false)
+        }
     }
 
     func tabKeys(_ id: String) -> TabKeys {

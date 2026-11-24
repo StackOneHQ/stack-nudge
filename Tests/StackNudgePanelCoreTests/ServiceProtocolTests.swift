@@ -25,6 +25,9 @@ final class ServiceProtocolTests: XCTestCase {
                        #"{"name":"idle","seconds":42,"type":"event"}"# + "\n")
         XCTAssertEqual(line(.event(name: "panel", fields: ["open": .bool(true)])),
                        #"{"name":"panel","open":true,"type":"event"}"# + "\n")
+        XCTAssertEqual(line(.action(id: "approve", row: "d1")),
+                       #"{"id":"approve","row":"d1","type":"action"}"# + "\n")
+        XCTAssertEqual(line(.action(id: "refresh", row: nil)), #"{"id":"refresh","type":"action"}"# + "\n")
         XCTAssertEqual(line(.ping(id: 17)), #"{"id":17,"type":"ping"}"# + "\n")
         XCTAssertEqual(line(.stop), #"{"type":"stop"}"# + "\n")
     }

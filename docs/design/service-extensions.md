@@ -119,6 +119,7 @@ version, and the extension's first message must answer it.
 {"type": "config", "values": {"STACKNUDGE_EXT_AWAY_WAIT": "30"}}
 {"type": "event", "name": "idle", "seconds": 42}
 {"type": "event", "name": "panel", "open": true}
+{"type": "action", "id": "approve", "row": "d1"}
 {"type": "ping", "id": 17}
 {"type": "stop"}
 ```
@@ -126,6 +127,14 @@ version, and the extension's first message must answer it.
 `capabilities` in `hello` is what was **granted**, which may be less than
 declared. `config` can arrive again at any point while running, whenever the
 user saves the extension's settings, so apply each one as it comes. Events are delivered only for granted `event:*` capabilities.
+
+`action` is a key the user pressed on its tab, resolved against its latest
+`document` exactly as a view's is: the selected row's binding first, then the
+document's. It's what a view gets as `run --action approve --row d1`, and `row`
+is left out for a document-level action. Sent only while the extension is
+running; a key pressed while it starts or restarts sends nothing, since the
+document on screen came from the process before. It grants nothing, so it needs
+no capability. Additive: an extension that predates it skips the type.
 
 **Extension → app (stdout)**
 
