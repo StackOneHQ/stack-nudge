@@ -125,10 +125,10 @@ enum SessionLauncher {
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
+    // The canonical 8-4-4-4-12 form only, so an id can never start with `-`
+    // and be read as a flag by `claude --resume`.
     static func isSessionID(_ id: String) -> Bool {
-        !id.isEmpty && id.unicodeScalars.allSatisfy {
-            CharacterSet(charactersIn: "abcdefABCDEF0123456789-").contains($0)
-        }
+        UUID(uuidString: id) != nil
     }
 
     static func resumeCommand(_ session: RecentSession) -> String {

@@ -107,6 +107,13 @@ final class SessionLauncherTests: XCTestCase {
         }
     }
 
+    func testOnlyAUUIDIsASessionID() {
+        XCTAssertTrue(SessionLauncher.isSessionID("0a1b2c3d-0000-4000-8000-000000000001"))
+        for id in ["-c", "-ac", "abc-123", "0a1b2c3d00004000800000000000001", ""] {
+            XCTAssertFalse(SessionLauncher.isSessionID(id), id)
+        }
+    }
+
     func testResumeCommandQuotesTheID() {
         let session = RecentSession(id: "abc-123", cwd: "/r", title: "t", date: Date())
         XCTAssertEqual(SessionLauncher.resumeCommand(session), "claude --resume 'abc-123'")
