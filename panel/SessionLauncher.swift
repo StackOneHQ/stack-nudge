@@ -83,7 +83,9 @@ enum RecentSessions {
             where name.hasSuffix(".jsonl") && !name.hasPrefix("agent-") {
                 let path = "\(root)/\(dir)/\(name)"
                 let id = (name as NSString).deletingPathExtension
-                guard !running.contains(id),
+                // The id is typed into a shell as `claude --resume <id>`, so
+                // only the shape Claude Code writes (a UUID) is offered.
+                guard SessionLauncher.isSessionID(id), !running.contains(id),
                       let modified = (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date
                 else { continue }
                 files.append((path, modified))
@@ -123,6 +125,12 @@ enum SessionLauncher {
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
+    // The canonical 8-4-4-4-12 form only, so an id can never start with `-`
+    // and be read as a flag by `claude --resume`.
+    static func isSessionID(_ id: String) -> Bool {
+        UUID(uuidString: id) != nil
+    }
+
     static func resumeCommand(_ session: RecentSession) -> String {
         "claude --resume \(shellQuoted(session.id))"
     }
@@ -130,10 +138,6 @@ enum SessionLauncher {
     // Single quotes, with any single quote closed, escaped and reopened.
     static func shellQuoted(_ s: String) -> String {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
-    static func appleScriptEscaped(_ s: String) -> String {
-        s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
     }
 
     enum Terminal: String { case ghostty, terminal, iterm }
@@ -146,40 +150,73 @@ enum SessionLauncher {
         return ghostty ? .ghostty : .terminal
     }
 
-    // Opens a new window in `cwd` and types `command` there.
-    static func open(cwd: String, command: String, in terminal: Terminal) {
-        let script: String
+    // A folder Terminal or iTerm can be sent to by typing `cd '<folder>'` into
+    // the login shell. Inside single quotes POSIX shells take everything
+    // literally, but fish reads `\'` and `\\` as escapes, and a control
+    // character can end the line early, so a folder holding any of those is
+    // refused rather than typed. Ghostty takes the folder as a property and
+    // never types it.
+    static func isTypable(_ folder: String) -> Bool {
+        !folder.isEmpty && !folder.unicodeScalars.contains {
+            $0 == "'" || $0 == "\\" || CharacterSet.controlCharacters.contains($0)
+        }
+    }
+
+    // The osascript arguments that open a window in `cwd` and type `command`,
+    // or nil when that can't be done safely in `terminal`. The folder and the
+    // command reach the script as arguments, never spliced into its source.
+    static func osascriptArguments(cwd: String, command: String, in terminal: Terminal) -> [String]? {
         switch terminal {
         case .ghostty:
-            // Ghostty's AppleScript API types the command without the "allow
-            // Ghostty to execute" prompt that `open --args -e` raises.
-            script = """
-                tell application "Ghostty"
-                    activate
-                    set cfg to new surface configuration from {initial working directory:"\(appleScriptEscaped(cwd))", initial input:"\(appleScriptEscaped(command))" & linefeed}
-                    new window with configuration cfg
-                end tell
-                """
-        case .iterm:
-            script = """
-                tell application "iTerm2"
-                    activate
-                    set w to (create window with default profile)
-                    tell current session of w to write text "\(appleScriptEscaped("cd \(shellQuoted(cwd)) && \(command)"))"
-                end tell
-                """
-        case .terminal:
-            script = """
-                tell application "Terminal"
-                    activate
-                    do script "\(appleScriptEscaped("cd \(shellQuoted(cwd)) && \(command)"))"
-                end tell
-                """
+            return ["-e", ghosttyScript, "--", cwd, command]
+        case .iterm, .terminal:
+            guard isTypable(cwd) else { return nil }
+            let line = "cd \(shellQuoted(cwd)) && \(command)"
+            return ["-e", terminal == .iterm ? itermScript : terminalScript, "--", line]
         }
+    }
+
+    // Ghostty's AppleScript API types the command without the "allow Ghostty
+    // to execute" prompt that `open --args -e` raises.
+    static let ghosttyScript = """
+        on run argv
+            tell application "Ghostty"
+                activate
+                set cfg to new surface configuration from {initial working directory:(item 1 of argv), initial input:(item 2 of argv) & linefeed}
+                new window with configuration cfg
+            end tell
+        end run
+        """
+
+    static let itermScript = """
+        on run argv
+            tell application "iTerm2"
+                activate
+                set w to (create window with default profile)
+                tell current session of w to write text (item 1 of argv)
+            end tell
+        end run
+        """
+
+    static let terminalScript = """
+        on run argv
+            tell application "Terminal"
+                activate
+                do script (item 1 of argv)
+            end tell
+        end run
+        """
+
+    // Opens a new window in `cwd` and types `command` there. False, having
+    // opened nothing, when the folder can't be typed safely in that terminal.
+    @discardableResult
+    static func open(cwd: String, command: String, in terminal: Terminal) -> Bool {
+        guard let arguments = osascriptArguments(cwd: cwd, command: command, in: terminal) else { return false }
         DispatchQueue.global(qos: .userInitiated).async {
-            let ok = ProcessOutput.run("/usr/bin/osascript", ["-e", script], timeout: 15)?.status == 0
+            let ok = ProcessOutput.run("/usr/bin/osascript", arguments, timeout: 15)?.status == 0
             // An older Ghostty without the scripting API: fall back once.
             if !ok, terminal == .ghostty { open(cwd: cwd, command: command, in: .terminal) }
         }
+        return true
     }
 }

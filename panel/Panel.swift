@@ -4643,6 +4643,21 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                              isRepeat: event.isARepeat)
     }
 
+    enum ClearConfirmKeyAction: Equatable {
+        case clear
+        case cancel
+        case ignoreRepeat
+    }
+
+    // The key that answers "Clear all?". A held C autorepeats, and its first
+    // repeat lands here about half a second after the press that asked, so a
+    // repeat answers nothing and the question stays up (AGENTS.md: destructive
+    // keys ignore autorepeat). A fresh C clears; any other key backs out.
+    static func clearConfirmKeyAction(keyCode: UInt16, shifted: Bool, isRepeat: Bool) -> ClearConfirmKeyAction {
+        if isRepeat { return .ignoreRepeat }
+        return keyCode == KeyCode.cKey && !shifted ? .clear : .cancel
+    }
+
     enum SessionLaunchKeyAction: Equatable {
         case resume
         case newSession
@@ -5376,8 +5391,12 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         // Clear all asks first. C confirms; anything else backs out, and the
         // key is swallowed so a stray ⌫ can't also deny a prompt.
         if nav.confirmingClear {
-            nav.confirmingClear = false
-            if event.keyCode == KeyCode.cKey, !shifted { store.clearFeed() }
+            switch Self.clearConfirmKeyAction(keyCode: event.keyCode, shifted: shifted,
+                                              isRepeat: event.isARepeat) {
+            case .clear:        nav.confirmingClear = false; store.clearFeed()
+            case .cancel:       nav.confirmingClear = false
+            case .ignoreRepeat: break
+            }
             return true
         }
 
@@ -5431,7 +5450,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         case KeyCode.aKey:
             store.markAllRead()
         case KeyCode.cKey:
-            if store.events.contains(where: \.isFeed) { nav.confirmingClear = true }
+            if !event.isARepeat, store.events.contains(where: \.isFeed) { nav.confirmingClear = true }
         case KeyCode.upArrow:
             store.selectPrevious()
         case KeyCode.downArrow:
@@ -5968,8 +5987,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     private func launch(cwd: String, command: String) {
         let terminal = SessionLauncher.terminal(configured: ConfigFile.read()["STACKNUDGE_SESSION_TERMINAL"])
+        // Refused (a folder that can't be typed safely in this terminal): the
+        // panel stays up and beeps rather than vanishing with nothing opened.
+        guard SessionLauncher.open(cwd: cwd, command: command, in: terminal) else { return NSSound.beep() }
         hidePanel()
-        SessionLauncher.open(cwd: cwd, command: command, in: terminal)
     }
 
     private struct SessionMenuItem {

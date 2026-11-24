@@ -51,12 +51,26 @@ final class RecentSessionsTests: XCTestCase {
             try line(["type": "user", "cwd": cwd, "message": ["content": name]])
                 .write(toFile: "\(project)/\(name).jsonl", atomically: true, encoding: .utf8)
         }
-        try write("keep", cwd: existing)
-        try write("running", cwd: existing)
+        let keep = "0a1b2c3d-0000-4000-8000-000000000001"
+        let running = "0a1b2c3d-0000-4000-8000-000000000002"
+        try write(keep, cwd: existing)
+        try write(running, cwd: existing)
         try write("agent-sub", cwd: existing)
-        try write("gone", cwd: root + "/deleted")
-        let ids = RecentSessions.load(root: root, excluding: ["running"]).map(\.id)
-        XCTAssertEqual(ids, ["keep"])
+        try write("0a1b2c3d-0000-4000-8000-000000000004", cwd: root + "/deleted")
+        let ids = RecentSessions.load(root: root, excluding: [running]).map(\.id)
+        XCTAssertEqual(ids, [keep])
+    }
+
+    // The id is typed into a shell, so a transcript named anything but the
+    // UUID Claude Code writes is not offered.
+    func testLoadSkipsATranscriptNotNamedLikeASession() throws {
+        let root = NSTemporaryDirectory() + "recent-\(UUID().uuidString)"
+        let project = root + "/-repo"
+        try FileManager.default.createDirectory(atPath: project, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        try line(["type": "user", "cwd": root, "message": ["content": "x"]])
+            .write(toFile: "\(project)/x$(touch pwned).jsonl", atomically: true, encoding: .utf8)
+        XCTAssertEqual(RecentSessions.load(root: root).map(\.id), [])
     }
 }
 
@@ -66,6 +80,38 @@ final class SessionLauncherTests: XCTestCase {
     func testShellQuoting() {
         XCTAssertEqual(SessionLauncher.shellQuoted("/a/b c"), "'/a/b c'")
         XCTAssertEqual(SessionLauncher.shellQuoted("it's"), "'it'\\''s'")
+    }
+
+    // Terminal and iTerm get `cd '<folder>'` typed into the login shell. A
+    // quote, a backslash or a control character could end the quoting early
+    // in some shells (fish reads \' inside single quotes as an escape), so
+    // such a folder is refused there. Ghostty takes the folder as a property.
+    func testAFolderThatCantBeTypedSafelyIsRefused() {
+        for folder in ["/r/it's", "/r/back\\slash", "/r/new\nline", "/r/bell\u{07}"] {
+            XCTAssertNil(SessionLauncher.osascriptArguments(cwd: folder, command: "claude", in: .terminal), folder)
+            XCTAssertNil(SessionLauncher.osascriptArguments(cwd: folder, command: "claude", in: .iterm), folder)
+            XCTAssertNotNil(SessionLauncher.osascriptArguments(cwd: folder, command: "claude", in: .ghostty), folder)
+        }
+    }
+
+    // The folder and command reach osascript as arguments after `--`, never
+    // spliced into the script's source.
+    func testTheFolderAndCommandAreArgumentsNotScript() {
+        let folder = "/r/a \"b\" $(c)"
+        let terminal = SessionLauncher.osascriptArguments(cwd: folder, command: "claude", in: .terminal)
+        XCTAssertEqual(terminal, ["-e", SessionLauncher.terminalScript, "--", "cd '/r/a \"b\" $(c)' && claude"])
+        let ghostty = SessionLauncher.osascriptArguments(cwd: folder, command: "claude", in: .ghostty)
+        XCTAssertEqual(ghostty, ["-e", SessionLauncher.ghosttyScript, "--", folder, "claude"])
+        for script in [SessionLauncher.terminalScript, SessionLauncher.itermScript, SessionLauncher.ghosttyScript] {
+            XCTAssertFalse(script.contains(folder))
+        }
+    }
+
+    func testOnlyAUUIDIsASessionID() {
+        XCTAssertTrue(SessionLauncher.isSessionID("0a1b2c3d-0000-4000-8000-000000000001"))
+        for id in ["-c", "-ac", "abc-123", "0a1b2c3d00004000800000000000001", ""] {
+            XCTAssertFalse(SessionLauncher.isSessionID(id), id)
+        }
     }
 
     func testResumeCommandQuotesTheID() {
