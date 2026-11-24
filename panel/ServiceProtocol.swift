@@ -52,6 +52,10 @@ enum ServiceProtocol {
         case feedAction(id: String, key: String)
         case ping(id: Int)
         case stop
+        // An MCP client called one of the extension's tools (ExtensionMCP).
+        // `arguments` is the client's JSON object, already checked to be one;
+        // `caller` is the client as the bridge saw it, never as a model claims.
+        case mcpCall(id: Int, tool: String, arguments: Data, caller: [String: Value])
     }
 
     // One line, newline included. Keys are sorted so the bytes are stable,
@@ -79,6 +83,10 @@ enum ServiceProtocol {
             object = ["type": "ping", "id": id]
         case .stop:
             object = ["type": "stop"]
+        case .mcpCall(let id, let tool, let arguments, let caller):
+            object = ["type": "mcp.call", "id": id, "tool": tool,
+                      "arguments": (try? JSONSerialization.jsonObject(with: arguments)) ?? [String: Any](),
+                      "caller": caller.mapValues(\.json)]
         }
         // Every value above is a String, Int, Bool or a collection of them, so
         // serialisation cannot fail; the fallback is for the type checker.
@@ -104,6 +112,11 @@ enum ServiceProtocol {
         // Settings picker. Whether the key is declared, and dynamic, is the
         // host's to check: this only knows the line.
         case choices(key: String, options: [ConfigOption])
+        // The answer to an mcp.call: a string or an object, kept as JSON
+        // bytes, and whether it's an error the client should see as one.
+        case mcpResult(id: Int, result: Data, isError: Bool)
+        // An occurrence of one of the extension's declared event types.
+        case mcpEvent(name: String, data: Data, eventID: String?)
     }
 
     // A feed event, as an extension posts one. Text is trimmed to fit, as a
@@ -267,6 +280,23 @@ enum ServiceProtocol {
                 }
             }
             return .message(.choices(key: key, options: options))
+        case "mcp.result":
+            guard let id = integer(object["id"]) else { return .invalid("mcp.result without an id") }
+            let result = object["result"] ?? ""
+            guard result is String || result is [String: Any],
+                  let data = try? JSONSerialization.data(withJSONObject: result, options: [.fragmentsAllowed, .sortedKeys])
+            else { return .invalid("mcp.result's result must be a string or an object") }
+            let isError = (object["isError"] as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() && $0.boolValue } ?? false
+            return .message(.mcpResult(id: id, result: data, isError: isError))
+        case "mcp.event":
+            guard let name = object["name"] as? String, ExtensionMCP.isValidName(name) else {
+                return .invalid("mcp.event without a valid name")
+            }
+            guard let payload = object["data"] as? [String: Any],
+                  let data = try? JSONSerialization.data(withJSONObject: payload, options: .sortedKeys)
+            else { return .invalid("mcp.event without a data object") }
+            let eventID = (object["eventId"] as? String).flatMap { $0.isEmpty || $0.count > 200 ? nil : $0 }
+            return .message(.mcpEvent(name: name, data: data, eventID: eventID))
         default:
             return .ignored(type: type)
         }

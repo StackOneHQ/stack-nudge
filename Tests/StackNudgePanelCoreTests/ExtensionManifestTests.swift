@@ -397,7 +397,7 @@ final class ExtensionManifestTests: XCTestCase {
     // Every capability the host knows, by the name a manifest uses for it.
     func testEveryKnownCapabilityIsAccepted() {
         let names = ["bluetooth", "signal:presence", "event:idle", "event:panel",
-                     "event:session", "event:nudge", "feed"]
+                     "event:session", "event:nudge", "feed", "mcp", "event:settings"]
         let list = names.map { "\"\($0)\"" }.joined(separator: ",")
         guard case .success(let m) = service(#","mode":"service","capabilities":["# + list + "]")
         else { return XCTFail("known capabilities refused") }

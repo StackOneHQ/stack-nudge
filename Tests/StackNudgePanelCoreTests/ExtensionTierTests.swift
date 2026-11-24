@@ -29,7 +29,7 @@ final class ExtensionTierTests: XCTestCase {
         let manifest = service(everything)
         XCTAssertEqual(ExtensionTier.grants(for: manifest, tier: .view), [])
         XCTAssertEqual(ExtensionTier.grants(for: manifest, tier: .service),
-                       [.eventIdle, .eventPanel, .feed])
+                       [.eventIdle, .eventPanel, .feed, .mcp, .eventSettings])
         XCTAssertEqual(ExtensionTier.grants(for: manifest, tier: .trusted),
                        ExtensionCapability.allCases)
     }

@@ -29,6 +29,11 @@ final class MCPSessionTests: XCTestCase {
         }
         func raiseNudge(_ request: MCPNudge.Request, caller: MCPCaller) { nudges.append((request, caller)) }
         func mute(minutes: Int, caller: MCPCaller) -> String { mutes.append(minutes); return "ok" }
+        var extensionToolList: [[String: Any]] = []
+        func extensionTools() -> [[String: Any]] { extensionToolList }
+        func callExtensionTool(_ name: String, arguments: [String: Any], caller: MCPCaller) -> [String: Any]? {
+            name == "pylon.open_issues" ? MCPProtocol.toolResult("3 open") : nil
+        }
     }
 
     private var sent: [[String: Any]] = []
@@ -171,6 +176,18 @@ final class MCPSessionTests: XCTestCase {
         XCTAssertEqual(context.nudges.first?.0.title, "Build done")
         XCTAssertEqual(call(session, "notify", ["title": "x", "url": "http://example.com"])?["isError"] as? Bool, true)
         XCTAssertEqual(context.nudges.count, 1)
+    }
+
+    func testAnExtensionsToolIsListedAfterTheAppsAndCalled() {
+        let session = session()
+        context.extensionToolList = [["name": "pylon.open_issues"]]
+        session.receive(request(5, "tools/list"))
+        let names = (lastResult?["tools"] as? [[String: Any]])?.compactMap { $0["name"] as? String }
+        XCTAssertEqual(names?.last, "pylon.open_issues")
+        XCTAssertEqual((call(session, "pylon.open_issues")?["content"] as? [[String: Any]])?.first?["text"] as? String,
+                       "3 open")
+        session.receive(request(6, "tools/call", ["name": "pylon.nope"]))
+        XCTAssertEqual(lastError?["code"] as? Int, MCPProtocol.invalidParams)
     }
 
     func testMuteIsBoundedToADay() {

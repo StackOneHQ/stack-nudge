@@ -13,6 +13,11 @@ protocol MCPContext: AnyObject {
     // Mutes for `minutes` (0 resumes), sparing permission prompts. Says what
     // it did.
     func mute(minutes: Int, caller: MCPCaller) -> String
+    // Tools running extensions offer, already namespaced (ExtensionMCP).
+    func extensionTools() -> [[String: Any]]
+    // Calls one, blocking until the extension answers or times out. nil when
+    // no running extension offers `name`.
+    func callExtensionTool(_ name: String, arguments: [String: Any], caller: MCPCaller) -> [String: Any]?
 }
 
 // One client's conversation with the server, from the bridge's hello to the
@@ -230,7 +235,12 @@ final class MCPSession {
     }
 
     // In a fixed order: clients cache the list, and the spec asks for it.
+    // The app's own first, then each running extension's.
     func tools() -> [[String: Any]] {
+        appTools() + context.extensionTools()
+    }
+
+    private func appTools() -> [[String: Any]] {
         [
             ["name": "settings_list",
              "title": "List stack-nudge settings",
@@ -332,6 +342,10 @@ final class MCPSession {
             else { return MCPProtocol.toolError("minutes is from 0 to \(MCPSession.maxMuteMinutes).") }
             return MCPProtocol.toolResult(context.mute(minutes: minutes, caller: currentCaller))
         default:
+            // An extension's, by its namespaced name. Its result is its own.
+            if let result = context.callExtensionTool(name, arguments: arguments, caller: currentCaller) {
+                return result
+            }
             throw MCPFailure.invalidParams("Unknown tool: \(name)")
         }
     }

@@ -1,10 +1,10 @@
 # A local MCP server
 
-Status: phases 1 to 3 are built: the bridge, the server on its own socket, the
+Status: phases 1 to 4 are built: the bridge, the server on its own socket, the
 settings registry, every tool below, the resources with their update
-notifications, the write switch, the audit lines, and the app's events over
-push and poll. Extension contributions (phase 4) are marked *not yet
-delivered*. Each phase is its own PR, and this doc is updated as they land, the
+notifications, the write switch, the audit lines, the app's events over push
+and poll, and extensions' tools and events (docs/extensions.md, "Tools and
+events for AI agents"). The relay (phase 5) is not. Each phase is its own PR, and this doc is updated as they land, the
 way [service-extensions.md](service-extensions.md) was.
 
 ## Why
@@ -220,12 +220,16 @@ the registry, so the panel and MCP can't drift apart.
 Both directions, built on what service extensions already have.
 
 **Contributing to the server.** A service extension's manifest gains an `mcp`
-block declaring the tools, resources and event types it offers, each named
-under its ID (`pylon.sla_breach`). The NDJSON protocol gains `mcp.call` and
-`mcp.result` for tool calls, `mcp.event` to emit an occurrence and
-`mcp.resource.updated`. The host checks every call's arguments and every
-event's payload against the declared schemas before passing them on.
-Installing, removing, updating or a crash sends `tools/list_changed` and
+block declaring the tools and event types it offers, each named under its ID
+(`pylon.sla_breach`), and checked at install like the rest of the manifest. The
+NDJSON protocol gains `mcp.call` and `mcp.result` for tool calls and `mcp.event`
+to emit an occurrence. The host passes on only an event type the extension
+declared, with an object for its data, and only a result for a call it made;
+a call unanswered in 30 seconds fails. It doesn't validate arguments or
+payloads against the declared JSON Schemas: clients see the schemas and are
+expected to keep to them, and extensions to their own. Resources from
+extensions aren't offered (yet). The tools and event types come and go with
+the service, and each change sends `tools/list_changed` and
 `events/list_changed`. Contributing needs a new capability, `mcp`, granted at
 service tier and above and listed in the install prompt like the others.
 

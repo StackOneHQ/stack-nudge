@@ -6509,10 +6509,27 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
                                     resume: { [weak self] in self?.resumeNotifications() })
         let server = MCPServer(socketPath: MCPServer.defaultSocketPath, context: context)
         context.server = server
+        context.extensions = extensions
         do {
             try server.start()
             mcpServer = server
             mcpChanges = MCPChangeWatcher(server: server, nav: nav, store: store, sessions: sessions)
+            mcpChanges?.onSettingChanged = { [weak self] key, value, by in
+                self?.extensions.broadcast(event: "settings", fields: ["key": .string(key), "value": .string(value),
+                                                                       "by": .string(by)])
+            }
+            // Extensions' tools and event types come and go with them.
+            extensions.onMCPChanged = { [weak self, weak server] in
+                guard let self, let server else { return }
+                let types = Dictionary(uniqueKeysWithValues: self.extensions.mcpContributions.map {
+                    ($0.id, $0.mcp.eventTypes(owner: $0.id))
+                })
+                if server.events.replaceExtensionTypes(types) { server.eventsListChanged() }
+                server.toolsListChanged()
+            }
+            extensions.onMCPEvent = { [weak server] name, data, eventID in
+                server?.emit(name, data: data, eventID: eventID)
+            }
         } catch {
             FileHandle.standardError.write(Data("stack-nudge: MCP server failed to start: \(error)\n".utf8))
         }

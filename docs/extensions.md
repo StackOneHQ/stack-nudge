@@ -604,6 +604,58 @@ Any tier may use it, since it grants nothing. It's a manifest field, so older
 hosts ignore it and show a tab, which still works. An unknown surface, or an
 empty list, is refused.
 
+## Tools and events for AI agents
+
+A service extension can offer tools and event types to MCP clients (Claude
+Code, Codex, Claude Desktop) through stack-nudge's own MCP server
+([design](design/local-mcp.md)). It asks for the `mcp` capability, which needs
+the `service` tier, and declares what it offers in the manifest:
+
+```json
+"capabilities": ["mcp"],
+"mcp": {
+  "tools": [{"name": "open_issues", "description": "Issues waiting on a reply.",
+             "inputSchema": {"type": "object", "properties": {"limit": {"type": "integer"}}}}],
+  "events": [{"name": "sla_breach", "description": "An issue is about to breach its SLA.",
+              "filters": {"team": "Only issues for this team."},
+              "payloadSchema": {"type": "object", "properties": {"issue": {"type": "string"}}}}]
+}
+```
+
+Names are lowercase letters, digits and `_`, at most 16 of each, and clients
+see them under the extension's id: `pylon.open_issues`, `pylon.sla_breach`.
+They're offered only while the service is running, and clients are told when
+they come and go.
+
+A call arrives on stdin, with the caller as stack-nudge saw it. `sessionId` and
+`pid` are present only when they name a session stack-nudge can see running,
+never because a model said so:
+
+```json
+{"type": "mcp.call", "id": 7, "tool": "open_issues", "arguments": {"limit": 5},
+ "caller": {"client": "Claude Code", "sessionId": "...", "pid": 4242}}
+```
+
+Answer with the same `id` within 30 seconds, with a string or an object, and
+`isError` when it failed:
+
+```json
+{"type": "mcp.result", "id": 7, "result": {"open": 3}}
+```
+
+An occurrence of a declared event type is one line; `eventId` is optional and
+should be the upstream's own id when there is one. Its `data` is shown to a
+model as it is, so keep it to what identifies the thing: an id, a title, a
+link.
+
+```json
+{"type": "mcp.event", "name": "sla_breach", "data": {"issue": "P-123"}, "eventId": "pylon-p123-sla"}
+```
+
+`event:settings` (also `service` tier) delivers
+`{"type": "event", "name": "settings", "key": "...", "value": "...", "by": "..."}`
+whenever a setting changes, from Settings or an MCP client.
+
 ## Away, the reference service extension
 
 `extensions/away` in StackOneHQ/stack-nudge-extensions-marketplace notices when you walk away from the Mac with your phone, and

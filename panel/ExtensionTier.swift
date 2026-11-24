@@ -24,7 +24,7 @@ enum ExtensionTier: String, Comparable, CaseIterable {
     // until somebody decides which tier it belongs to.
     func allows(_ capability: ExtensionCapability) -> Bool {
         switch capability {
-        case .eventIdle, .eventPanel, .feed:
+        case .eventIdle, .eventPanel, .feed, .mcp, .eventSettings:
             return self >= .service
         case .signalPresence, .eventSession, .eventNudge, .bluetooth:
             return self >= .trusted
