@@ -473,4 +473,89 @@ final class ExtensionSourceTests: XCTestCase {
         XCTAssertEqual(actual.ignoredSources, ["nonsense"])
         XCTAssertEqual(actual.entries.map(\.id), ["derby"])
     }
+
+    // MARK: - Installs that predate .sources.json
+
+    private func listed(_ id: String, from source: ExtensionSource?, version: String = "1")
+        -> ExtensionInstaller.IndexEntry {
+        var listing = entry(id, version: version)
+        listing.source = source?.slug
+        return listing
+    }
+
+    private let outsideRepo = ExtensionSource(owner: "someone", repo: "extensions")
+
+    func testAnInstallWithATierAndNoSourceTakesTheOneSourceThatListsIt() {
+        let actual = ExtensionTiers.adopting([:], tiered: ["claude-usage"],
+                                             listings: [listed("derby", from: nil),
+                                                        listed("claude-usage", from: internalSource)])
+        XCTAssertEqual(actual, ["claude-usage": internalSource.slug])
+    }
+
+    func testARecordedSourceIsNeverReplaced() {
+        let recorded = ["claude-usage": outsideRepo.slug]
+        let actual = ExtensionTiers.adopting(recorded, tiered: ["claude-usage"],
+                                             listings: [listed("claude-usage", from: internalSource)])
+        XCTAssertEqual(actual, recorded)
+    }
+
+    func testNothingIsAdoptedWhenTheAppsOwnIndexListsIt() {
+        let actual = ExtensionTiers.adopting([:], tiered: ["derby"],
+                                             listings: [listed("derby", from: nil),
+                                                        listed("derby", from: internalSource)])
+        XCTAssertEqual(actual, [:])
+    }
+
+    func testNothingIsAdoptedWhenTwoSourcesListIt() {
+        let actual = ExtensionTiers.adopting([:], tiered: ["radar"],
+                                             listings: [listed("radar", from: internalSource),
+                                                        listed("radar", from: outsideRepo)])
+        XCTAssertEqual(actual, [:])
+    }
+
+    // No tier means it wasn't installed from an index: put there by hand, so
+    // a source listing the same id says nothing about it.
+    func testACopyWithNoTierIsNeverAdopted() {
+        let actual = ExtensionTiers.adopting([:], tiered: [],
+                                             listings: [listed("claude-usage", from: internalSource)])
+        XCTAssertEqual(actual, [:])
+    }
+
+    func testAdoptingWritesTheSourceBesideTheTiers() throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("adopt-\(UUID().uuidString)/.tiers.json").path
+        addTeardownBlock {
+            try? FileManager.default.removeItem(atPath: (path as NSString).deletingLastPathComponent)
+        }
+        try FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent,
+                                                withIntermediateDirectories: true)
+        try #"{"claude-usage":"view","hand-made":"view"}"#.write(toFile: path, atomically: true,
+                                                                  encoding: .utf8)
+        ExtensionTiers.adoptUnrecordedSources(listings: [listed("claude-usage", from: internalSource)],
+                                              path: path)
+        let sourcesPath = ExtensionTiers.sourcesPath(beside: path)
+        XCTAssertEqual(ExtensionTiers.readSources(path: sourcesPath), ["claude-usage": internalSource.slug])
+        XCTAssertEqual(ExtensionTiers.read(path: path), ["claude-usage": .view, "hand-made": .view],
+                       "the tiers themselves are left to reconcile")
+    }
+
+    // The load that names the source is the one that shows the update: the
+    // sources are read for the rows only after adopting has run.
+    func testACatalogueLoadAdoptsBeforeItReadsTheSources() {
+        var adopted: [String: String] = [:]
+        let listing = listed("claude-usage", from: internalSource, version: "0.3.1")
+        let catalog = ExtensionCatalog(
+            fetchCatalogue: { .success(ExtensionInstaller.Catalogue(entries: [listing])) },
+            background: { $0() }, toMain: { $0() }, recordedTiers: { ["claude-usage": .view] },
+            recordedSources: { adopted },
+            adoptSources: { listings in
+                adopted = ExtensionTiers.adopting(adopted, tiered: ["claude-usage"], listings: listings)
+            })
+        catalog.reload()
+        XCTAssertEqual(catalog.installedFrom, ["claude-usage": internalSource.slug])
+        let row = catalog.settingsRows(installed: [manifest("claude-usage", version: "0.1.0")],
+                                       refused: []).first
+        XCTAssertEqual(row?.availableVersion, "0.3.1")
+        XCTAssertTrue(row?.updateAvailable == true)
+    }
 }
