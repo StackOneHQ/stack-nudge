@@ -10,7 +10,10 @@ enum FeedStyle {
         symbol(tag: event.tag, source: event.source)
     }
 
+    // An extension's events keep the extension's icon and colour whatever
+    // tag they carry, so one can't dress up as a GitHub review.
     static func symbol(tag: String?, source: EventSource) -> String {
+        if source == .extension { return sourceSymbol(source) }
         switch tag {
         case "review":         return "text.bubble.fill"
         case "review-request": return "person.crop.circle.badge.questionmark"
@@ -27,6 +30,7 @@ enum FeedStyle {
     // the two match. System colours adapt to light and dark. A tag the table
     // does not know takes its source's colour.
     static func color(tag: String?, source: EventSource) -> Color {
+        if source == .extension { return sourceColor(source) }
         switch tag?.trimmingCharacters(in: .whitespaces) {
         case "review":         return .blue
         case "review-request": return .purple
@@ -46,6 +50,7 @@ enum FeedStyle {
         case .github:   return .blue
         case .calendar: return .mint
         case .script:   return .gray
+        case .extension: return .teal
         case .agent:    return .secondary
         }
     }
@@ -55,6 +60,7 @@ enum FeedStyle {
         case .github:   return "chevron.left.forwardslash.chevron.right"
         case .calendar: return "calendar"
         case .script:   return "terminal.fill"
+        case .extension: return "puzzlepiece.extension.fill"
         case .agent:    return "checkmark.circle.fill"
         }
     }
@@ -69,7 +75,8 @@ enum FeedStyle {
     }
 
     static func chip(for event: NudgeEvent) -> String {
-        var label = event.source.label
+        // An extension's events are named for the extension, which `agent` holds.
+        var label = event.source == .extension ? event.agent : event.source.label
         if let repo = event.repo, !repo.isEmpty {
             let name = repo.split(separator: "/").last.map(String.init) ?? repo
             label += " · " + name + (event.pr.map { "#\($0)" } ?? "")

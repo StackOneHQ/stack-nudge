@@ -28,6 +28,8 @@ final class ServiceProtocolTests: XCTestCase {
         XCTAssertEqual(line(.action(id: "approve", row: "d1")),
                        #"{"id":"approve","row":"d1","type":"action"}"# + "\n")
         XCTAssertEqual(line(.action(id: "refresh", row: nil)), #"{"id":"refresh","type":"action"}"# + "\n")
+        XCTAssertEqual(line(.feedAction(id: "send", key: "draft-1")),
+                       #"{"feed":"draft-1","id":"send","type":"action"}"# + "\n")
         XCTAssertEqual(line(.ping(id: 17)), #"{"id":17,"type":"ping"}"# + "\n")
         XCTAssertEqual(line(.stop), #"{"type":"stop"}"# + "\n")
     }
@@ -54,11 +56,48 @@ final class ServiceProtocolTests: XCTestCase {
                        .message(.signal(name: "presence", value: "away")))
         XCTAssertEqual(decode(#"{"type":"pong","id":17}"#), .message(.pong(id: 17)))
         XCTAssertEqual(decode(#"{"type":"feed","event":{"title":"Left","tag":"away"}}"#),
-                       .message(.feed(event: Data(#"{"tag":"away","title":"Left"}"#.utf8))))
+                       .message(.feed(.init(title: "Left", message: "", tag: "away", severity: .info,
+                                            url: nil, key: nil, action: nil))))
+        XCTAssertEqual(decode(#"{"type":"retract","key":"draft-1"}"#), .message(.retract(key: "draft-1")))
         guard case .message(.document(let document)) = decode(
             #"{"type":"document","document":{"schema":1,"header":{"title":"Away"},"rows":[]}}"#)
         else { return XCTFail("expected a document") }
         XCTAssertEqual(document.header?.title, "Away")
+    }
+
+    // A feed event with an action, a severity and a link, as the exchange's
+    // reply drafts would post one.
+    func testAFeedEventWithAnActionDecodes() {
+        let line = #"{"type":"feed","event":{"title":"Reply for behan","message":"Looks good","tag":"exchange","severity":"action","url":"https://example.com/x","key":"draft-1","action":{"id":"send","label":"Send"}}}"#
+        XCTAssertEqual(decode(line), .message(.feed(.init(
+            title: "Reply for behan", message: "Looks good", tag: "exchange", severity: .action,
+            url: URL(string: "https://example.com/x"), key: "draft-1",
+            action: FeedAction(id: "send", label: "Send")))))
+    }
+
+    // Names are refused when wrong; text is trimmed to fit; a link that isn't
+    // a web link is dropped, as it is from a script.
+    func testAFeedEventIsCheckedFieldByField() {
+        func invalid(_ event: String) -> Bool {
+            if case .invalid = decode(#"{"type":"feed","event":"# + event + "}") { return true }
+            return false
+        }
+        XCTAssertTrue(invalid(#"{"message":"no title"}"#))
+        XCTAssertTrue(invalid(#"{"title":"   "}"#))
+        XCTAssertTrue(invalid(#"{"title":"x","severity":"urgent"}"#))
+        XCTAssertTrue(invalid(#"{"title":"x","key":"has space"}"#))
+        XCTAssertTrue(invalid(#"{"title":"x","tag":"a/b"}"#))
+        XCTAssertTrue(invalid(#"{"title":"x","action":{"id":"send","label":"Send"}}"#), "an action needs a key")
+        XCTAssertTrue(invalid(#"{"title":"x","key":"k","action":{"id":"send"}}"#))
+        XCTAssertTrue(invalid(#"{"title":"x","key":"k","action":{"id":"","label":"Send"}}"#))
+        guard case .invalid = decode(#"{"type":"retract","key":""}"#) else { return XCTFail("empty retract key") }
+
+        let long = String(repeating: "a", count: 300)
+        guard case .message(.feed(let post)) = decode(
+            #"{"type":"feed","event":{"title":""# + long + #"","url":"file:///etc/passwd"}}"#)
+        else { return XCTFail("a long title is trimmed, not refused") }
+        XCTAssertEqual(post.title.count, ServiceProtocol.FeedPost.maxTitle)
+        XCTAssertNil(post.url)
     }
 
     // Additive: a type this host doesn't know is skipped, not an error.

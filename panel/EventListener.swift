@@ -201,10 +201,12 @@ private struct NudgeEventDTO: Decodable {
 
     // A script may call itself github or calendar, but never an agent: an
     // agent event is what Allow/Deny and focus act on, and those need the
-    // hook's own fields.
+    // hook's own fields. A script claiming to be an extension is a script: an
+    // extension's event can carry an action that ⏎ sends back to it, so only
+    // the extension's own process may post one.
     static func feedSource(_ raw: String?) -> EventSource {
         guard let raw, let source = EventSource(rawValue: raw), source != .agent else { return .agent }
-        return source
+        return source == .extension ? .script : source
     }
 
     // Only accept a fifo_path that looks like one of our permission FIFOs AND

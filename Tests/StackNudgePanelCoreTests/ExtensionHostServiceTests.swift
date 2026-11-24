@@ -498,6 +498,49 @@ final class ExtensionHostServiceTests: XCTestCase {
         XCTAssertEqual(host.services, [:])
     }
 
+    // MARK: - Feed
+
+    // A feed event goes to the app with the extension's id and name, a
+    // retract with its key, and an action on one goes back only while it runs.
+    func testAFeedEventReachesTheAppAndItsActionComesBack() {
+        tiers = ["exchange": .service]
+        let host = host()
+        var posted: [(String, String, ServiceProtocol.FeedPost)] = []
+        var retracted: [(String, String)] = []
+        host.onFeed = { posted.append(($0, $1, $2)) }
+        host.onRetract = { retracted.append(($0, $1)) }
+        host.load(.init(installed: [manifest("exchange", capabilities: ["feed"])]))
+        XCTAssertFalse(host.performFeedAction(FeedAction(id: "send", label: "Send"), key: "draft-1", on: "exchange"),
+                       "nothing is running to take it yet")
+        spawner.last.ready()
+        spawner.last.say(#"{"type":"feed","event":{"title":"Reply","key":"draft-1","action":{"id":"send","label":"Send"}}}"#)
+        spawner.last.say(#"{"type":"retract","key":"draft-0"}"#)
+        XCTAssertEqual(posted.map(\.0), ["exchange"])
+        XCTAssertEqual(posted.first?.1, "exchange")
+        XCTAssertEqual(posted.first?.2.action, FeedAction(id: "send", label: "Send"))
+        XCTAssertEqual(retracted.map(\.1), ["draft-0"])
+
+        XCTAssertTrue(host.performFeedAction(FeedAction(id: "send", label: "Send"), key: "draft-1", on: "exchange"))
+        let sent = spawner.last.messages.filter { $0["type"] as? String == "action" }
+        XCTAssertEqual(sent.first?["feed"] as? String, "draft-1")
+    }
+
+    // Restarting, breaking or stopping takes the actions off its events, so
+    // ⏎ never shows a label nothing will answer.
+    func testAServiceThatGoesAwayLapsesItsFeedActions() {
+        tiers = ["exchange": .service]
+        let host = host()
+        var lapsed: [String] = []
+        host.onFeedActionsLapsed = { lapsed.append($0) }
+        host.load(.init(installed: [manifest("exchange", capabilities: ["feed"])]))
+        spawner.last.ready()
+        spawner.last.exit(.exited(1))
+        XCTAssertEqual(lapsed, ["exchange"])
+        XCTAssertFalse(host.canPerformFeedAction(for: "exchange"))
+        host.load(.init(installed: []))
+        XCTAssertEqual(lapsed, ["exchange", "exchange"])
+    }
+
     // MARK: - Tab keys
 
     // Actions only while running; ⌘R only once broken, as Retry.
