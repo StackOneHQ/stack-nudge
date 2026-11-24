@@ -43,6 +43,10 @@ enum ServiceProtocol {
         case hello(protocol: Int, capabilities: [String])
         case config(values: [String: String])
         case event(name: String, fields: [String: Value])
+        // A key the user pressed on its tab, resolved against its latest
+        // document the way a view's `run --action` is. `row` is set for a row's
+        // own action.
+        case action(id: String, row: String?)
         case ping(id: Int)
         case stop
     }
@@ -63,6 +67,9 @@ enum ServiceProtocol {
             // pass it off as another message type.
             object["type"] = "event"
             object["name"] = name
+        case .action(let id, let row):
+            object = ["type": "action", "id": id]
+            if let row { object["row"] = row }
         case .ping(let id):
             object = ["type": "ping", "id": id]
         case .stop:

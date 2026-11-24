@@ -463,6 +463,21 @@ final class ServiceSupervisorTests: XCTestCase {
         XCTAssertEqual(sent.first?["seconds"] as? Int, 42)
     }
 
+    // A key press reaches the process only while it's running. One made while
+    // it starts was made against the last process's document.
+    func testAnActionReachesOnlyARunningExtension() {
+        let s = supervisor(granted: [])
+        s.start()
+        s.perform(action: "approve", row: "d1")
+        XCTAssertEqual(spawner.last.types, ["hello"])
+        spawner.last.ready()
+        s.perform(action: "approve", row: "d1")
+        let sent = spawner.last.messages.filter { $0["type"] as? String == "action" }
+        XCTAssertEqual(sent.count, 1)
+        XCTAssertEqual(sent.first?["id"] as? String, "approve")
+        XCTAssertEqual(sent.first?["row"] as? String, "d1")
+    }
+
     func testAMalformedDocumentIsReportedAsTheExtensionsBug() {
         _ = running()
         spawner.last.say(#"{"type":"document","document":{"schema":9}}"#)

@@ -96,13 +96,13 @@ final class ExtensionTabKeyTests: XCTestCase {
             keys: ExtensionHost.tabKeys(mode: .service, state: broken ? .broken(.exited(1)) : .running))
     }
 
-    // A running service's tab has no refresh and no actions, so ⌘R and the
-    // document's letters are swallowed, not run and not passed on. The
-    // arrows still move the selection.
-    func test_aRunningServiceTabSwallowsRefreshAndActions() {
+    // A running service's tab has no refresh, so ⌘R is swallowed, not passed
+    // on. Its letters and ⏎ run like a view's, and the arrows move the
+    // selection.
+    func test_aRunningServiceTabRunsActionsAndSwallowsRefresh() {
         XCTAssertEqual(service(15, "r", .command), .swallow)
-        XCTAssertEqual(service(0, "a"), .swallow)
-        XCTAssertEqual(service(36, "\r"), .swallow)
+        XCTAssertEqual(service(0, "a"), .run("a"))
+        XCTAssertEqual(service(36, "\r"), .run("return"))
         XCTAssertEqual(service(126), .move(-1))
         XCTAssertEqual(service(125), .move(1))
         XCTAssertEqual(service(36, "\r", .command), .passThrough)

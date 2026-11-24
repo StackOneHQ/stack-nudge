@@ -83,7 +83,8 @@ final class ExtensionHostServiceTests: XCTestCase {
     }
 
     // Opening the tab, ⌘R and an action key all spawn `run` for a view. For a
-    // service they'd start a second copy, so they do nothing.
+    // service they'd start a second copy, so they don't: the key goes to the
+    // running process as an `action` line instead.
     func testAServiceIsNeverRunAsAOneShotFetch() {
         tiers = ["away": .service]
         let host = host()
@@ -92,10 +93,42 @@ final class ExtensionHostServiceTests: XCTestCase {
         spawner.last.say(#"{"type":"document","document":{"schema":1,"actions":[{"id":"go","label":"Go","key":"g"}]}}"#)
         host.tabAppeared("away")
         host.forceRefresh("away")
-        XCTAssertFalse(host.handle(key: "g", on: "away"))
+        XCTAssertTrue(host.handle(key: "g", on: "away"))
         host.tick(visibleTab: "away", now: Date().addingTimeInterval(3600))
         XCTAssertEqual(fetches, [])
         XCTAssertEqual(spawner.spawned.count, 1)
+    }
+
+    // The selected row's binding wins, as on a view, and the row goes with it.
+    // A key the document doesn't bind sends nothing.
+    func testAKeyOnAServiceTabIsSentAsAnActionForTheSelectedRow() {
+        tiers = ["exchange": .service]
+        let host = host()
+        host.load(.init(installed: [manifest("exchange")]))
+        spawner.last.ready()
+        spawner.last.say(#"{"type":"document","document":{"schema":1,"rows":[{"id":"d1","title":"Reply","actions":[{"id":"approve","label":"Approve","key":"return"}]}],"actions":[{"id":"sync","label":"Sync","key":"s"},{"id":"all","label":"All","key":"return"}]}}"#)
+        host.selectRow("d1", on: "exchange")
+        XCTAssertTrue(host.handle(key: "return", on: "exchange"))
+        XCTAssertTrue(host.handle(key: "s", on: "exchange"))
+        XCTAssertFalse(host.handle(key: "x", on: "exchange"))
+        let sent = spawner.last.messages.filter { $0["type"] as? String == "action" }
+        XCTAssertEqual(sent.map { $0["id"] as? String }, ["approve", "sync"])
+        XCTAssertEqual(sent.map { $0["row"] as? String }, ["d1", nil])
+    }
+
+    // While it restarts the tab still shows the old document, but a key sends
+    // nothing: that document came from a process that has gone.
+    func testAKeyOnARestartingServiceSendsNothing() {
+        tiers = ["exchange": .service]
+        let host = host()
+        host.load(.init(installed: [manifest("exchange")]))
+        spawner.last.ready()
+        spawner.last.say(#"{"type":"document","document":{"schema":1,"actions":[{"id":"sync","label":"Sync","key":"s"}]}}"#)
+        let first = spawner.last
+        first.exit(.exited(1))
+        XCTAssertNotNil(host.pane("exchange").document)
+        XCTAssertFalse(host.handle(key: "s", on: "exchange"))
+        XCTAssertTrue(first.messages.filter { $0["type"] as? String == "action" }.isEmpty)
     }
 
     // MARK: - Documents
@@ -467,9 +500,12 @@ final class ExtensionHostServiceTests: XCTestCase {
 
     // MARK: - Tab keys
 
-    func testAServiceTabOffersNoRefreshOrActionsUntilItBreaksThenRetry() {
+    // Actions only while running; ⌘R only once broken, as Retry.
+    func testAServiceTabOffersActionsWhileRunningAndRetryOnceBroken() {
         XCTAssertEqual(ExtensionHost.tabKeys(mode: .view, state: nil), .view)
         XCTAssertEqual(ExtensionHost.tabKeys(mode: .service, state: .running),
+                       .init(refresh: nil, actions: true))
+        XCTAssertEqual(ExtensionHost.tabKeys(mode: .service, state: .starting),
                        .init(refresh: nil, actions: false))
         XCTAssertEqual(ExtensionHost.tabKeys(mode: .service, state: .restarting(after: 4)),
                        .init(refresh: nil, actions: false))

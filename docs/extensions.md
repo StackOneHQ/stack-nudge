@@ -319,6 +319,12 @@ directory.
 Only one invocation runs at a time per extension; presses while one is in flight
 are ignored rather than queued.
 
+A service extension isn't run again. Its running process is sent the same
+press as a line, `{"type": "action", "id": "open", "row": "h1"}`, and answers
+with a new `document` if what it shows has changed. A press while it's starting
+or restarting sends nothing. See the design note's
+[Protocol](design/service-extensions.md#protocol).
+
 #### Key bindings are requested, not granted
 
 `key` may be a single ASCII letter or digit, or `"return"`. Everything else is
