@@ -102,7 +102,7 @@ Reminders only fire for prompts stack-nudge can *prove* are unanswered. Claude C
 | `STACKNUDGE_SLACK_STOP` | off | Also DM on finished turns, not just permission prompts |
 | `STACKNUDGE_SLACK_MEMBER_ID` | — | Who to DM. Detected for you; not secret |
 
-**Setup, once per person:** Settings → **Paste Slack setup** reads your clipboard and takes either an `xoxb-…` bot token, a `U…` member ID, or a JSON blob with both — so an org can keep one password-manager entry and onboarding is a single paste. stack-nudge then looks you up from your `git config user.email` and shows who it found; that's a *suggestion*, and pasting a member ID overrides it. **Send test message** confirms the whole chain and switches delivery on.
+**Setup, once per person:** Settings → Integrations → Slack → **Paste Slack setup** reads your clipboard and takes either an `xoxb-…` bot token, a `U…` member ID, or a JSON blob with both — so an org can keep one password-manager entry and onboarding is a single paste. stack-nudge then looks you up from your `git config user.email` and shows who it found; that's a *suggestion*, and pasting a member ID overrides it. **Send test message** confirms the whole chain and switches delivery on.
 
 **Setup, once per org:** create a Slack app, give its **bot** token `chat:write` (plus `users:read.email` and `users:read` if you want the automatic user lookup), install it, and share the `xoxb-` token internally. There is deliberately **no default app and no embedded credentials** — every install points at its own workspace.
 

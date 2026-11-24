@@ -202,12 +202,19 @@ final class SettingsRowTests: XCTestCase {
 
         for row in [SettingsRow.wireAgents, .dismissAgents, .quit, .editPhrases,
                     .openConfig, .releaseNotes, .checkUpdates, .checkPermissions,
-                    .uninstall, .disconnectGithub, .openRepo, .browseExtensions, .extensionSources, .companionResetPosition, .companionTurnOn,
-                    .installedExtension("derby"), .permissions, .hotkey] {
+                    .uninstall, .connectGithub, .openRepo, .browseExtensions, .extensionSources, .companionResetPosition, .companionTurnOn,
+                    .installedExtension("derby"), .integration(.slack), .integration(.github),
+                    .permissions, .hotkey] {
             select(row)
             XCTAssertEqual(nav.selectedRow, row)
             XCTAssertFalse(nav.selectedRowIsPicker, "\(row) should ignore arrows")
         }
+
+        // Disconnect replaces Connect once signed in.
+        nav.githubSignedIn = true
+        select(.disconnectGithub)
+        XCTAssertEqual(nav.selectedRow, .disconnectGithub)
+        XCTAssertFalse(nav.selectedRowIsPicker, "disconnectGithub should ignore arrows")
 
         // On/off rows flip on Space / Enter only.
         for row in [SettingsRow.banner, .voiceEnabled, .soundEnabled, .companionBadge,

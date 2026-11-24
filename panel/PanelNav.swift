@@ -212,11 +212,14 @@ enum SettingsRow: Hashable {
     case quotaTracking, quotaAlerts, alertThreshold, pollFrequency, contextAlert, showRemaining
     case piApiBudget, piLocalBudget
     case awayLock
-    case githubLinks, hideShipped, disconnectGithub
+    case githubLinks, hideShipped, connectGithub, disconnectGithub
     case historyPerSession
     case editPhrases, checkPermissions, openConfig, releaseNotes, checkUpdates, uninstall, quit
     case browseExtensions, extensionSources
     case openRepo
+    // One per built-in integration on the Integrations list, drawn as a card
+    // like an installed extension's, which → or ⏎ opens.
+    case integration(Integration)
     // One per installed extension, rendered as a card rather than a label/value
     // row. The associated value is what costs the synthesised CaseIterable
     // below; every `switch` over SettingsRow stays exhaustive, which is what
@@ -264,12 +267,12 @@ extension SettingsRow: CaseIterable {
         .quotaTracking, .quotaAlerts, .alertThreshold, .pollFrequency,
         .contextAlert, .showRemaining, .piApiBudget, .piLocalBudget,
         .awayLock,
-        .githubLinks, .hideShipped, .disconnectGithub,
+        .githubLinks, .hideShipped, .connectGithub, .disconnectGithub,
         .historyPerSession,
         .editPhrases, .checkPermissions, .openConfig, .releaseNotes,
         .checkUpdates, .uninstall, .quit,
         .browseExtensions, .extensionSources, .openRepo,
-    ]
+    ] + Integration.allCases.map { .integration($0) }
 }
 
 struct SettingsActions {
@@ -622,7 +625,14 @@ final class PanelNav: ObservableObject {
     // True when a GitHub token is stored (signed in). Drives whether the Tickets
     // tab shows PR chips or the "Connect GitHub" card. Set from the Keychain on
     // load and after the device flow completes.
-    @Published var githubSignedIn: Bool = false
+    //
+    // It also swaps the GitHub page's Connect row for Disconnect in the same
+    // place, so a sign-in finishing under a selected Connect row would leave
+    // the next ⏎, pressed to copy the code again, signing straight back out.
+    // The re-anchor moves the selection off the row that went.
+    @Published var githubSignedIn: Bool = false {
+        didSet { if githubSignedIn != oldValue { settingsLayoutChanged() } }
+    }
     // Live device-flow state for the in-panel "Connect GitHub" card.
     @Published var githubSignIn: GithubSignIn = .idle
     // Set when a new sign-in's token didn't save and the older one is still in
@@ -761,6 +771,26 @@ final class PanelNav: ObservableObject {
         if let url = URL(string: Self.repositoryURL) {
             NSWorkspace.shared.open(url)
         }
+    }
+
+    // Settings "Connect GitHub": the Tickets card's sign-in, started from the
+    // GitHub page. While a code waits, ⏎ copies it and opens GitHub's page for
+    // it, as the card's button does; while one is being asked for, nothing.
+    func connectGithub() {
+        switch githubSignIn {
+        case .idle, .failed:
+            startGithubSignIn?()
+        case .requesting:
+            break
+        case let .awaitingApproval(userCode, verificationURI):
+            Self.copyGithubCodeAndOpen(code: userCode, url: verificationURI)
+        }
+    }
+
+    static func copyGithubCodeAndOpen(code: String, url: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(code, forType: .string)
+        if let target = URL(string: url) { NSWorkspace.shared.open(target) }
     }
 
     // Settings "Disconnect GitHub": wipe the local token + PR state, then open
@@ -1195,7 +1225,7 @@ final class PanelNav: ObservableObject {
     // follows its row, the same re-anchor every other reshaping input does.
     private func settingsLayoutChanged() {
         if case .extensionPage(let id) = settingsCategory, rows(in: settingsCategory).isEmpty {
-            return settingsBack(to: id)
+            return settingsBack(to: .extensions, on: .installedExtension(id))
         }
         if rows(in: settingsCategory).isEmpty { settingsDetailFocused = false }
         reanchorSettingSelection()
@@ -1594,10 +1624,17 @@ final class PanelNav: ObservableObject {
                 + (presenceHolderID == id ? [.awayLock] : [])
                 + (update ? [.extensionUpdate(id)] : [])
                 + [.extensionRemove(id)]
+        // A card per integration, each opening its own page, as the
+        // Extensions list does: one flat list of both read as one integration.
         case .integrations:
+            return Integration.allCases.map { .integration($0) }
+        case .integrationPage(.slack):
             return [.slackPaste, .slackIdentity, .slackTest,
-                    .slackEnabled, .slackIdle, .slackDetail, .slackStop,
-                    .githubLinks, .hideShipped, .disconnectGithub]
+                    .slackEnabled, .slackIdle, .slackDetail, .slackStop]
+        // Connect while signed out, Disconnect once signed in: the page is
+        // somewhere to sign in from, not only to sign out.
+        case .integrationPage(.github):
+            return [.githubLinks, .hideShipped, githubSignedIn ? .disconnectGithub : .connectGithub]
         // Its own category rather than a row under Actions: extensions declare
         // STACKNUDGE_EXT_ keys, so per-extension configuration needs somewhere
         // to live, and it should not arrive by growing an unrelated category.
@@ -1676,18 +1713,32 @@ final class PanelNav: ObservableObject {
     // selected category, so anything reaching for a row by identity has to land
     // on its category first.
     func category(containing row: SettingsRow) -> SettingsCategory? {
-        (settingsCategories + installedExtensions.map { .extensionPage($0.id) })
+        (settingsCategories + Integration.allCases.map { .integrationPage($0) }
+            + installedExtensions.map { .extensionPage($0.id) })
             .first { rows(in: $0).contains(row) }
     }
 
-    // The sidebar, in order. Extension pages aren't in it: they are a level
-    // below the Extensions category, reached from its list.
+    // The sidebar, in order. Extension and integration pages aren't in it:
+    // each is a level below its category, reached from that category's list.
     var settingsCategories: [SettingsCategory] { SettingsCategory.allCases }
 
-    // Which sidebar entry is lit: Extensions while one of its pages is open.
+    // Which sidebar entry is lit: the list a page was opened from while the
+    // page is open.
     var sidebarCategory: SettingsCategory {
-        if case .extensionPage = settingsCategory { return .extensions }
-        return settingsCategory
+        switch settingsCategory {
+        case .extensionPage:   return .extensions
+        case .integrationPage: return .integrations
+        default:               return settingsCategory
+        }
+    }
+
+    // Where ← goes from the category's rows, as the footer names it.
+    var settingsBackLabel: String {
+        switch settingsCategory {
+        case .extensionPage:   return "Extensions"
+        case .integrationPage: return "Integrations"
+        default:               return "Categories"
+        }
     }
 
     // → or ⏎ on an installed extension's row opens its page.
@@ -1698,30 +1749,40 @@ final class PanelNav: ObservableObject {
         selectFirstCategoryRow()
     }
 
-    // ← in a category's rows. From an extension's page it goes back to the
-    // Extensions list, on that extension's row; anywhere else, out to the
-    // sidebar.
-    func settingsBack() {
-        guard case .extensionPage(let id) = settingsCategory else {
-            settingsDetailFocused = false
-            return
-        }
-        settingsBack(to: id)
+    // → or ⏎ on an integration's card opens its page.
+    func openIntegrationPage(_ integration: Integration) {
+        settingsCategory = .integrationPage(integration)
+        settingsDetailFocused = true
+        selectFirstCategoryRow()
     }
 
-    private func settingsBack(to id: String) {
-        settingsCategory = .extensions
+    // ← in a category's rows. From a page it goes back to the list it was
+    // opened from, on the row that opened it; anywhere else, out to the
+    // sidebar.
+    func settingsBack() {
+        switch settingsCategory {
+        case .extensionPage(let id):
+            settingsBack(to: .extensions, on: .installedExtension(id))
+        case .integrationPage(let integration):
+            settingsBack(to: .integrations, on: .integration(integration))
+        default:
+            settingsDetailFocused = false
+        }
+    }
+
+    private func settingsBack(to category: SettingsCategory, on row: SettingsRow) {
+        settingsCategory = category
         settingsDetailFocused = true
-        let row = SettingsRow.installedExtension(id)
         if settingsRows.contains(row) { selectedSettingIndex = index(of: row) }
     }
 
-    // Rows that → opens, like ⏎ does: the Extensions list's, each of which is
-    // a door to a page. Everywhere else → only steps a value being picked.
+    // Rows that → opens, like ⏎ does: the Extensions and Integrations lists',
+    // each of which is a door to a page. Everywhere else → only steps a value
+    // being picked.
     var selectedRowOpensOnRight: Bool {
         switch selectedRow {
-        case .installedExtension, .browseExtensions, .extensionSources: return true
-        default:                                     return false
+        case .installedExtension, .browseExtensions, .extensionSources, .integration: return true
+        default:                                                                     return false
         }
     }
 
@@ -2128,6 +2189,7 @@ final class PanelNav: ObservableObject {
             // The pre-download row is an action: Enter triggers (or cancels)
             // the model download.
             if voiceModelDownloading { cancelVoiceModelDownload() } else { startVoiceModelDownload() }
+        case .connectGithub:    connectGithub()
         case .disconnectGithub: disconnectGithub()
         case .editPhrases:      actions?.editPhrases()
         case .browseExtensions: actions?.browseExtensions()
@@ -2136,6 +2198,7 @@ final class PanelNav: ObservableObject {
         // omission here is not a build error — it is Enter quietly doing
         // nothing, on the one row whose whole purpose is being opened.
         case .installedExtension(let id): openExtensionPage(id)
+        case .integration(let integration): openIntegrationPage(integration)
         // Pickers never get here (see above). A toggle flips; a text key hands
         // its row a field to type in.
         case .extensionSetting(let id, let key):
@@ -2184,7 +2247,8 @@ final class PanelNav: ObservableObject {
     var selectedRowIsPicker: Bool {
         switch selectedRow {
         case .wireAgents, .dismissAgents,
-             .disconnectGithub, .editPhrases, .browseExtensions, .extensionSources, .installedExtension,
+             .connectGithub, .disconnectGithub, .editPhrases, .browseExtensions, .extensionSources,
+             .installedExtension, .integration,
              .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
              .slackPaste, .slackIdentity, .slackTest, .openRepo, .companionResetPosition, .companionTurnOn, .none:
@@ -2503,7 +2567,8 @@ final class PanelNav: ObservableObject {
         // them before it gets here.
         case .wireAgents, .dismissAgents, .permissions, .update, .extensionUpdates,
              .hotkey, .speakHotkey, .downloadVoiceModel,
-             .disconnectGithub, .editPhrases, .browseExtensions, .extensionSources, .installedExtension,
+             .connectGithub, .disconnectGithub, .editPhrases, .browseExtensions, .extensionSources,
+             .installedExtension, .integration,
              .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
              .slackPaste, .slackIdentity, .slackTest, .openRepo, .companionResetPosition, .companionTurnOn, .none:
@@ -2764,6 +2829,8 @@ enum SettingsCategory: Hashable, CaseIterable {
          actions, about
     // One extension's page, a level below Extensions. Not in the sidebar.
     case extensionPage(String)
+    // One integration's page, a level below Integrations. Not in the sidebar.
+    case integrationPage(Integration)
 
     static let allCases: [SettingsCategory] = [
         .notifications, .voice, .appearance, .companion, .usage, .integrations, .extensions,
@@ -2786,6 +2853,7 @@ enum SettingsCategory: Hashable, CaseIterable {
         case .actions:       return "Actions"
         case .about:         return "About"
         case .extensionPage(let id): return id
+        case .integrationPage(let integration): return integration.name
         }
     }
 }

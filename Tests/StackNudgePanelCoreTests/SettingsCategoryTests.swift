@@ -13,7 +13,7 @@ final class SettingsCategoryTests: XCTestCase {
     func testEveryCategoryRowIsReachableAndUnique() {
         let nav = PanelNav()
         var seen: [SettingsRow] = []
-        for category in SettingsCategory.allCases {
+        for category in SettingsCategory.allCases + Integration.allCases.map({ .integrationPage($0) }) {
             seen += nav.rows(in: category)
         }
         XCTAssertEqual(Set(seen).count, seen.count, "a row appears in two categories")
@@ -56,12 +56,18 @@ final class SettingsCategoryTests: XCTestCase {
             ]),
         ]
         nav.presenceHolderID = SettingsRow.representativeExtensionID
-        // The voice category swaps rows on whether the model is cached; both
-        // branches are reachable, so both count as homes.
+        // The voice category swaps rows on whether the model is cached, and the
+        // GitHub page swaps Connect for Disconnect on signing in; every branch
+        // is reachable, so every one counts as a home.
+        let pages: [SettingsCategory] = Integration.allCases.map { .integrationPage($0) }
+            + [.extensionPage(SettingsRow.representativeExtensionID)]
         for cached in [true, false] {
-            nav.voiceModelCached = cached
-            for category in nav.settingsCategories + [.extensionPage(SettingsRow.representativeExtensionID)] {
-                covered.formUnion(nav.rows(in: category))
+            for signedIn in [true, false] {
+                nav.voiceModelCached = cached
+                nav.githubSignedIn = signedIn
+                for category in nav.settingsCategories + pages {
+                    covered.formUnion(nav.rows(in: category))
+                }
             }
         }
         let orphaned = Set(SettingsRow.allCases).subtracting(covered)
