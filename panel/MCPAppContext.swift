@@ -58,7 +58,10 @@ final class MCPAppContext: MCPContext {
     func raiseNudge(_ request: MCPNudge.Request, caller: MCPCaller) {
         onMain {
             let session = MCPNudge.session(for: caller, in: sessionStore?.sessions ?? [])
-            store?.append(MCPNudge.event(request, caller: caller, session: session))
+            // The sound an agent's own would make: waiting is a prompt's, the
+            // rest a finished turn's.
+            let sound = request.kind == .waiting ? nav?.soundPermission : nav?.soundStop
+            store?.append(MCPNudge.event(request, caller: caller, session: session, sound: sound))
         }
     }
 

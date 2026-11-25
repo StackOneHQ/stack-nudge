@@ -501,6 +501,22 @@ final class MCPNudgeTests: XCTestCase {
         XCTAssertNil(MCPNudge.liveSession(for: fromDesktop, in: [session(pid: 10, claude: "s-10")]))
     }
 
+    // A client asked for the user's attention, so the nudge is spoken, or
+    // makes the user's own sound, even with banners off.
+    func testTheNudgeIsSpokenAsTheClient() {
+        let request = try! MCPNudge.request(from: ["title": "Migration finished"]).get()
+        let event = MCPNudge.event(request, caller: MCPCaller(clientName: "local-agent-mode-stack-nudge"),
+                                   session: nil, sound: "Glass")
+        XCTAssertEqual(event.agent, "Claude")
+        XCTAssertEqual(event.voiceMessage, "Claude: Migration finished")
+        XCTAssertEqual(event.soundName, "Glass")
+    }
+
+    func testClaudeDesktopIsNamedClaude() {
+        XCTAssertEqual(MCPCaller.friendlyName("local-agent-mode-stack-nudge"), "Claude")
+        XCTAssertEqual(MCPCaller.friendlyName("my-own-client"), "my-own-client")
+    }
+
     // The hook socket may not claim to be MCP: an MCP nudge can take you to a
     // terminal or app, so only the server makes them.
     func testAScriptCantClaimToBeMCP() {

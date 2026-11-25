@@ -132,6 +132,8 @@ struct MCPCaller: Equatable {
     // Clients name themselves in code form ("claude-code"); a row reads better
     // with the product name.
     static func friendlyName(_ raw: String) -> String {
+        // Claude Desktop names itself after the server it's talking to.
+        if raw.lowercased().hasPrefix("local-agent-mode-") { return "Claude" }
         switch raw.lowercased() {
         case "claude-code", "claude code":                 return "Claude Code"
         case "claude-ai", "claude", "claude-desktop":      return "Claude"

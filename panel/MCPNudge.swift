@@ -85,13 +85,16 @@ enum MCPNudge {
     // The feed event: source mcp, so it can never be a permission prompt and
     // has its own cap in the queue. It carries what acting on it needs to take
     // you back: the session's pid and Claude session id, or the launching
-    // app's bundle id.
-    static func event(_ request: Request, caller: MCPCaller, session: Session?) -> NudgeEvent {
+    // app's bundle id. And what to say, since a client asked for the user's
+    // attention: with banners off, voice may be the only way they hear it.
+    // `sound` is the user's own, for when voice is off.
+    static func event(_ request: Request, caller: MCPCaller, session: Session?, sound: String? = nil) -> NudgeEvent {
         NudgeEvent(agent: caller.displayName, kind: .other, title: request.title, message: request.message,
                    projectPath: session?.projectPath,
                    bundleID: session == nil ? caller.parentBundleID : nil,
                    agentPID: session?.pid,
                    terminalApp: session?.terminalApp,
+                   voiceMessage: "\(caller.displayName): \(request.title)", soundName: sound,
                    claudeSessionID: session?.claudeSessionID ?? caller.claudeSessionID,
                    source: .mcp, tag: request.tag ?? "mcp", severity: request.kind.severity,
                    url: request.url)
