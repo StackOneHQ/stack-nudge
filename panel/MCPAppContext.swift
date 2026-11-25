@@ -12,6 +12,8 @@ final class MCPAppContext: MCPContext {
     // The controller's mute, which owns the timer and the menu-bar badge.
     private let muteFor: (Int, Bool) -> Void
     private let resume: () -> Void
+    // Set once the server exists: writes credit their client through it.
+    weak var server: MCPServer?
 
     init(nav: PanelNav, store: EventStore, sessions: SessionStore,
          muteFor: @escaping (Int, Bool) -> Void, resume: @escaping () -> Void) {
@@ -41,6 +43,7 @@ final class MCPAppContext: MCPContext {
         onMain {
             guard let nav else { return .failure(.unknownKey(key)) }
             let before = SettingsRegistry.snapshot(nav).first { $0.key == key }?.value
+            server?.attribution.note(key, by: caller.displayName)
             let result = SettingsRegistry.write(key: key, raw: value, nav: nav)
             // Every change shows in Events, so one you didn't ask for is seen.
             if case .success(let setting) = result, setting.value != before {
@@ -129,6 +132,13 @@ final class MCPChangeWatcher {
         guard let nav else { return }
         let snapshot = SettingsRegistry.snapshot(nav)
         let changed = snapshot.filter { lastSettings[$0.key] != $0.value }
+        for setting in changed {
+            var data: [String: Any] = ["key": setting.key, "label": setting.label,
+                                       "value": SettingsRegistry.describe(setting.value),
+                                       "by": server.attribution.take(setting.key) ?? "stack-nudge"]
+            if let previous = lastSettings[setting.key] { data["previous"] = SettingsRegistry.describe(previous) }
+            server.emit("settings.changed", data: data)
+        }
         lastSettings = Self.values(snapshot)
         var uris = MCPSession.settingsURIs(changed: changed)
         let sessions = currentSessions()
@@ -146,5 +156,53 @@ final class MCPChangeWatcher {
     private func currentSessions() -> [SessionSnapshot] {
         guard let sessionStore else { return [] }
         return MCPSessions.list(sessionStore.sessions, events: store?.events ?? [])
+    }
+}
+
+// What stack-nudge tells MCP event subscribers about, built from what the app
+// already has. Minimal by design: no prompt text, tool input or message body
+// (docs/design/local-mcp.md, "Events"). Pure, for tests.
+enum MCPAppEvents {
+
+    // The repo's folder name, as sessions_list and event:session give it:
+    // never the path.
+    static func repo(_ path: String?) -> String? {
+        path.map { ($0 as NSString).lastPathComponent }
+    }
+
+    // An event arriving in Events: a prompt is a session waiting, a finished
+    // turn a session stopping, and anything else a nudge.
+    static func occurrence(for event: NudgeEvent) -> (name: String, data: [String: Any])? {
+        if event.isFeed {
+            var data: [String: Any] = ["source": event.source.rawValue, "client": event.agent, "title": event.title]
+            if let tag = event.tag { data["tag"] = tag }
+            if let url = event.url { data["url"] = url.absoluteString }
+            return ("nudge.raised", data)
+        }
+        var data: [String: Any] = ["agent": event.agent]
+        if let repo = repo(event.projectPath) { data["repo"] = repo }
+        if let id = event.claudeSessionID { data["claudeSessionId"] = id }
+        switch event.kind {
+        case .permission:
+            if let pid = event.agentPID { data["sessionPid"] = pid }
+            data["since"] = MCPEventHub.iso.string(from: event.timestamp)
+            return ("session.waiting", data)
+        case .stop:
+            return ("session.stopped", data)
+        case .other:
+            return nil
+        }
+    }
+
+    static func stalled(_ session: Session, quietMinutes: Int) -> [String: Any] {
+        var data: [String: Any] = ["agent": session.agent, "sessionPid": session.pid, "quietMinutes": quietMinutes]
+        if let repo = session.projectName ?? repo(session.projectPath) { data["repo"] = repo }
+        return data
+    }
+
+    static func quota(label: String, percent: Int, resetsAt: Date?) -> [String: Any] {
+        var data: [String: Any] = ["label": label, "percent": percent]
+        if let resetsAt { data["resetsAt"] = MCPEventHub.iso.string(from: resetsAt) }
+        return data
     }
 }

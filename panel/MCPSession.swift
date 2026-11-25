@@ -29,6 +29,7 @@ final class MCPSession {
     static let settingsCategoryPrefix = "stacknudge://settings/"
 
     private let context: MCPContext
+    private let events: MCPEventHub
     private let send: ([String: Any]) -> Void
     private let lock = NSLock()
     private(set) var caller: MCPCaller
@@ -48,12 +49,46 @@ final class MCPSession {
         let resourceURIs: Set<String>
         let toolsListChanged: Bool
         let resourcesListChanged: Bool
+        var eventsListChanged = false
     }
 
-    init(context: MCPContext, caller: MCPCaller, send: @escaping ([String: Any]) -> Void) {
+    // events/stream subscriptions, one per request.
+    private var streams: [EventStream] = []
+
+    private final class EventStream {
+        let id: Any
+        let name: String
+        let arguments: [String: String]
+        let heartbeatMs: Int
+        var lastSequence: Int
+        var lastSentAt = Date()
+        var timer: DispatchSourceTimer?
+
+        init(id: Any, name: String, arguments: [String: String], heartbeatMs: Int, lastSequence: Int) {
+            self.id = id
+            self.name = name
+            self.arguments = arguments
+            self.heartbeatMs = heartbeatMs
+            self.lastSequence = lastSequence
+        }
+    }
+
+    init(context: MCPContext, events: MCPEventHub = MCPEventHub(), caller: MCPCaller,
+         send: @escaping ([String: Any]) -> Void) {
         self.context = context
+        self.events = events
         self.caller = caller
         self.send = send
+    }
+
+    // The connection closed: stop every stream's heartbeat.
+    func close() {
+        lock.lock()
+        let open = streams
+        streams.removeAll()
+        listeners.removeAll()
+        lock.unlock()
+        open.forEach { $0.timer?.cancel() }
     }
 
     // MARK: - Incoming
@@ -98,6 +133,9 @@ final class MCPSession {
             case "resources/subscribe":       respond(id, try subscribe(params), modern: modern)
             case "resources/unsubscribe":     respond(id, unsubscribe(params), modern: modern)
             case "subscriptions/listen":      listen(id: id, params: params)
+            case "events/list":               respond(id, ["events": events.types.map(\.json)], modern: modern)
+            case "events/poll":               respond(id, try poll(params), modern: modern)
+            case "events/stream":             try stream(id: id, params: params)
             default:
                 send(MCPProtocol.error(id: id, code: MCPProtocol.methodNotFound, message: "Method not found: \(method)"))
             }
@@ -165,7 +203,8 @@ final class MCPSession {
 
     private var capabilities: [String: Any] {
         ["tools": ["listChanged": true],
-         "resources": ["subscribe": true, "listChanged": true]]
+         "resources": ["subscribe": true, "listChanged": true],
+         "extensions": [MCPEventHub.extensionID: ["listChanged": true]]]
     }
 
     private func initialize(_ params: [String: Any]) -> [String: Any] {
@@ -363,11 +402,13 @@ final class MCPSession {
         let filter = params["notifications"] as? [String: Any] ?? [:]
         let asked = filter["resourceSubscriptions"] as? [String] ?? []
         let uris = Set(asked.filter(Self.isKnownURI))
-        let listener = Listener(id: id, resourceURIs: uris,
+        var listener = Listener(id: id, resourceURIs: uris,
                                 toolsListChanged: filter["toolsListChanged"] as? Bool ?? false,
                                 resourcesListChanged: filter["resourcesListChanged"] as? Bool ?? false)
+        listener.eventsListChanged = filter["eventsListChanged"] as? Bool ?? false
         var acknowledged: [String: Any] = [:]
         if listener.toolsListChanged { acknowledged["toolsListChanged"] = true }
+        if listener.eventsListChanged { acknowledged["eventsListChanged"] = true }
         if listener.resourcesListChanged { acknowledged["resourcesListChanged"] = true }
         if !uris.isEmpty { acknowledged["resourceSubscriptions"] = asked.filter(Self.isKnownURI) }
         lock.lock()
@@ -381,7 +422,106 @@ final class MCPSession {
     private func cancel(_ requestID: Any?) {
         lock.lock()
         listeners.removeAll { MCPProtocol.sameID($0.id, requestID) }
+        let cancelled = streams.filter { MCPProtocol.sameID($0.id, requestID) }
+        streams.removeAll { MCPProtocol.sameID($0.id, requestID) }
         lock.unlock()
+        cancelled.forEach { $0.timer?.cancel() }
+    }
+
+    // MARK: - Events
+
+    private func eventType(_ params: [String: Any]) throws -> (MCPEventHub.EventType, [String: String]) {
+        guard let name = params["name"] as? String else { throw MCPFailure.invalidParams("Missing event name") }
+        guard let type = events.type(named: name) else {
+            throw MCPFailure(code: MCPEventHub.notFound, message: "No event type \(name)")
+        }
+        switch MCPEventHub.arguments(params["arguments"], for: type) {
+        case .success(let arguments): return (type, arguments)
+        case .failure(let failure):   throw failure
+        }
+    }
+
+    private func poll(_ params: [String: Any]) throws -> [String: Any] {
+        let (type, arguments) = try eventType(params)
+        let replay = events.replay(name: type.name, arguments: arguments, cursor: params["cursor"] as? String,
+                                   maxAgeMs: (params["maxAgeMs"] as? NSNumber)?.intValue,
+                                   maxEvents: (params["maxEvents"] as? NSNumber)?.intValue ?? 100)
+        return ["events": replay.events.map { $0.json(cursor: nil) }, "cursor": events.cursor(replay.cursor),
+                "truncated": replay.truncated, "hasMore": replay.hasMore, "nextPollMs": MCPEventHub.defaultPollMs]
+    }
+
+    // Confirmed with notifications/events/active, then what was missed since
+    // the cursor, then live events as they happen, with a heartbeat carrying
+    // the cursor whenever a heartbeat interval passes in silence. The request
+    // stays open until the client cancels it.
+    private func stream(id: Any, params: [String: Any]) throws {
+        let (type, arguments) = try eventType(params)
+        let suggested = (params["heartbeatMs"] as? NSNumber)?.intValue ?? MCPEventHub.defaultHeartbeatMs
+        let heartbeatMs = min(max(suggested, 5000), 300_000)
+        lock.lock()
+        let replay = events.replay(name: type.name, arguments: arguments, cursor: params["cursor"] as? String,
+                                   maxAgeMs: (params["maxAgeMs"] as? NSNumber)?.intValue, maxEvents: MCPEventHub.ringSize)
+        let stream = EventStream(id: id, name: type.name, arguments: arguments, heartbeatMs: heartbeatMs,
+                                 lastSequence: replay.events.last?.sequence ?? replay.cursor)
+        streams.append(stream)
+        let tag: [String: Any] = [MCPProtocol.metaSubscriptionID: id]
+        send(MCPProtocol.notification("notifications/events/active",
+                                      params: ["cursor": events.cursor(replay.cursor), "truncated": replay.truncated,
+                                               "heartbeatMs": heartbeatMs, "_meta": tag]))
+        for occurrence in replay.events {
+            var body = occurrence.json(cursor: events.cursor(occurrence.sequence))
+            body["_meta"] = tag
+            send(MCPProtocol.notification("notifications/events/event", params: body))
+        }
+        lock.unlock()
+        startHeartbeat(stream)
+    }
+
+    private func startHeartbeat(_ stream: EventStream) {
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        let interval = DispatchTimeInterval.milliseconds(stream.heartbeatMs)
+        timer.schedule(deadline: .now() + interval, repeating: interval)
+        timer.setEventHandler { [weak self, weak stream] in
+            guard let self, let stream else { return }
+            self.lock.lock()
+            let quiet = Date().timeIntervalSince(stream.lastSentAt) * 1000 >= Double(stream.heartbeatMs) * 0.9
+            if quiet {
+                stream.lastSentAt = Date()
+                self.send(MCPProtocol.notification("notifications/events/heartbeat",
+                                                   params: ["cursor": self.events.cursor(self.events.head),
+                                                            "_meta": [MCPProtocol.metaSubscriptionID: stream.id]]))
+            }
+            self.lock.unlock()
+        }
+        stream.timer = timer
+        timer.resume()
+    }
+
+    // A new occurrence: each of this client's streams it matches hears it,
+    // once.
+    func deliver(_ occurrence: MCPEventHub.Occurrence) {
+        lock.lock()
+        defer { lock.unlock() }
+        for stream in streams where occurrence.sequence > stream.lastSequence
+            && occurrence.matches(name: stream.name, arguments: stream.arguments) {
+            stream.lastSequence = occurrence.sequence
+            stream.lastSentAt = Date()
+            var body = occurrence.json(cursor: events.cursor(occurrence.sequence))
+            body["_meta"] = [MCPProtocol.metaSubscriptionID: stream.id]
+            send(MCPProtocol.notification("notifications/events/event", params: body))
+        }
+    }
+
+    // The event types changed (an extension's came or went): only on a
+    // listen stream that asked, as the extension says.
+    func eventsListChanged() {
+        lock.lock()
+        let ids = listeners.filter(\.eventsListChanged).map(\.id)
+        lock.unlock()
+        for id in ids {
+            send(MCPProtocol.notification("notifications/events/list_changed",
+                                          params: ["_meta": [MCPProtocol.metaSubscriptionID: id]]))
+        }
     }
 
     // MARK: - Change notifications

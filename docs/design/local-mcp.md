@@ -1,9 +1,10 @@
 # A local MCP server
 
-Status: phases 1 and 2 are built: the bridge, the server on its own socket, the
+Status: phases 1 to 3 are built: the bridge, the server on its own socket, the
 settings registry, every tool below, the resources with their update
-notifications, the write switch and the audit lines. Later phases are marked
-*not yet delivered*. Each phase is its own PR, and this doc is updated as they land, the
+notifications, the write switch, the audit lines, and the app's events over
+push and poll. Extension contributions (phase 4) are marked *not yet
+delivered*. Each phase is its own PR, and this doc is updated as they land, the
 way [service-extensions.md](service-extensions.md) was.
 
 ## Why
@@ -165,10 +166,19 @@ Payloads are minimal: no prompt text, tool input or message bodies, by default.
 untrusted input to a model, and a permission prompt's text is exactly what
 prompt injection would aim for.
 
-Cursors come from the event log's sequence when Event history is on, so a
-client that reconnects gets what it missed, with `truncated: true` past the
-log's window. With history off the cursor is `null` and a reconnect starts from
-now, as the spec allows for types with no addressable history.
+Cursors are positions in a ring of the last 500 occurrences, stamped with an
+epoch that changes every launch, so a client that reconnects gets what it
+missed while it's still in the ring. A cursor from before a relaunch, older
+than the ring, or behind the client's `maxAgeMs` floor comes back as a gap
+(`truncated: true` and a fresh cursor), never an error. The ring is in memory on
+purpose: replaying events from before a relaunch would replay prompts long since
+answered. Push streams are confirmed with `notifications/events/active`, carry a
+heartbeat with the current cursor every interval that passes in silence
+(30 seconds unless the client asks, between 5 seconds and 5 minutes), and end
+when the client cancels.
+
+A change from an MCP client is credited to it in `settings.changed`'s `by`;
+anything else (Settings, the config file) is credited to `stack-nudge`.
 
 ## Writes
 
