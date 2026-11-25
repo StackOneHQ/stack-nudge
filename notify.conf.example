@@ -67,6 +67,10 @@
 # Default when unset and nothing to migrate: pill
 STACKNUDGE_FLOATING_WIDGET=companion
 
+# Which character: stacky, wizard, wizard-grey (pixel) or pedro.
+# Default: stacky
+#STACKNUDGE_COMPANION_SKIN=wizard
+
 # Character size: small, medium or large.
 # Default: medium
 #STACKNUDGE_COMPANION_SIZE=large

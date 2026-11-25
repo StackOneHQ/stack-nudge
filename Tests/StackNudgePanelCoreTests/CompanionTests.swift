@@ -148,7 +148,8 @@ final class CompanionSettingsTests: XCTestCase {
         let nav = PanelNav()
         nav.companionEnabled = true
         XCTAssertEqual(nav.rows(in: .companion),
-                       [.companionBadge, .companionSize, .companionPreviewPose, .companionResetPosition])
+                       [.companionBadge, .companionSize, .companionSkin, .companionPreviewPose,
+                        .companionResetPosition])
         XCTAssertEqual(nav.rows(in: .appearance).first, .floatingWidget)
         XCTAssertFalse(nav.rows(in: .appearance).contains(.companionTurnOn))
     }
@@ -158,7 +159,7 @@ final class CompanionSettingsTests: XCTestCase {
         let nav = PanelNav()
         nav.companionEnabled = false
         XCTAssertEqual(nav.rows(in: .companion).first, .companionTurnOn)
-        XCTAssertEqual(nav.rows(in: .companion).count, 5)
+        XCTAssertEqual(nav.rows(in: .companion).count, 6)
     }
 
     func testFloatingWidgetFollowsTheTwoFlags() {
@@ -225,5 +226,53 @@ final class FloatingWidgetMigrationTests: XCTestCase {
 
     func testAnUnknownValueFallsBackToTheOldKeys() {
         XCTAssertEqual(resolve(["STACKNUDGE_FLOATING_WIDGET": "blob", "STACKNUDGE_COMPACT_MODE": "false"]), .off)
+    }
+}
+
+final class CompanionSkinNamesTests: XCTestCase {
+
+    func testVariantsCarryTheirFamilyName() {
+        XCTAssertEqual(CompanionSkins.skin(id: "wizard").fullName, "Wizard Clay")
+        XCTAssertEqual(CompanionSkins.skin(id: "wizard-grey").fullName, "Wizard Pixel")
+        XCTAssertEqual(CompanionSkins.skin(id: "stacky").fullName, "Stacky")
+    }
+
+    func testEverySkinHasAUniqueId() {
+        let ids = CompanionSkins.ids()
+        XCTAssertEqual(Set(ids).count, ids.count)
+    }
+}
+
+final class CompanionSkinPickerTests: XCTestCase {
+
+    // Wizard's two looks share one submenu; single-skin families stay flat.
+    func testFamiliesGroupVariantsInPickerOrder() {
+        let families = CompanionMenu.families()
+        XCTAssertEqual(families.map(\.name), ["Stacky", "Wizard", "Pedro"])
+        XCTAssertEqual(families[1].skins.map(\.id), ["wizard", "wizard-grey"])
+    }
+}
+
+@MainActor
+final class CompanionSkinSettingTests: XCTestCase {
+
+    // Hovering a card or a menu entry previews a skin; it must never be the
+    // saved one, which the Character row steps.
+    func testAPreviewDoesNotChangeTheSavedSkin() {
+        let nav = PanelNav()
+        let saved = nav.companionSkin
+        nav.companionPreviewSkin = "pedro"
+        XCTAssertEqual(nav.companionSkin, saved)
+    }
+
+    func testCharacterIsAValueRow() {
+        let nav = PanelNav()
+        nav.settingsCategory = .companion
+        nav.selectedSettingIndex = nav.index(of: .companionSkin)
+        XCTAssertEqual(nav.selectedRow, .companionSkin)
+        XCTAssertTrue(nav.selectedRowIsPicker)
+        let saved = nav.companionSkin
+        nav.cycleForward()
+        XCTAssertEqual(nav.companionSkin, saved, "an arrow outside a pick must not change the character")
     }
 }

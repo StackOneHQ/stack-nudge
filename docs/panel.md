@@ -154,7 +154,7 @@ Reachable from the tab strip, `Cmd+,`, or the last `Cmd`-number. A sidebar of ca
 | **Notifications** | Banner notifications, Mute when focused, Mute / Resume notifications, Mute duration, Remind unanswered, Flag stalled after, Sound enabled, and the Agent done / Permission sounds (preview as you cycle) |
 | **Voice** | Voice notifications, the read-aloud shortcut, then Voice and Speed (preview as you cycle) once the voice model is downloaded, or **Download voice model** until it is |
 | **Appearance** | Floating widget (`Pill`, `Companion` or `Off`), then the pill's own rows: Snap to corners, Widget corner, Widget opacity, Widget type, Mascot, Accent color |
-| **Companion** | Size, Count badge, Preview pose, Reset position; **Turn on companion** while it's off. See [Companion](#companion) |
+| **Companion** | Character, Size, Count badge, Preview pose, Reset position; **Turn on companion** while it's off. See [Companion](#companion) |
 | **Usage** | Quota tracking, Quota alerts, Alert threshold, Poll frequency, Context alert, Show remaining, and the two pi budgets |
 | **Integrations** | A card each for Slack and GitHub, with where it stands on the right; `→` or `⏎` opens its page. Slack's: paste setup, detected user, test message, on/off, idle threshold, message text, finished turns. GitHub's: PR links, GitHub activity, Hide shipped, Connect GitHub (or Disconnect once signed in). Each page's first line says what it's doing or what's wrong |
 | **Extensions** | What's installed, then **Browse extensions** (see [Extensions](#extensions)) |
@@ -268,17 +268,18 @@ The companion is a small animated character that floats on your desktop and take
 
 - **Click** the character to open the panel beside it. The hotkey opens it there too.
 - **Drag** it anywhere; it stays where you drop it, and comes back on screen if a display it was on goes away.
-- **Right-click** for the menu, including a **Companion** submenu with its size and **Reset position**, which puts it back where a fresh install starts it.
+- **Right-click** for the menu, including a **Companion** submenu with the character (hover a name to preview it), its size and **Reset position**, which puts it back where a fresh install starts it.
 
 Its pose follows what stack-nudge knows: thinking while an agent is busy, watching while agent sessions are live, waiting when an event or a permission prompt is queued, alert when a quota is past your alert threshold, muted while notifications are muted, and asleep after five quiet minutes. The waiting pose is a wave: it means something wants you to act, and a finished agent turn is one of those, so it still waves. A new finished turn also gets a single small nod on arrival, when the character is otherwise calm (idle or asleep), not muted, and Reduce Motion is off. A count badge at its corner shows how many events are waiting, grey while muted. It animates on the render server and pauses while it is covered, the display sleeps or the screen is locked, so it stays near 0% CPU. With Reduce Motion on, it holds still.
 
 | Setting | Key | Values |
 |---------|-----|--------|
 | Floating widget (Appearance) | `STACKNUDGE_FLOATING_WIDGET` | `pill`, `companion`, `off` |
+| Character | `STACKNUDGE_COMPANION_SKIN` | `stacky` (default), `wizard`, `wizard-grey` (pixel), `pedro` |
 | Size | `STACKNUDGE_COMPANION_SIZE` | `small`, `medium` (default), `large` |
 | Count badge | `STACKNUDGE_COMPANION_BADGE` | `true` (default) / `false` |
 
-The Companion category holds only the character's own settings. While Floating widget isn't `Companion` it shows a note and a **Turn on companion** row that switches it, and the settings are dimmed. `Space` or `⏎` flips Count badge, runs Reset position and Turn on companion, and on Floating widget, Size and Preview pose starts picking, as on every other row. Preview pose shows any pose on the character without changing anything else; it isn't saved. Holding `⌥` while the menu is open also reveals a **Debug** submenu under Companion with the same pose preview and an **Info (nod)** entry that plays the nod once. The character's last spot is kept in `STACKNUDGE_COMPANION_POS`.
+The Companion category holds only the character's own settings. While Floating widget isn't `Companion` it shows a note and a **Turn on companion** row that switches it, and the settings are dimmed. `Space` or `⏎` flips Count badge, runs Reset position and Turn on companion, and on Floating widget, Character, Size and Preview pose starts picking, as on every other row. The Companion category also shows every character as a live card: hover one to see it on the companion without saving it, click to pick it, and use the pose picker above the cards to see each character in every state. Preview pose shows any pose on the character without changing anything else; it isn't saved. Holding `⌥` while the menu is open also reveals a **Debug** submenu under Companion with the same pose preview and an **Info (nod)** entry that plays the nod once. The character's last spot is kept in `STACKNUDGE_COMPANION_POS`.
 
 ## Menu bar (macOS)
 
@@ -291,7 +292,7 @@ When the panel daemon is running, the StackNudge mark appears in your menu bar, 
 | `Voice notifications` | Toggles spoken notifications. Enabling speaks *"Voice notifications enabled"*. |
 | `Mute when focused` | Toggles skipping the banner when the agent's window is already in front |
 | `Mute notifications ▸` | Submenu (For 15m / 30m / 1h / 2h) to silence all nudges for a set time. While muted a `Muted · Xm left` line shows above it, the item becomes `Resume notifications`, and the menu-bar icon shows a `bell.slash` + countdown. |
-| `Companion ▸` | While the companion is on: size, Reset position, and (with `⌥` held) Debug |
+| `Companion ▸` | While the companion is on: character (with hover preview), size, Reset position, and (with `⌥` held) Debug |
 | `Show panel` | Brings the floating panel up (handy when no events are queued) |
 | `Settings…` (⌘,) | Opens the panel straight on Settings |
 | `Check permissions…` | Opens the Permissions page in the panel (see [Permissions](setup.md#permissions-macos)) |

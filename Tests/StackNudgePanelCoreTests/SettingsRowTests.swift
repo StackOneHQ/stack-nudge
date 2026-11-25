@@ -224,7 +224,7 @@ final class SettingsRowTests: XCTestCase {
             XCTAssertFalse(nav.selectedRowIsPicker, "\(row) should ignore arrows")
         }
 
-        for row in [SettingsRow.muteDuration, .floatingWidget, .theme, .companionSize, .companionPreviewPose, .historyPerSession, .agentDoneSound] {
+        for row in [SettingsRow.muteDuration, .floatingWidget, .theme, .companionSize, .companionSkin, .companionPreviewPose, .historyPerSession, .agentDoneSound] {
             select(row)
             XCTAssertEqual(nav.selectedRow, row)
             XCTAssertTrue(nav.selectedRowIsPicker, "\(row) should pick")

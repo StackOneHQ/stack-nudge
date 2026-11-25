@@ -4,10 +4,11 @@ import SwiftUI
 
 // Everything the character view draws from. CompanionController updates it
 // only when a value actually changes, so the view re-renders on a change of
-// mood, size or count rather than on every event, session poll or setting.
+// mood, skin, size or count rather than on every event, session poll or setting.
 @MainActor
 final class CompanionModel: ObservableObject {
     @Published var mode: SkinMode = .idle
+    @Published var skinID: String = CompanionSkins.defaultID
     @Published var size: CompanionSize = .medium
     // Events waiting on you; 0 hides the badge, which is also how the setting
     // that turns it off reaches the view.
@@ -43,7 +44,7 @@ struct CompanionView: View {
 
     var body: some View {
         let size = model.size.points
-        CharacterLayerHost(skin: CompanionSkins.skin(id: CompanionSkins.defaultID), mode: model.mode,
+        CharacterLayerHost(skin: CompanionSkins.skin(id: model.skinID), mode: model.mode,
                            still: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
                            size: size, active: gate.active)
             .frame(width: size.width, height: size.height)

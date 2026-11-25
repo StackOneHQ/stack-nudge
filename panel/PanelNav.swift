@@ -205,7 +205,7 @@ enum SettingsRow: Hashable {
     case banner, muteWhenFocused, mute, muteDuration, remindUnanswered, stalledSessions,
          tabTitleNames, pinPanel, keepOpenWhenEmpty, launchAtLogin
     case floatingWidget, snapToCorners, widgetCorner, widgetOpacity, widgetContent, mascot, theme
-    case companionTurnOn, companionSize, companionBadge, companionPreviewPose, companionResetPosition
+    case companionTurnOn, companionSize, companionSkin, companionBadge, companionPreviewPose, companionResetPosition
     case eventHistory, clearHistory
     case slackPaste, slackIdentity, slackTest
     case slackEnabled, slackIdle, slackDetail, slackStop
@@ -263,7 +263,7 @@ extension SettingsRow: CaseIterable {
         .stalledSessions, .tabTitleNames, .pinPanel, .keepOpenWhenEmpty, .launchAtLogin,
         .floatingWidget, .snapToCorners, .widgetCorner, .widgetOpacity, .widgetContent,
         .mascot, .theme,
-        .companionTurnOn, .companionSize, .companionBadge, .companionPreviewPose, .companionResetPosition,
+        .companionTurnOn, .companionSize, .companionSkin, .companionBadge, .companionPreviewPose, .companionResetPosition,
         .eventHistory, .clearHistory,
         .slackPaste, .slackIdentity, .slackTest,
         .slackEnabled, .slackIdle, .slackDetail, .slackStop,
@@ -1543,6 +1543,9 @@ final class PanelNav: ObservableObject {
     // The floating companion character, independent of the pill above.
     @Published var companionEnabled = false
     @Published var companionSize: CompanionSize = .medium
+    @Published var companionSkin: String = CompanionSkins.defaultID
+    // A skin hovered in Settings, shown on the companion and never saved.
+    @Published var companionPreviewSkin: String?
     @Published var companionOffered = false
     // A count of events waiting on you at the character's corner.
     @Published var companionBadge = true
@@ -1685,7 +1688,7 @@ final class PanelNav: ObservableObject {
             // The way in sits above the settings while the companion is off, so
             // it is the first thing the keyboard lands on.
             return (companionEnabled ? [] : [.companionTurnOn])
-                + [.companionBadge, .companionSize, .companionPreviewPose, .companionResetPosition]
+                + [.companionBadge, .companionSize, .companionSkin, .companionPreviewPose, .companionResetPosition]
         case .usage:
             return [.quotaTracking, .quotaAlerts, .alertThreshold,
                     .pollFrequency, .contextAlert, .showRemaining,
@@ -2018,6 +2021,7 @@ final class PanelNav: ObservableObject {
         mascot        = MascotKind(rawValue: config["STACKNUDGE_MASCOT"] ?? "") ?? .robot
         theme         = AccentTheme(rawValue: config["STACKNUDGE_THEME"] ?? "") ?? .cyan
         companionSize = CompanionSize(rawValue: config["STACKNUDGE_COMPANION_SIZE"] ?? "") ?? .medium
+        companionSkin = CompanionSkins.skin(id: config["STACKNUDGE_COMPANION_SKIN"]).id
         companionOffered = ConfigFile.bool(config, "STACKNUDGE_COMPANION_OFFERED", default: false)
         companionBadge = ConfigFile.bool(config, "STACKNUDGE_COMPANION_BADGE", default: true)
         compactMode   = chosen == .pill
@@ -2352,7 +2356,7 @@ final class PanelNav: ObservableObject {
         case .permissions, .update, .extensionUpdates, .hotkey, .speakHotkey, .downloadVoiceModel:
             return false
         case .muteDuration, .remindUnanswered, .stalledSessions,
-             .floatingWidget, .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme, .companionSize, .companionPreviewPose,
+             .floatingWidget, .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme, .companionSize, .companionSkin, .companionPreviewPose,
              .agentDoneSound, .permissionSound,
              .voice, .voiceSpeed,
              .alertThreshold, .pollFrequency,
@@ -2389,6 +2393,11 @@ final class PanelNav: ObservableObject {
         guard !companionOffered else { return }
         companionOffered = true
         ConfigFile.write(key: "STACKNUDGE_COMPANION_OFFERED", value: "true")
+    }
+
+    func selectCompanionSkin(_ id: String) {
+        companionSkin = CompanionSkins.skin(id: id).id
+        ConfigFile.write(key: "STACKNUDGE_COMPANION_SKIN", value: companionSkin)
     }
 
     func setCompanionSize(_ size: CompanionSize) {
@@ -2599,6 +2608,11 @@ final class PanelNav: ObservableObject {
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
             mascot = list[next]
             ConfigFile.write(key: "STACKNUDGE_MASCOT", value: mascot.rawValue)
+        case .companionSkin:
+            let list = CompanionSkins.ids()
+            let idx = list.firstIndex(of: companionSkin) ?? 0
+            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+            selectCompanionSkin(list[next])
         case .companionBadge:
             companionBadge.toggle()
             ConfigFile.write(key: "STACKNUDGE_COMPANION_BADGE", value: companionBadge ? "true" : "false")
