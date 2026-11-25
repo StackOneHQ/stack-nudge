@@ -67,7 +67,7 @@ final class MCPAppContext: MCPContext {
             store?.append(NudgeEvent.feed(source: .mcp, tag: "settings", severity: .info,
                                           title: "\(caller.displayName) muted notifications for \(minutes) min",
                                           message: "Permission prompts still come through."))
-            return "Muted for \(minutes) minutes. Permission prompts still come through."
+            return "Muted for \(minutes) \(minutes == 1 ? "minute" : "minutes"). Permission prompts still come through."
         }
     }
 

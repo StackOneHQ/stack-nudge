@@ -19,6 +19,20 @@ final class EventStoreTests: XCTestCase {
         XCTAssertEqual(store.events.map(\.message), ["second", "first"])
     }
 
+    func test_append_dropsARepeatOfTheSameEventWithinTheWindow() {
+        let store = EventStore()
+        store.append(makeEvent(message: "done"))
+        store.append(makeEvent(message: "done"))
+        XCTAssertEqual(store.events.count, 1)
+    }
+
+    func test_append_keepsTwoFeedNudgesThatShareOnlyTheirMessage() {
+        let store = EventStore()
+        store.append(NudgeEvent.feed(source: .mcp, tag: "ci", title: "Build finished", message: ""))
+        store.append(NudgeEvent.feed(source: .mcp, tag: "ci", title: "Tests finished", message: ""))
+        XCTAssertEqual(store.events.map(\.title), ["Tests finished", "Build finished"])
+    }
+
     func test_append_setsSelectionToNewest() {
         let store = EventStore()
         let event = makeEvent()

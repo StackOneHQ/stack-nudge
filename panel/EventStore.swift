@@ -370,15 +370,17 @@ final class EventStore: ObservableObject {
     func append(_ event: NudgeEvent) {
         // Claude Code occasionally fires the same hook twice in rapid
         // succession (observed on Stop). Drop the second event when an
-        // identical one landed within the dedup window. The title, key,
-        // extension and action count too: two feed events with the same text
-        // but their own keys are two things, and a keyed one replaces its
-        // earlier self below rather than being dropped as a repeat.
+        // identical one landed within the dedup window. The title, source,
+        // key, extension and action count too: two nudges sharing a message,
+        // such as an MCP client's notify with none, are two things, and a keyed
+        // one replaces its earlier self below rather than being dropped as a
+        // repeat.
         let dedupWindow: TimeInterval = 2
         if events.contains(where: { existing in
             abs(event.timestamp.timeIntervalSince(existing.timestamp)) < dedupWindow
                 && existing.agent == event.agent
                 && existing.kind == event.kind
+                && existing.source == event.source
                 && existing.title == event.title
                 && existing.message == event.message
                 && existing.claudeSessionID == event.claudeSessionID
