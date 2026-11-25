@@ -110,13 +110,16 @@ struct MCPCaller: Equatable {
     // Claude Desktop.
     var parentPID: Int? = nil
     var parentApp: String? = nil
+    // The launching app's bundle id, so acting on its nudge can bring it back.
+    var parentBundleID: String? = nil
 
     // The bridge's first line on the socket.
     static func fromHello(_ hello: [String: Any]) -> MCPCaller {
         MCPCaller(clientName: nil, clientVersion: nil,
                   claudeSessionID: (hello["claudeSessionId"] as? String).flatMap { $0.isEmpty ? nil : $0 },
                   parentPID: (hello["parentPid"] as? NSNumber)?.intValue,
-                  parentApp: (hello["parentApp"] as? String).flatMap { $0.isEmpty ? nil : $0 })
+                  parentApp: (hello["parentApp"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                  parentBundleID: (hello["parentBundleId"] as? String).flatMap { $0.isEmpty ? nil : $0 })
     }
 
     // How a feed row and an audit line name the client.

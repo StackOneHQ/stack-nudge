@@ -206,7 +206,9 @@ private struct NudgeEventDTO: Decodable {
     // the extension's own process may post one.
     static func feedSource(_ raw: String?) -> EventSource {
         guard let raw, let source = EventSource(rawValue: raw), source != .agent else { return .agent }
-        return source == .extension ? .script : source
+        // Only the MCP server raises MCP nudges, and only an extension's own
+        // process its feed: a script claiming either is a script's.
+        return source == .mcp || source == .extension ? .script : source
     }
 
     // Only accept a fifo_path that looks like one of our permission FIFOs AND

@@ -26,16 +26,24 @@ enum MCPBridge {
         if let session = environment["CLAUDE_CODE_SESSION_ID"], !session.isEmpty {
             hello["claudeSessionId"] = session
         }
-        if let app = appName(forPID: parentPID) { hello["parentApp"] = app }
+        if let path = executablePath(forPID: parentPID), let app = appName(fromExecutablePath: path) {
+            hello["parentApp"] = app
+            if let bundleID = bundleID(fromExecutablePath: path) { hello["parentBundleId"] = bundleID }
+        }
         return hello
     }
 
     // "Claude" for /Applications/Claude.app/Contents/..., nil for a process
     // that isn't inside an app bundle (a CLI such as claude or codex).
-    static func appName(forPID pid: Int32) -> String? {
+    static func executablePath(forPID pid: Int32) -> String? {
         var buffer = [CChar](repeating: 0, count: 4096)  // PROC_PIDPATHINFO_MAXSIZE
         guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
-        return appName(fromExecutablePath: String(cString: buffer))
+        return String(cString: buffer)
+    }
+
+    static func bundleID(fromExecutablePath path: String) -> String? {
+        guard let range = path.range(of: ".app/") else { return nil }
+        return Bundle(path: String(path[..<range.lowerBound]) + ".app")?.bundleIdentifier
     }
 
     static func appName(fromExecutablePath path: String) -> String? {

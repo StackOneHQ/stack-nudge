@@ -954,6 +954,10 @@ struct SettingsView: View {
         case .openConfig:       row(.openConfig, label: "Open config file…", kind: .action, value: "")
         case .releaseNotes:     row(.releaseNotes, label: "View release notes…", kind: .action, value: "")
         case .updateChannel:    row(.updateChannel, label: "Update channel", kind: .cycle, value: nav.updateChannel.label)
+        case .mcpSetup:         row(.mcpSetup, label: "Copy MCP setup for Claude Code", kind: .action,
+                                    value: nav.mcpSetupCopied ? "Copied" : "")
+        case .mcpWrites:        row(.mcpWrites, label: "MCP clients can change settings", kind: .toggle,
+                                    value: nav.mcpWritesEnabled ? "On" : "Off")
         case .checkUpdates:     row(.checkUpdates, label: "Check for updates…", kind: .action, value: checkForUpdatesStatus)
         case .uninstall:        row(.uninstall, label: "Uninstall StackNudge…", kind: .action, value: "")
         case .quit:             row(.quit, label: "Quit panel", kind: .action, value: "")

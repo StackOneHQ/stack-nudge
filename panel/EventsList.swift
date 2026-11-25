@@ -19,7 +19,7 @@ struct FeedTagFilter: Equatable {
         return words.prefix(1).uppercased() + words.dropFirst()
     }
 
-    private static let acronyms: Set<String> = ["ci", "pr", "ai", "ui", "api"]
+    private static let acronyms: Set<String> = ["ci", "pr", "ai", "ui", "api", "mcp"]
 
     // Tags of the feed events in the list, in the order chips show them.
     static func present(in events: [NudgeEvent]) -> [String] {

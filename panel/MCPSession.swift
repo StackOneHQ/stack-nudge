@@ -6,6 +6,13 @@ protocol MCPContext: AnyObject {
     var serverVersion: String { get }
     func settings() -> [SettingSnapshot]
     func sessions() -> [[String: Any]]
+    // Changes a setting, as `caller`, and leaves a line in Events saying so.
+    func writeSetting(key: String, value: Any, caller: MCPCaller) -> Result<SettingSnapshot, SettingsRegistry.WriteFailure>
+    // Raises a nudge in Events from `caller`.
+    func raiseNudge(_ request: MCPNudge.Request, caller: MCPCaller)
+    // Mutes for `minutes` (0 resumes), sparing permission prompts. Says what
+    // it did.
+    func mute(minutes: Int, caller: MCPCaller) -> String
 }
 
 // One client's conversation with the server, from the bridge's hello to the
@@ -113,6 +120,15 @@ final class MCPSession {
         lock.unlock()
     }
 
+    // A day: a mute an agent asked for always ends on its own.
+    static let maxMuteMinutes = 24 * 60
+
+    private var currentCaller: MCPCaller {
+        lock.lock()
+        defer { lock.unlock() }
+        return caller
+    }
+
     private func respond(_ id: Any, _ result: [String: Any], modern: Bool) {
         var result = result
         result["resultType"] = "complete"
@@ -141,8 +157,10 @@ final class MCPSession {
 
     static let instructions = """
         stack-nudge is the menu-bar app that tells this person when their coding agents finish or wait \
-        on them. Use settings_list and settings_get to read its settings and sessions_list to see which \
-        agent sessions are running and which are waiting on the user.
+        on them. Use notify to tell them something here: a long task finished, or you need them, with a \
+        link back if you have one. settings_list, settings_get and settings_set read and change its \
+        settings; mute quiets it for a while; sessions_list shows which agent sessions are running and \
+        which are waiting on the user.
         """
 
     private var capabilities: [String: Any] {
@@ -190,6 +208,40 @@ final class MCPSession {
                              "properties": ["key": ["type": "string"]],
                              "required": ["key"], "additionalProperties": false],
              "annotations": ["readOnlyHint": true]],
+            ["name": "settings_set",
+             "title": "Change a stack-nudge setting",
+             "description": "Sets one setting, by its STACKNUDGE_ key, to one of the values settings_list "
+                 + "gives for it. Settings that protect permission prompts can't be changed here. Each change "
+                 + "is shown to the user in stack-nudge.",
+             "inputSchema": ["type": "object",
+                             "properties": ["key": ["type": "string"],
+                                            "value": ["description": "A boolean, number or string, as the setting takes."]],
+                             "required": ["key", "value"], "additionalProperties": false],
+             "annotations": ["readOnlyHint": false, "destructiveHint": false, "idempotentHint": true]],
+            ["name": "notify",
+             "title": "Nudge the user",
+             "description": "Shows the user a nudge in stack-nudge: a banner and a row in Events. Use it when a "
+                 + "long task finishes or you need them. Acting on it takes them to url if you give one, "
+                 + "otherwise back to this session's terminal or app.",
+             "inputSchema": ["type": "object",
+                             "properties": [
+                                "title": ["type": "string", "maxLength": MCPNudge.maxTitle],
+                                "message": ["type": "string", "maxLength": MCPNudge.maxMessage],
+                                "kind": ["type": "string", "enum": MCPNudge.Kind.allCases.map(\.rawValue),
+                                         "description": "waiting asks for the user; done and info are heads-ups."],
+                                "url": ["type": "string", "description": "An https link to take the user to."],
+                                "tag": ["type": "string", "description": "A short label for filtering, like ci."],
+                             ],
+                             "required": ["title"], "additionalProperties": false],
+             "annotations": ["readOnlyHint": false, "destructiveHint": false, "openWorldHint": false]],
+            ["name": "mute",
+             "title": "Mute stack-nudge for a while",
+             "description": "Quiets banners, sound and voice for some minutes, up to a day; 0 resumes. Permission "
+                 + "prompts still come through.",
+             "inputSchema": ["type": "object",
+                             "properties": ["minutes": ["type": "integer", "minimum": 0, "maximum": MCPSession.maxMuteMinutes]],
+                             "required": ["minutes"], "additionalProperties": false],
+             "annotations": ["readOnlyHint": false, "destructiveHint": false, "idempotentHint": true]],
             ["name": "sessions_list",
              "title": "List agent sessions",
              "description": "The coding-agent sessions stack-nudge can see: agent, repo, and state: busy, idle, "
@@ -219,6 +271,27 @@ final class MCPSession {
             return MCPProtocol.toolResult(setting.json)
         case "sessions_list":
             return MCPProtocol.toolResult(["sessions": context.sessions()])
+        case "settings_set":
+            guard let key = arguments["key"] as? String, let value = arguments["value"] else {
+                throw MCPFailure.invalidParams("settings_set needs a key and a value")
+            }
+            switch context.writeSetting(key: key, value: value, caller: currentCaller) {
+            case .success(let setting): return MCPProtocol.toolResult(setting.json)
+            case .failure(let failure): return MCPProtocol.toolError(failure.message)
+            }
+        case "notify":
+            switch MCPNudge.request(from: arguments) {
+            case .success(let request):
+                context.raiseNudge(request, caller: currentCaller)
+                return MCPProtocol.toolResult("Shown to the user.")
+            case .failure(let refusal):
+                return MCPProtocol.toolError(refusal.message)
+            }
+        case "mute":
+            guard let minutes = (arguments["minutes"] as? NSNumber)?.intValue,
+                  (0...MCPSession.maxMuteMinutes).contains(minutes)
+            else { return MCPProtocol.toolError("minutes is from 0 to \(MCPSession.maxMuteMinutes).") }
+            return MCPProtocol.toolResult(context.mute(minutes: minutes, caller: currentCaller))
         default:
             throw MCPFailure.invalidParams("Unknown tool: \(name)")
         }

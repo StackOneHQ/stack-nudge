@@ -160,7 +160,7 @@ Reachable from the tab strip, `Cmd+,`, or the last `Cmd`-number. A sidebar of ca
 | **Extensions** | What's installed, then **Browse extensions** (see [Extensions](#extensions)) |
 | **Panel** | Hotkey, Pin panel, Keep open when empty, Launch at login, Name from tab titles |
 | **Events** | History per session, Event history, Clear event history |
-| **Actions** | Edit phrases, Check permissions, Open config file, View release notes, Update channel (Stable or Nightly, see [Nightly builds](setup.md#nightly-builds)), Check for updates, Uninstall, Quit |
+| **Actions** | Edit phrases, Check permissions, Open config file, View release notes, Update channel (Stable or Nightly, see [Nightly builds](setup.md#nightly-builds)), Check for updates, Copy MCP setup for Claude Code and MCP clients can change settings (see [the local MCP server](design/local-mcp.md)), Uninstall, Quit |
 | **About** | The version and hook-script status, and a link to this repo |
 
 An extension that asks for a Settings page gets one under Extensions. A pending update, an extension update, a missing permission, or an agent whose hooks aren't wired yet shows as a row above every category. An app or extension update also puts a dot on the Settings tab.

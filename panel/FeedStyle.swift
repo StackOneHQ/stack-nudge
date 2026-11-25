@@ -51,6 +51,7 @@ enum FeedStyle {
         case .calendar: return .mint
         case .script:   return .gray
         case .extension: return .teal
+        case .mcp:       return .purple
         case .agent:    return .secondary
         }
     }
@@ -61,6 +62,7 @@ enum FeedStyle {
         case .calendar: return "calendar"
         case .script:   return "terminal.fill"
         case .extension: return "puzzlepiece.extension.fill"
+        case .mcp:       return "sparkles"
         case .agent:    return "checkmark.circle.fill"
         }
     }

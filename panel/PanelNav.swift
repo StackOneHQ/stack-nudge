@@ -217,6 +217,9 @@ enum SettingsRow: Hashable {
     case githubLinks, githubActivity, hideShipped, connectGithub, disconnectGithub
     case historyPerSession
     case editPhrases, checkPermissions, openConfig, releaseNotes, updateChannel, checkUpdates, uninstall, quit
+    // The local MCP server: whether clients may change settings, and the line
+    // that adds the server to Claude Code (docs/design/local-mcp.md).
+    case mcpWrites, mcpSetup
     case browseExtensions, extensionSources
     case openRepo
     // One per built-in integration on the Integrations list, drawn as a card
@@ -273,6 +276,7 @@ extension SettingsRow: CaseIterable {
         .historyPerSession,
         .editPhrases, .checkPermissions, .openConfig, .releaseNotes,
         .updateChannel, .checkUpdates, .uninstall, .quit,
+        .mcpWrites, .mcpSetup,
         .browseExtensions, .extensionSources, .openRepo,
     ] + Integration.allCases.map { .integration($0) }
 }
@@ -387,6 +391,18 @@ final class PanelNav: ObservableObject {
         guard let until = muteUntil else { return false }
         return until > Date()
     }
+    // Set while the mute came from an MCP client: that mute never holds a
+    // permission prompt, or an agent could silence what it's asking you.
+    @Published var muteSparesPrompts = false
+
+    // Whether a mute silences this event's interruptions.
+    func mutes(_ event: NudgeEvent) -> Bool {
+        isMuted && !(muteSparesPrompts && event.kind == .permission && !event.isFeed)
+    }
+
+    // STACKNUDGE_MCP_WRITES: whether MCP clients may change settings. On by
+    // default: a client only reaches the server once you add it.
+    @Published var mcpWritesEnabled = true
     // "14m" style remainder for the menu-bar badge, tab-strip bell, and menu.
     static func muteRemainingLabel(until: Date) -> String {
         let mins = Int(ceil(max(0, until.timeIntervalSinceNow) / 60))
@@ -1717,7 +1733,7 @@ final class PanelNav: ObservableObject {
             return [.historyPerSession, .eventHistory, .clearHistory]
         case .actions:
             return [.editPhrases, .checkPermissions, .openConfig,
-                    .releaseNotes, .updateChannel, .checkUpdates, .uninstall, .quit]
+                    .releaseNotes, .updateChannel, .checkUpdates, .mcpSetup, .mcpWrites, .uninstall, .quit]
         // Version and hook-script freshness render above this row as a plain
         // note, not as rows: they are readouts with nothing to activate, and a
         // keyboard-selectable row that ignores Enter reads as broken.
@@ -2008,6 +2024,7 @@ final class PanelNav: ObservableObject {
         let rawAlpha = Double(config["STACKNUDGE_COMPACT_ALPHA"] ?? "") ?? 1.0
         compactAlpha = Self.compactAlphaOptions.min(by: { abs($0 - rawAlpha) < abs($1 - rawAlpha) }) ?? 1.0
         updateChannel = UpdateChannel.from(config: config[UpdateChannel.configKey])
+        mcpWritesEnabled = ConfigFile.bool(config, "STACKNUDGE_MCP_WRITES", default: true)
         let rawPerSession = Int(config["STACKNUDGE_EVENTS_PER_SESSION"] ?? "") ?? 5
         eventsPerSession = Self.eventsPerSessionOptions.min(by: { abs($0 - rawPerSession) < abs($1 - rawPerSession) }) ?? 5
     }
@@ -2257,6 +2274,7 @@ final class PanelNav: ObservableObject {
             // the model download.
             if voiceModelDownloading { cancelVoiceModelDownload() } else { startVoiceModelDownload() }
         case .connectGithub:    connectGithub()
+        case .mcpSetup:         copyMCPSetupCommand()
         case .disconnectGithub: disconnectGithub()
         case .editPhrases:      actions?.editPhrases()
         case .browseExtensions: actions?.browseExtensions()
@@ -2315,7 +2333,7 @@ final class PanelNav: ObservableObject {
         switch selectedRow {
         case .wireAgents, .dismissAgents,
              .connectGithub, .disconnectGithub, .editPhrases, .browseExtensions, .extensionSources,
-             .installedExtension, .integration,
+             .installedExtension, .integration, .mcpSetup,
              .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
              .slackPaste, .slackIdentity, .slackTest, .openRepo, .companionResetPosition, .companionTurnOn, .none:
@@ -2329,7 +2347,7 @@ final class PanelNav: ObservableObject {
              .soundEnabled, .voiceEnabled,
              .quotaTracking, .quotaAlerts, .showRemaining,
              .githubLinks, .githubActivity, .hideShipped, .eventHistory,
-             .slackEnabled, .slackDetail, .slackStop, .awayLock:
+             .slackEnabled, .slackDetail, .slackStop, .awayLock, .mcpWrites:
             return false
         case .permissions, .update, .extensionUpdates, .hotkey, .speakHotkey, .downloadVoiceModel:
             return false
@@ -2439,6 +2457,23 @@ final class PanelNav: ObservableObject {
         if githubUsesCLILogin != loggedIn { githubUsesCLILogin = loggedIn }
         let signedIn = loggedIn || GitHubAuth.token() != nil
         if githubSignedIn != signedIn { githubSignedIn = signedIn }
+    }
+
+    // What adds stack-nudge to Claude Code as an MCP server, pointing at this
+    // app's own binary so it's right wherever the app is installed.
+    static var mcpSetupCommand: String {
+        let binary = Bundle.main.executablePath ?? "~/Applications/StackNudge.app/Contents/MacOS/stack-nudge"
+        let quoted = binary.contains(" ") ? "'\(binary)'" : binary
+        return "claude mcp add stack-nudge -- \(quoted) \(MCPBridge.flag)"
+    }
+
+    @Published var mcpSetupCopied = false
+
+    func copyMCPSetupCommand() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(Self.mcpSetupCommand, forType: .string)
+        mcpSetupCopied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.mcpSetupCopied = false }
     }
 
     func setUpdateChannel(_ channel: UpdateChannel) {
@@ -2678,12 +2713,15 @@ final class PanelNav: ObservableObject {
             ConfigFile.write(key: "STACKNUDGE_EVENTS_PER_SESSION", value: String(eventsPerSession))
         case .updateChannel:
             setUpdateChannel(updateChannel == .stable ? .nightly : .stable)
+        case .mcpWrites:
+            mcpWritesEnabled.toggle()
+            ConfigFile.write(key: "STACKNUDGE_MCP_WRITES", value: mcpWritesEnabled ? "true" : "false")
         // Action rows have nothing to cycle, and activate() handles each of
         // them before it gets here.
         case .wireAgents, .dismissAgents, .permissions, .update, .extensionUpdates,
              .hotkey, .speakHotkey, .downloadVoiceModel,
              .connectGithub, .disconnectGithub, .editPhrases, .browseExtensions, .extensionSources,
-             .installedExtension, .integration,
+             .installedExtension, .integration, .mcpSetup,
              .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
              .slackPaste, .slackIdentity, .slackTest, .openRepo, .companionResetPosition, .companionTurnOn, .none:
