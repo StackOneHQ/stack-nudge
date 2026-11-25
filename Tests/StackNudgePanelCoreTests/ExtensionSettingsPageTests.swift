@@ -187,7 +187,7 @@ final class ExtensionSettingsPageTests: XCTestCase {
         XCTAssertEqual(nav.label(for: .extensionPage("away")), "Away")
         XCTAssertEqual(nav.selectedRow, .extensionSetting("away", "STACKNUDGE_EXT_A"), "lands on the first row")
         nav.selectNextCategory()
-        XCTAssertEqual(nav.settingsCategory, .panel)
+        XCTAssertEqual(nav.settingsCategory, .mcp)
     }
 
     // Settings, then the app's lock row, then Update when there is one, then

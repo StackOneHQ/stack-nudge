@@ -217,9 +217,12 @@ enum SettingsRow: Hashable {
     case githubLinks, githubActivity, hideShipped, connectGithub, disconnectGithub
     case historyPerSession
     case editPhrases, checkPermissions, openConfig, releaseNotes, updateChannel, checkUpdates, uninstall, quit
-    // The local MCP server: whether clients may change settings, and the line
-    // that adds the server to Claude Code (docs/design/local-mcp.md).
-    case mcpWrites, mcpSetup
+    // The local MCP server (docs/design/local-mcp.md): the door to the page of
+    // clients it can be added to, and whether clients may change settings.
+    case mcpSetupClients, mcpWrites
+    // One per client on that page, drawn as a card with a tick once the
+    // client has stack-nudge.
+    case mcpClient(MCPClient)
     case browseExtensions, extensionSources
     case openRepo
     // One per built-in integration on the Integrations list, drawn as a card
@@ -276,9 +279,9 @@ extension SettingsRow: CaseIterable {
         .historyPerSession,
         .editPhrases, .checkPermissions, .openConfig, .releaseNotes,
         .updateChannel, .checkUpdates, .uninstall, .quit,
-        .mcpWrites, .mcpSetup,
+        .mcpSetupClients, .mcpWrites,
         .browseExtensions, .extensionSources, .openRepo,
-    ] + Integration.allCases.map { .integration($0) }
+    ] + Integration.allCases.map { .integration($0) } + MCPClient.allCases.map { .mcpClient($0) }
 }
 
 struct SettingsActions {
@@ -1714,6 +1717,10 @@ final class PanelNav: ObservableObject {
         // somewhere to sign in from, not only to sign out.
         case .integrationPage(.github):
             return [.githubLinks, .githubActivity, .hideShipped, githubSignedIn ? .disconnectGithub : .connectGithub]
+        case .mcp:
+            return [.mcpSetupClients, .mcpWrites]
+        case .mcpSetupPage:
+            return MCPClient.allCases.map { .mcpClient($0) }
         // Its own category rather than a row under Actions: extensions declare
         // STACKNUDGE_EXT_ keys, so per-extension configuration needs somewhere
         // to live, and it should not arrive by growing an unrelated category.
@@ -1733,7 +1740,7 @@ final class PanelNav: ObservableObject {
             return [.historyPerSession, .eventHistory, .clearHistory]
         case .actions:
             return [.editPhrases, .checkPermissions, .openConfig,
-                    .releaseNotes, .updateChannel, .checkUpdates, .mcpSetup, .mcpWrites, .uninstall, .quit]
+                    .releaseNotes, .updateChannel, .checkUpdates, .uninstall, .quit]
         // Version and hook-script freshness render above this row as a plain
         // note, not as rows: they are readouts with nothing to activate, and a
         // keyboard-selectable row that ignores Enter reads as broken.
@@ -1792,7 +1799,7 @@ final class PanelNav: ObservableObject {
     // selected category, so anything reaching for a row by identity has to land
     // on its category first.
     func category(containing row: SettingsRow) -> SettingsCategory? {
-        (settingsCategories + Integration.allCases.map { .integrationPage($0) }
+        (settingsCategories + Integration.allCases.map { .integrationPage($0) } + [.mcpSetupPage]
             + installedExtensions.map { .extensionPage($0.id) })
             .first { rows(in: $0).contains(row) }
     }
@@ -1807,6 +1814,7 @@ final class PanelNav: ObservableObject {
         switch settingsCategory {
         case .extensionPage:   return .extensions
         case .integrationPage: return .integrations
+        case .mcpSetupPage:    return .mcp
         default:               return settingsCategory
         }
     }
@@ -1816,6 +1824,7 @@ final class PanelNav: ObservableObject {
         switch settingsCategory {
         case .extensionPage:   return "Extensions"
         case .integrationPage: return "Integrations"
+        case .mcpSetupPage:    return "MCP"
         default:               return "Categories"
         }
     }
@@ -1835,6 +1844,15 @@ final class PanelNav: ObservableObject {
         selectFirstCategoryRow()
     }
 
+    // ⏎ on Set up for… opens the page of clients, each ticked or not as its
+    // config says now.
+    func openMCPSetupPage() {
+        refreshMCPClients()
+        settingsCategory = .mcpSetupPage
+        settingsDetailFocused = true
+        selectFirstCategoryRow()
+    }
+
     // ← in a category's rows. From a page it goes back to the list it was
     // opened from, on the row that opened it; anywhere else, out to the
     // sidebar.
@@ -1844,6 +1862,8 @@ final class PanelNav: ObservableObject {
             settingsBack(to: .extensions, on: .installedExtension(id))
         case .integrationPage(let integration):
             settingsBack(to: .integrations, on: .integration(integration))
+        case .mcpSetupPage:
+            settingsBack(to: .mcp, on: .mcpSetupClients)
         default:
             settingsDetailFocused = false
         }
@@ -1860,8 +1880,8 @@ final class PanelNav: ObservableObject {
     // being picked.
     var selectedRowOpensOnRight: Bool {
         switch selectedRow {
-        case .installedExtension, .browseExtensions, .extensionSources, .integration: return true
-        default:                                                                     return false
+        case .installedExtension, .browseExtensions, .extensionSources, .integration, .mcpSetupClients: return true
+        default:                                                                                         return false
         }
     }
 
@@ -2274,7 +2294,8 @@ final class PanelNav: ObservableObject {
             // the model download.
             if voiceModelDownloading { cancelVoiceModelDownload() } else { startVoiceModelDownload() }
         case .connectGithub:    connectGithub()
-        case .mcpSetup:         copyMCPSetupCommand()
+        case .mcpSetupClients:  openMCPSetupPage()
+        case .mcpClient(let client): copyMCPSetup(for: client)
         case .disconnectGithub: disconnectGithub()
         case .editPhrases:      actions?.editPhrases()
         case .browseExtensions: actions?.browseExtensions()
@@ -2333,7 +2354,7 @@ final class PanelNav: ObservableObject {
         switch selectedRow {
         case .wireAgents, .dismissAgents,
              .connectGithub, .disconnectGithub, .editPhrases, .browseExtensions, .extensionSources,
-             .installedExtension, .integration, .mcpSetup,
+             .installedExtension, .integration, .mcpSetupClients, .mcpClient,
              .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
              .slackPaste, .slackIdentity, .slackTest, .openRepo, .companionResetPosition, .companionTurnOn, .none:
@@ -2459,21 +2480,31 @@ final class PanelNav: ObservableObject {
         if githubSignedIn != signedIn { githubSignedIn = signedIn }
     }
 
-    // What adds stack-nudge to Claude Code as an MCP server, pointing at this
-    // app's own binary so it's right wherever the app is installed.
-    static var mcpSetupCommand: String {
-        let binary = Bundle.main.executablePath ?? "~/Applications/StackNudge.app/Contents/MacOS/stack-nudge"
-        let quoted = binary.contains(" ") ? "'\(binary)'" : binary
-        return "claude mcp add stack-nudge -- \(quoted) \(MCPBridge.flag)"
+    // This app's own binary, which every client's setup points at.
+    static var mcpBinaryPath: String {
+        Bundle.main.executablePath ?? "\(NSHomeDirectory())/Applications/StackNudge.app/Contents/MacOS/stack-nudge"
     }
 
-    @Published var mcpSetupCopied = false
+    // The clients whose config has stack-nudge, as last read, and the one
+    // whose setup was just copied.
+    @Published var mcpConfiguredClients: Set<MCPClient> = []
+    @Published var mcpCopiedClient: MCPClient?
 
-    func copyMCPSetupCommand() {
+    // A few small file reads, done when the MCP pages are shown, so a client
+    // set up since (by pasting what was copied) is ticked on the way back.
+    func refreshMCPClients() {
+        let configured = MCPClient.configured(claudeDirs: claudeLogins.map(\.configDir),
+                                              codexHomes: codexLogins.map(\.codexHome))
+        if configured != mcpConfiguredClients { mcpConfiguredClients = configured }
+    }
+
+    func copyMCPSetup(for client: MCPClient) {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(Self.mcpSetupCommand, forType: .string)
-        mcpSetupCopied = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.mcpSetupCopied = false }
+        NSPasteboard.general.setString(client.setup(binary: Self.mcpBinaryPath), forType: .string)
+        mcpCopiedClient = client
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            if self?.mcpCopiedClient == client { self?.mcpCopiedClient = nil }
+        }
     }
 
     func setUpdateChannel(_ channel: UpdateChannel) {
@@ -2721,7 +2752,7 @@ final class PanelNav: ObservableObject {
         case .wireAgents, .dismissAgents, .permissions, .update, .extensionUpdates,
              .hotkey, .speakHotkey, .downloadVoiceModel,
              .connectGithub, .disconnectGithub, .editPhrases, .browseExtensions, .extensionSources,
-             .installedExtension, .integration, .mcpSetup,
+             .installedExtension, .integration, .mcpSetupClients, .mcpClient,
              .checkPermissions, .openConfig,
              .releaseNotes, .checkUpdates, .uninstall, .quit, .clearHistory,
              .slackPaste, .slackIdentity, .slackTest, .openRepo, .companionResetPosition, .companionTurnOn, .none:
@@ -2978,16 +3009,19 @@ struct ExtensionTab: Equatable, Identifiable {
 // one, in install order, and are listed by PanelNav.settingsCategories, since
 // only nav knows what is installed. `allCases` is the built-in ones alone.
 enum SettingsCategory: Hashable, CaseIterable {
-    case notifications, voice, appearance, companion, usage, integrations, extensions, panel, events,
+    case notifications, voice, appearance, companion, usage, integrations, extensions, mcp, panel, events,
          actions, about
     // One extension's page, a level below Extensions. Not in the sidebar.
     case extensionPage(String)
     // One integration's page, a level below Integrations. Not in the sidebar.
     case integrationPage(Integration)
+    // The clients stack-nudge's MCP server can be added to, a level below MCP.
+    // Not in the sidebar.
+    case mcpSetupPage
 
     static let allCases: [SettingsCategory] = [
         .notifications, .voice, .appearance, .companion, .usage, .integrations, .extensions,
-        .panel, .events, .actions, .about,
+        .mcp, .panel, .events, .actions, .about,
     ]
 
     // Kept short: the sidebar is ~120pt. An extension's page is titled by its
@@ -3001,6 +3035,8 @@ enum SettingsCategory: Hashable, CaseIterable {
         case .usage:         return "Usage"
         case .integrations:  return "Integrations"
         case .extensions:    return "Extensions"
+        case .mcp:           return "MCP"
+        case .mcpSetupPage:  return "Set up for"
         case .panel:         return "Panel"
         case .events:        return "Events"
         case .actions:       return "Actions"

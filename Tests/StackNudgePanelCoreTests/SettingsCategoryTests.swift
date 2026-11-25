@@ -13,7 +13,7 @@ final class SettingsCategoryTests: XCTestCase {
     func testEveryCategoryRowIsReachableAndUnique() {
         let nav = PanelNav()
         var seen: [SettingsRow] = []
-        for category in SettingsCategory.allCases + Integration.allCases.map({ .integrationPage($0) }) {
+        for category in SettingsCategory.allCases + Integration.allCases.map({ .integrationPage($0) }) + [.mcpSetupPage] {
             seen += nav.rows(in: category)
         }
         XCTAssertEqual(Set(seen).count, seen.count, "a row appears in two categories")
@@ -60,7 +60,7 @@ final class SettingsCategoryTests: XCTestCase {
         // GitHub page swaps Connect for Disconnect on signing in; every branch
         // is reachable, so every one counts as a home.
         let pages: [SettingsCategory] = Integration.allCases.map { .integrationPage($0) }
-            + [.extensionPage(SettingsRow.representativeExtensionID)]
+            + [.extensionPage(SettingsRow.representativeExtensionID), .mcpSetupPage]
         for cached in [true, false] {
             for signedIn in [true, false] {
                 nav.voiceModelCached = cached
