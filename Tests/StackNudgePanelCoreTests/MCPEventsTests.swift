@@ -186,7 +186,8 @@ final class MCPAppEventsTests: XCTestCase {
                                 projectPath: "/Users/me/api", agentPID: 42, claudeSessionID: "s-1")
         let (name, data) = MCPAppEvents.occurrence(for: prompt)!
         XCTAssertEqual(name, "session.waiting")
-        XCTAssertEqual(data["project"] as? String, "api")
+        XCTAssertEqual(data["repo"] as? String, "api")
+        XCTAssertNil(data["path"], "the repo's name, never its path")
         XCTAssertEqual(data["sessionPid"] as? Int, 42)
         XCTAssertFalse(data.values.contains { ($0 as? String)?.contains("rm -rf") == true })
     }

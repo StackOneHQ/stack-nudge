@@ -164,7 +164,9 @@ final class MCPChangeWatcher {
 // (docs/design/local-mcp.md, "Events"). Pure, for tests.
 enum MCPAppEvents {
 
-    static func project(_ path: String?) -> String? {
+    // The repo's folder name, as sessions_list and event:session give it:
+    // never the path.
+    static func repo(_ path: String?) -> String? {
         path.map { ($0 as NSString).lastPathComponent }
     }
 
@@ -178,7 +180,7 @@ enum MCPAppEvents {
             return ("nudge.raised", data)
         }
         var data: [String: Any] = ["agent": event.agent]
-        if let path = event.projectPath { data["path"] = path; data["project"] = project(path) }
+        if let repo = repo(event.projectPath) { data["repo"] = repo }
         if let id = event.claudeSessionID { data["claudeSessionId"] = id }
         switch event.kind {
         case .permission:
@@ -194,8 +196,7 @@ enum MCPAppEvents {
 
     static func stalled(_ session: Session, quietMinutes: Int) -> [String: Any] {
         var data: [String: Any] = ["agent": session.agent, "sessionPid": session.pid, "quietMinutes": quietMinutes]
-        if let path = session.projectPath { data["path"] = path }
-        if let project = session.projectName ?? project(session.projectPath) { data["project"] = project }
+        if let repo = session.projectName ?? repo(session.projectPath) { data["repo"] = repo }
         return data
     }
 

@@ -107,7 +107,7 @@ final class MCPEventHub {
     }
 
     private static let sessionFilters = ["agent": "Only this agent: claude, codex, gemini, agy or pi.",
-                                         "project": "Only sessions in the project with this folder name."]
+                                         "repo": "Only sessions in the repo with this folder name."]
 
     private static func object(_ fields: [String: String], required: [String]) -> [String: Any] {
         ["type": "object", "required": required,
@@ -118,18 +118,18 @@ final class MCPEventHub {
         EventType(name: "session.waiting",
                   description: "An agent session is blocked on the user: a permission prompt or a question.",
                   filters: sessionFilters,
-                  payloadSchema: object(["agent": "string", "project": "string", "path": "string",
+                  payloadSchema: object(["agent": "string", "repo": "string",
                                          "sessionPid": "integer", "claudeSessionId": "string", "since": "string"],
                                         required: ["agent"])),
         EventType(name: "session.stopped",
                   description: "An agent session finished its turn.",
                   filters: sessionFilters,
-                  payloadSchema: object(["agent": "string", "project": "string", "path": "string",
+                  payloadSchema: object(["agent": "string", "repo": "string",
                                          "claudeSessionId": "string"], required: ["agent"])),
         EventType(name: "session.stalled",
                   description: "A session the agent still reports as busy has produced nothing for the stall window.",
                   filters: sessionFilters,
-                  payloadSchema: object(["agent": "string", "project": "string", "path": "string",
+                  payloadSchema: object(["agent": "string", "repo": "string",
                                          "sessionPid": "integer", "quietMinutes": "integer"], required: ["agent"])),
         EventType(name: "nudge.raised",
                   description: "A nudge that isn't an agent's own arrived in Events: GitHub, a script, an extension, "
