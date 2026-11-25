@@ -4,6 +4,29 @@ All notable changes to stack-nudge are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Pre-1.0, breaking changes bump the **minor** version.
 
+## [2.11.0](https://github.com/StackOneHQ/stack-nudge/compare/v2.10.0...v2.11.0) (2026-11-25)
+
+
+### Features
+
+* **extensions:** deliver event:session to trusted services ([#284](https://github.com/StackOneHQ/stack-nudge/issues/284)) ([0e464b8](https://github.com/StackOneHQ/stack-nudge/commit/0e464b8a10f69c90ded45d509724fecf2f46cec7))
+* **extensions:** send key presses on a service's tab to it ([#282](https://github.com/StackOneHQ/stack-nudge/issues/282)) ([cb208a1](https://github.com/StackOneHQ/stack-nudge/commit/cb208a1922f8dec78c61f740465552dd2128d17d))
+* **extensions:** show service feed events, with an action and retract ([#283](https://github.com/StackOneHQ/stack-nudge/issues/283)) ([428bb74](https://github.com/StackOneHQ/stack-nudge/commit/428bb744eaca2cd3be72411ca6d6248ef92bd356))
+* **mcp:** a local MCP server for reading settings and sessions ([#286](https://github.com/StackOneHQ/stack-nudge/issues/286)) ([f6afd67](https://github.com/StackOneHQ/stack-nudge/commit/f6afd67af8a3d5db3141204542cc4336b6edc028))
+* **mcp:** extensions offer tools and events through the MCP server ([#289](https://github.com/StackOneHQ/stack-nudge/issues/289)) ([f3c76d3](https://github.com/StackOneHQ/stack-nudge/commit/f3c76d34527dba3f17a817bd59d01811c78b2d43))
+* **mcp:** settings_set, notify and mute, with a write switch and audit lines ([#287](https://github.com/StackOneHQ/stack-nudge/issues/287)) ([7218b7d](https://github.com/StackOneHQ/stack-nudge/commit/7218b7d0840186f6316ae8b7c08099e17b009662))
+* **mcp:** stack-nudge's events over MCP Events, push and poll ([#288](https://github.com/StackOneHQ/stack-nudge/issues/288)) ([fffed69](https://github.com/StackOneHQ/stack-nudge/commit/fffed694bf496b7d4800aca2c17d1373f37d2879))
+* **settings:** an MCP category, with setup for each client, and the version in the footer ([#291](https://github.com/StackOneHQ/stack-nudge/issues/291)) ([0e15dac](https://github.com/StackOneHQ/stack-nudge/commit/0e15dac45ee36fb0e0beabe1b30c1ea0fe9afc05))
+* **update:** a nightly channel, built from main at 02:00 UTC, which Settings can switch to ([61c8614](https://github.com/StackOneHQ/stack-nudge/commit/61c861410bfc769cd2e987f5d52093ede5455ccf))
+
+
+### Bug Fixes
+
+* **ci:** don't fail the nightly publish when there's no older build to drop ([#281](https://github.com/StackOneHQ/stack-nudge/issues/281)) ([6fe883f](https://github.com/StackOneHQ/stack-nudge/commit/6fe883fbe8539ba53fc75e7a0c0a345e5426a41b))
+* **extensions:** hold a restarted service's keys until it sends a document ([#285](https://github.com/StackOneHQ/stack-nudge/issues/285)) ([87b5a28](https://github.com/StackOneHQ/stack-nudge/commit/87b5a2838457e4cd5fd169752893caa25c9fec23))
+* **extensions:** offer updates to installs that predate source records ([#279](https://github.com/StackOneHQ/stack-nudge/issues/279)) ([0984a75](https://github.com/StackOneHQ/stack-nudge/commit/0984a7544c3aebb5f7ec86f7c422a4d3c43b227d))
+* **mcp:** speak a client's nudge, and name Claude Desktop ([#290](https://github.com/StackOneHQ/stack-nudge/issues/290)) ([fb7d426](https://github.com/StackOneHQ/stack-nudge/commit/fb7d42693f6c29a82b8c40624086c5ca91093519))
+
 ## [2.10.0](https://github.com/StackOneHQ/stack-nudge/compare/v2.9.0...v2.10.0) (2026-11-24)
 
 
