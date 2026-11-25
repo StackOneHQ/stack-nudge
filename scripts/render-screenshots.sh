@@ -5,7 +5,7 @@
 # installing anything.
 # Dev-only: see panel/ScreenshotRenderer.swift.
 #
-#   scripts/render-screenshots.sh [outdir] [readme|extensions|integrations]   # default: build/screenshots, every set
+#   scripts/render-screenshots.sh [outdir] [readme|extensions|integrations|mcp]   # default: build/screenshots, every set
 #
 # Builds the app, then runs its binary with --render-screenshots. Nothing is
 # read from or written to ~/.stack-nudge. The README's pictures are copied into

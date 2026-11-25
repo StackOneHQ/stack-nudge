@@ -343,5 +343,6 @@ final class EventsListTests: XCTestCase {
         XCTAssertEqual(FeedTagFilter.label("ci"), "CI")
         XCTAssertEqual(FeedTagFilter.label("pr-closed"), "PR closed")
         XCTAssertEqual(FeedTagFilter.label("review-request"), "Review request")
+        XCTAssertEqual(FeedTagFilter.label("mcp"), "MCP")
     }
 }

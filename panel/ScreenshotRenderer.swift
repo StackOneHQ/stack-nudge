@@ -2,11 +2,11 @@ import AppKit
 import SwiftUI
 
 // Dev-only: renders the panel from fixture state into PNGs: the README's
-// pictures (`readme`), the Extensions pages (`extensions`) and the
-// Integrations pages (`integrations`), for reviewers
-// to see each screen without installing anything.
+// pictures (`readme`), the Extensions pages (`extensions`), the Integrations
+// pages (`integrations`) and the MCP server's rows (`mcp`), for reviewers to
+// see each screen without installing anything.
 //
-//     StackNudge.app/Contents/MacOS/stack-nudge --render-screenshots <dir> [readme|extensions|integrations]
+//     StackNudge.app/Contents/MacOS/stack-nudge --render-screenshots <dir> [readme|extensions|integrations|mcp]
 //
 // The real SwiftUI views, at the panel's default size, in dark appearance, in
 // an offscreen window captured with cacheDisplay, which needs no Screen
@@ -29,7 +29,7 @@ enum ScreenshotRenderer {
         // typo, not an empty set.
         let set = i + 2 < args.count ? args[i + 2] : nil
         if let set, !scenarios.contains(where: { $0.set == set }) {
-            FileHandle.standardError.write(Data("render-screenshots: unknown set \(set); use readme, extensions or integrations\n".utf8))
+            FileHandle.standardError.write(Data("render-screenshots: unknown set \(set); use readme, extensions, integrations or mcp\n".utf8))
             exit(2)
         }
         NSApplication.shared.setActivationPolicy(.prohibited)
@@ -64,7 +64,7 @@ enum ScreenshotRenderer {
         let make: () -> (AnyView, () -> Void)
     }
 
-    static let scenarios: [Scenario] = readmeScenarios + integrationScenarios + [
+    static let scenarios: [Scenario] = readmeScenarios + integrationScenarios + mcpScenarios + [
         Scenario(name: "extensions-none") {
             let nav = fixtureNav(installed: [])
             return (settings(nav), { enterExtensions(nav) })
@@ -287,6 +287,29 @@ enum ScreenshotRenderer {
     private static func browser(_ catalog: ExtensionCatalog, _ host: ExtensionHost) -> AnyView {
         AnyView(ExtensionsView(catalog: catalog, host: host, onConfigure: { _ in }, onBack: {}))
     }
+
+    // MARK: - MCP
+
+    // Settings → Actions with the MCP rows, tall enough to show every row, and
+    // an MCP client's nudge selected in Events.
+    private static let mcpScenarios: [Scenario] = [
+        Scenario(name: "mcp-settings-actions", set: "mcp", height: 420) {
+            let f = PanelFixture(mode: .settings)
+            return (f.view, {
+                f.nav.settingsCategory = .actions
+                f.nav.settingsDetailFocused = true
+                f.nav.selectedSettingIndex = f.nav.settingsAttentionRows.count
+                    + (f.nav.rows(in: .actions).firstIndex(of: .mcpSetup) ?? 0)
+            })
+        },
+        Scenario(name: "mcp-events", set: "mcp", height: panelHeight) {
+            let f = PanelFixture(mode: .events)
+            let request = MCPNudge.Request(title: "Migration finished", message: "All 14 tables moved, no errors.",
+                                           kind: .done, url: nil, tag: nil)
+            f.store.append(MCPNudge.event(request, caller: MCPCaller(clientName: "claude-code"), session: nil))
+            return (f.view, { f.store.selectedID = f.store.events.first?.id })
+        },
+    ]
 
     // MARK: - README
 
