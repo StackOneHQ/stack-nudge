@@ -192,8 +192,8 @@ final class MCPSession {
              "annotations": ["readOnlyHint": true]],
             ["name": "sessions_list",
              "title": "List agent sessions",
-             "description": "The coding-agent sessions stack-nudge can see: agent, project, whether it's busy, "
-                 + "and whether it's waiting on the user for a permission prompt.",
+             "description": "The coding-agent sessions stack-nudge can see: agent, repo, and state: busy, idle, "
+                 + "waiting on the user for a permission prompt, or active when the agent doesn't say.",
              "inputSchema": ["type": "object", "properties": [:] as [String: Any], "additionalProperties": false],
              "annotations": ["readOnlyHint": true]],
         ]

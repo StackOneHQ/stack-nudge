@@ -232,8 +232,8 @@ you), `active` (running, but the agent reports no live state) or `ended`.
 name someone chose) and `claude_session` are left out when unknown. No paths,
 tab names or prompt text: `pid` and `claude_session` are there so a caller seen
 elsewhere, such as an MCP bridge, can be matched to its session. The shape is
-`SessionSnapshot`, which the MCP server is to read too, so the two can't
-disagree about what waiting means. It's worked out again whenever Events or the
+`SessionSnapshot`, which the MCP server's `sessions_list` reads too, so the
+two can't disagree about what waiting means. It's worked out again whenever Events or the
 session poll changes, so `waiting` can still show for up to one poll (10 s while
 the panel is hidden) after a hook has given up on its prompt.
 

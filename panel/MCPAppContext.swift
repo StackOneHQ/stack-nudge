@@ -27,8 +27,7 @@ final class MCPAppContext: MCPContext {
     func sessions() -> [[String: Any]] {
         onMain {
             guard let sessionStore else { return [] }
-            return MCPSessions.snapshot(sessionStore.sessions, events: store?.events ?? [],
-                                        allowTabTitle: nav?.tabTitleNames ?? false)
+            return MCPSessions.list(sessionStore.sessions, events: store?.events ?? []).map(MCPSessions.json)
         }
     }
 
@@ -37,37 +36,23 @@ final class MCPAppContext: MCPContext {
     }
 }
 
-// The sessions as a client sees them. Pure, for tests.
+// The sessions as a client sees them: the shape `event:session` sends, so the
+// two agree on what waiting means, without the ones that have ended. Pure, for
+// tests.
 enum MCPSessions {
 
-    static func snapshot(_ sessions: [Session], events: [NudgeEvent], allowTabTitle: Bool) -> [[String: Any]] {
-        let iso = ISO8601DateFormatter()
-        return sessions.filter { $0.status == .active }.map { session in
-            var entry: [String: Any] = [
-                "pid": session.pid,
-                "agent": session.agent,
-                "name": SessionLabel.displayName(for: session, fallback: session.agent, allowTabTitle: allowTabTitle),
-                "busy": session.liveStatus == "busy",
-                "waitingOnUser": isWaiting(session, events: events),
-            ]
-            if let project = session.projectName { entry["project"] = project }
-            if let path = session.projectPath { entry["path"] = path }
-            if let terminal = session.terminalApp { entry["terminal"] = terminal }
-            if let id = session.claudeSessionID { entry["claudeSessionId"] = id }
-            if let at = session.lastActivityAt { entry["lastActivity"] = iso.string(from: at) }
-            return entry
-        }
+    static func list(_ sessions: [Session], events: [NudgeEvent],
+                     isBlocking: (NudgeEvent) -> Bool = { $0.isStillBlocking }) -> [SessionSnapshot] {
+        SessionSnapshot.list(sessions: sessions, events: events, isBlocking: isBlocking).filter { $0.state != .ended }
     }
 
-    // A permission prompt from this session is still in Events: answered and
-    // dead prompts leave the queue, so one that's there is waiting.
-    static func isWaiting(_ session: Session, events: [NudgeEvent]) -> Bool {
-        events.contains { event in
-            guard event.kind == .permission, !event.isFeed else { return false }
-            if let id = session.claudeSessionID, let eventID = event.claudeSessionID { return id == eventID }
-            if let pid = event.agentPID { return pid == session.pid }
-            return false
-        }
+    static func json(_ snapshot: SessionSnapshot) -> [String: Any] {
+        var entry: [String: Any] = ["session": snapshot.handle, "pid": snapshot.pid, "agent": snapshot.agent,
+                                    "state": snapshot.state.rawValue]
+        if let repo = snapshot.repo { entry["repo"] = repo }
+        if let name = snapshot.name { entry["name"] = name }
+        if let id = snapshot.claudeSessionID { entry["claudeSessionId"] = id }
+        return entry
     }
 }
 
@@ -82,7 +67,7 @@ final class MCPChangeWatcher {
     private weak var store: EventStore?
     private weak var sessionStore: SessionStore?
     private var lastSettings: [String: SettingValue] = [:]
-    private var lastSessions = ""
+    private var lastSessions: [SessionSnapshot] = []
     private var cancellables = Set<AnyCancellable>()
 
     init(server: MCPServer, nav: PanelNav, store: EventStore, sessions: SessionStore) {
@@ -91,7 +76,7 @@ final class MCPChangeWatcher {
         self.store = store
         self.sessionStore = sessions
         lastSettings = Self.values(SettingsRegistry.snapshot(nav))
-        lastSessions = sessionsSignature()
+        lastSessions = currentSessions()
         Publishers.Merge3(nav.objectWillChange.map { _ in () },
                           store.objectWillChange.map { _ in () },
                           sessions.objectWillChange.map { _ in () })
@@ -106,7 +91,7 @@ final class MCPChangeWatcher {
         let changed = snapshot.filter { lastSettings[$0.key] != $0.value }
         lastSettings = Self.values(snapshot)
         var uris = MCPSession.settingsURIs(changed: changed)
-        let sessions = sessionsSignature()
+        let sessions = currentSessions()
         if sessions != lastSessions {
             lastSessions = sessions
             uris.insert(MCPSession.sessionsURI)
@@ -118,15 +103,8 @@ final class MCPChangeWatcher {
         Dictionary(snapshot.map { ($0.key, $0.value) }, uniquingKeysWith: { first, _ in first })
     }
 
-    private func sessionsSignature() -> String {
-        guard let sessionStore else { return "" }
-        let entries = MCPSessions.snapshot(sessionStore.sessions, events: store?.events ?? [],
-                                           allowTabTitle: nav?.tabTitleNames ?? false)
-            // lastActivity moves on every tick of a busy session; a client
-            // subscribing to the list wants to hear about sessions coming,
-            // going, and starting or stopping waiting.
-            .map { $0.filter { $0.key != "lastActivity" } }
-        guard let data = try? JSONSerialization.data(withJSONObject: entries, options: [.sortedKeys]) else { return "" }
-        return String(decoding: data, as: UTF8.self)
+    private func currentSessions() -> [SessionSnapshot] {
+        guard let sessionStore else { return [] }
+        return MCPSessions.list(sessionStore.sessions, events: store?.events ?? [])
     }
 }

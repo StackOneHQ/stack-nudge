@@ -294,19 +294,27 @@ final class SettingsRegistryTests: XCTestCase {
 
 final class MCPSessionsTests: XCTestCase {
 
-    func testASessionIsWaitingWhileItsPromptIsInEvents() {
-        var session = Session(id: 9, pid: 9, agent: "claude", projectPath: "/r", projectName: "r",
-                              terminalPID: nil, terminalApp: nil, elapsed: nil, customName: nil, status: .active)
-        session.claudeSessionID = "s-9"
+    private func session(_ pid: Int, claude: String, status: SessionStatus = .active) -> Session {
+        var session = Session(id: pid, pid: pid, agent: "claude", projectPath: "/r", projectName: "r",
+                              terminalPID: nil, terminalApp: nil, elapsed: nil, customName: nil, status: status)
+        session.claudeSessionID = claude
+        return session
+    }
+
+    func testASessionIsWaitingWhileItsPromptIsStillBlocking() {
         let prompt = NudgeEvent(agent: "claude", kind: .permission, title: "Claude Code", message: "Bash(ls)",
                                 claudeSessionID: "s-9")
-        let other = NudgeEvent(agent: "claude", kind: .permission, title: "Claude Code", message: "Bash(ls)",
-                               claudeSessionID: "s-1")
-        XCTAssertTrue(MCPSessions.isWaiting(session, events: [prompt]))
-        XCTAssertFalse(MCPSessions.isWaiting(session, events: [other]))
-        let entry = MCPSessions.snapshot([session], events: [prompt], allowTabTitle: false).first
-        XCTAssertEqual(entry?["waitingOnUser"] as? Bool, true)
-        XCTAssertEqual(entry?["claudeSessionId"] as? String, "s-9")
+        let entries = MCPSessions.list([session(9, claude: "s-9"), session(1, claude: "s-1")], events: [prompt],
+                                       isBlocking: { _ in true }).map(MCPSessions.json)
+        XCTAssertEqual(entries.map { $0["state"] as? String }, ["waiting", "active"])
+        XCTAssertEqual(entries.first?["claudeSessionId"] as? String, "s-9")
+        XCTAssertEqual(entries.first?["repo"] as? String, "r")
+        XCTAssertNil(entries.first?["path"], "no paths, as event:session")
+    }
+
+    func testAnEndedSessionIsLeftOut() {
+        let entries = MCPSessions.list([session(9, claude: "s-9", status: .finished(at: Date()))], events: [])
+        XCTAssertTrue(entries.isEmpty)
     }
 }
 
