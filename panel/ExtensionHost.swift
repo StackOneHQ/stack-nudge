@@ -150,6 +150,13 @@ final class ExtensionHost: ObservableObject {
     // started since its last document still shows the dead process's, which
     // its keys must not be resolved against.
     private var freshDocument: Set<String> = []
+    // MCP tool calls handed to an extension and not yet answered, by call id.
+    private var mcpCalls: [Int: (id: String, complete: ([String: Any]) -> Void)] = [:]
+    private var nextMCPCall = 0
+    // Told when an extension's MCP tools or event types come or go, and when
+    // one emits an event (the app passes both to the MCP server).
+    var onMCPChanged: (() -> Void)?
+    var onMCPEvent: ((String, [String: Any], String?) -> Void)?
     private var extensionLog = ExtensionLog()
     private let writeLog: (String) -> Void
     private let now: () -> TimeInterval
@@ -639,6 +646,10 @@ final class ExtensionHost: ObservableObject {
     private func stopService(_ id: String) {
         guard let service = running.removeValue(forKey: id) else { return }
         onFeedActionsLapsed(id)
+        if !service.manifest.mcp.isEmpty {
+            failMCPCalls(for: id, "the extension stopped")
+            onMCPChanged?()
+        }
         // Released now rather than when the process is finally gone: the
         // extension is no longer one the app listens to, so whatever it last
         // said must not keep acting.
@@ -710,6 +721,16 @@ final class ExtensionHost: ObservableObject {
             onFeed(id, manifest.name, post)
         case .retract(let key):
             onRetract(id, key)
+        case .mcpResult(let callID, let result, let isError):
+            completeMCPCall(callID, from: id, result: result, isError: isError)
+        case .mcpEvent(let name, let data, let eventID):
+            // Only a type it declared: the server lists those, and a client
+            // subscribed to the list's contract.
+            guard running[id]?.manifest.mcp.events.contains(where: { $0.name == name }) == true else {
+                return log(id, "sent mcp.event \(name), which it didn't declare")
+            }
+            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            onMCPEvent?(ExtensionMCP.toolName(id, name), object, eventID)
         case .degraded(let why):
             log(id, "degraded \u{2014} \(why)")
         case .problem(let why):
@@ -718,6 +739,11 @@ final class ExtensionHost: ObservableObject {
     }
 
     private func serviceStateChanged(_ id: String, _ state: ServiceSupervisor.State) {
+        // Its tools and events are offered only while it runs.
+        if running[id]?.manifest.mcp.isEmpty == false {
+            if state != .running { failMCPCalls(for: id, "the extension stopped") }
+            onMCPChanged?()
+        }
         var pane = self.pane(id)
         switch state {
         case .starting:
@@ -758,9 +784,7 @@ final class ExtensionHost: ObservableObject {
         let changes = SessionSnapshot.changes(from: sessionSnapshots, to: snapshots)
         sessionSnapshots = snapshots
         guard !changes.isEmpty else { return }
-        for service in running.values {
-            for change in changes { service.supervisor.send(event: "session", fields: change.fields) }
-        }
+        for change in changes { broadcast(event: "session", fields: change.fields) }
     }
 
     // Whether ⏎ on one of this extension's feed events can reach it now. When
@@ -775,6 +799,73 @@ final class ExtensionHost: ObservableObject {
         guard canPerformFeedAction(for: id), let service = running[id] else { return false }
         service.supervisor.perform(feedAction: action.id, key: key)
         return true
+    }
+
+    // MARK: - MCP
+
+    // The extensions offering MCP tools and events right now: running, and
+    // granted mcp. In id order, so the server's tool list is stable.
+    var mcpContributions: [(id: String, name: String, mcp: ExtensionMCP)] {
+        running.values
+            .filter { $0.granted.contains(.mcp) && !$0.manifest.mcp.isEmpty && services[$0.manifest.id] == .running }
+            .map { ($0.manifest.id, $0.manifest.name, $0.manifest.mcp) }
+            .sorted { $0.0 < $1.0 }
+    }
+
+    static let mcpCallTimeout: TimeInterval = 30
+
+    // Routes an MCP client's call to `<id>.<tool>` to that extension. Main
+    // thread. Completes with the tool result, or nil when no running extension
+    // offers that tool.
+    func callMCPTool(_ name: String, arguments: [String: Any], caller: [String: ServiceProtocol.Value],
+                     timeout: TimeInterval = ExtensionHost.mcpCallTimeout,
+                     complete: @escaping ([String: Any]?) -> Void) {
+        let parts = name.split(separator: ".", maxSplits: 1).map(String.init)
+        guard parts.count == 2,
+              let contribution = mcpContributions.first(where: { $0.id == parts[0] }),
+              contribution.mcp.tools.contains(where: { $0.name == parts[1] }),
+              let service = running[parts[0]],
+              let data = try? JSONSerialization.data(withJSONObject: arguments)
+        else { return complete(nil) }
+        nextMCPCall += 1
+        let callID = nextMCPCall
+        mcpCalls[callID] = (parts[0], { complete($0) })
+        service.supervisor.callMCP(id: callID, tool: parts[1], arguments: data, caller: caller) { [weak self] accepted in
+            guard !accepted else { return }
+            self?.toMain { self?.finishMCPCall(callID, MCPProtocol.toolError("\(contribution.name) isn't running.")) }
+        }
+        toMain { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
+                self?.finishMCPCall(callID, MCPProtocol.toolError("\(contribution.name) didn't answer in time."))
+            }
+        }
+    }
+
+    // The extension's answer, as a tool result. Its text and data are its
+    // own: the client is told which extension they came from by the tool's
+    // name and description.
+    private func completeMCPCall(_ callID: Int, from id: String, result: Data, isError: Bool) {
+        guard mcpCalls[callID]?.id == id else {
+            return log(id, "answered an mcp.call it wasn't asked (\(callID))")
+        }
+        let value = (try? JSONSerialization.jsonObject(with: result, options: .fragmentsAllowed)) ?? ""
+        finishMCPCall(callID, MCPProtocol.toolResult(value, isError: isError))
+    }
+
+    private func finishMCPCall(_ callID: Int, _ result: [String: Any]) {
+        guard let call = mcpCalls.removeValue(forKey: callID) else { return }
+        call.complete(result)
+    }
+
+    private func failMCPCalls(for id: String, _ why: String) {
+        for (callID, call) in mcpCalls where call.id == id {
+            finishMCPCall(callID, MCPProtocol.toolError("The call failed: \(why)."))
+        }
+    }
+
+    // An app event to every running service granted it.
+    func broadcast(event name: String, fields: [String: ServiceProtocol.Value]) {
+        running.values.forEach { $0.supervisor.send(event: name, fields: fields) }
     }
 
     // What a service was given, for its page's "Allowed" line. Empty for a

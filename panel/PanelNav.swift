@@ -3034,6 +3034,8 @@ extension ExtensionCapability {
         case .eventSession:   return "See agent sessions"
         case .eventNudge:     return "Read nudges, including prompt text"
         case .feed:           return "Post to the event feed"
+        case .mcp:            return "Offer tools and events to AI agents"
+        case .eventSettings:  return "Know when a setting changes"
         }
     }
 
@@ -3047,6 +3049,8 @@ extension ExtensionCapability {
         case .eventSession:   return "seeing agent sessions"
         case .eventNudge:     return "reading nudges, including prompt text"
         case .feed:           return "posting to the event feed"
+        case .mcp:            return "offering tools and events to AI agents"
+        case .eventSettings:  return "knowing when a setting changes"
         }
     }
 }

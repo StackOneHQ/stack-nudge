@@ -14,6 +14,8 @@ final class MCPAppContext: MCPContext {
     private let resume: () -> Void
     // Set once the server exists: writes credit their client through it.
     weak var server: MCPServer?
+    // The extension host, for the tools running extensions offer.
+    weak var extensions: ExtensionHost?
 
     init(nav: PanelNav, store: EventStore, sessions: SessionStore,
          muteFor: @escaping (Int, Bool) -> Void, resume: @escaping () -> Void) {
@@ -74,6 +76,37 @@ final class MCPAppContext: MCPContext {
         }
     }
 
+    func extensionTools() -> [[String: Any]] {
+        onMain {
+            (extensions?.mcpContributions ?? []).flatMap { $0.mcp.toolsJSON(owner: $0.id, name: $0.name) }
+        }
+    }
+
+    // Answers on main, whenever the extension does: the host times a call out
+    // itself, so `complete` always runs.
+    func callExtensionTool(_ name: String, arguments: [String: Any], caller: MCPCaller,
+                           complete: @escaping ([String: Any]?) -> Void) {
+        guard name.contains(".") else { return complete(nil) }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let host = self.extensions else { return complete(nil) }
+            let fields = MCPAppContext.callerFields(caller, live: self.sessionStore?.sessions ?? [])
+            host.callMCPTool(name, arguments: arguments, caller: fields, complete: complete)
+        }
+    }
+
+    // The caller as an extension hears it in mcp.call: as the bridge saw it,
+    // and only as far as stack-nudge can vouch for it. The session id and pid
+    // are passed only when they name a session it sees running, so an
+    // extension never acts on a session it can't find.
+    static func callerFields(_ caller: MCPCaller, live sessions: [Session]) -> [String: ServiceProtocol.Value] {
+        var fields: [String: ServiceProtocol.Value] = ["client": .string(caller.displayName)]
+        if let session = MCPNudge.session(for: caller, in: sessions) {
+            fields["pid"] = .int(session.pid)
+            if let id = session.claudeSessionID { fields["sessionId"] = .string(id) }
+        }
+        return fields
+    }
+
     private func onMain<T>(_ work: () -> T) -> T {
         Thread.isMainThread ? work() : DispatchQueue.main.sync(execute: work)
     }
@@ -113,6 +146,9 @@ final class MCPChangeWatcher {
     private var lastSessions: [SessionSnapshot] = []
     private var cancellables = Set<AnyCancellable>()
 
+    // A setting changed: also told to extensions granted event:settings.
+    var onSettingChanged: ((_ key: String, _ value: String, _ by: String) -> Void)?
+
     init(server: MCPServer, nav: PanelNav, store: EventStore, sessions: SessionStore) {
         self.server = server
         self.nav = nav
@@ -138,6 +174,7 @@ final class MCPChangeWatcher {
                                        "by": server.attribution.take(setting.key) ?? "stack-nudge"]
             if let previous = lastSettings[setting.key] { data["previous"] = SettingsRegistry.describe(previous) }
             server.emit("settings.changed", data: data)
+            onSettingChanged?(setting.key, SettingsRegistry.describe(setting.value), data["by"] as? String ?? "stack-nudge")
         }
         lastSettings = Self.values(snapshot)
         var uris = MCPSession.settingsURIs(changed: changed)

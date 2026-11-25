@@ -101,6 +101,9 @@ struct ExtensionManifest: Equatable {
     // install starts with a crash. Asked for in the manifest, so the rest
     // keep the short one that catches a hang quickly.
     var handshakeSeconds: TimeInterval = ExtensionManifest.defaultHandshakeSeconds
+    // Tools and event types offered to MCP clients; empty without an `mcp`
+    // block. Last and defaulted, like the rest.
+    var mcp = ExtensionMCP()
 
     var tabEntry: ExtensionTab { ExtensionTab(id: id, label: tab.label) }
     var hasTab: Bool { surfaces.contains(.tab) }
@@ -222,6 +225,7 @@ struct ExtensionManifest: Equatable {
         case invalidConfigType(key: String, why: String)
         case unknownSurface(String)
         case noSurfaces
+        case invalidMCP(String)
 
         var message: String {
             switch self {
@@ -241,6 +245,8 @@ struct ExtensionManifest: Equatable {
                 return "config key \"\(key)\" \(why)"
             case .unknownSurface(let name):
                 return "unknown surface \"\(name)\""
+            case .invalidMCP(let why):
+                return "mcp: \(why)"
             case .noSurfaces:
                 return "surfaces is empty; it needs \"tab\", \"settings\" or both"
             }
@@ -310,6 +316,14 @@ struct ExtensionManifest: Equatable {
             }
             if !capabilities.contains(capability) { capabilities.append(capability) }
         }
+        // The `mcp` block holds JSON Schemas, which Codable can't carry, so it
+        // is read from the same bytes as plain JSON.
+        let rawMCP = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["mcp"]
+        let mcp: ExtensionMCP
+        switch ExtensionMCP.parse(rawMCP) {
+        case .success(let parsed):  mcp = parsed
+        case .failure(let failure): return .failure(failure)
+        }
 
         return .success(ExtensionManifest(
             id: decoded.id,
@@ -334,7 +348,8 @@ struct ExtensionManifest: Equatable {
             // Clamped rather than refused, like the poll interval: never
             // shorter than the default, never long enough to hide a hang.
             handshakeSeconds: min(max(decoded.handshakeSeconds ?? defaultHandshakeSeconds,
-                                      defaultHandshakeSeconds), maximumHandshakeSeconds)))
+                                      defaultHandshakeSeconds), maximumHandshakeSeconds),
+            mcp: mcp))
     }
 
     // The decoder's own description names the field, which is the one thing a
@@ -589,6 +604,11 @@ enum ExtensionCapability: String, CaseIterable, Equatable {
     case eventSession = "event:session"
     case eventNudge = "event:nudge"
     case feed
+    // Offer tools and event types to MCP clients through stack-nudge's server,
+    // as the manifest's `mcp` block declares (ExtensionMCP).
+    case mcp
+    // Hear when a setting changes, from Settings or an MCP client.
+    case eventSettings = "event:settings"
 
     // The capability that gates an `event` or `signal` message by its name, so
     // the supervisor can check one without a table of its own.

@@ -216,6 +216,7 @@ doesn't send them yet (*not yet delivered*).
 | `panel` | `open` | refresh what's on screen when it matters |
 | `session` | one session's whole state whenever it starts, changes or ends (below) | token counting, insights, the direct exchange's roster |
 | `nudge` | an agent nudge as delivered, without FIFO paths or PIDs | voice, Slack-style relays |
+| `settings` | a setting changed: key, value, and who changed it (an MCP client, or `stack-nudge`) | extensions that follow the user's settings. Delivered |
 
 `session` is sent for each session that's new or changed, and once as `ended`
 when it goes. A service that has just started gets every current session first,

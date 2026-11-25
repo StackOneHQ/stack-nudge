@@ -3,7 +3,7 @@ import SwiftUI
 
 // Dev-only: renders the panel from fixture state into PNGs: the README's
 // pictures (`readme`), the Extensions pages (`extensions`), the Integrations
-// pages (`integrations`) and the MCP server's rows (`mcp`), for reviewers to
+// pages (`integrations`) and the MCP server's screens (`mcp`), for reviewers to
 // see each screen without installing anything.
 //
 //     StackNudge.app/Contents/MacOS/stack-nudge --render-screenshots <dir> [readme|extensions|integrations|mcp]
@@ -237,7 +237,7 @@ enum ScreenshotRenderer {
         let published: [(String, String, String, String?, [String])] = [
             ("away", "Away", "Locks the Mac when your phone leaves", "trusted", []),
             ("derby", "Token Derby", "A horse race where each runner advances on the tokens its owner burns.", nil, ["python3"]),
-            ("pylon", "Pylon", "Customer issues waiting on a response, and a nudge before the SLA runs out.", nil, ["python3"]),
+            ("pylon", "Pylon", "Customer issues waiting on a response, and a nudge before the SLA runs out.", "service", ["python3"]),
             ("system", "System", "CPU, memory and disk usage at a glance.", nil, []),
             ("radar", "Radar", "Watches your open pull requests for review requests.", "trusted", []),
             ("standup", "Standup", "Yesterday's merged work, ready to paste into standup.", nil, []),
@@ -251,7 +251,7 @@ enum ScreenshotRenderer {
             ("pomodoro", "Pomodoro", "A 25-minute timer in the widget.", nil, []),
         ]
         let capabilities = ["away": ["bluetooth", "signal:presence"], "slack-status": ["event:idle"],
-                            "focus": ["event:panel", "feed"]]
+                            "focus": ["event:panel", "feed"], "pylon": ["mcp", "event:settings"]]
         let entries = published.map { id, name, description, tier, requires in
             ExtensionInstaller.IndexEntry(id: id, name: name, version: id == "derby" ? "1.2.0" : "1.1.0",
                                           description: description, asset: "extension-\(id)-1.1.0.tar.gz",
@@ -300,6 +300,15 @@ enum ScreenshotRenderer {
                 f.nav.settingsDetailFocused = true
                 f.nav.selectedSettingIndex = f.nav.settingsAttentionRows.count
                     + (f.nav.rows(in: .actions).firstIndex(of: .mcpSetup) ?? 0)
+            })
+        },
+        // An extension that offers tools and events to MCP clients, as its
+        // install asks.
+        Scenario(name: "mcp-install-confirm", set: "mcp") {
+            let (catalog, host) = fixtureCatalog()
+            return (browser(catalog, host), {
+                catalog.selection = .row("pylon")
+                catalog.requestInstall(catalog.entries.first { $0.id == "pylon" }!)
             })
         },
         Scenario(name: "mcp-events", set: "mcp", height: panelHeight) {

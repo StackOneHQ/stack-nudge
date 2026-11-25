@@ -94,16 +94,18 @@ final class MCPEventHub {
         types.first { $0.name == name }
     }
 
-    // An extension's event types replace whatever it offered before. Returns
-    // whether the list changed, so the server can say so.
+    // Every extension's event types at once, replacing what was there: an
+    // extension that no longer offers any drops out. Returns whether the list
+    // changed, so the server can say so.
     @discardableResult
-    func setExtensionTypes(_ types: [EventType], for owner: String) -> Bool {
+    func replaceExtensionTypes(_ byOwner: [String: [EventType]]) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        let before = extensionTypes.filter { $0.owner == owner }.map(\.name)
-        extensionTypes.removeAll { $0.owner == owner }
-        extensionTypes += types.map { var type = $0; type.owner = owner; return type }
-        return before != types.map(\.name)
+        let before = extensionTypes.map(\.name)
+        extensionTypes = byOwner.keys.sorted().flatMap { owner in
+            (byOwner[owner] ?? []).map { var type = $0; type.owner = owner; return type }
+        }
+        return before != extensionTypes.map(\.name)
     }
 
     private static let sessionFilters = ["agent": "Only this agent: claude, codex, gemini, agy or pi.",

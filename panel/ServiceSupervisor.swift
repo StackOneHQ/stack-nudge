@@ -102,6 +102,8 @@ final class ServiceSupervisor {
         case feed(ServiceProtocol.FeedPost)
         case retract(key: String)
         case choices(key: String, options: [ConfigOption])
+        case mcpResult(id: Int, result: Data, isError: Bool)
+        case mcpEvent(name: String, data: Data, eventID: String?)
         // Something was dropped: too many messages, a line over its limit.
         // Sent once per process, since the point is to say it is happening,
         // not to forward the flood.
@@ -313,6 +315,18 @@ final class ServiceSupervisor {
         }
     }
 
+    // Hands an MCP client's tool call to the extension. False when it can't
+    // take one: not running, or not granted mcp. The answer comes back as an
+    // `mcpResult` event.
+    func callMCP(id: Int, tool: String, arguments: Data, caller: [String: ServiceProtocol.Value],
+                 accepted: @escaping (Bool) -> Void) {
+        perform { [weak self] in
+            guard let self, self.state == .running, self.granted.contains(.mcp) else { return accepted(false) }
+            self.send(.mcpCall(id: id, tool: tool, arguments: arguments, caller: caller))
+            accepted(true)
+        }
+    }
+
     // MARK: - Spawning
 
     private func spawn() {
@@ -492,6 +506,12 @@ final class ServiceSupervisor {
             // Needs no capability: it only fills a picker for one of the
             // extension's own keys, which the host checks it declared.
             onEvent(.choices(key: key, options: options))
+        case .mcpResult(let id, let result, let isError):
+            guard granted.contains(.mcp) else { return onEvent(.problem("mcp wasn't granted")) }
+            onEvent(.mcpResult(id: id, result: result, isError: isError))
+        case .mcpEvent(let name, let data, let eventID):
+            guard granted.contains(.mcp) else { return onEvent(.problem("mcp wasn't granted")) }
+            onEvent(.mcpEvent(name: name, data: data, eventID: eventID))
         case .pong(let id):
             guard outstandingPing?.id == id else { return }
             pongTimer?.cancel()
