@@ -292,9 +292,9 @@ final class ServiceSupervisor {
         }
     }
 
-    // Passes on a key the user pressed on the tab. Dropped unless running: a
-    // press made while it starts or restarts was made against a document from
-    // a process that has gone, so it may not mean the same thing to the next.
+    // Passes on a key the user pressed on the tab. The host offers keys only
+    // once this process has sent a document of its own (ExtensionHost.tabKeys);
+    // this drops one still on its way when the process stopped.
     func perform(action id: String, row: String?) {
         perform { [weak self] in
             guard let self, self.state == .running else { return }

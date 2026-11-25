@@ -132,8 +132,9 @@ user saves the extension's settings, so apply each one as it comes. Events are d
 `document` exactly as a view's is: the selected row's binding first, then the
 document's. It's what a view gets as `run --action approve --row d1`, and `row`
 is left out for a document-level action. Sent only while the extension is
-running; a key pressed while it starts or restarts sends nothing, since the
-document on screen came from the process before. It grants nothing, so it needs
+running and has sent a document of its own: a key pressed while it starts or
+restarts, or after a restart before its first document, sends nothing, since
+the document on screen came from the process before. It grants nothing, so it needs
 no capability. Additive: an extension that predates it skips the type.
 
 **Extension → app (stdout)**

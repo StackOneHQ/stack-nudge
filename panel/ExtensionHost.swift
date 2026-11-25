@@ -146,6 +146,10 @@ final class ExtensionHost: ObservableObject {
     private var stopping: [String: ServiceSupervisor] = [:]
     private var wanted: [String: (manifest: ExtensionManifest, allowed: [ExtensionCapability])] = [:]
     private var shuttingDown = false
+    // Services whose tab shows a document from the process running now. One
+    // started since its last document still shows the dead process's, which
+    // its keys must not be resolved against.
+    private var freshDocument: Set<String> = []
     private var extensionLog = ExtensionLog()
     private let writeLog: (String) -> Void
     private let now: () -> TimeInterval
@@ -569,7 +573,11 @@ final class ExtensionHost: ObservableObject {
     }
 
     func tabKeys(_ id: String) -> TabKeys {
-        Self.tabKeys(mode: manifest(id)?.mode ?? .view, state: services[id])
+        var keys = Self.tabKeys(mode: manifest(id)?.mode ?? .view, state: services[id])
+        // Running again after a restart, but still showing what the process
+        // before it sent: its actions wait for the new process's document.
+        if manifest(id)?.mode == .service, !freshDocument.contains(id) { keys.actions = false }
+        return keys
     }
 
     // A fresh supervisor, so a fresh crash window: the user has asked, and
@@ -679,6 +687,7 @@ final class ExtensionHost: ObservableObject {
             services[id] = state
             serviceStateChanged(id, state)
         case .document(let document):
+            freshDocument.insert(id)
             // Exactly the path a view fetch takes, so the tab can't tell them apart.
             finish(id, .ok(document))
         case .malformedDocument(let why):
@@ -712,6 +721,7 @@ final class ExtensionHost: ObservableObject {
         var pane = self.pane(id)
         switch state {
         case .starting:
+            freshDocument.remove(id)
             if pane.document == nil { pane.status = .loading }
         case .running:
             pane.status = pane.document == nil ? .loading : .idle
