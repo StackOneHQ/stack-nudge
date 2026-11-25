@@ -198,11 +198,12 @@ enum SettingsRegistry {
         // Extensions
         SettingSpec(key: "STACKNUDGE_AWAY_LOCK", label: "Lock screen when away", category: "extensions",
                     kind: .toggle, read: { .bool($0.awayLock) }, readOnlyReason: protectsLock),
+        // MCP
+        SettingSpec(key: "STACKNUDGE_MCP_WRITES", label: "MCP clients can change settings", category: "mcp",
+                    kind: .toggle, read: { .bool($0.mcpWritesEnabled) },
+                    readOnlyReason: "Only you can decide what MCP clients may change. Change it in Settings → MCP."),
         // Actions
         SettingSpec(key: UpdateChannel.configKey, label: "Update channel", category: "actions",
                     kind: .choice(UpdateChannel.allCases.map(\.rawValue)), read: { .string($0.updateChannel.rawValue) }),
-        SettingSpec(key: "STACKNUDGE_MCP_WRITES", label: "MCP clients can change settings", category: "actions",
-                    kind: .toggle, read: { .bool($0.mcpWritesEnabled) },
-                    readOnlyReason: "Only you can decide what MCP clients may change. Change it in Settings → Actions."),
     ]
 }

@@ -1570,6 +1570,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             .removeDuplicates()
             .sink { [weak self] category in
                 if case .extensionPage(let id) = category { self?.extensions.tabAppeared(id) }
+                // Counted on the MCP row, so read as the category opens.
+                if category == .mcp { self?.nav.refreshMCPClients() }
             }
             .store(in: &cancellables)
     }

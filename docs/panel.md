@@ -158,10 +158,13 @@ Reachable from the tab strip, `Cmd+,`, or the last `Cmd`-number. A sidebar of ca
 | **Usage** | Quota tracking, Quota alerts, Alert threshold, Poll frequency, Context alert, Show remaining, and the two pi budgets |
 | **Integrations** | A card each for Slack and GitHub, with where it stands on the right; `→` or `⏎` opens its page. Slack's: paste setup, detected user, test message, on/off, idle threshold, message text, finished turns. GitHub's: PR links, GitHub activity, Hide shipped, Connect GitHub (or Disconnect once signed in). Each page's first line says what it's doing or what's wrong |
 | **Extensions** | What's installed, then **Browse extensions** (see [Extensions](#extensions)) |
+| **MCP** | **Set up for…**, whose page has a card each for Claude Code, Claude Desktop and Codex: `⏎` copies what adds stack-nudge to it, and a tick shows once its config has it. Then MCP clients can change settings. See [the local MCP server](design/local-mcp.md) |
 | **Panel** | Hotkey, Pin panel, Keep open when empty, Launch at login, Name from tab titles |
 | **Events** | History per session, Event history, Clear event history |
-| **Actions** | Edit phrases, Check permissions, Open config file, View release notes, Update channel (Stable or Nightly, see [Nightly builds](setup.md#nightly-builds)), Check for updates, Copy MCP setup for Claude Code and MCP clients can change settings (see [the local MCP server](design/local-mcp.md)), Uninstall, Quit |
+| **Actions** | Edit phrases, Check permissions, Open config file, View release notes, Update channel (Stable or Nightly, see [Nightly builds](setup.md#nightly-builds)), Check for updates, Uninstall, Quit |
 | **About** | The version and hook-script status, and a link to this repo |
+
+The version, nightly build number included, is on the left of the footer on every Settings page.
 
 An extension that asks for a Settings page gets one under Extensions. A pending update, an extension update, a missing permission, or an agent whose hooks aren't wired yet shows as a row above every category. An app or extension update also puts a dot on the Settings tab.
 

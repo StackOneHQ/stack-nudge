@@ -270,6 +270,9 @@ extension EnvironmentValues {
 // and "Hide" otherwise.
 struct PageFooter<Hints: View>: View {
 
+    // A quiet line on the left, such as Settings' version. Hints keep the
+    // right.
+    var leading: String? = nil
     @ViewBuilder var hints: () -> Hints
     @Environment(\.escapeCancels) private var escapeCancels
 
@@ -277,6 +280,14 @@ struct PageFooter<Hints: View>: View {
 
     var body: some View {
         HStack(spacing: 0) {
+            if let leading {
+                Text(leading)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.trailing, 12)
+            }
             ShedToFitLayout {
                 hints()
             }

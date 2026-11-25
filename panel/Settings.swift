@@ -38,7 +38,8 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 0) {
             categorySplit
 
-            PageFooter {
+            // The build, nightly and all, on the left of Settings' footer only.
+            PageFooter(leading: "v\(buildVersion)") {
                 if nav.recordingHotkey || nav.recordingSpeakHotkey {
                     // Esc cancels it too; PageFooter shows that as its last hint.
                     FooterHint(label: "Press a combo with ⌘ / ⇧ / ⌥ / ⌃", keys: [], primary: true)
@@ -623,6 +624,58 @@ struct SettingsView: View {
         .padding(.bottom, 4)
     }
 
+    // The head of the MCP clients page, drawn as an integration page's is.
+    private var mcpSetupPageHeader: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("Set up for").font(.subheadline.weight(.semibold))
+            Text("Ticked once stack-nudge is in that app's config").font(.caption).foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.bottom, 4)
+    }
+
+    // A client on that page, as an integration's card is drawn: what ⏎ copies
+    // underneath, and on the right a tick when it already has stack-nudge.
+    private func mcpClientCard(_ client: MCPClient) -> some View {
+        let row = SettingsRow.mcpClient(client)
+        let selected = nav.settingsDetailFocused && nav.selectedSettingIndex == nav.index(of: row)
+        let added = nav.mcpConfiguredClients.contains(client)
+        return HStack(spacing: 10) {
+            Image(systemName: client.symbol)
+                .font(.system(size: 13))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(client.name).font(.subheadline).lineLimit(1)
+                Text(client.summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            if nav.mcpCopiedClient == client {
+                Text("Copied").font(.caption).foregroundStyle(.secondary)
+            } else if added {
+                Label("Added", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            } else {
+                Text("Copy").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(Color.accentColor.opacity(selected ? 0.22 : 0)))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            nav.selectedSettingIndex = nav.index(of: row)
+            nav.activate()
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
+        .id(nav.index(of: row))
+    }
+
     // Read-only lines under a page's rows: what it was allowed, in plain
     // words, and where else it appears.
     private func extensionPageTrailer(_ id: String) -> some View {
@@ -954,8 +1007,9 @@ struct SettingsView: View {
         case .openConfig:       row(.openConfig, label: "Open config file…", kind: .action, value: "")
         case .releaseNotes:     row(.releaseNotes, label: "View release notes…", kind: .action, value: "")
         case .updateChannel:    row(.updateChannel, label: "Update channel", kind: .cycle, value: nav.updateChannel.label)
-        case .mcpSetup:         row(.mcpSetup, label: "Copy MCP setup for Claude Code", kind: .action,
-                                    value: nav.mcpSetupCopied ? "Copied" : "")
+        case .mcpSetupClients:  row(.mcpSetupClients, label: "Set up for\u{2026}", kind: .action,
+                                    value: nav.mcpConfiguredClients.isEmpty ? "" : "\(nav.mcpConfiguredClients.count) added")
+        case .mcpClient(let client): mcpClientCard(client)
         case .mcpWrites:        row(.mcpWrites, label: "MCP clients can change settings", kind: .toggle,
                                     value: nav.mcpWritesEnabled ? "On" : "Off")
         case .checkUpdates:     row(.checkUpdates, label: "Check for updates…", kind: .action, value: checkForUpdatesStatus)
@@ -1038,11 +1092,6 @@ struct SettingsView: View {
                     }
                 }
             }
-
-            Text("v\(appVersion)")
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(.tertiary)
-                .padding(.horizontal, 8)
         }
         .frame(width: 124)
         .padding(.vertical, 10)
@@ -1077,6 +1126,7 @@ struct SettingsView: View {
                         if case .integrationPage(let integration) = nav.settingsCategory {
                             integrationPageHeader(integration)
                         }
+                        if nav.settingsCategory == .mcpSetupPage { mcpSetupPageHeader }
                         detailRows
                     }
                     .padding(.horizontal, 14)

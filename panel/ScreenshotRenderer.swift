@@ -290,16 +290,26 @@ enum ScreenshotRenderer {
 
     // MARK: - MCP
 
-    // Settings → Actions with the MCP rows, tall enough to show every row, and
-    // an MCP client's nudge selected in Events.
+    // Settings → MCP, the page of clients it can be added to (two of them
+    // ticked), and an MCP client's nudge selected in Events.
     private static let mcpScenarios: [Scenario] = [
-        Scenario(name: "mcp-settings-actions", set: "mcp", height: 420) {
+        Scenario(name: "mcp-settings", set: "mcp", height: panelHeight) {
             let f = PanelFixture(mode: .settings)
+            f.nav.mcpConfiguredClients = [.claudeCode, .codex]
             return (f.view, {
-                f.nav.settingsCategory = .actions
+                f.nav.settingsCategory = .mcp
+                f.nav.settingsDetailFocused = true
+                f.nav.selectFirstCategoryRow()
+            })
+        },
+        Scenario(name: "mcp-setup-page", set: "mcp", height: panelHeight) {
+            let f = PanelFixture(mode: .settings)
+            f.nav.mcpConfiguredClients = [.claudeCode, .codex]
+            return (f.view, {
+                f.nav.settingsCategory = .mcpSetupPage
                 f.nav.settingsDetailFocused = true
                 f.nav.selectedSettingIndex = f.nav.settingsAttentionRows.count
-                    + (f.nav.rows(in: .actions).firstIndex(of: .mcpSetup) ?? 0)
+                    + (f.nav.rows(in: .mcpSetupPage).firstIndex(of: .mcpClient(.claudeDesktop)) ?? 0)
             })
         },
         // An extension that offers tools and events to MCP clients, as its

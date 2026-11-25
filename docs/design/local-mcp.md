@@ -183,10 +183,12 @@ anything else (Settings, the config file) is credited to `stack-nudge`.
 ## Writes
 
 Settings writes are the main use, so v1 has them. One switch governs them,
-Settings → Actions → **MCP clients can change settings** (`STACKNUDGE_MCP_WRITES`),
+Settings → MCP → **MCP clients can change settings** (`STACKNUDGE_MCP_WRITES`),
 on by default. It is a client-side opt-in already: nothing reaches stack-nudge
-until you add the server, and **Copy MCP setup for Claude Code** on the same
-page copies the line that does it, pointing at the installed app.
+until you add the server, and **Set up for…** on the same page lists Claude
+Code, Claude Desktop and Codex, copies what adds it to each, pointing at the
+installed app, and ticks the ones whose config already has it. stack-nudge
+reads those configs and never writes them.
 
 Any process running as you could already change these by editing the config
 file, so writes aren't a new privilege. What's new is an agent doing it in one

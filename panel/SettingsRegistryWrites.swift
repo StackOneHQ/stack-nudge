@@ -20,7 +20,7 @@ extension SettingsRegistry {
             case .readOnly(let reason):
                 return reason
             case .writesOff:
-                return "Changing settings from MCP is off. Turn on Settings → Actions → MCP clients can change settings."
+                return "Changing settings from MCP is off. Turn on Settings → MCP → MCP clients can change settings."
             case .invalidValue(let message):
                 return message
             }
