@@ -112,10 +112,12 @@ enum MCPNudge {
         return nil
     }
 
-    // The audit line a settings change leaves in Events.
+    // The audit line a settings change leaves in Events: one line, since the
+    // title says what changed and the row's MCP chip says how. Every change
+    // leaves one, so anything more is read over and over.
     static func auditEvent(caller: MCPCaller, setting: SettingSnapshot) -> NudgeEvent {
         NudgeEvent.feed(source: .mcp, tag: "settings", severity: .info,
                         title: "\(caller.displayName) set \(setting.label) to \(SettingsRegistry.describe(setting.value))",
-                        message: "Changed over MCP. Settings has the switch for this.")
+                        message: "")
     }
 }

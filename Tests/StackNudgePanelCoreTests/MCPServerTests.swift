@@ -512,6 +512,14 @@ final class MCPNudgeTests: XCTestCase {
         XCTAssertEqual(event.soundName, "Glass")
     }
 
+    func testASettingsChangeLeavesOneLine() {
+        let setting = SettingSnapshot(key: "STACKNUDGE_THEME", label: "Accent color", category: "appearance",
+                                      value: .string("mint"), kindJSON: ["type": "string"], readOnlyReason: nil)
+        let row = MCPNudge.auditEvent(caller: MCPCaller(clientName: "claude-ai"), setting: setting)
+        XCTAssertEqual(row.title, "Claude set Accent color to mint")
+        XCTAssertEqual(row.message, "")
+    }
+
     func testClaudeDesktopIsNamedClaude() {
         XCTAssertEqual(MCPCaller.friendlyName("local-agent-mode-stack-nudge"), "Claude")
         XCTAssertEqual(MCPCaller.friendlyName("my-own-client"), "my-own-client")
