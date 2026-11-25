@@ -1348,6 +1348,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         self?.nav.extensionGlances = glances
     }, signals: SignalRegistry(path: SignalRegistry.defaultPath))
     private var listener: EventListener?
+    // The local MCP server on ~/.stack-nudge/mcp.sock, and what keeps its
+    // clients told about changes (docs/design/local-mcp.md).
+    private var mcpServer: MCPServer?
+    private var mcpChanges: MCPChangeWatcher?
     private var menuBar: MenuBarController?
     private var companion: CompanionController?
     private var githubFeed: GitHubFeedPoller?
@@ -1766,6 +1770,10 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             MainActor.assumeIsolated { self?.companion?.noteArrival(event) }
         }
         nav.loadFromConfig()  // populate panelPinned + other live values up-front
+        // After the config, so the server's first view of the settings is the
+        // user's: started earlier, the load reads to its clients as every
+        // non-default setting changing at once.
+        startMCPServer()
         // Scan agent configs for missing wires (post-update / post-install
         // reconciliation). Surfaces a "Set up X" banner in Settings when
         // any detected agent lacks our notify.sh hook.
@@ -4529,6 +4537,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
 
     func applicationWillTerminate(_ notification: Notification) {
         listener?.stop()
+        mcpServer?.stop()
         quotaTimer?.invalidate()
         quotaTimer = nil
         // Stop any in-flight afplay/stackvox children so Quit silences
@@ -6439,6 +6448,20 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return match
         }
         return NSScreen.main ?? NSScreen.screens.first ?? panel.screen ?? NSScreen()
+    }
+
+    // A failure only costs MCP clients their server: the hook socket and
+    // everything else carry on, so it's logged rather than shown.
+    private func startMCPServer() {
+        let server = MCPServer(socketPath: MCPServer.defaultSocketPath,
+                               context: MCPAppContext(nav: nav, store: store, sessions: sessions))
+        do {
+            try server.start()
+            mcpServer = server
+            mcpChanges = MCPChangeWatcher(server: server, nav: nav, store: store, sessions: sessions)
+        } catch {
+            FileHandle.standardError.write(Data("stack-nudge: MCP server failed to start: \(error)\n".utf8))
+        }
     }
 
     private func startListener() {
