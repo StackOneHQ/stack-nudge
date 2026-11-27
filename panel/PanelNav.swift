@@ -2534,7 +2534,15 @@ final class PanelNav: ObservableObject {
     }
 
     private func applyCycle(forward: Bool) {
+        // List rows step through the same options their click menu offers.
+        if let row = selectedRow, let choices = choices(for: row) {
+            choices.step(forward: forward)
+            return
+        }
         switch selectedRow {
+        case .muteDuration, .remindUnanswered, .stalledSessions, .widgetCorner, .widgetOpacity, .widgetContent, .mascot, .theme, .agentDoneSound, .permissionSound, .voice, .alertThreshold, .pollFrequency, .contextAlert, .slackIdle, .historyPerSession, .updateChannel:
+            // A list row whose options aren't available (voices still loading).
+            break
         case .banner:
             bannerEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_BANNER", value: bannerEnabled ? "true" : "false")
@@ -2550,27 +2558,6 @@ final class PanelNav: ObservableObject {
             // menu-bar badge (muteFor / resumeNotifications). Uses the current
             // default duration, same as the header bell and the M shortcut.
             if isMuted { actions?.resumeNotifications() } else { actions?.muteFor(muteDurationMinutes) }
-        case .muteDuration:
-            let list = Self.muteDurationOptions
-            let idx = list.firstIndex(of: muteDurationMinutes) ?? 1
-            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
-            muteDurationMinutes = list[next]
-            ConfigFile.write(key: "STACKNUDGE_MUTE_DURATION_MIN", value: String(muteDurationMinutes))
-        case .remindUnanswered:
-            let list = AttentionPolicy.reminderMinuteOptions
-            let idx = list.firstIndex(of: remindMinutes) ?? 0
-            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
-            remindMinutes = list[next]
-            ConfigFile.write(key: "STACKNUDGE_REMIND_MIN", value: String(remindMinutes))
-        case .stalledSessions:
-            let list = AttentionPolicy.stalledMinuteOptions
-            let idx = list.firstIndex(of: stalledMinutes) ?? 0
-            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
-            stalledMinutes = list[next]
-            ConfigFile.write(key: "STACKNUDGE_STALLED_MIN", value: String(stalledMinutes))
-            // Clearing the threshold must clear the flags too — nothing else
-            // recomputes them once the tick stops evaluating.
-            if stalledMinutes == 0 { stalledSessionKeys = [] }
         case .pinPanel:
             panelPinned.toggle()
             ConfigFile.write(key: "STACKNUDGE_PANEL_PIN", value: panelPinned ? "true" : "false")
@@ -2606,30 +2593,6 @@ final class PanelNav: ObservableObject {
             compactSnap.toggle()
             ConfigFile.write(key: "STACKNUDGE_COMPACT_SNAP",
                              value: compactSnap ? "true" : "false")
-        case .widgetCorner:
-            let list = CompactCorner.allCases
-            let idx = list.firstIndex(of: compactCorner) ?? 0
-            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
-            compactCorner = list[next]
-            ConfigFile.write(key: "STACKNUDGE_COMPACT_CORNER", value: compactCorner.rawValue)
-        case .widgetOpacity:
-            let list = Self.compactAlphaOptions
-            let idx = list.firstIndex(of: compactAlpha) ?? (list.count - 1)
-            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
-            compactAlpha = list[next]
-            ConfigFile.write(key: "STACKNUDGE_COMPACT_ALPHA", value: String(format: "%.2f", compactAlpha))
-        case .widgetContent:
-            let list = CompactContent.allCases
-            let idx = list.firstIndex(of: compactContent) ?? 0
-            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
-            compactContent = list[next]
-            ConfigFile.write(key: "STACKNUDGE_COMPACT_CONTENT", value: compactContent.rawValue)
-        case .mascot:
-            let list = MascotKind.allCases
-            let idx = list.firstIndex(of: mascot) ?? 0
-            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
-            mascot = list[next]
-            ConfigFile.write(key: "STACKNUDGE_MASCOT", value: mascot.rawValue)
         case .companionBadge:
             companionBadge.toggle()
             ConfigFile.write(key: "STACKNUDGE_COMPANION_BADGE", value: companionBadge ? "true" : "false")
@@ -2642,29 +2605,12 @@ final class PanelNav: ObservableObject {
             let idx = list.firstIndex(of: companionSize) ?? 0
             let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
             setCompanionSize(list[next])
-        case .theme:
-            let list = AccentTheme.allCases
-            let idx = list.firstIndex(of: theme) ?? 0
-            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
-            theme = list[next]
-            ConfigFile.write(key: "STACKNUDGE_THEME", value: theme.rawValue)
         case .soundEnabled:
             soundEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_SOUND", value: soundEnabled ? "true" : "false")
-        case .agentDoneSound:
-            soundStop = step(soundStop, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_STOP", preview: true)
-        case .permissionSound:
-            soundPermission = step(soundPermission, in: Self.macSounds, forward: forward, key: "STACKNUDGE_SOUND_PERMISSION", preview: true)
         case .voiceEnabled:
             voiceEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_VOICE", value: voiceEnabled ? "true" : "false")
-        case .voice:
-            // Only reachable when the model is cached (otherwise the row is
-            // .downloadVoiceModel), so there's no download branch here.
-            guard !voicesLoading, !voicesAvailable.isEmpty else { return }
-            voice = step(voice, in: voicesAvailable, forward: forward, key: "STACKNUDGE_VOICE_NAME", preview: false)
-            let phrase = Self.voicePreviewPhrases.randomElement() ?? "Hello."
-            Speaker.speak(phrase, voice: voice, speed: String(format: "%.2f", voiceSpeed))
         case .voiceSpeed:
             let next = forward ? voiceSpeed + Self.speedStep : voiceSpeed - Self.speedStep
             voiceSpeed = max(Self.speedMin, min(Self.speedMax, (next * 100).rounded() / 100))
@@ -2674,12 +2620,6 @@ final class PanelNav: ObservableObject {
         case .quotaAlerts:
             quotaAlertsEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_QUOTA_ALERTS", value: quotaAlertsEnabled ? "true" : "false")
-        case .alertThreshold:
-            let list = Self.quotaThresholds
-            let idx = list.firstIndex(of: quotaAlertThreshold) ?? 2
-            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
-            quotaAlertThreshold = list[next]
-            ConfigFile.write(key: "STACKNUDGE_QUOTA_THRESHOLD", value: String(quotaAlertThreshold))
         case .piApiBudget:
             setPiBudget(apiDaily: Self.stepBudget(piApiBudgetDaily, forward: forward),
                         localDaily: piLocalBudgetDaily)
@@ -2688,18 +2628,6 @@ final class PanelNav: ObservableObject {
             setPiBudget(apiDaily: piApiBudgetDaily,
                         localDaily: Self.stepBudget(piLocalBudgetDaily, forward: forward))
             ConfigFile.write(key: "STACKNUDGE_PI_LOCAL_BUDGET", value: String(piLocalBudgetDaily))
-        case .pollFrequency:
-            let list = Self.quotaPollMinuteOptions
-            let idx = list.firstIndex(of: quotaPollMinutes) ?? 2
-            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
-            quotaPollMinutes = list[next]
-            ConfigFile.write(key: "STACKNUDGE_USAGE_POLL_MIN", value: String(quotaPollMinutes))
-        case .contextAlert:
-            let list = Self.contextAlertThresholdOptions
-            let idx = list.firstIndex(of: contextAlertThresholdK) ?? 0
-            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
-            contextAlertThresholdK = list[next]
-            ConfigFile.write(key: "STACKNUDGE_CONTEXT_ALERT_THRESHOLD", value: String(contextAlertThresholdK))
         case .showRemaining:
             quotaShowRemaining.toggle()
             ConfigFile.write(key: "STACKNUDGE_QUOTA_SHOW_REMAINING", value: quotaShowRemaining ? "true" : "false")
@@ -2717,12 +2645,6 @@ final class PanelNav: ObservableObject {
         case .slackEnabled:
             slackEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_SLACK", value: slackEnabled ? "true" : "false")
-        case .slackIdle:
-            let list = SlackDelivery.idleMinuteOptions
-            let idx = list.firstIndex(of: slackIdleMinutes) ?? 1
-            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
-            slackIdleMinutes = list[next]
-            ConfigFile.write(key: "STACKNUDGE_SLACK_IDLE_MIN", value: String(slackIdleMinutes))
         case .slackDetail:
             slackIncludeDetail.toggle()
             ConfigFile.write(key: "STACKNUDGE_SLACK_DETAIL",
@@ -2736,14 +2658,6 @@ final class PanelNav: ObservableObject {
             ConfigFile.write(key: "STACKNUDGE_EVENT_HISTORY",
                              value: eventHistoryEnabled ? "true" : "false")
             actions?.applyEventHistorySetting()
-        case .historyPerSession:
-            let list = Self.eventsPerSessionOptions
-            let idx = list.firstIndex(of: eventsPerSession) ?? 1
-            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
-            eventsPerSession = list[next]
-            ConfigFile.write(key: "STACKNUDGE_EVENTS_PER_SESSION", value: String(eventsPerSession))
-        case .updateChannel:
-            setUpdateChannel(updateChannel == .stable ? .nightly : .stable)
         case .mcpWrites:
             mcpWritesEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_MCP_WRITES", value: mcpWritesEnabled ? "true" : "false")
@@ -2933,16 +2847,6 @@ final class PanelNav: ObservableObject {
         persistExtensionValue(key, value)
         extensionConfigValues[key] = value
         onExtensionConfigChanged(id)
-    }
-
-    private func step(_ current: String, in list: [String], forward: Bool, key: String, preview: Bool) -> String {
-        guard !list.isEmpty else { return current }
-        let idx = list.firstIndex(of: current) ?? 0
-        let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
-        let value = list[next]
-        ConfigFile.write(key: key, value: value)
-        if preview { NSSound(named: NSSound.Name(value))?.play() }
-        return value
     }
 
     // MARK: - Hotkey recording

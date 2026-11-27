@@ -1228,15 +1228,29 @@ struct SettingsView: View {
         .id(nav.index(of: id))
         .onTapGesture {
             nav.selectedSettingIndex = nav.index(of: id)
-            // For actions, single-click is enough. For toggles/cycles a click
-            // on the row also acts so mouse users don't have to keyboard. The
-            // mute row acts in place too, so it clicks like an action.
-            // Remove is the exception: ⏎ never removes, but a click on the
-            // row is as deliberate as the old page's Remove button was.
+            // Every row acts on a click, so the mouse needs no keyboard: an
+            // action runs, a toggle flips, and a list row opens its options to
+            // pick from. A dimmed value row is gated off by another setting, so
+            // a click leaves it alone.
+            // Remove is the exception among actions: ⏎ never removes, but a
+            // click on the row is as deliberate as the old page's Remove
+            // button was.
             if case .extensionRemove(let extensionID) = id {
                 nav.onRemoveExtension(extensionID)
-            } else if kind == .action || kind == .toggle || kind == .mute || kind == .destructive {
+                return
+            }
+            switch kind {
+            case .action, .toggle, .mute, .destructive:
                 nav.activate()
+            case .cycle where enabled:
+                if let choices = nav.choices(for: id) {
+                    SettingChoicesMenu.show(choices)
+                } else if id == .hotkey || id == .speakHotkey {
+                    nav.activate()   // records a new combo, as ⏎ does
+                }
+                // A range (voice speed, pi budgets) keeps its arrows.
+            case .cycle:
+                break
             }
         }
     }
