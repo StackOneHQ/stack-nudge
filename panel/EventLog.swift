@@ -34,6 +34,9 @@ struct EventRecord: Codable, Equatable, Identifiable {
     var removed: Bool? = nil
     // The service extension a feed event came from, for source "extension".
     var extensionID: String? = nil
+    // A Stop that ended on a question (NudgeEvent.asksQuestion). Absent rather
+    // than false otherwise, so a done turn's line is unchanged.
+    var question: Bool? = nil
 
     static let markerKind = "state"
 
@@ -61,7 +64,9 @@ struct EventRecord: Codable, Equatable, Identifiable {
         let q = needle.folding(options: [.caseInsensitive, .diacriticInsensitive],
                                locale: nil)
         guard !q.isEmpty else { return true }
-        for field in [message, title, agent, projectName ?? "", source ?? "", tag ?? ""] {
+        // "question" finds the turns that asked you something, whatever they asked.
+        let kindWord = question == true ? "question" : ""
+        for field in [message, title, agent, projectName ?? "", source ?? "", tag ?? "", kindWord] {
             if field.folding(options: [.caseInsensitive, .diacriticInsensitive],
                              locale: nil).contains(q) { return true }
         }

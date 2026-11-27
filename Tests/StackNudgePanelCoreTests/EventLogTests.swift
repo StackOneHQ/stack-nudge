@@ -25,6 +25,16 @@ final class EventLogTests: XCTestCase {
         XCTAssertEqual(EventLog.parse(line), [original])
     }
 
+    func test_aQuestionRoundTripsAndIsFoundByTheWordQuestion() {
+        var asked = record("Want me to raise the PR?")
+        asked.question = true
+        guard let line = EventLog.encode(asked) else { return XCTFail("encode failed") }
+        XCTAssertEqual(EventLog.parse(line), [asked])
+        XCTAssertTrue(asked.matches("question"))
+        XCTAssertFalse(record("Done").matches("question"))
+        XCTAssertFalse(EventLog.encode(record("Done"))?.contains("question") ?? true)
+    }
+
     // One record per line is the format's only invariant — a pretty-printed
     // encoder would silently corrupt every subsequent read.
     func test_encodeProducesASingleLine() {

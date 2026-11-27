@@ -127,6 +127,10 @@ struct NudgeEvent: Identifiable, Equatable {
     // Code hook events; nil for other agents.
     let claudeSessionID: String?
     let transcriptPath: String?
+    // A Stop whose reply ended on a question to you (AgentQuestion), so the
+    // Events filter can tell "waiting on your answer" from "finished". The
+    // question itself is in `message`, in place of "Done".
+    let asksQuestion: Bool
     // Feed fields; all nil or default for agent events.
     let source: EventSource
     // Groups feed events for filters and icons ("review", "ci", "calendar").
@@ -167,6 +171,7 @@ struct NudgeEvent: Identifiable, Equatable {
          bypassMute: Bool = false,
          claudeSessionID: String? = nil,
          transcriptPath: String? = nil,
+         asksQuestion: Bool = false,
          source: EventSource = .agent,
          tag: String? = nil,
          severity: EventSeverity = .info,
@@ -206,6 +211,7 @@ struct NudgeEvent: Identifiable, Equatable {
         self.bypassMute = bypassMute
         self.claudeSessionID = claudeSessionID
         self.transcriptPath = transcriptPath
+        self.asksQuestion = asksQuestion
         self.source = source
         self.tag = tag
         self.severity = severity
@@ -275,6 +281,7 @@ struct NudgeEvent: Identifiable, Equatable {
             bypassMute: bypassMute,
             claudeSessionID: claudeSessionID,
             transcriptPath: transcriptPath,
+            asksQuestion: asksQuestion,
             source: source, tag: tag, severity: severity,
             url: url, repo: repo, pr: pr, key: key,
             isRead: isRead, members: members,
@@ -291,7 +298,7 @@ final class EventStore: ObservableObject {
     @Published var selectedID: NudgeEvent.ID?
     // Per session, never persisted: a filter left on from yesterday would hide
     // today's events with no sign of why.
-    @Published var tagFilter = FeedTagFilter() {
+    @Published var tagFilter = EventTagFilter() {
         didSet {
             if !visibleEvents.contains(where: { $0.id == selectedID }) {
                 selectedID = visibleEvents.first?.id
@@ -439,7 +446,8 @@ final class EventStore: ObservableObject {
                                 repo: event.repo,
                                 pr: event.pr,
                                 key: event.key,
-                                extensionID: event.extensionID))
+                                extensionID: event.extensionID,
+                                question: event.asksQuestion ? true : nil))
         onAppend?(event)
         if ProcessInfo.processInfo.environment["STACKNUDGE_PANEL_DEBUG"] != nil {
             FileHandle.standardError.write(Data(
@@ -538,7 +546,7 @@ final class EventStore: ObservableObject {
     var pendingCount: Int { events.filter { !$0.isFeed || !$0.isRead }.count }
 
     func unreadCount(forTag tag: String) -> Int {
-        events.filter { $0.isUnread && FeedTagFilter.key(for: $0) == tag }.count
+        events.filter { $0.isUnread && EventTagFilter.key(for: $0) == tag }.count
     }
 
     func setRead(id: NudgeEvent.ID, _ read: Bool) {
@@ -624,15 +632,15 @@ final class EventStore: ObservableObject {
 
     // MARK: - Filtering
 
-    // Agent events are never filtered: a hidden permission prompt would leave
-    // an agent blocked with nothing on screen to say so.
+    // Permission prompts are never filtered: a hidden one would leave an agent
+    // blocked with nothing on screen to say so. EventTagFilter gives them no key.
     var visibleEvents: [NudgeEvent] {
-        events.filter { !$0.isFeed || tagFilter.shows(FeedTagFilter.key(for: $0)) }
+        events.filter { event in EventTagFilter.key(for: event).map(tagFilter.shows) ?? true }
     }
 
-    // Feed tags in the list, in the order chips show them.
+    // Filter keys in the list, in the order chips show them.
     var presentTags: [String] {
-        FeedTagFilter.present(in: events)
+        EventTagFilter.present(in: events)
     }
 
     // Replace the event in-place with a new copy that has snoozedUntil set

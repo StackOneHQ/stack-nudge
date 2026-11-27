@@ -24,7 +24,7 @@ Outside a text field, `←` is back a level on sub-pages and detail panes: out o
 
 ## Events
 
-Recent nudges in chronological order. Each shows agent, message, project name, time. What happens to a permission prompt, reminders, feed events and Slack are in [notifications.md](notifications.md).
+Recent nudges in chronological order. Each shows agent, message, project name, time. A finished turn that ended on a question to you shows the question instead of "Done", with a speech-bubble icon. The **Questions** and **Done** chips above the list filter those turns, beside one chip per feed tag (shift-⏎ or option-click a chip to show only that). Permission prompts have no chip and are never hidden. Spotting the question needs the agent's last reply, which Claude Code and Codex send on Stop; other agents' turns always read as done. What happens to a permission prompt, reminders, feed events and Slack are in [notifications.md](notifications.md).
 
 | Key | Action |
 |-----|--------|
@@ -35,7 +35,7 @@ Recent nudges in chronological order. Each shows agent, message, project name, t
 | `M` | Mute all notifications for the configured duration (press again to resume) |
 | `⌫` / `⌦` / `R` | Dismiss the selected nudge locally |
 | `H` | Open the searchable history pane |
-| `F` | Focus the tag chips above the list (feed events only); `F` or `↓` returns to the list |
+| `F` | Focus the filter chips above the list; `F` or `↓` returns to the list |
 | `← →` `⏎` `Space` `⇧⏎` | On the chips: move, toggle the chip (or All/None), show only that tag |
 | `U` | Mark the selected feed event read or unread |
 | `A` | Mark all feed events read |
@@ -47,7 +47,7 @@ When you press `⏎` on a permission event in a VS Code / Cursor terminal pane, 
 
 **Mute for a while.** Press `M` (or use the bell button in the panel header, or the menu-bar **Mute notifications** submenu) to silence *everything* — banner, sound, voice, and the focus jump — for a set duration, **including permission prompts**. Events keep flowing into the panel while muted; only the interruptions are suppressed. A live countdown shows on the header bell and the menu-bar icon (the compact widget just shows a muted-bell glyph), and the mute lifts itself when the timer runs out (or immediately if you press `M` / **Resume** again). The default duration is configurable (`STACKNUDGE_MUTE_DURATION_MIN`, one of 15 / 30 / 60 / 120, default 30) and can be cycled in Settings. Mute is in-memory only — it resets on relaunch.
 
-**History.** The list above is a live triage queue — capped, pruned per session, and gone when you quit. Press `H` for the durable log behind it: every nudge, newest first, with a filter box that matches on message, agent, and repo. `↑↓` and `⌘↑↓` walk the rows; start typing (or press `/`) to filter, `⏎` hands the keyboard back to the rows, and `←` steps back to the queue.
+**History.** The list above is a live triage queue — capped, pruned per session, and gone when you quit. Press `H` for the durable log behind it: every nudge, newest first, with a filter box that matches on message, agent, and repo, and on `question` for the turns that asked you something. `↑↓` and `⌘↑↓` walk the rows; start typing (or press `/`) to filter, `⏎` hands the keyboard back to the rows, and `←` steps back to the queue.
 
 History is deliberately a separate pane rather than more rows in the queue. The queue is an action list — `⏎` approves, `⌫` dismisses — and a replayed record has no FIFO to answer and no process to focus, so mixing the two would make those keys mean different things depending on which row you happened to land on.
 

@@ -1,18 +1,34 @@
 import SwiftUI
 
-// Which feed tags the Events tab shows. Agent events are never filtered, so
-// this only ever narrows the feed rows.
-struct FeedTagFilter: Equatable {
+// Which rows the Events tab shows: a chip per feed tag, and Questions and Done
+// for the turns agents ended. Permission prompts never have a chip, so they are
+// never hidden (see EventStore.visibleEvents).
+struct EventTagFilter: Equatable {
     private(set) var hidden: Set<String> = []
 
-    // Feeds send open-ended tags; an untagged event files under "other".
-    static func key(for event: NudgeEvent) -> String {
+    // Feed tags are whatever the feed sends, so the agent keys carry a prefix
+    // no feed is expected to use.
+    static let questionKey = "agent:question"
+    static let doneKey = "agent:done"
+
+    // The chip a row files under, or nil for a row no chip may hide. Feeds send
+    // open-ended tags; an untagged feed event files under "other".
+    static func key(for event: NudgeEvent) -> String? {
+        guard event.isFeed else {
+            guard event.kind == .stop else { return nil }
+            return event.asksQuestion ? questionKey : doneKey
+        }
         let tag = event.tag?.trimmingCharacters(in: .whitespaces) ?? ""
         return tag.isEmpty ? "other" : tag
     }
 
     // "review-request" reads as "Review request"; acronyms stay in capitals ("CI", "PR closed").
     static func label(_ tag: String) -> String {
+        switch tag {
+        case questionKey: return "Questions"
+        case doneKey:     return "Done"
+        default:          break
+        }
         let words = tag.split(separator: "-").map { word in
             acronyms.contains(word.lowercased()) ? word.uppercased() : String(word)
         }.joined(separator: " ")
@@ -21,9 +37,13 @@ struct FeedTagFilter: Equatable {
 
     private static let acronyms: Set<String> = ["ci", "pr", "ai", "ui", "api", "mcp"]
 
-    // Tags of the feed events in the list, in the order chips show them.
+    // Keys of the rows in the list, in the order chips show them: the agent
+    // chips first, as they are the ones that answer "who is waiting on me".
     static func present(in events: [NudgeEvent]) -> [String] {
-        Array(Set(events.filter(\.isFeed).map(key(for:)))).sorted { label($0) < label($1) }
+        let keys = Set(events.compactMap(key(for:)))
+        let agent = [questionKey, doneKey].filter(keys.contains)
+        let feed = keys.subtracting(agent).sorted { label($0) < label($1) }
+        return agent + feed
     }
 
     func shows(_ tag: String) -> Bool { !hidden.contains(tag) }
@@ -168,7 +188,7 @@ struct EventTimeLabel: View {
     }
 }
 
-// One chip per feed tag present, plus All/None. Option-click shows that tag
+// One chip per filter key present, plus All/None. Option-click shows that tag
 // only. `focused` is the chip the keyboard is on, nil while the list has it.
 struct FeedTagChips: View {
     @ObservedObject var store: EventStore
@@ -203,7 +223,7 @@ struct FeedTagChips: View {
 
     private func tagChip(_ tag: String, present: [String]) -> some View {
         let source = sourceForTag(tag)
-        return chip(.tag(tag), label: FeedTagFilter.label(tag),
+        return chip(.tag(tag), label: EventTagFilter.label(tag),
                     symbol: FeedStyle.symbol(tag: tag, source: source),
                     count: store.unreadCount(forTag: tag),
                     color: FeedStyle.color(tag: tag, source: source),
@@ -212,7 +232,7 @@ struct FeedTagChips: View {
 
     // A tag the style table does not know gets its source's icon and colour.
     private func sourceForTag(_ tag: String) -> EventSource {
-        store.events.first { $0.isFeed && FeedTagFilter.key(for: $0) == tag }?.source ?? .script
+        store.events.first { EventTagFilter.key(for: $0) == tag }?.source ?? .script
     }
 
     // Included: the tag's colour, softly filled. Excluded: outlined in it with
