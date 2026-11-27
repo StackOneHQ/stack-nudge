@@ -244,6 +244,21 @@ final class FeedEventTests: XCTestCase {
         XCTAssertNil(store.selectedID)
     }
 
+    func testCalendarEventsReplaceByKeyAndReachMCPAsNudges() {
+        let store = EventStore()
+        func meeting(_ title: String) -> NudgeEvent {
+            .feed(source: .calendar, tag: "calendar", severity: .action, title: title, message: "10:00 to 10:30",
+                  key: "meeting:1")
+        }
+        let first = meeting("Standup starts in 10 min")
+        store.append(first)
+        store.append(meeting("Standup moved to 11:00"))
+        XCTAssertEqual(store.events.map(\.title), ["Standup moved to 11:00"], "a keyed calendar event replaces, never groups")
+        let occurrence = MCPAppEvents.occurrence(for: first)
+        XCTAssertEqual(occurrence?.name, "nudge.raised")
+        XCTAssertEqual(occurrence?.data["source"] as? String, "calendar")
+    }
+
     // Two meetings at the same time differ only in their title.
     func testTwoFeedEventsWithTheSameBodyButDifferentTitlesBothLand() {
         let store = EventStore()
