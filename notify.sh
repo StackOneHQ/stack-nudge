@@ -698,8 +698,9 @@ post_to_panel() {
   # Cap what the exec carries: env and argv share ARG_MAX (1 MiB on macOS), and a
   # PermissionRequest payload can hold a whole file's contents in tool_input.
   # Overflowing it fails the python3 exec, which would lose the event entirely.
-  # The fields read from it are a few hundred bytes deep in a Stop payload, so a
-  # 32 KiB cap never bites for the events that need them.
+  # A Stop payload also carries the agent's whole last reply, so a reply over
+  # the cap loses the fields read from it, the question check included; the
+  # event itself still arrives.
   local hook_json="$HOOK_JSON"
   (( ${#hook_json} > 32768 )) && hook_json=""
 
@@ -762,6 +763,16 @@ def hook_field(name):
     value = parsed.get(name)
     return value if isinstance(value, str) and value else None
 
+# The end of the agent's last reply (Claude Code and Codex send it on Stop), so
+# the app can tell a turn that ends on a question from one that finished. Only
+# the tail is needed, and it keeps the socket line small. A subagent's reply is
+# addressed to the agent that launched it, never to you.
+def last_message():
+    if env["NUDGE_EVENT"] != "stop" or hook_field("hook_event_name") == "SubagentStop":
+        return None
+    reply = hook_field("last_assistant_message")
+    return reply[-2000:] if reply else None
+
 out = {
     "agent":             env["NUDGE_AGENT"],
     "event":             env["NUDGE_EVENT"],
@@ -789,6 +800,7 @@ optional = {
     "iterm_tab_name": env.get("NUDGE_ITERM_TAB_NAME"),
     "claude_session_id": hook_field("session_id"),
     "transcript_path":   hook_field("transcript_path"),
+    "last_message":      last_message(),
     "voice_message": env.get("NUDGE_VOICE_MESSAGE"),
     "voice_template": env.get("NUDGE_VOICE_TEMPLATE"),
     "sound_name":    env.get("NUDGE_SOUND"),

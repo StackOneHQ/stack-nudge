@@ -57,6 +57,31 @@ final class EventListenerTests: XCTestCase {
         XCTAssertTrue(e.hasActionButton)
     }
 
+    func test_parseEvents_stopEndingOnAQuestionShowsTheQuestion() {
+        let data = payload(#"{"agent":"claude-code","event":"stop","title":"Claude Code","message":"Done","last_message":"Tests pass.\n\nWant me to raise the PR?"}"#)
+        let event = EventListener.parseEvents(data)[0]
+        XCTAssertTrue(event.asksQuestion)
+        XCTAssertEqual(event.message, "Want me to raise the PR?")
+    }
+
+    func test_parseEvents_stopWithoutAQuestionStaysDone() {
+        let finished = payload(#"{"agent":"codex","event":"stop","title":"Codex","message":"Done","last_message":"Raised #12."}"#)
+        let silent = payload(#"{"agent":"gemini","event":"stop","title":"Gemini","message":"Done"}"#)
+        for data in [finished, silent] {
+            let event = EventListener.parseEvents(data)[0]
+            XCTAssertFalse(event.asksQuestion)
+            XCTAssertEqual(event.message, "Done")
+        }
+    }
+
+    // A prompt keeps its own message, and only a Stop is a finished turn.
+    func test_parseEvents_lastMessageIsReadOnlyOnStop() {
+        let data = payload(#"{"agent":"claude-code","event":"permission","title":"Claude Code","message":"rm -rf build","last_message":"Shall I?"}"#)
+        let event = EventListener.parseEvents(data)[0]
+        XCTAssertFalse(event.asksQuestion)
+        XCTAssertEqual(event.message, "rm -rf build")
+    }
+
     func test_parseEvents_missingTimestampDefaultsToNow() {
         let before = Date()
         let data = payload(#"""

@@ -13,6 +13,11 @@ final class EventsListTests: XCTestCase {
               timestamp: at)
     }
 
+    private func stop(asks: Bool) -> NudgeEvent {
+        NudgeEvent(agent: "claude-code", kind: .stop, title: "Claude Code",
+                   message: asks ? "Want me to raise it?" : "Done", asksQuestion: asks)
+    }
+
     private func prompt() -> NudgeEvent {
         NudgeEvent(agent: "claude-code", kind: .permission, title: "Claude Code", message: "Bash(ls)")
     }
@@ -20,7 +25,7 @@ final class EventsListTests: XCTestCase {
     // MARK: Tag filter
 
     func testFilterStartsShowingEverythingAndChipsToggle() {
-        var filter = FeedTagFilter()
+        var filter = EventTagFilter()
         XCTAssertTrue(filter.shows("ci"))
         filter.toggle("ci")
         XCTAssertFalse(filter.shows("ci"))
@@ -29,7 +34,7 @@ final class EventsListTests: XCTestCase {
 
     func testShowOnlyAndAllNone() {
         let present = ["ci", "review", "ready"]
-        var filter = FeedTagFilter()
+        var filter = EventTagFilter()
         filter.showOnly("review", among: present)
         XCTAssertEqual(present.filter(filter.shows), ["review"])
         filter.toggleAll(among: present)
@@ -40,7 +45,7 @@ final class EventsListTests: XCTestCase {
 
     func testApplyTogglesOrShowsOnlyAndAllNoneIgnoresOnly() {
         let present = ["ci", "review", "ready"]
-        var filter = FeedTagFilter()
+        var filter = EventTagFilter()
         filter.apply(.tag("ci"), only: false, among: present)
         XCTAssertEqual(present.filter(filter.shows), ["review", "ready"])
         filter.apply(.tag("ci"), only: false, among: present)
@@ -114,6 +119,49 @@ final class EventsListTests: XCTestCase {
         store.selectNext()
         store.selectNext()
         XCTAssertEqual(store.selectedID, visible.last)
+    }
+
+    func testAgentTurnsFileUnderQuestionsAndDoneButPromptsHaveNoChip() {
+        let asked = stop(asks: true)
+        let finished = stop(asks: false)
+        XCTAssertEqual(EventTagFilter.key(for: asked), EventTagFilter.questionKey)
+        XCTAssertEqual(EventTagFilter.key(for: finished), EventTagFilter.doneKey)
+        XCTAssertNil(EventTagFilter.key(for: prompt()))
+        XCTAssertEqual(EventTagFilter.label(EventTagFilter.questionKey), "Questions")
+        XCTAssertEqual(EventTagFilter.label(EventTagFilter.doneKey), "Done")
+    }
+
+    func testAgentChipsComeBeforeFeedTagsAndOnlyWhenPresent() {
+        let events = [feed("rev", tag: "review", key: "1"), stop(asks: false), feed("ci", key: "2"), stop(asks: true)]
+        XCTAssertEqual(EventTagFilter.present(in: events),
+                       [EventTagFilter.questionKey, EventTagFilter.doneKey, "ci", "review"])
+        XCTAssertEqual(EventTagFilter.present(in: [stop(asks: false), prompt()]), [EventTagFilter.doneKey])
+        XCTAssertEqual(EventTagFilter.present(in: [prompt()]), [])
+    }
+
+    func testOnlyQuestionsKeepsPromptsInView() {
+        let store = EventStore()
+        let asked = stop(asks: true)
+        let finished = stop(asks: false)
+        let waiting = prompt()
+        let ci = feed("ci", key: "1")
+        [finished, ci, waiting, asked].forEach(store.append)
+        store.tagFilter.showOnly(EventTagFilter.questionKey, among: store.presentTags)
+        XCTAssertEqual(Set(store.visibleEvents.map(\.id)), [asked.id, waiting.id])
+    }
+
+    func testFiltersHintNeedsOnlyAChipNotAFeed() {
+        let hints = PanelContentView.eventsFooterHints(
+            pane: .live, filterFocused: false, liveQueueEmpty: false,
+            primaryAction: "Open", dismissLabel: "Dismiss", snoozeEnabled: false,
+            muted: false, feed: FeedFooterState(hasChips: true))
+        XCTAssertEqual(hints.filter { $0.shedOrder.map { $0 < 0 } == true }.map(\.keys), [["F"]])
+    }
+
+    func testQuestionAndDoneRowsShareTheirChipsColours() {
+        XCTAssertEqual(FeedStyle.color(tag: EventTagFilter.questionKey, source: .agent), .blue)
+        XCTAssertEqual(FeedStyle.color(tag: EventTagFilter.doneKey, source: .agent), .green)
+        XCTAssertEqual(FeedStyle.symbol(tag: EventTagFilter.questionKey, source: .agent), "questionmark.bubble.fill")
     }
 
     // MARK: Read state
@@ -322,8 +370,9 @@ final class EventsListTests: XCTestCase {
                 muted: false, feed: feed)
         }
         XCTAssertFalse(hints(FeedFooterState()).contains { $0.keys == ["F"] })
-        XCTAssertEqual(hints(FeedFooterState(feedCount: 2)).first { $0.keys == ["F"] }?.label, "Filters")
-        let withFeed = hints(FeedFooterState(unread: 1, feedCount: 2, selectedIsFeed: true))
+        XCTAssertEqual(hints(FeedFooterState(feedCount: 2, hasChips: true)).first { $0.keys == ["F"] }?.label,
+                       "Filters")
+        let withFeed = hints(FeedFooterState(unread: 1, feedCount: 2, selectedIsFeed: true, hasChips: true))
         XCTAssertEqual(withFeed.filter { $0.shedOrder.map { $0 < 0 } == true }.map(\.keys),
                        [["F"], ["U"], ["A"], ["C"]])
         let confirm = hints(FeedFooterState(feedCount: 2, confirmingClear: true))
@@ -340,9 +389,9 @@ final class EventsListTests: XCTestCase {
     }
 
     func testChipLabelsKeepAcronymsInCapitals() {
-        XCTAssertEqual(FeedTagFilter.label("ci"), "CI")
-        XCTAssertEqual(FeedTagFilter.label("pr-closed"), "PR closed")
-        XCTAssertEqual(FeedTagFilter.label("review-request"), "Review request")
-        XCTAssertEqual(FeedTagFilter.label("mcp"), "MCP")
+        XCTAssertEqual(EventTagFilter.label("ci"), "CI")
+        XCTAssertEqual(EventTagFilter.label("pr-closed"), "PR closed")
+        XCTAssertEqual(EventTagFilter.label("review-request"), "Review request")
+        XCTAssertEqual(EventTagFilter.label("mcp"), "MCP")
     }
 }

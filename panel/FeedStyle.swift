@@ -22,6 +22,8 @@ enum FeedStyle {
         case "deploy":         return "shippingbox.fill"
         case "pipeline":       return "arrow.triangle.branch"
         case "calendar":       return "calendar"
+        case EventTagFilter.questionKey: return "questionmark.bubble.fill"
+        case EventTagFilter.doneKey:     return "checkmark.circle.fill"
         default:               return sourceSymbol(source)
         }
     }
@@ -41,6 +43,8 @@ enum FeedStyle {
         case "calendar":       return .mint
         case "plan":           return .teal
         case "audit":          return .pink
+        case EventTagFilter.questionKey: return .blue
+        case EventTagFilter.doneKey:     return .green
         default:               return sourceColor(source)
         }
     }

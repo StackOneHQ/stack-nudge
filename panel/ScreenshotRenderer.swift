@@ -6,7 +6,7 @@ import SwiftUI
 // pages (`integrations`) and the MCP server's screens (`mcp`), for reviewers to
 // see each screen without installing anything.
 //
-//     StackNudge.app/Contents/MacOS/stack-nudge --render-screenshots <dir> [readme|extensions|integrations|mcp]
+//     StackNudge.app/Contents/MacOS/stack-nudge --render-screenshots <dir> [readme|events|extensions|integrations|mcp]
 //
 // The real SwiftUI views, at the panel's default size, in dark appearance, in
 // an offscreen window captured with cacheDisplay, which needs no Screen
@@ -345,6 +345,15 @@ enum ScreenshotRenderer {
             let f = PanelFixture(mode: .events)
             return (f.view, { f.store.selectedID = f.store.events.first?.id })
         },
+        // Not a README picture: the Events filter narrowed to the turns that
+        // asked something. The prompt stays, as prompts are never filtered.
+        Scenario(name: "events-questions", set: "events", height: panelHeight) {
+            let f = PanelFixture(mode: .events)
+            return (f.view, {
+                f.store.tagFilter.showOnly(EventTagFilter.questionKey, among: f.store.presentTags)
+                f.store.selectFirst()
+            })
+        },
         Scenario(name: "sessions", set: "readme", height: panelHeight) {
             let f = PanelFixture(mode: .sessions)
             return (f.view, {})
@@ -442,8 +451,10 @@ enum ScreenshotRenderer {
                                     source: .github, tag: "review-request", severity: .action,
                                     url: URL(string: "https://github.com/acme/api/pull/318"),
                                     repo: "acme/api", pr: 318))
-            store.append(NudgeEvent(agent: "claude", kind: .stop, title: "Claude Code", message: "Done",
-                                    projectPath: path("docs"), timestamp: now.addingTimeInterval(-3 * 60)))
+            store.append(NudgeEvent(agent: "claude", kind: .stop, title: "Claude Code",
+                                    message: "Want me to open the PR, or wait for CI first?",
+                                    projectPath: path("docs"), timestamp: now.addingTimeInterval(-3 * 60),
+                                    asksQuestion: true))
             store.append(NudgeEvent(agent: "claude", kind: .permission, title: "Claude Code",
                                     message: "npm test -- --coverage", projectPath: path("web-app"),
                                     hasActionButton: true, timestamp: now.addingTimeInterval(-20),

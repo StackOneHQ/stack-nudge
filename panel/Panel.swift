@@ -746,7 +746,8 @@ struct PanelContentView: View {
                                   selectedExpandable: store.selectedEvent?.members.isEmpty == false,
                                   selectedExpanded: store.selectedID.map(store.expandedIDs.contains) == true,
                                   confirmingClear: nav.confirmingClear,
-                                  chipsFocused: chipFocus != nil)
+                                  chipsFocused: chipFocus != nil,
+                                  hasChips: !store.presentTags.isEmpty)
         )
         return PageFooter {
             ForEach(hints.indices, id: \.self) { FooterHintRow(spec: hints[$0]) }
@@ -834,9 +835,12 @@ struct PanelContentView: View {
             hints.append(FooterHintSpec(label: muteLabel, keys: ["M"]))
             hints.append(FooterHintSpec(label: "History", keys: ["H"]))
             // Feed shortcuts only exist while there is a feed to act on, and
-            // they shed before anything the bar already advertised.
-            if feed.feedCount > 0 {
+            // they shed before anything the bar already advertised. Filters
+            // also covers agent turns, so it needs only a chip to focus.
+            if feed.hasChips {
                 hints.append(FooterHintSpec(label: "Filters", keys: ["F"], shedOrder: -4))
+            }
+            if feed.feedCount > 0 {
                 if feed.selectedExpandable {
                     hints.append(FooterHintSpec(label: feed.selectedExpanded ? "Collapse" : "Expand",
                                                 keys: ["Space"], shedOrder: -5))
@@ -890,7 +894,8 @@ private struct HistoryRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: record.source.flatMap(EventSource.init(rawValue:)).map(FeedStyle.sourceSymbol)
-                  ?? (record.kind == "permission" ? "hand.raised.fill" : "checkmark.circle"))
+                  ?? (record.kind == "permission" ? "hand.raised.fill"
+                      : record.question == true ? "questionmark.bubble" : "checkmark.circle"))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .frame(width: 14)
@@ -936,6 +941,7 @@ struct FeedFooterState: Equatable {
     var selectedExpanded = false
     var confirmingClear = false
     var chipsFocused = false
+    var hasChips = false
 }
 
 struct EventRow: View {
@@ -1151,13 +1157,16 @@ struct EventRow: View {
     private var glyph: String {
         if isSnoozed { return "moon.zzz.fill" }
         if event.isFeed { return FeedStyle.symbol(for: event) }
-        return event.kind == .permission ? "questionmark.circle.fill" : "checkmark.circle.fill"
+        if event.kind == .permission { return "questionmark.circle.fill" }
+        // A finished turn shares its icon and colour with its filter chip.
+        return FeedStyle.symbol(tag: EventTagFilter.key(for: event), source: .agent)
     }
 
     private var glyphColor: Color {
         if isSnoozed { return .gray }
         if event.isFeed { return FeedStyle.color(tag: event.tag, source: event.source) }
-        return event.kind == .permission ? .orange : .green
+        if event.kind == .permission { return .orange }
+        return FeedStyle.color(tag: EventTagFilter.key(for: event) ?? EventTagFilter.doneKey, source: .agent)
     }
 }
 

@@ -177,6 +177,9 @@ private struct NudgeEventDTO: Decodable {
     // Populated only for Claude Code hook events; nil for other agents.
     let claude_session_id: String?
     let transcript_path: String?
+    // The end of the agent's last reply, sent on Stop so the app can tell a
+    // turn that asks you something from one that finished.
+    let last_message: String?
     // Feed fields, for scripts posting their own events. All optional; an
     // agent hook sends none of them.
     let source: String?
@@ -229,13 +232,15 @@ private struct NudgeEventDTO: Decodable {
 
     func toNudgeEvent() -> NudgeEvent {
         let isFeed = Self.feedSource(source) != .agent
+        // A feed is never a prompt, whatever it claims, so it also loses the
+        // fields that make a prompt answerable.
+        let kind: NudgeKind = isFeed ? .other : NudgeKind(rawWireValue: event)
+        let question = kind == .stop ? AgentQuestion.question(in: last_message) : nil
         return NudgeEvent(
             agent: agent,
-            // A feed is never a prompt, whatever it claims, so it also loses
-            // the fields that make a prompt answerable.
-            kind: isFeed ? .other : NudgeKind(rawWireValue: event),
+            kind: kind,
             title: title,
-            message: message,
+            message: question ?? message,
             projectPath: project_path,
             bundleID: bundle_id,
             windowTitle: window_title,
@@ -257,6 +262,7 @@ private struct NudgeEventDTO: Decodable {
             bypassMute: bypass_mute ?? false,
             claudeSessionID: claude_session_id,
             transcriptPath: transcript_path,
+            asksQuestion: question != nil,
             source: Self.feedSource(source),
             tag: tag,
             severity: severity.flatMap(EventSeverity.init(rawValue:)) ?? .info,
