@@ -52,5 +52,16 @@
     -->
     <key>com.apple.security.automation.apple-events</key>
     <true/>
+
+    <!--
+        Calendar access for the optional meeting reminders (EventKit).
+
+        Without this a hardened-runtime build is refused calendar access
+        outright, with no prompt, so the Calendar setting could never be
+        granted. Unsigned local builds are unaffected. The app still reads
+        nothing until the user turns the setting on and approves the prompt.
+    -->
+    <key>com.apple.security.personal-information.calendars</key>
+    <true/>
 </dict>
 </plist>

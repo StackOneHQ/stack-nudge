@@ -157,6 +157,7 @@ Reachable from the tab strip, `Cmd+,`, or the last `Cmd`-number. A sidebar of ca
 | **Companion** | Size, Count badge, Preview pose, Reset position; **Turn on companion** while it's off. See [Companion](#companion) |
 | **Usage** | Quota tracking, Quota alerts, Alert threshold, Poll frequency, Context alert, Show remaining, and the two pi budgets |
 | **Integrations** | A card each for Slack and GitHub, with where it stands on the right; `→` or `⏎` opens its page. Slack's: paste setup, detected user, test message, on/off, idle threshold, message text, finished turns. GitHub's: PR links, GitHub activity, Hide shipped, Connect GitHub (or Disconnect once signed in). Each page's first line says what it's doing or what's wrong |
+| **Calendar** | Calendar, Heads-up before meetings, Morning summary, Summary time, Weekdays only, Summary on empty days, Detect joining (see [notifications.md](notifications.md#calendar)) |
 | **Extensions** | What's installed, then **Browse extensions** (see [Extensions](#extensions)) |
 | **MCP** | **Set up for…**, whose page has a card each for Claude Code, Claude Desktop and Codex: `⏎` copies what adds stack-nudge to it, and a tick shows once its config has it. Then MCP clients can change settings. See [the local MCP server](design/local-mcp.md) |
 | **Panel** | Hotkey, Pin panel, Keep open when empty, Launch at login, Name from tab titles |
@@ -237,6 +238,15 @@ With **Settings → Integrations → GitHub → GitHub activity** on (`STACKNUDG
 If the GitHub CLI (`gh`) is installed and logged in, these requests and PR links go through it (`gh api`), so gh sends its own credential and stack-nudge never reads it, and the GitHub page's first line says so ("Signed in with your gh login"); otherwise it uses its own sign-in. That matters for an org that restricts third-party OAuth apps: until an owner approves stack-nudge's app, its own sign-in can't see the org's private repos, while a `gh` login usually can. `STACKNUDGE_GITHUB_USE_GH=false` always uses the sign-in. It searches by your login across GitHub, with no org filter. The first check records what is already there without announcing it, and its state lives in `~/.stack-nudge/github-feed.json`, so a relaunch announces nothing twice. `⏎` on one of these events opens it on GitHub.
 
 The same check fills a **PRs** tab, shown while GitHub activity is on: your open PRs (with draft, review, CI and conflict chips) and the PRs waiting on your review, asked of you by name first, then through your teams (marked with the team). `↑↓` select, `⏎` or a click opens the PR, `⌘↑` / `⌘↓` jump to the first / last row, `Esc` hides.
+
+## Today
+
+With Calendar on (see [notifications.md](notifications.md#calendar)), a **Today** tab lists the day's meetings in order: times, title, where or who, and a notes snippet. Past meetings are dimmed, the one in progress is marked Now, and the tab opens on it (or the next).
+
+| Key | Action |
+|-----|--------|
+| `↑ ↓` | Move selection |
+| `⏎` | Join through the meeting link, or open the event in Calendar when it has none |
 
 ## Extensions
 

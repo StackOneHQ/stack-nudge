@@ -71,6 +71,28 @@ Each source keeps its own 20 most recent events, so a busy feed can't push a per
 
 Records live in `~/.stack-nudge/events.jsonl` (mode 0600), one JSON object per line, holding timestamp, agent, kind, title, message, repo path, and session id — the descriptive fields only, never the FIFO paths or PIDs. They're kept for 30 days or 10,000 records, whichever binds first, trimmed once per launch. **The log contains prompt and tool text**, so if that isn't something you want on disk, turn it off in Settings → **Event history** (`STACKNUDGE_EVENT_HISTORY=false`); Settings → **Clear event history** deletes the file outright. Nothing is ever sent anywhere — this is a local file, same as the rest of `~/.stack-nudge`.
 
+## Calendar
+
+**Meetings in the Events tab.** Off by default. Turn on Settings → **Calendar** and stack-nudge reads the calendars synced into Calendar.app (Google, iCloud, Exchange and so on) through EventKit. macOS asks for calendar access the first time, and only then. Everything is read locally; nothing is sent anywhere.
+
+- **Heads-up.** One row per meeting, `<title> starts in N min`, at the lead time you set. At the start it is replaced by `<title> is starting now`, in the alert colour. ⏎ opens the meeting link (Meet, Zoom, Teams, Webex), else the event in Calendar.app. The row goes away when you join, or five minutes after the start.
+- **Changes.** A meeting added, moved, renamed, relocated or cancelled gets its own row. A change to a meeting starting within 24 hours is flagged for action. A meeting missing for under five minutes is not called cancelled, because a calendar re-sync can drop events briefly.
+- **Morning summary.** One row on weekdays, `Today: 3 meetings`, listing the first three. It is sent at the set time, or on the first refresh after it if the Mac was asleep, but never after noon.
+- **Join detection.** From five minutes before the start, stack-nudge checks every 15 seconds whether you are already in the meeting: an open Meet tab in a running browser (read with `osascript`), Zoom's `CptHost` helper process, or a Teams window titled "meeting". If so, the heads-up is removed. Reading browser tabs needs the Automation permission for each browser, which macOS asks for the first time; refuse it and the row simply stays until it expires. Teams window titles are only readable with Screen Recording granted, so Teams detection is best effort.
+
+| Setting | Key | Default |
+|---|---|---|
+| Calendar | `STACKNUDGE_CALENDAR` | off |
+| Heads-up before meetings | `STACKNUDGE_CALENDAR_LEAD_MIN` | `10` (5, 10 or 15) |
+| Morning summary | `STACKNUDGE_CALENDAR_SUMMARY` | on |
+| Summary time | `STACKNUDGE_CALENDAR_SUMMARY_TIME` | `09:00` (08:00 to 10:00, half-hourly) |
+| Weekdays only | `STACKNUDGE_CALENDAR_WEEKDAYS_ONLY` | on |
+| Summary on empty days | `STACKNUDGE_CALENDAR_SUMMARY_EMPTY` | off |
+| Detect joining (Automation) | `STACKNUDGE_CALENDAR_JOIN` | on, when Calendar is on |
+| Calendars to watch | `STACKNUDGE_CALENDARS` | empty, meaning all. Comma-separated calendar identifiers, listed in `calendar.log` when access is first granted; config file only, there is no picker |
+
+All-day events and meetings you have declined are ignored. If access is refused, the Calendar row says so; allow it under System Settings → Privacy & Security → Calendars. The last snapshot and a short log are kept in `~/.stack-nudge/calendar.json` and `calendar.log`, join checks log to `join.log`.
+
 ## Permission prompts
 
 **Answering elsewhere clears the prompt.** A permission prompt is tracked by two things: the FIFO notify.sh creates for your decision, and the hook process waiting to read it. Both are required. The FIFO alone isn't proof — its cleanup is skipped entirely on `SIGKILL`, which is what the agent does to the hook when you answer in its own UI. (It was also skipped on a clean exit until recently — the trap referenced a variable that had gone out of scope by the time it fired — so answered and timed-out prompts leaked their FIFO directory until the half-hourly sweep collected it.) So approving a plan in the terminal used to leave the panel convinced the prompt was still blocking, keeping it in the menu-bar count and re-nudging you (and Slack) for the full 550 seconds. Now a prompt whose hook has gone is retired within a tick, because there's nobody left to read a decision.

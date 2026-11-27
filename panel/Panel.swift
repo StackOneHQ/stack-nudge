@@ -207,6 +207,7 @@ struct PanelContentView: View {
                 case .usage:    UsageView(nav: nav)
                 case .outcomes: OutcomesTabView(nav: nav)
                 case .prs:      PullRequestsView(nav: nav)
+                case .today:    TodayView(nav: nav)
                 // .id(id) or the two extension tabs share one view identity: a
                 // ViewBuilder switch case is a single branch, and the associated
                 // value isn't part of identity, so switching between them reused
@@ -278,6 +279,7 @@ struct PanelContentView: View {
         case .usage:    return "Usage"
         case .outcomes: return "Outcomes"
         case .prs:      return "PRs"
+        case .today:    return "Today"
         case .settings: return "Settings"
         case .extensionTab(let id): return nav.extensionTab(id: id)?.label ?? id
         // Listed, not defaulted: a new tab should fail to compile here rather
@@ -294,6 +296,7 @@ struct PanelContentView: View {
         case .sessions: return sessions.liveSessions.count
         case .outcomes: return ticketGroupCount
         case .prs:      return nav.pullRequestRows.count
+        case .today:    return nav.todaysMeetings.filter { $0.end > Date() }.count
         default:        return 0
         }
     }
@@ -1358,6 +1361,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     private var updateChecker: UpdateChecker?
     private var updater: Updater?
     private var extensionCheckTimer: Timer?
+    private var calendarWatcher: CalendarWatcher?
     private let claudeCliQuotaProbe = ClaudeCliQuotaProbe()
     // Claude logins other than the default one, by config dir. See
     // refreshOtherClaudeAccounts.
@@ -1814,6 +1818,7 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
         extensions.load()
         startEventHistory()
         startSlack()
+        startCalendar()
         // The pill (CompactView) reads sessions.sessions for the busy/idle
         // headline and mascot state, so polling has to run as soon as the
         // app is up — not gated on the Sessions tab being visible. Sessions
@@ -4455,6 +4460,35 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
     }
 
 
+    // MARK: - Calendar
+
+    // The watcher exists from launch but touches nothing until the setting is
+    // on: start() is what first reaches EventKit and asks for access.
+    private func startCalendar() {
+        let watcher = CalendarWatcher(
+            events: store,
+            settings: { [weak self] in self?.nav.calendarSettings ?? CalendarSettings() },
+            onToday: { [weak self] meetings in self?.nav.todaysMeetings = meetings },
+            onAccess: { [weak self] access in self?.nav.calendarAccess = access })
+        calendarWatcher = watcher
+        nav.$calendarEnabled
+            .removeDuplicates()
+            .sink { enabled in
+                if enabled { watcher.start() } else { watcher.stop() }
+            }
+            .store(in: &cancellables)
+        // objectWillChange fires before the value is stored, so the read is
+        // deferred a turn; duplicates drop out every change that is not ours.
+        nav.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .compactMap { [weak self] in self?.nav.calendarSettings }
+            .prepend(nav.calendarSettings)
+            .removeDuplicates()
+            .dropFirst()
+            .sink { _ in watcher.settingsChanged() }
+            .store(in: &cancellables)
+    }
+
     // MARK: - Config file watcher
 
     private var configWatcher: DispatchSourceFileSystemObject?
@@ -5395,6 +5429,18 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             return true
         }
 
+        if nav.mode == .today {
+            let plain = mods.intersection([.command, .control, .option, .shift]).isEmpty
+            guard plain else { return false }
+            switch event.keyCode {
+            case KeyCode.upArrow:                        nav.moveTodaySelection(-1)
+            case KeyCode.downArrow:                      nav.moveTodaySelection(1)
+            case KeyCode.returnKey, KeyCode.numpadEnter: nav.openSelectedMeeting()
+            default: break
+            }
+            return true
+        }
+
         // Only Events gets what follows. Without this, a mode that declined a
         // key fell through to bindings that include Return → approve.
         guard Self.eventsOwnsKeyboard(nav.mode) else { return false }
@@ -6168,6 +6214,8 @@ final class PanelController: NSObject, NSApplicationDelegate, PanelKeyDelegate,
             }
         case .prs:
             nav.jumpPullRequestSelection(toLast: !top)
+        case .today:
+            nav.jumpTodaySelection(toLast: !top)
         case .outcomes:
             // Overview pane scrolls; the tickets list jumps its selection.
             if nav.outcomesPane == .overview { scrollDetailToEdge(top: top) }

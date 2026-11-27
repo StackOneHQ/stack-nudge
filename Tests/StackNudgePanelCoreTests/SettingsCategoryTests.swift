@@ -250,6 +250,70 @@ final class SettingsCategoryTests: XCTestCase {
         XCTAssertEqual(nav.selectedRow, .browseExtensions)
     }
 
+    func testTheCalendarCategoryFollowsIntegrationsAndHoldsItsRows() {
+        let all = SettingsCategory.allCases
+        XCTAssertEqual(SettingsCategory.calendar.label, "Calendar")
+        // After Integrations, not necessarily next to it: other integration
+        // categories (GitHub) may sit between them.
+        XCTAssertGreaterThan(all.firstIndex(of: .calendar) ?? -1, all.firstIndex(of: .integrations) ?? Int.max)
+        XCTAssertEqual(PanelNav().rows(in: .calendar),
+                       [.calendarEnabled, .calendarLead, .calendarSummary, .calendarSummaryTime,
+                        .calendarWeekdaysOnly, .calendarSummaryEmpty, .calendarDetectJoin])
+    }
+
+    // Toggles flip on Space / ⏎ and ignore the arrows. The two value rows (lead
+    // time, summary time) pick: arrows step them only once Space has started it.
+    func testOnlyTheCalendarValueRowsPickAndArrowsLeaveThemAloneUntilThen() {
+        let nav = PanelNav()
+        nav.settingsCategory = .calendar
+        let pickers: [SettingsRow] = [.calendarLead, .calendarSummaryTime]
+        for row in nav.rows(in: .calendar) {
+            nav.selectedSettingIndex = nav.index(of: row) ?? 0
+            XCTAssertEqual(nav.selectedRow, row)
+            XCTAssertEqual(nav.selectedRowIsPicker, pickers.contains(row), "\(row)")
+        }
+
+        let lead = nav.calendarLeadMinutes
+        let time = nav.calendarSummaryMinutes
+        for row in pickers {
+            nav.selectedSettingIndex = nav.index(of: row) ?? 0
+            nav.cycleForward()
+            nav.cycleBackward()
+            XCTAssertEqual(nav.calendarLeadMinutes, lead, "arrows must not step \(row) nobody picked")
+            XCTAssertEqual(nav.calendarSummaryMinutes, time, "arrows must not step \(row) nobody picked")
+            XCTAssertFalse(nav.pickingValue)
+            nav.activate()
+            XCTAssertTrue(nav.pickingValue, "\(row) starts picking on ⏎")
+            nav.activate()
+            XCTAssertFalse(nav.pickingValue)
+        }
+    }
+
+    func testCalendarDefaultsAreOffWithTheSummaryOnWeekdaysAtNine() {
+        let nav = PanelNav()
+        XCTAssertFalse(nav.calendarEnabled)
+        XCTAssertEqual(nav.calendarSettings, CalendarSettings())
+        XCTAssertEqual(nav.calendarSettings.leadMinutes, 10)
+        XCTAssertEqual(nav.calendarSettings.summary.minutes, 9 * 60)
+        XCTAssertTrue(nav.calendarSettings.summary.weekdaysOnly)
+        XCTAssertTrue(nav.calendarSettings.detectJoin)
+        XCTAssertTrue(nav.calendarSettings.calendarIds.isEmpty)
+    }
+
+    func testSummaryTimeSnapsToTheNearestOfferedTime() {
+        XCTAssertEqual(PanelNav.summaryMinutes("09:00"), 9 * 60)
+        XCTAssertEqual(PanelNav.summaryMinutes("8:30"), 8 * 60 + 30)
+        XCTAssertEqual(PanelNav.summaryMinutes("09:20"), 9 * 60 + 30)
+        XCTAssertEqual(PanelNav.summaryMinutes("noon"), 9 * 60)
+        XCTAssertEqual(PanelNav.summaryMinutes(nil), 9 * 60)
+    }
+
+    func testCalendarSelectionIsACommaSeparatedListWhereEmptyMeansAll() {
+        XCTAssertEqual(PanelNav.calendarIds("A1, B2 ,,C3"), ["A1", "B2", "C3"])
+        XCTAssertTrue(PanelNav.calendarIds("").isEmpty)
+        XCTAssertTrue(PanelNav.calendarIds(nil).isEmpty)
+    }
+
     private func row(_ id: String) -> ExtensionRow {
         ExtensionRow(id: id, name: id, description: "", installedVersion: "1.0.0",
                      availableVersion: nil, refusedReason: nil, requires: [], config: [])

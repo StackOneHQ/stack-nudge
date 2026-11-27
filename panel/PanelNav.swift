@@ -42,6 +42,8 @@ enum PanelMode: Hashable {
     case outcomes
     // Your open PRs and reviews waiting on you; shown while GitHub activity is on.
     case prs
+    // Today's meetings; shown while Calendar is on.
+    case today
     // A tab contributed by an installed extension, keyed by its id.
     case extensionTab(String)
     case settings
@@ -215,6 +217,8 @@ enum SettingsRow: Hashable {
     case piApiBudget, piLocalBudget
     case awayLock
     case githubLinks, githubActivity, hideShipped, connectGithub, disconnectGithub
+    case calendarEnabled, calendarLead, calendarSummary, calendarSummaryTime,
+         calendarWeekdaysOnly, calendarSummaryEmpty, calendarDetectJoin
     case historyPerSession
     case editPhrases, checkPermissions, openConfig, releaseNotes, updateChannel, checkUpdates, uninstall, quit
     // The local MCP server (docs/design/local-mcp.md): the door to the page of
@@ -276,6 +280,8 @@ extension SettingsRow: CaseIterable {
         .contextAlert, .showRemaining, .piApiBudget, .piLocalBudget,
         .awayLock,
         .githubLinks, .githubActivity, .hideShipped, .connectGithub, .disconnectGithub,
+        .calendarEnabled, .calendarLead, .calendarSummary, .calendarSummaryTime,
+        .calendarWeekdaysOnly, .calendarSummaryEmpty, .calendarDetectJoin,
         .historyPerSession,
         .editPhrases, .checkPermissions, .openConfig, .releaseNotes,
         .updateChannel, .checkUpdates, .uninstall, .quit,
@@ -1184,6 +1190,48 @@ final class PanelNav: ObservableObject {
     @Published var slackIncludeDetail: Bool = false
     @Published var slackNotifyOnStop: Bool = false
 
+    // Calendar (STACKNUDGE_CALENDAR*). Off by default: turning it on is what
+    // asks macOS for calendar access.
+    @Published var calendarEnabled: Bool = false
+    @Published var calendarLeadMinutes: Int = 10
+    @Published var calendarSummaryEnabled: Bool = true
+    @Published var calendarSummaryMinutes: Int = 9 * 60
+    @Published var calendarWeekdaysOnly: Bool = true
+    @Published var calendarSummaryEmpty: Bool = false
+    @Published var calendarDetectJoin: Bool = true
+    // Calendar identifiers to watch (STACKNUDGE_CALENDARS); empty is all of them.
+    // Edited in the config file: there is no picker.
+    @Published var calendarIds: [String] = []
+    @Published var calendarAccess: CalendarAccess = .notDetermined
+    // Today's meetings, finished ones included, in start order. Written by the
+    // CalendarWatcher on every refresh; a view of the day reads it.
+    @Published var todaysMeetings: [Meeting] = []
+    @Published var todaySelectedIndex = 0
+
+    func moveTodaySelection(_ delta: Int) {
+        guard !todaysMeetings.isEmpty else { return }
+        todaySelectedIndex = max(0, min(todaysMeetings.count - 1, todaySelectedIndex + delta))
+    }
+
+    func jumpTodaySelection(toLast: Bool) {
+        todaySelectedIndex = toLast ? max(0, todaysMeetings.count - 1) : 0
+    }
+
+    // The meeting link when there is one, else the event in Calendar.app.
+    func openSelectedMeeting() {
+        guard todaysMeetings.indices.contains(todaySelectedIndex),
+              let url = URL(string: todaysMeetings[todaySelectedIndex].link) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    var calendarSettings: CalendarSettings {
+        CalendarSettings(
+            leadMinutes: calendarLeadMinutes,
+            summary: SummarySettings(enabled: calendarSummaryEnabled, minutes: calendarSummaryMinutes,
+                                     weekdaysOnly: calendarWeekdaysOnly, announceEmpty: calendarSummaryEmpty),
+            detectJoin: calendarDetectJoin, calendarIds: calendarIds)
+    }
+
     // Which pane of the Events tab is showing. `live` is the triage queue —
     // capped, prunable, and gone on quit. `history` is the durable log behind
     // it. Deliberately a second pane rather than merged into the queue: the
@@ -1461,6 +1509,7 @@ final class PanelNav: ObservableObject {
     var orderedTabs: [PanelMode] {
         var tabs: [PanelMode] = [.events, .sessions, .usage, .outcomes]
         if githubActivityEnabled { tabs.append(.prs) }
+        if calendarEnabled { tabs.append(.today) }
         // First id wins. Two tabs sharing one id are structurally equal, so
         // ForEach drops a row, firstIndex(of:) can never reach the second, and
         // the lookup returns the first one's label for both.
@@ -1721,6 +1770,10 @@ final class PanelNav: ObservableObject {
             return [.mcpSetupClients, .mcpWrites]
         case .mcpSetupPage:
             return MCPClient.allCases.map { .mcpClient($0) }
+        case .calendar:
+            return [.calendarEnabled, .calendarLead, .calendarSummary,
+                    .calendarSummaryTime, .calendarWeekdaysOnly,
+                    .calendarSummaryEmpty, .calendarDetectJoin]
         // Its own category rather than a row under Actions: extensions declare
         // STACKNUDGE_EXT_ keys, so per-extension configuration needs somewhere
         // to live, and it should not arrive by growing an unrelated category.
@@ -1958,6 +2011,18 @@ final class PanelNav: ObservableObject {
         }
     }
 
+    // "HH:MM" to minutes since midnight, snapped to the nearest offered time so a
+    // hand-edited value can't desync the cycle row's selection.
+    static func summaryMinutes(_ raw: String?) -> Int {
+        let parts = (raw ?? "").split(separator: ":").compactMap { Int($0) }
+        let minutes = parts.count == 2 ? parts[0] * 60 + parts[1] : 9 * 60
+        return SummarySettings.times.min(by: { abs($0 - minutes) < abs($1 - minutes) }) ?? 9 * 60
+    }
+
+    static func calendarIds(_ raw: String?) -> [String] {
+        (raw ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+
     func loadFromConfig() {
         let config = ConfigFile.read()
         hotkeyDisplay   = config["STACKNUDGE_PANEL_HOTKEY"]    ?? "cmd+opt+n"
@@ -1989,6 +2054,15 @@ final class PanelNav: ObservableObject {
         githubUseGH = ConfigFile.bool(config, "STACKNUDGE_GITHUB_USE_GH", default: true)
         githubSignedIn = githubUsesCLILogin || GitHubAuth.token() != nil
         refreshGitHubCLILogin()
+        calendarEnabled = ConfigFile.bool(config, "STACKNUDGE_CALENDAR", default: false)
+        let rawLead = Int(config["STACKNUDGE_CALENDAR_LEAD_MIN"] ?? "") ?? 10
+        calendarLeadMinutes = CalendarSettings.leadOptions.min(by: { abs($0 - rawLead) < abs($1 - rawLead) }) ?? 10
+        calendarSummaryEnabled = ConfigFile.bool(config, "STACKNUDGE_CALENDAR_SUMMARY", default: true)
+        calendarSummaryMinutes = Self.summaryMinutes(config["STACKNUDGE_CALENDAR_SUMMARY_TIME"])
+        calendarWeekdaysOnly = ConfigFile.bool(config, "STACKNUDGE_CALENDAR_WEEKDAYS_ONLY", default: true)
+        calendarSummaryEmpty = ConfigFile.bool(config, "STACKNUDGE_CALENDAR_SUMMARY_EMPTY", default: false)
+        calendarDetectJoin = ConfigFile.bool(config, "STACKNUDGE_CALENDAR_JOIN", default: true)
+        calendarIds = Self.calendarIds(config["STACKNUDGE_CALENDARS"])
         quotaTrackingEnabled = ConfigFile.bool(config, "STACKNUDGE_QUOTA_TRACKING", default: true)
         quotaAlertsEnabled   = ConfigFile.bool(config, "STACKNUDGE_QUOTA_ALERTS",   default: true)
         quotaShowRemaining   = ConfigFile.bool(config, "STACKNUDGE_QUOTA_SHOW_REMAINING", default: false)
@@ -2368,6 +2442,8 @@ final class PanelNav: ObservableObject {
              .soundEnabled, .voiceEnabled,
              .quotaTracking, .quotaAlerts, .showRemaining,
              .githubLinks, .githubActivity, .hideShipped, .eventHistory,
+             .calendarEnabled, .calendarSummary, .calendarWeekdaysOnly, .calendarSummaryEmpty,
+             .calendarDetectJoin,
              .slackEnabled, .slackDetail, .slackStop, .awayLock, .mcpWrites:
             return false
         case .permissions, .update, .extensionUpdates, .hotkey, .speakHotkey, .downloadVoiceModel:
@@ -2378,7 +2454,7 @@ final class PanelNav: ObservableObject {
              .voice, .voiceSpeed,
              .alertThreshold, .pollFrequency,
              .contextAlert, .piApiBudget, .piLocalBudget,
-             .historyPerSession,
+             .historyPerSession, .calendarLead, .calendarSummaryTime,
              .slackIdle, .updateChannel:
             return true
         }
@@ -2714,6 +2790,33 @@ final class PanelNav: ObservableObject {
             refreshGitHubCLILogin()
         case .hideShipped:
             toggleHideShipped()
+        case .calendarEnabled:
+            calendarEnabled.toggle()
+            ConfigFile.write(key: "STACKNUDGE_CALENDAR", value: calendarEnabled ? "true" : "false")
+        case .calendarLead:
+            let list = CalendarSettings.leadOptions
+            let idx = list.firstIndex(of: calendarLeadMinutes) ?? 1
+            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+            calendarLeadMinutes = list[next]
+            ConfigFile.write(key: "STACKNUDGE_CALENDAR_LEAD_MIN", value: String(calendarLeadMinutes))
+        case .calendarSummary:
+            calendarSummaryEnabled.toggle()
+            ConfigFile.write(key: "STACKNUDGE_CALENDAR_SUMMARY", value: calendarSummaryEnabled ? "true" : "false")
+        case .calendarSummaryTime:
+            let list = SummarySettings.times
+            let idx = list.firstIndex(of: calendarSummaryMinutes) ?? 2
+            let next = forward ? (idx + 1) % list.count : (idx - 1 + list.count) % list.count
+            calendarSummaryMinutes = list[next]
+            ConfigFile.write(key: "STACKNUDGE_CALENDAR_SUMMARY_TIME", value: SummarySettings.label(calendarSummaryMinutes))
+        case .calendarWeekdaysOnly:
+            calendarWeekdaysOnly.toggle()
+            ConfigFile.write(key: "STACKNUDGE_CALENDAR_WEEKDAYS_ONLY", value: calendarWeekdaysOnly ? "true" : "false")
+        case .calendarSummaryEmpty:
+            calendarSummaryEmpty.toggle()
+            ConfigFile.write(key: "STACKNUDGE_CALENDAR_SUMMARY_EMPTY", value: calendarSummaryEmpty ? "true" : "false")
+        case .calendarDetectJoin:
+            calendarDetectJoin.toggle()
+            ConfigFile.write(key: "STACKNUDGE_CALENDAR_JOIN", value: calendarDetectJoin ? "true" : "false")
         case .slackEnabled:
             slackEnabled.toggle()
             ConfigFile.write(key: "STACKNUDGE_SLACK", value: slackEnabled ? "true" : "false")
@@ -3009,7 +3112,7 @@ struct ExtensionTab: Equatable, Identifiable {
 // one, in install order, and are listed by PanelNav.settingsCategories, since
 // only nav knows what is installed. `allCases` is the built-in ones alone.
 enum SettingsCategory: Hashable, CaseIterable {
-    case notifications, voice, appearance, companion, usage, integrations, extensions, mcp, panel, events,
+    case notifications, voice, appearance, companion, usage, integrations, calendar, extensions, mcp, panel, events,
          actions, about
     // One extension's page, a level below Extensions. Not in the sidebar.
     case extensionPage(String)
@@ -3020,7 +3123,7 @@ enum SettingsCategory: Hashable, CaseIterable {
     case mcpSetupPage
 
     static let allCases: [SettingsCategory] = [
-        .notifications, .voice, .appearance, .companion, .usage, .integrations, .extensions,
+        .notifications, .voice, .appearance, .companion, .usage, .integrations, .calendar, .extensions,
         .mcp, .panel, .events, .actions, .about,
     ]
 
@@ -3034,6 +3137,7 @@ enum SettingsCategory: Hashable, CaseIterable {
         case .companion:     return "Companion"
         case .usage:         return "Usage"
         case .integrations:  return "Integrations"
+        case .calendar:      return "Calendar"
         case .extensions:    return "Extensions"
         case .mcp:           return "MCP"
         case .mcpSetupPage:  return "Set up for"
