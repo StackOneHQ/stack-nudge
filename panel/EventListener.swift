@@ -3,6 +3,10 @@ import Foundation
 // Unix-domain socket server. notify.sh writes one JSON object per connection
 // (newline-terminated). The wire shape mirrors the existing CLI args to
 // stack-nudge.app — same fields, just JSON-serialised.
+//
+// A line with a "cmd" key is a command instead (CommandChannel.swift): the
+// panel answers it with one JSON line as soon as that first line is complete,
+// without waiting for the client to close.
 final class EventListener {
 
     // 64 KiB is two orders of magnitude above the largest realistic nudge
@@ -12,6 +16,7 @@ final class EventListener {
 
     private let store: EventStore
     private let socketPath: String
+    private let commands: CommandRouter?
     private var serverFD: Int32 = -1
     private let queue = DispatchQueue(label: "stack-nudge.panel.listener")
     private let decoder = JSONDecoder()
@@ -21,9 +26,10 @@ final class EventListener {
     // bundle's shutdown otherwise removes the new bundle's socket file.
     private var boundInode: ino_t?
 
-    init(store: EventStore, socketPath: String) {
+    init(store: EventStore, socketPath: String, commands: CommandRouter? = nil) {
         self.store = store
         self.socketPath = socketPath
+        self.commands = commands
     }
 
     func start() throws {
@@ -101,16 +107,23 @@ final class EventListener {
     }
 
     private func handleClient(_ fd: Int32) {
-        defer { close(fd) }
         var buffer = Data()
         let chunkSize = 4096
         var chunk = [UInt8](repeating: 0, count: chunkSize)
+        var firstLineChecked = false
         while true {
             let n = read(fd, &chunk, chunkSize)
             if n <= 0 { break }
             buffer.append(chunk, count: n)
-            if buffer.count > Self.maxPayloadBytes { return }
+            if buffer.count > Self.maxPayloadBytes { close(fd); return }
+            if !firstLineChecked, buffer.contains(0x0A) {
+                firstLineChecked = true
+                if let line = Self.commandLine(in: buffer) { return serveCommand(fd, line) }
+            }
         }
+        // A command whose client closed before sending a newline.
+        if !firstLineChecked, let line = Self.commandLine(in: buffer) { return serveCommand(fd, line) }
+        close(fd)
         guard !buffer.isEmpty else { return }
 
         for event in Self.parseEvents(buffer) {
@@ -128,6 +141,32 @@ final class EventListener {
                 self?.store.append(event)
             }
         }
+    }
+
+    // The buffer's first line when it is a command, else nil.
+    static func commandLine(in buffer: Data) -> Data? {
+        let line = Data(buffer.prefix { $0 != 0x0A })
+        return CommandRouter.isCommand(line) ? line : nil
+    }
+
+    // Takes ownership of `fd`: it is closed once the reply is written.
+    private func serveCommand(_ fd: Int32, _ line: Data) {
+        var one: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+        let finish: (String) -> Void = { reply in
+            let out = Array((reply + "\n").utf8)
+            var sent = 0
+            while sent < out.count {
+                let n = out.withUnsafeBytes { write(fd, $0.baseAddress! + sent, out.count - sent) }
+                if n <= 0 { break }
+                sent += n
+            }
+            close(fd)
+        }
+        guard let commands else {
+            return finish(CommandRouter.encode(CommandRouter.failure("commands unavailable")))
+        }
+        DispatchQueue.main.async { commands.handle(line, reply: finish) }
     }
 
     // Pure parser: newline-split the wire buffer and decode each non-empty

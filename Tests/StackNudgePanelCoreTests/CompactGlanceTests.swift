@@ -38,7 +38,7 @@ final class CompactGlanceTests: XCTestCase {
         var exitedCompact = false
         nav.actions = SettingsActions(
             checkPermissions: {}, openConfig: {}, editPhrases: {},
-            browseExtensions: {}, openExtensionSources: {}, openExtension: { _ in },
+            browseExtensions: {}, openExtensionSources: {}, editNotifyTags: {}, openExtension: { _ in },
             openReleaseNotes: {}, checkForUpdates: {}, beginUpdate: {}, runUpdate: {},
             beginUninstall: {}, runUninstall: {}, runBootstrap: {}, quit: {},
             expandFromCompact: { modeWhenExpanded = nav.mode },

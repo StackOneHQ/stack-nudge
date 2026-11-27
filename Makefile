@@ -79,7 +79,7 @@ typecheck-tests:
 test-without-xcode:
 	@./scripts/run-tests-without-xcode.sh $(NAME)
 
-# One-shot dev cycle: rebuild, reinstall the app, refresh notify.sh in
+# One-shot dev cycle: rebuild, reinstall the app, refresh notify.sh and the CLI in
 # ~/.stack-nudge so hook-side changes propagate, kickstart the daemon.
 # Build output goes to $(BUILD_LOG); on failure, last 20 lines tail to stderr.
 .PHONY: reload
@@ -95,6 +95,7 @@ reload:
 	cp -R "$(BUILT_APP)" "$(APP)"; \
 	if [ -d "$$HOME/.stack-nudge" ]; then \
 		cp notify.sh "$$HOME/.stack-nudge/notify.sh"; \
+		cp stack-nudge.sh "$$HOME/.stack-nudge/stack-nudge"; \
 		if [ -d phrases ]; then \
 			rm -rf "$$HOME/.stack-nudge/phrases"; \
 			cp -R phrases "$$HOME/.stack-nudge/phrases"; \

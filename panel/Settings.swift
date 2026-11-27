@@ -104,6 +104,10 @@ struct SettingsView: View {
         }
     }
 
+    private var notifyTagsRowValue: String {
+        nav.quietTags.isEmpty ? "All" : "\(nav.quietTags.count) off"
+    }
+
     // Trailing value for the .mute action row: the live countdown while
     // muted (re-rendered by nav.muteTick every 30s), empty otherwise so the
     // row reads as a plain "Mute notifications" affordance.
@@ -875,6 +879,11 @@ struct SettingsView: View {
         case .soundEnabled:     row(.soundEnabled, label: "Sound enabled", kind: .toggle, value: nav.soundEnabled ? "On" : "Off")
         case .agentDoneSound:   row(.agentDoneSound, label: "Agent done", kind: .cycle, value: nav.soundStop, enabled: nav.soundEnabled)
         case .permissionSound:  row(.permissionSound, label: "Permission", kind: .cycle, value: nav.soundPermission, enabled: nav.soundEnabled)
+        case .notifyTagsPage:   row(.notifyTagsPage, label: "Notify me about…", kind: .action, value: notifyTagsRowValue)
+
+        // Focus
+        case .respectFocus:     row(.respectFocus, label: "Respect Focus / Do Not Disturb", kind: .toggle, value: nav.respectFocus ? "On" : "Off")
+        case .focusMeetings:    row(.focusMeetings, label: "Meetings still show", kind: .toggle, value: nav.focusMeetings ? "On" : "Off", enabled: nav.respectFocus)
 
         // Voice
         case .voiceEnabled: row(.voiceEnabled, label: "Voice notifications", kind: .toggle, value: nav.voiceEnabled ? "On" : "Off")

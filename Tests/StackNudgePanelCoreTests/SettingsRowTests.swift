@@ -74,7 +74,7 @@ final class SettingsRowTests: XCTestCase {
         var browsed = 0
         nav.actions = SettingsActions(
             checkPermissions: {}, openConfig: {}, editPhrases: {},
-            browseExtensions: { browsed += 1 }, openExtensionSources: {}, openExtension: { _ in },
+            browseExtensions: { browsed += 1 }, openExtensionSources: {}, editNotifyTags: {}, openExtension: { _ in },
             openReleaseNotes: {}, checkForUpdates: {}, beginUpdate: {}, runUpdate: {},
             beginUninstall: {}, runUninstall: {}, runBootstrap: {}, quit: {},
             expandFromCompact: {}, exitCompactMode: {},
@@ -165,7 +165,7 @@ final class SettingsRowTests: XCTestCase {
         var resets = 0
         nav.actions = SettingsActions(
             checkPermissions: {}, openConfig: {}, editPhrases: {},
-            browseExtensions: {}, openExtensionSources: {}, openExtension: { _ in },
+            browseExtensions: {}, openExtensionSources: {}, editNotifyTags: {}, openExtension: { _ in },
             openReleaseNotes: {}, checkForUpdates: {}, beginUpdate: {}, runUpdate: {},
             beginUninstall: {}, runUninstall: {}, runBootstrap: {}, quit: {},
             expandFromCompact: {}, exitCompactMode: {},
@@ -283,7 +283,7 @@ final class SettingsRowTests: XCTestCase {
         var mutes: [Int] = []
         nav.actions = SettingsActions(
             checkPermissions: {}, openConfig: {}, editPhrases: {},
-            browseExtensions: {}, openExtensionSources: {}, openExtension: { _ in },
+            browseExtensions: {}, openExtensionSources: {}, editNotifyTags: {}, openExtension: { _ in },
             openReleaseNotes: {}, checkForUpdates: {}, beginUpdate: {}, runUpdate: {},
             beginUninstall: {}, runUninstall: {}, runBootstrap: {}, quit: {},
             expandFromCompact: {}, exitCompactMode: {},

@@ -151,7 +151,8 @@ Reachable from the tab strip, `Cmd+,`, or the last `Cmd`-number. A sidebar of ca
 
 | Category | Rows |
 |----------|------|
-| **Notifications** | Banner notifications, Mute when focused, Mute / Resume notifications, Mute duration, Remind unanswered, Flag stalled after, Sound enabled, and the Agent done / Permission sounds (preview as you cycle) |
+| **Notifications** | Banner notifications, Mute when focused, Mute / Resume notifications, Mute duration, Remind unanswered, Flag stalled after, Sound enabled, and the Agent done / Permission sounds (preview as you cycle), and **Notify me about…**, a page of per-tag toggles (see [notifications.md](notifications.md#notify-me-about)) |
+| **Focus** | Respect Focus / Do Not Disturb, Meetings still show (see [notifications.md](notifications.md#focus-and-do-not-disturb-macos)) |
 | **Voice** | Voice notifications, the read-aloud shortcut, then Voice and Speed (preview as you cycle) once the voice model is downloaded, or **Download voice model** until it is |
 | **Appearance** | Floating widget (`Pill`, `Companion` or `Off`), then the pill's own rows: Snap to corners, Widget corner, Widget opacity, Widget type, Mascot, Accent color |
 | **Companion** | Size, Count badge, Preview pose, Reset position; **Turn on companion** while it's off. See [Companion](#companion) |
@@ -299,6 +300,7 @@ When the panel daemon is running, the StackNudge mark appears in your menu bar, 
 | `Settings…` (⌘,) | Opens the panel straight on Settings |
 | `Check permissions…` | Opens the Permissions page in the panel (see [Permissions](setup.md#permissions-macos)) |
 | `Open config file…` | Opens `~/.stack-nudge/config` in your default editor |
+| `☾ Focus on · …` | Appears only while a macOS Focus is on and tells you banners are held (info only). |
 | `Quit StackNudge panel` (⌘Q) | Exits the daemon |
 
 Menu changes take effect immediately for the next nudge — no daemon restart needed.

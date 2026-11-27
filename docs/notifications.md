@@ -71,6 +71,49 @@ Each source keeps its own 20 most recent events, so a busy feed can't push a per
 
 Records live in `~/.stack-nudge/events.jsonl` (mode 0600), one JSON object per line, holding timestamp, agent, kind, title, message, repo path, and session id — the descriptive fields only, never the FIFO paths or PIDs. They're kept for 30 days or 10,000 records, whichever binds first, trimmed once per launch. **The log contains prompt and tool text**, so if that isn't something you want on disk, turn it off in Settings → **Event history** (`STACKNUDGE_EVENT_HISTORY=false`); Settings → **Clear event history** deletes the file outright. Nothing is ever sent anywhere — this is a local file, same as the rest of `~/.stack-nudge`.
 
+## Command line (macOS)
+
+`~/.stack-nudge/stack-nudge` talks to the running panel over the same Unix socket `notify.sh` posts events to (`~/.stack-nudge/panel.sock`, mode 0600, so only your user can reach it). The app installs it on first launch and refreshes it on every launch. Put it on your `PATH` if you like: `ln -s ~/.stack-nudge/stack-nudge ~/.local/bin/stack-nudge`.
+
+```sh
+stack-nudge say "Deploy done" --url https://example.com/deploys/42 --severity info
+stack-nudge focus on|off|status
+stack-nudge state <pose> --ttl 30
+stack-nudge settings [category]
+stack-nudge poll
+stack-nudge busy
+stack-nudge ping
+```
+
+| Command | What it does |
+|---------|--------------|
+| `say "title"` | Posts an event from a script: `--body`, `--url` (http or https only), `--severity info\|action\|alert`, `--source github\|calendar\|script` (default `script`), `--tag`, `--key` (a later event with the same key replaces the earlier one). |
+| `focus on\|off\|status` | Sets or reads the macOS Focus state (see below). |
+| `state <pose> --ttl <seconds>` | Asks the companion to hold a pose for a while (default 30, 1 to 3600). The panel stores the override and its expiry; the companion decides what the pose looks like. |
+| `settings [category]` | Opens the panel on Settings, on that category when given (`notifications`, `focus`, `voice`, `appearance`, `companion`, `usage`, `integrations`, `extensions`, `panel`, `events`, `actions`, `about`). |
+| `poll` | Polls the feeds now. Replies `no poller` when none is set up. |
+| `busy` | Whether an agent session or other work is in flight, so a script can wait before restarting the app. |
+| `ping` | `{"ok":true,"pong":true}` when the panel is up. |
+
+`say`, `state` and `focus on|off` exit 0 without output when the panel is not running, so a script or automation never fails for that. Anything else prints a short message and exits 1.
+
+## Focus and Do Not Disturb (macOS)
+
+While a macOS Focus is on, the panel holds back banners, sounds and voice. Events still land in the list and the counts still update. Meeting reminders still show unless you turn that off (Settings > Focus). When the Focus ends, one notice such as `While Focus was on: 3 review, 1 CI` replaces the held banners. The menu shows `☾ Focus on` and a moon after the menu-bar icon, and the compact widget shows a small moon. The timed mute wins over Focus: a muted panel stays muted.
+
+macOS gives an app no way to read the Focus state, so a Shortcuts automation tells the panel. Once:
+
+1. Open Shortcuts, then the Automation tab, then the + button, then New Automation.
+2. Choose Do Not Disturb (or the Focus you use; repeat for each one). Pick "Is Turned On", Run Immediately, Next.
+3. Add the Run Shell Script action with `~/.stack-nudge/stack-nudge focus on`, then Done.
+4. Repeat for "Is Turned Off" with `~/.stack-nudge/stack-nudge focus off`.
+
+Check with `~/.stack-nudge/stack-nudge focus status`. Settings > Focus has **Respect Focus / Do Not Disturb** (`STACKNUDGE_RESPECT_FOCUS`, default on) and **Meetings still show** (`STACKNUDGE_FOCUS_MEETINGS`, default on). The state lives in memory only: if you quit the panel during a Focus it starts as off until the next switch, so a missed "off" cannot hold banners for good.
+
+## Notify me about
+
+Settings > Notifications > **Notify me about…** lists the feed tags (`review`, `ci`, `deploy`, and any other tag a feed or `stack-nudge say --tag` has used since launch) with a toggle each. A tag turned off still lists its events in the Events tab, but they pop no banner, play no sound or voice and do not move the companion. The off tags are stored as `STACKNUDGE_QUIET_TAGS`, comma-separated (for example `ci,review-request`).
+
 ## Permission prompts
 
 **Answering elsewhere clears the prompt.** A permission prompt is tracked by two things: the FIFO notify.sh creates for your decision, and the hook process waiting to read it. Both are required. The FIFO alone isn't proof — its cleanup is skipped entirely on `SIGKILL`, which is what the agent does to the hook when you answer in its own UI. (It was also skipped on a clean exit until recently — the trap referenced a variable that had gone out of scope by the time it fired — so answered and timed-out prompts leaked their FIFO directory until the half-hourly sweep collected it.) So approving a plan in the terminal used to leave the panel convinced the prompt was still blocking, keeping it in the menu-bar count and re-nudging you (and Slack) for the full 550 seconds. Now a prompt whose hook has gone is retired within a tick, because there's nobody left to read a decision.

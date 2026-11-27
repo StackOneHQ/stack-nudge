@@ -233,6 +233,11 @@ chmod +x "$INSTALL_DIR/.notify.sh.new"
 mv -f "$INSTALL_DIR/.notify.sh.new" "$INSTALL_DIR/notify.sh"
 echo "  Installed notify.sh    -> $INSTALL_DIR/notify.sh"
 
+cp "$SCRIPT_DIR/stack-nudge.sh" "$INSTALL_DIR/.stack-nudge.new"
+chmod +x "$INSTALL_DIR/.stack-nudge.new"
+mv -f "$INSTALL_DIR/.stack-nudge.new" "$INSTALL_DIR/stack-nudge"
+echo "  Installed stack-nudge  -> $INSTALL_DIR/stack-nudge"
+
 # jq is optional: the socket payload is parsed by python3, but the permission
 # banner's "what needs approval" detail still reads the hook JSON with jq.
 if ! command -v jq >/dev/null 2>&1; then

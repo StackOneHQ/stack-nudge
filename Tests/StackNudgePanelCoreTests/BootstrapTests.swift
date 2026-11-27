@@ -212,3 +212,33 @@ final class BootstrapTests: XCTestCase {
         return dir
     }
 }
+
+// The stack-nudge CLI is copied beside notify.sh and kept equal to the bundle's.
+final class BootstrapCLITests: XCTestCase {
+
+    private func tempDir() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        return dir
+    }
+
+    func test_installCLI_writesAnExecutableCopy() throws {
+        let path = try tempDir().appendingPathComponent("stack-nudge").path
+        XCTAssertTrue(Bootstrap.installCLI(bundled: "#!/bin/sh\necho new\n", at: path))
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), "#!/bin/sh\necho new\n")
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: path))
+    }
+
+    func test_installCLI_replacesAnOutdatedCopyAndLeavesAnEqualOne() throws {
+        let path = try tempDir().appendingPathComponent("stack-nudge").path
+        try "old".write(toFile: path, atomically: true, encoding: .utf8)
+        XCTAssertTrue(Bootstrap.installCLI(bundled: "new", at: path))
+        XCTAssertFalse(Bootstrap.installCLI(bundled: "new", at: path))
+    }
+
+    func test_installCLI_skipsAMachineWithNoInstallDirectory() {
+        XCTAssertFalse(Bootstrap.installCLI(bundled: "x", at: "/nonexistent-\(UUID().uuidString)/stack-nudge"))
+        XCTAssertFalse(Bootstrap.installCLI(bundled: nil, at: "/tmp/never"))
+    }
+}

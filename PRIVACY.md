@@ -59,6 +59,14 @@ StackNudge identifier, because there isn't one.
   about 350 MB and lands in `~/.cache/stackvox/`, outside `~/.stack-nudge/` —
   worth knowing if you are removing stack-nudge by deleting that directory.
 
+## The local command line
+
+`~/.stack-nudge/stack-nudge` sends commands (`say`, `focus`, `state`, `poll`,
+`busy`, `settings`, `ping`) to the running panel over `~/.stack-nudge/panel.sock`,
+a Unix socket readable and writable only by your user. Nothing leaves your
+machine. The macOS Focus state is pushed in by a Shortcuts automation you set
+up; stack-nudge never reads it from the system.
+
 ## Tools it runs on your behalf
 
 Usage tracking (`STACKNUDGE_QUOTA_TRACKING`) reads your quota by shelling out to

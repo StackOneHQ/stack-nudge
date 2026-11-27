@@ -309,6 +309,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
 
         addMuteSection(to: menu)
+        addFocusSection(to: menu)
         menu.addItem(.separator())
 
         if let nav = panelController?.nav, nav.companionEnabled {
@@ -366,6 +367,17 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
     }
 
+    // Shown only while a Focus is on, so the menu explains why banners stopped.
+    private func addFocusSection(to menu: NSMenu) {
+        guard let nav = panelController?.nav, nav.focus.active else { return }
+        let title = nav.respectFocus
+            ? "☾ Focus on · banners held (\(nav.focus.held.count))"
+            : "☾ Focus on · not holding banners"
+        let info = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        info.isEnabled = false
+        menu.addItem(info)
+    }
+
     private func muteDurationLabel(_ minutes: Int) -> String {
         minutes % 60 == 0 ? "\(minutes / 60)h" : "\(minutes)m"
     }
@@ -375,7 +387,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // permission prompts still blocking an agent rides alongside either way —
     // that count is the only trace left once a banner has expired into
     // Notification Center, so it must survive a mute.
-    func refreshStatusBadge(muteUntil: Date?, pendingPrompts: Int) {
+    func refreshStatusBadge(muteUntil: Date?, pendingPrompts: Int, focusHolding: Bool = false) {
         guard let button = statusItem.button else { return }
         let muted = muteUntil.map { $0 > Date() } ?? false
         var parts: [String] = []
@@ -393,6 +405,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if pendingPrompts > 0 {
             parts.append("\(pendingPrompts)⏳")
         }
+        if focusHolding { parts.append("☾") }
         button.imagePosition = .imageLeft
         button.title = parts.isEmpty ? "" : " " + parts.joined(separator: " ")
         button.toolTip = pendingPrompts > 0
